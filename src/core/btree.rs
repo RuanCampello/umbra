@@ -1,6 +1,7 @@
 // ! Disk management and B-Tree data structure implementation.
 
-use crate::sql::sql::Type;
+use crate::core::{byte_len_of_int_type, utf_8_length_bytes};
+use crate::sql::statements::Type;
 use std::cmp::Ordering;
 
 /// Key comparator to [`BTree`].
@@ -59,11 +60,47 @@ impl BytesCmp for StringCmp {
     }
 }
 
-/// Returns the byte length of a given SQL [`Type`] for integers.
-fn byte_len_of_int_type(data_type: &Type) -> usize {
-    match data_type {
-        Type::Integer | Type::UnsignedInteger => 4,
-        Type::BigInteger | Type::UnsignedBigInteger => 8,
-        _ => unreachable!("This must only be used for integers."),
+impl BytesCmp for FixedSizeCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        a[..self.0].cmp(&b[..self.0])
+    }
+}
+
+impl From<&Type> for Box<dyn BytesCmp> {
+    fn from(value: &Type) -> Self {
+        match value {
+            Type::Varchar(max) => Box::new(StringCmp(utf_8_length_bytes(*max))),
+            not_var_type => Box::new(FixedSizeCmp(byte_len_of_int_type(not_var_type))),
+        }
+    }
+}
+
+impl BytesCmp for &Box<dyn BytesCmp> {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        self.as_ref().cmp(a, b)
+    }
+}
+
+/// No allocations comparing to [`Box`].
+pub(crate) enum BTreeKeyCmp {
+    MemCmp(FixedSizeCmp),
+    StrCmp(StringCmp),
+}
+
+impl From<&Type> for BTreeKeyCmp {
+    fn from(value: &Type) -> Self {
+        match value {
+            Type::Varchar(max) => Self::StrCmp(StringCmp(utf_8_length_bytes(*max))),
+            not_var_type => Self::MemCmp(FixedSizeCmp(byte_len_of_int_type(not_var_type))),
+        }
+    }
+}
+
+impl BytesCmp for BTreeKeyCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        match self {
+            Self::MemCmp(mem) => mem.cmp(a, b),
+            Self::StrCmp(str) => str.cmp(a, b),
+        }
     }
 }
