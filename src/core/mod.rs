@@ -1,6 +1,9 @@
 use crate::sql::statements::Type;
 
 pub mod btree;
+mod pager;
+
+type PageNumber = u16;
 
 /// Returns the byte length of a given SQL [`Type`] for integers.
 fn byte_len_of_int_type(data_type: &Type) -> usize {

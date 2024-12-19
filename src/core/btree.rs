@@ -1,8 +1,34 @@
 // ! Disk management and B-Tree data structure implementation.
 
-use crate::core::{byte_len_of_int_type, utf_8_length_bytes};
+use crate::core::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
 use crate::sql::statements::Type;
 use std::cmp::Ordering;
+
+/// B-Tree data structure hardly inspired on SQLite B*-Tree.
+/// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
+/// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualizer of this data structure.
+struct BTree<Cmp> {
+    root: PageNumber,
+    min_keys: usize,
+    balanced_siblings: usize,
+
+    /// The bytes comparator used to get [`Ordering`].
+    comparator: Cmp,
+}
+
+const DEFAULT_BALANCED_SIBLINGS: usize = 1;
+const DEFAULT_MIN_KEYS: usize = 4;
+
+impl<Cmp: BytesCmp> BTree<Cmp> {
+    pub fn new(root: PageNumber, comparator: Cmp) -> Self {
+        Self {
+            root,
+            comparator,
+            balanced_siblings: DEFAULT_BALANCED_SIBLINGS,
+            min_keys: DEFAULT_MIN_KEYS,
+        }
+    }
+}
 
 /// Key comparator to [`BTree`].
 /// Compares two keys to determine their [`Ordering`].
