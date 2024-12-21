@@ -2,7 +2,7 @@
 
 use crate::core::PageNumber;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::{fs, io};
 
@@ -90,7 +90,7 @@ impl<IO> BlockIo<IO> {
     }
 }
 
-impl<Input: Seek + Read> BlockIo<Input> {
+impl<IO: Seek + Read> BlockIo<IO> {
     pub fn read(&mut self, page_number: PageNumber, buffer: &mut [u8]) -> io::Result<usize> {
         self.assert_args(&page_number, buffer);
 
@@ -125,5 +125,17 @@ impl<Input: Seek + Read> BlockIo<Input> {
 
         buffer.copy_from_slice(&block[body_offset..body_offset + self.page_size]);
         Ok(self.page_size)
+    }
+}
+
+impl<IO: Write> BlockIo<IO> {
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.io.flush()
+    }
+}
+
+impl<IO: FileOperations> BlockIo<IO> {
+    pub fn save(&self) -> io::Result<()> {
+        self.io.save()
     }
 }

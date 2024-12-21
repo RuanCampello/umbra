@@ -1,19 +1,20 @@
-use crate::core::PageNumber;
+use crate::core::io::FileOperations;
+use crate::core::{io::BlockIo, PageNumber};
 use std::collections::HashSet;
-use std::io;
-use std::io::{Read, Seek, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::PathBuf;
 
 /// Inspired by [SQLite 2.8.1 pager].
 /// It manages IO over a "block" in disk to storage the database.
 pub(crate) struct Pager<File> {
-    file: File,
+    file: BlockIo<File>,
     /// Block size to read/write a buffer.
     block_size: usize,
     page_size: usize,
     /// The modified files.
     dirty_pages: HashSet<PageNumber>,
-
+    /// Written pages.
+    journal_pages: HashSet<PageNumber>,
     journal: Journal<File>,
 }
 
@@ -32,6 +33,8 @@ struct Journal<File> {
     file: Option<File>,
 }
 
+type FrameId = usize;
+
 const JOURNAL_NUMBER: u64 = 0x9DD505F920A163D6;
 const JOURNAL_SIZE: usize = size_of::<u64>();
 const JOURNAL_PAGE_SIZE: usize = size_of::<u16>();
@@ -40,8 +43,25 @@ const JOURNAL_HEADER_SIZE: usize = size_of::<u16>();
 
 impl<File: Seek + Read> Pager<File> {
     /// Reads directly from the disk.
-    fn read(&mut self, page_number: PageNumber, buffer: &mut [u8]) {
-        self.file.read(buffer);
+    fn read(&mut self, page_number: PageNumber, buffer: &mut [u8]) -> io::Result<usize> {
+        self.file.read(page_number, buffer)
+    }
+}
+
+impl<File: Seek + FileOperations> Pager<File> {
+    fn push_to_queue(
+        &mut self,
+        page_number: PageNumber,
+        content: impl AsRef<[u8]>,
+    ) -> io::Result<()> {
+        self.dirty_pages.insert(page_number);
+
+        if !self.journal_pages.contains(&page_number) {
+            self.journal.push(page_number, content)?;
+            self.journal_pages.insert(page_number);
+        }
+        
+        Ok(())
     }
 }
 
@@ -75,7 +95,28 @@ impl<File: Write> Journal<File> {
     }
 }
 
-// impl<File: >
+impl<File: FileOperations> Journal<File> {
+    /// Add a page to the journal buffer.
+    pub fn push(&mut self, page_number: PageNumber, page: impl AsRef<[u8]>) -> io::Result<()> {
+        if self.buffered_pages as usize >= self.max_pages {
+            // TODO: when there are not space, just write to empty the queue.
+        }
+
+        self.buffer.extend_from_slice(&page_number.to_le_bytes()); // write the page_number.
+        self.buffer.extend_from_slice(page.as_ref()); // write its actual content.
+
+        // TODO: instead of this, maybe generate a random number would be a great place to be.
+        let checksum = (JOURNAL_NUMBER as u16).wrapping_add(page_number);
+
+        self.buffer.extend_from_slice(&checksum.to_le_bytes());
+
+        let pages_range = (JOURNAL_NUMBER as usize)..JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
+
+        self.buffered_pages += 1;
+        self.buffer[pages_range].copy_from_slice(&self.buffered_pages.to_le_bytes());
+        Ok(())
+    }
+}
 
 fn journal_chunk_size(page_size: usize, pages_number: usize) -> usize {
     JOURNAL_SIZE + JOURNAL_PAGE_SIZE + (pages_number) * journal_page_size(page_size)

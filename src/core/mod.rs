@@ -1,7 +1,7 @@
 use crate::sql::statements::Type;
 
 pub mod btree;
-mod io;
+pub mod io;
 mod pager;
 
 type PageNumber = u16;
