@@ -1,9 +1,8 @@
 use crate::core::PageNumber;
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::{fs, io};
+use std::io;
+use std::io::{Read, Seek, Write};
+use std::path::PathBuf;
 
 /// Inspired by [SQLite 2.8.1 pager].
 /// It manages IO over a "block" in disk to storage the database.
@@ -39,52 +38,10 @@ const JOURNAL_PAGE_SIZE: usize = size_of::<u16>();
 const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u16>();
 const JOURNAL_HEADER_SIZE: usize = size_of::<u16>();
 
-/// Generic file related operations that are not implemented by [`io`].
-pub(in crate::core) trait FileOperations {
-    fn create(path: impl AsRef<Path>) -> io::Result<Self>
-    where
-        Self: Sized;
-
-    fn open(path: impl AsRef<Path>) -> io::Result<Self>
-    where
-        Self: Sized;
-
-    fn delete(path: impl AsRef<Path>) -> io::Result<()>;
-
-    /// Tries to store the data on disk to its respective [`Path`].
-    fn save(&self) -> io::Result<()>;
-}
-
-impl FileOperations for File {
-    fn create(path: impl AsRef<Path>) -> io::Result<Self>
-    where
-        Self: Sized,
-    {
-        if let Some(parent_dir) = path.as_ref().parent() {
-            fs::create_dir_all(parent_dir)?;
-        }
-
-        File::options()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open(path)
-    }
-
-    fn open(path: impl AsRef<Path>) -> io::Result<Self>
-    where
-        Self: Sized,
-    {
-        File::options().read(true).write(false).open(path)
-    }
-
-    fn delete(path: impl AsRef<Path>) -> io::Result<()> {
-        fs::remove_file(path)
-    }
-
-    fn save(&self) -> io::Result<()> {
-        self.sync_all()
+impl<File: Seek + Read> Pager<File> {
+    /// Reads directly from the disk.
+    fn read(&mut self, page_number: PageNumber, buffer: &mut [u8]) {
+        self.file.read(buffer);
     }
 }
 
