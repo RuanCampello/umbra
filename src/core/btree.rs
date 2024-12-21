@@ -19,6 +19,12 @@ struct BTree<Cmp> {
 const DEFAULT_BALANCED_SIBLINGS: usize = 1;
 const DEFAULT_MIN_KEYS: usize = 4;
 
+/// Key comparator to [`BTree`].
+/// Compares two keys to determine their [`Ordering`].
+pub(crate) trait BytesCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
+}
+
 impl<Cmp: BytesCmp> BTree<Cmp> {
     pub fn new(root: PageNumber, comparator: Cmp) -> Self {
         Self {
@@ -28,12 +34,6 @@ impl<Cmp: BytesCmp> BTree<Cmp> {
             min_keys: DEFAULT_MIN_KEYS,
         }
     }
-}
-
-/// Key comparator to [`BTree`].
-/// Compares two keys to determine their [`Ordering`].
-pub(crate) trait BytesCmp {
-    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
 }
 
 /// Compares the `self.0` using a `memcmp`.
