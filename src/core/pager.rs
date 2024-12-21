@@ -49,6 +49,7 @@ impl<File: Seek + Read> Pager<File> {
 }
 
 impl<File: Seek + FileOperations> Pager<File> {
+    /// Adds a given page to the queue of "pages to be written" if it has not being already written.
     fn push_to_queue(
         &mut self,
         page_number: PageNumber,
@@ -60,7 +61,7 @@ impl<File: Seek + FileOperations> Pager<File> {
             self.journal.push(page_number, content)?;
             self.journal_pages.insert(page_number);
         }
-        
+
         Ok(())
     }
 }
