@@ -8,5 +8,5 @@ pub(crate) enum Type {
     BigInteger,
     UnsignedBigInteger,
     Boolean,
-    Varchar(usize)
+    Varchar(usize),
 }

@@ -1,5 +1,6 @@
 [package]
 name = "umbra"
+description = "A blazingly fast toy database"
 version = "0.1.0"
 edition = "2021"
 
