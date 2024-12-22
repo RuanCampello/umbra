@@ -2,7 +2,7 @@
 
 use crate::core::PageNumber;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::{fs, io};
 
@@ -61,6 +61,28 @@ impl FileOperations for File {
 
     fn save(&self) -> io::Result<()> {
         self.sync_all()
+    }
+}
+
+/// This is a memory buffer implementation used primarily for test, but it can be used as the most primitive form of in-memory database.
+impl FileOperations for Cursor<Vec<u8>> {
+    fn create(_path: impl AsRef<Path>) -> io::Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(Cursor::new(Vec::new()))
+    }
+    fn delete(_path: impl AsRef<Path>) -> io::Result<()> {
+        Ok(())
+    }
+    fn open(_path: impl AsRef<Path>) -> io::Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(Cursor::new(Vec::new()))
+    }
+    fn save(&self) -> io::Result<()> {
+        Ok(())
     }
 }
 

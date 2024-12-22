@@ -28,7 +28,7 @@ struct Journal<File> {
     /// The maximum of pages to be loaded in memory.
     max_pages: usize,
     /// The current number of pages held in the `buffer`.
-    buffered_pages: u32,
+    buffered_pages: u16,
     path: PathBuf,
     file: Option<File>,
 }
@@ -111,7 +111,7 @@ impl<File: FileOperations> Journal<File> {
 
         self.buffer.extend_from_slice(&checksum.to_le_bytes());
 
-        let pages_range = (JOURNAL_NUMBER as usize)..JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
+        let pages_range = JOURNAL_SIZE..JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
 
         self.buffered_pages += 1;
         self.buffer[pages_range].copy_from_slice(&self.buffered_pages.to_le_bytes());
@@ -125,4 +125,53 @@ fn journal_chunk_size(page_size: usize, pages_number: usize) -> usize {
 
 fn journal_page_size(size: usize) -> usize {
     JOURNAL_PAGE_SIZE + size + JOURNAL_CHECKSUM_SIZE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_journal_construction() {
+        let page_size: usize = 1024;
+        let max: usize = 4;
+        let path = PathBuf::from("test_journal");
+
+        let journal = Journal::<Cursor<&[u8]>>::new(page_size, max, path.clone());
+
+        assert_eq!(journal.path, path);
+        assert_eq!(journal.page_size, page_size);
+        assert_eq!(journal.max_pages, max);
+        assert_eq!(journal.buffered_pages, 0);
+        assert!(journal.buffer.starts_with(&JOURNAL_NUMBER.to_le_bytes()));
+    }
+
+    #[test]
+    fn test_journal_push() {
+        let page_size: usize = 1024;
+        let max: usize = 8;
+        let path = PathBuf::from("test_journal");
+
+        let mut journal = Journal::<Cursor<Vec<u8>>>::new(page_size, max, path.clone());
+
+        let page_number = 1u16;
+        let page_content = vec![1u8; page_size];
+
+        journal
+            .push(page_number, &page_content)
+            .expect("Was unable to push to journal");
+        assert_eq!(journal.buffered_pages, 1);
+
+        let mut output_buffer = Vec::new();
+        output_buffer.extend_from_slice(&JOURNAL_NUMBER.to_le_bytes()); // file header identifier
+        output_buffer.extend_from_slice(&1u16.to_le_bytes()); // buffered pages (one)
+        output_buffer.extend_from_slice(&page_number.to_le_bytes());
+        output_buffer.extend_from_slice(&page_content);
+        let checksum = (JOURNAL_NUMBER as u16).wrapping_add(page_number);
+        output_buffer.extend_from_slice(&checksum.to_le_bytes());
+
+        assert_eq!(&journal.buffer[..output_buffer.len()], &output_buffer);
+    }
 }
