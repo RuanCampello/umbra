@@ -141,7 +141,7 @@ impl<IO: Seek + Read> BlockIo<IO> {
             return self.io.read(buffer);
         }
 
-        // If the page is not greater than the block, multiple pages can be read at once.
+        // TODO: If the page is not greater than the block, multiple pages can be read at once.
         let mut block: Vec<u8> = vec![0; cap];
         let _ = self.io.read(&mut block)?;
 
@@ -156,8 +156,47 @@ impl<IO: Write> BlockIo<IO> {
     }
 }
 
+impl<IO: Seek + Write> BlockIo<IO> {
+    pub fn write(&mut self, page_number: PageNumber, buffer: &[u8]) -> io::Result<usize> {
+        self.assert_args(&page_number, buffer);
+
+        let offset = self.page_size * page_number as usize;
+        self.io.seek(SeekFrom::Start(offset as u64))?;
+        self.io.write(buffer)
+    }
+}
+
 impl<IO: FileOperations> BlockIo<IO> {
     pub fn save(&self) -> io::Result<()> {
         self.io.save()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn test_block_io() -> io::Result<()> {
+        let sizes = [(4, 4), (4, 16), (16, 4)];
+
+        for (page_size, block_size) in sizes {
+            let max = 10;
+
+            let io: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+            let mut block_io = BlockIo::new(io, block_size, page_size);
+
+            for idx in 0..max {
+                let output = vec![(idx + 1) as u8; page_size];
+                let mut buffer = vec![0; page_size];
+
+                assert_eq!(block_io.write(idx, &output)?, page_size);
+                assert_eq!(block_io.read(idx, &mut buffer)?, buffer.len());
+                assert_eq!(buffer, output);
+            }
+        }
+
+        Ok(())
     }
 }
