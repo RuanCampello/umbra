@@ -231,3 +231,45 @@ fn random_seed() -> Option<u64> {
 
     Some(hasher.finish())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::random::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_seed_generation_randomness() {
+        let mut rand = Rng::new();
+        let range = rand.u16(0..128);
+        let mut seeds = HashSet::new();
+
+        for _ in 0..range {
+            let seed = random_seed().expect("Unable to generate seed");
+
+            assert!(!seeds.contains(&seed), "Duplicated seed {seed} found");
+            assert_eq!(size_of_val(&seed), size_of::<u64>()); // grants it's a u64
+            seeds.insert(seed);
+        }
+
+        assert_eq!(seeds.len(), range as usize);
+    }
+
+    #[test]
+    fn test_seed_determinism() {
+        let seeds: [u64; 4] = [1u64, 12345u64, 67890u64, 98765u64];
+
+        for seed in seeds {
+            let mut rng_one = Rng::with_seed(seed);
+            let mut rng_two = Rng::with_seed(seed);
+
+            let range = rng_one.i32(4..32);
+            let range_two = rng_two.i32(4..32);
+
+            let numbers_of_one: Vec<i32> = (0..range).map(|_| rng_one.i32(0..range)).collect();
+            let numbers_of_two: Vec<i32> =
+                (0..range_two).map(|_| rng_two.i32(0..range_two)).collect();
+
+            assert_eq!(numbers_of_one, numbers_of_two);
+        }
+    }
+}
