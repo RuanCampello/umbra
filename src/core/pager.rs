@@ -1,4 +1,5 @@
 use crate::core::io::FileOperations;
+use crate::core::random::Rng;
 use crate::core::{io::BlockIo, PageNumber};
 use std::collections::HashSet;
 use std::io::{self, Read, Seek, Write};
@@ -29,13 +30,14 @@ struct Journal<File> {
     max_pages: usize,
     /// The current number of pages held in the `buffer`.
     buffered_pages: u16,
+    /// The random journal's identifier.
+    journal_number: u64,
     path: PathBuf,
     file: Option<File>,
 }
 
 type FrameId = usize;
 
-const JOURNAL_NUMBER: u64 = 0x9DD505F920A163D6;
 const JOURNAL_SIZE: usize = size_of::<u64>();
 const JOURNAL_PAGE_SIZE: usize = size_of::<u16>();
 const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u16>();
@@ -69,8 +71,11 @@ impl<File: Seek + FileOperations> Pager<File> {
 impl<File> Journal<File> {
     pub fn new(page_size: usize, max_pages: usize, path: PathBuf) -> Self {
         let mut buffer = Vec::with_capacity(journal_chunk_size(page_size, max_pages));
+        let mut rand = Rng::new();
+        let journal_number = rand.u64(0..u64::MAX);
+        println!("journal_number randomly generated was: {journal_number}");
 
-        buffer.extend_from_slice(&JOURNAL_NUMBER.to_le_bytes());
+        buffer.extend_from_slice(&journal_number.to_le_bytes());
         buffer.extend_from_slice(&[0; JOURNAL_PAGE_SIZE]);
 
         Self {
@@ -78,6 +83,7 @@ impl<File> Journal<File> {
             max_pages,
             path,
             page_size,
+            journal_number,
             buffered_pages: 0,
             file: None,
         }
@@ -106,8 +112,7 @@ impl<File: FileOperations> Journal<File> {
         self.buffer.extend_from_slice(&page_number.to_le_bytes()); // write the page_number.
         self.buffer.extend_from_slice(page.as_ref()); // write its actual content.
 
-        // TODO: instead of this, maybe generate a random number would be a great place to be.
-        let checksum = (JOURNAL_NUMBER as u16).wrapping_add(page_number);
+        let checksum = (self.journal_number as u16).wrapping_add(page_number);
 
         self.buffer.extend_from_slice(&checksum.to_le_bytes());
 
@@ -145,7 +150,9 @@ mod tests {
         assert_eq!(journal.page_size, page_size);
         assert_eq!(journal.max_pages, max);
         assert_eq!(journal.buffered_pages, 0);
-        assert!(journal.buffer.starts_with(&JOURNAL_NUMBER.to_le_bytes()));
+        assert!(journal
+            .buffer
+            .starts_with(&journal.journal_number.to_le_bytes()));
     }
 
     #[test]
@@ -165,11 +172,11 @@ mod tests {
         assert_eq!(journal.buffered_pages, 1);
 
         let mut output_buffer = Vec::new();
-        output_buffer.extend_from_slice(&JOURNAL_NUMBER.to_le_bytes()); // file header identifier
+        output_buffer.extend_from_slice(&journal.journal_number.to_le_bytes()); // file header identifier
         output_buffer.extend_from_slice(&1u16.to_le_bytes()); // buffered pages (one)
         output_buffer.extend_from_slice(&page_number.to_le_bytes());
         output_buffer.extend_from_slice(&page_content);
-        let checksum = (JOURNAL_NUMBER as u16).wrapping_add(page_number);
+        let checksum = (journal.journal_number as u16).wrapping_add(page_number);
         output_buffer.extend_from_slice(&checksum.to_le_bytes());
 
         assert_eq!(&journal.buffer[..output_buffer.len()], &output_buffer);
@@ -190,7 +197,7 @@ mod tests {
         let mut output_second_page = Vec::new();
         output_second_page.extend_from_slice(&second_page_number.to_le_bytes());
         output_second_page.extend_from_slice(&second_page_content);
-        let second_checksum = (JOURNAL_NUMBER as u16).wrapping_add(second_page_number);
+        let second_checksum = (journal.journal_number as u16).wrapping_add(second_page_number);
         output_second_page.extend_from_slice(&second_checksum.to_le_bytes());
 
         assert_eq!(
