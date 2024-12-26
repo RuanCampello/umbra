@@ -43,6 +43,49 @@ const JOURNAL_PAGE_SIZE: usize = size_of::<u16>();
 const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u16>();
 const JOURNAL_HEADER_SIZE: usize = size_of::<u16>();
 
+const DEFAULT_PAGE_SIZE: usize = 4096;
+const DEFAULT_BUFFERED_PAGES: usize = 10;
+
+macro_rules! method_builder {
+    ($field:ident, $ty:ty) => {
+        pub fn $field(mut self, value: $ty) -> Self {
+            self.$field = value;
+            self
+        }
+    };
+}
+
+impl Pager<io::Cursor<Vec<u8>>> {
+    pub fn default() -> Self {
+        let io: io::Cursor<Vec<u8>> = io::Cursor::new(Vec::new());
+        let block_size = usize::default();
+
+        Self {
+            file: BlockIo::new(io, block_size, DEFAULT_PAGE_SIZE),
+            journal: Journal::new(
+                DEFAULT_PAGE_SIZE,
+                DEFAULT_BUFFERED_PAGES,
+                PathBuf::default(),
+            ),
+            dirty_pages: HashSet::new(),
+            journal_pages: HashSet::new(),
+            page_size: DEFAULT_PAGE_SIZE,
+            block_size,
+        }
+    }
+
+    pub fn journal_path_file(mut self, path: PathBuf) -> Self {
+        let journal = Journal::new(self.page_size, self.journal.max_pages, path);
+        self.journal = journal;
+        self
+    }
+
+    method_builder!(block_size, usize);
+    method_builder!(page_size, usize);
+    method_builder!(dirty_pages, HashSet<PageNumber>);
+    method_builder!(journal_pages, HashSet<PageNumber>);
+}
+
 impl<File: Seek + Read> Pager<File> {
     /// Reads directly from the disk.
     fn read(&mut self, page_number: PageNumber, buffer: &mut [u8]) -> io::Result<usize> {
