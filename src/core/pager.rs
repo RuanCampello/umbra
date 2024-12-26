@@ -73,7 +73,6 @@ impl<File> Journal<File> {
         let mut buffer = Vec::with_capacity(journal_chunk_size(page_size, max_pages));
         let mut rand = Rng::new();
         let journal_number = rand.u64(0..u64::MAX);
-        println!("journal_number randomly generated was: {journal_number}");
 
         buffer.extend_from_slice(&journal_number.to_le_bytes());
         buffer.extend_from_slice(&[0; JOURNAL_PAGE_SIZE]);

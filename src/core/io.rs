@@ -129,8 +129,8 @@ impl<IO: Seek + Read> BlockIo<IO> {
             if page_size >= block_size {
                 (page_size, page_size * page_number, 0)
             } else {
-                let offset = (page_size * page_number) & !(block_size - 1);
-                (block_size, page_size, page_number - offset)
+                let offset = (page_number * page_size) & !(block_size - 1);
+                (block_size, offset, page_number * page_size - offset)
             }
         };
 
