@@ -7,6 +7,63 @@ use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 use std::fmt::Debug;
 use std::{self, alloc, ptr};
 
+/// Fixed-size slotted page for storing [`super::btree::BTree`] nodes, used in indexes and tables.
+///
+/// The page uses a "slot array" to manage offsets pointing to stored cells. 
+/// [`Cell`] grow from the end of the page, while the slot array grows from the 
+/// start, leaving free space in the middle. Rearranging or deleting cells 
+/// only modifies the slot array, making these operations efficient.
+///
+/// ```text
+/// 
+///   HEADER   SLOT ARRAY   FREE SPACE    USED CELLS
+///  +------+----+----+----+----------+--------+--------+
+///  |      | O1 | O2 | O3 | ->    <- | CELL 3 | CELL 2 |
+///  +------+----+----+----+----------+--------+--------+
+/// 
+/// ```
+/// 
+struct Page {
+    buffer: BufferWithHeader<PageHeader>,
+}
+
+/// Slotted page header.
+///
+/// ```text
+///                           HEADER                                          CONTENT
+/// +-------------------------------------------------------------+-----------------------+
+/// | +------------+------------+------------------+-------------+ |                       |
+/// | | free_space | slot_count | last_used_offset | right_child | |                       |
+/// | +------------+------------+------------------+-------------+ |                       |
+/// +-------------------------------------------------------------+-----------------------+
+///                                          PAGE
+/// ```
+struct PageHeader {
+    /// The Page's free space available.
+    free_space: u16,
+    /// Number of entries in the slot array.
+    slot_count: u16,
+    /// Offset of the last inserted cell, starting from the page content.
+    /// For empty pages, this equals the content size, allowing consistent offset calculations.
+    last_used_offset: u16,
+    /// Manual padding to avoid uninitialized bytes, ensuring reliable memory comparison.
+    padding: u16,
+    /// Last child of this page.
+    pub right_child: PageNumber,
+}
+
+impl PageHeader {
+    pub fn new(size: usize) -> Self {
+        Self {
+            free_space: 0,
+            slot_count: 0,
+            last_used_offset: (size - PAGE_HEADER_SIZE as usize) as u16,
+            padding: 0,
+            right_child: 0,
+        }
+    }
+}
+
 ///The Cell struct holds a [`crate::core::btree::BTree`] entry (key/value) and a pointer to a node with smaller keys.
 /// It works with the BTree to rearrange entries during overflow or underflow situations.
 /// This uses a DST (Dynamically Sized Type), which is complex but improves efficiency when working with references and ownership.
@@ -32,6 +89,7 @@ struct CellHeader {
 const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
 const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
+const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const MIN_PAGE_SIZE: usize = 512;
 const MAX_PAGE_SIZE: usize = 64 << 10;
 

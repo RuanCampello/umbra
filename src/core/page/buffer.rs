@@ -145,6 +145,14 @@ impl<Header> BufferWithHeader<Header> {
         mem::ManuallyDrop::new(self).as_non_null()
     }
 
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { self.as_non_null().as_ref() }
+    }
+
+    pub fn as_mutable_slice(&mut self) -> &mut [u8] {
+        unsafe { self.as_non_null().as_mut() }
+    }
+
     /// The number of bytes that can be used for `content`.
     fn usable_space(size: usize) -> u16 {
         (size - size_of::<Header>()) as u16
@@ -167,6 +175,18 @@ impl<Header: Debug> Debug for BufferWithHeader<Header> {
             .field("header", &self.header)
             .field("size", &self.size)
             .finish()
+    }
+}
+
+impl<Header> AsRef<[u8]> for BufferWithHeader<Header> {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl<Header> AsMut<[u8]> for BufferWithHeader<Header> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.as_mutable_slice()
     }
 }
 
