@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
 /// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualizer of this data structure.
-struct BTree<Cmp> {
+pub(in crate::core) struct BTree<Cmp> {
     root: PageNumber,
     min_keys: usize,
     balanced_siblings: usize,

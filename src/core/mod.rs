@@ -2,9 +2,10 @@ use crate::sql::statements::Type;
 
 pub(in crate::core) mod btree;
 pub(in crate::core) mod io;
-pub(in crate::core) mod random;
+mod page;
 mod pager;
- 
+pub(in crate::core) mod random;
+
 type PageNumber = u16;
 
 /// Returns the byte length of a given SQL [`Type`] for integers.
