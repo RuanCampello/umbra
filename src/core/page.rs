@@ -4,7 +4,7 @@
 use crate::core::PageNumber;
 use std::any::type_name;
 use std::ptr::NonNull;
-use std::{self, alloc, any, mem};
+use std::{self, alloc, mem};
 
 ///The Cell struct holds a [`crate::core::btree::BTree`] entry (key/value) and a pointer to a node with smaller keys.
 /// It works with the BTree to rearrange entries during overflow or underflow situations.
@@ -33,6 +33,7 @@ struct CellHeader {
 /// Represents a buffer split into a header and content.
 /// Header size is determined by the generic type `Header`.
 /// Provides methods for accessing header and content directly.
+#[derive(Debug)]
 struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
     size: usize,
@@ -42,7 +43,7 @@ struct BufferWithHeader<Header> {
     header: NonNull<Header>,
 }
 
-const CELL_ALIGNMENT: usize = size_of::<CellHeader>();
+const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
 const PAGE_ALIGNMENT: usize = 4096;
 const MIN_PAGE_SIZE: usize = 512;
 const MAX_PAGE_SIZE: usize = 64 << 10;
@@ -56,6 +57,8 @@ impl<Header> BufferWithHeader<Header> {
 
     /// Works as [`Self::new`] but checks range bounds.
     pub fn for_page(size: usize) -> Self {
+        println!("MIN {MIN_PAGE_SIZE} MAX {MAX_PAGE_SIZE} SIZE {size}");
+
         assert!(
             (MIN_PAGE_SIZE..=MAX_PAGE_SIZE).contains(&size),
             "Page size {size} is not between {MIN_PAGE_SIZE} and {MAX_PAGE_SIZE}"
@@ -69,12 +72,8 @@ impl<Header> BufferWithHeader<Header> {
 
         assert!(
             size > header_size,
-            concat!(
-                "Buffer allocation failed: the requested size ({}) is too small.\n",
-                "Header type `{}` requires at least {} bytes, but the allocation size is {}."
-            ),
-            size,
-            any::type_name::<Header>(),
+            "Insufficient allocation size: {} requires at least {} bytes, but got {}",
+            type_name::<Self>(),
             header_size,
             size,
         );
@@ -93,7 +92,7 @@ impl<Header> BufferWithHeader<Header> {
     /// Creates a buffer from a [`NonNull`] pointer.
     pub unsafe fn from_non_null(pointer: NonNull<[u8]>) -> Self {
         let header_size = size_of::<Header>();
-        let name = any::type_name::<Self>();
+        let name = type_name::<Self>();
         let size = pointer.len();
 
         assert!(
@@ -171,5 +170,32 @@ impl<Header> Drop for BufferWithHeader<Header> {
             .expect("Unable to create layout for buffer");
 
         unsafe { alloc::dealloc(self.as_non_null().as_ptr() as *mut u8, layout) }
+    }
+}
+
+mod tests {
+    use crate::core::page::*;
+
+    #[test]
+    fn test_buffer_allocation_with_range() {
+        let buffer = BufferWithHeader::<CellHeader>::new(MIN_PAGE_SIZE);
+        assert_eq!(buffer.size, MIN_PAGE_SIZE);
+        
+        println!("buffer {buffer:#?}");
+
+        let buffer = BufferWithHeader::<CellHeader>::new(MAX_PAGE_SIZE);
+        assert_eq!(buffer.size, MAX_PAGE_SIZE);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_allocation_below_min() {
+        BufferWithHeader::<CellHeader>::for_page(MIN_PAGE_SIZE - 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_allocation_above_max() {
+        BufferWithHeader::<CellHeader>::for_page(MAX_PAGE_SIZE + 1);
     }
 }
