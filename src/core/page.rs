@@ -3,8 +3,9 @@
 
 use crate::core::PageNumber;
 use std::any::type_name;
+use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
-use std::{self, alloc, mem};
+use std::{self, alloc, mem, ptr};
 
 ///The Cell struct holds a [`crate::core::btree::BTree`] entry (key/value) and a pointer to a node with smaller keys.
 /// It works with the BTree to rearrange entries during overflow or underflow situations.
@@ -33,7 +34,6 @@ struct CellHeader {
 /// Represents a buffer split into a header and content.
 /// Header size is determined by the generic type `Header`.
 /// Provides methods for accessing header and content directly.
-#[derive(Debug)]
 struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
     size: usize,
@@ -44,9 +44,53 @@ struct BufferWithHeader<Header> {
 }
 
 const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
+const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
 const MIN_PAGE_SIZE: usize = 512;
 const MAX_PAGE_SIZE: usize = 64 << 10;
+
+impl Cell {
+    pub fn new(mut content: Vec<u8>) -> Box<Self> {
+        let size = Self::calculate_aligned_size(&content);
+        content.resize(size as usize, 0); // padding
+
+        let mut buffer = unsafe {
+            let layout_size = (size + CELL_HEADER_SIZE) as usize;
+
+            let layout = alloc::Layout::from_size_align(layout_size, CELL_ALIGNMENT)
+                .expect("Failed to create layout for Cell buffer");
+
+            let ptr = alloc::alloc_zeroed(layout);
+            if ptr.is_null() {
+                panic!("Memory allocation failed for BufferWithHeader");
+            }
+
+            let non_null = BufferWithHeader::<CellHeader>::from_raw_parts(ptr, layout_size);
+            BufferWithHeader::<CellHeader>::from_non_null(non_null)
+        };
+
+        buffer.mutable_header().size = size;
+        buffer.mutable_content().copy_from_slice(&content);
+
+        // TODO: this is a much complicated case. checkout it here later. very dangerous. 
+        // maybe implement a smart pointer, because it can seg fault, and no one want that in rust, right? 
+
+        unsafe {
+            Box::from_raw(ptr::slice_from_raw_parts(
+                buffer.into_non_null().cast::<u8>().as_ptr(),
+                content.len(),
+            ) as *mut Cell)
+        }
+    }
+
+    /// Calculates the aligned size of the data based on CELL_ALIGNMENT.
+    pub fn calculate_aligned_size(data: &[u8]) -> u16 {
+        alloc::Layout::from_size_align(data.len(), CELL_ALIGNMENT)
+            .unwrap()
+            .pad_to_align()
+            .size() as u16
+    }
+}
 
 impl<Header> BufferWithHeader<Header> {
     /// Creates a buffer with the given `size` with all bytes set as 0.
@@ -86,6 +130,10 @@ impl<Header> BufferWithHeader<Header> {
             panic!("Memory allocation failed for BufferWithHeader");
         }
 
+        Self::from_raw_parts(ptr, size)
+    }
+
+    pub fn from_raw_parts(ptr: *mut u8, size: usize) -> NonNull<[u8]> {
         NonNull::slice_from_raw_parts(NonNull::new(ptr).expect("Non-null allocation failed"), size)
     }
 
@@ -158,6 +206,19 @@ impl<Header> BufferWithHeader<Header> {
         NonNull::slice_from_raw_parts(self.header.cast::<u8>(), self.size)
     }
 
+    pub fn mutable_header(&mut self) -> &mut Header {
+        unsafe { self.header.as_mut() }
+    }
+
+    pub fn mutable_content(&mut self) -> &mut [u8] {
+        unsafe { self.content.as_mut() }
+    }
+
+    /// Consumes `self` and return the memory buffer pointer.
+    pub fn into_non_null(self) -> NonNull<[u8]> {
+        mem::ManuallyDrop::new(self).as_non_null()
+    }
+
     /// The number of bytes that can be used for `content`.
     fn usable_space(size: usize) -> u16 {
         (size - size_of::<Header>()) as u16
@@ -173,15 +234,25 @@ impl<Header> Drop for BufferWithHeader<Header> {
     }
 }
 
+impl<Header: Debug> Debug for BufferWithHeader<Header> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BufferWithHeader")
+            .field("content", &self.content)
+            .field("header", &self.header)
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
 mod tests {
     use crate::core::page::*;
 
     #[test]
-    fn test_buffer_allocation_with_range() {
+    fn test_buffer_allocation_size() {
         let buffer = BufferWithHeader::<CellHeader>::new(MIN_PAGE_SIZE);
         assert_eq!(buffer.size, MIN_PAGE_SIZE);
-        
-        println!("buffer {buffer:#?}");
+
+        println!("Buffer {buffer:#?}");
 
         let buffer = BufferWithHeader::<CellHeader>::new(MAX_PAGE_SIZE);
         assert_eq!(buffer.size, MAX_PAGE_SIZE);
