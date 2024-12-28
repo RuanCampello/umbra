@@ -28,6 +28,7 @@ use std::{self, alloc, ptr};
 ///
 /// ```
 ///
+#[derive(Debug)]
 struct Page {
     /// In-memory buffer containing data read from disk, including a header.
     buffer: BufferWithHeader<PageHeader>,
@@ -46,6 +47,7 @@ struct Page {
 /// +-------------------------------------------------------------+-------------------+
 ///                                     PAGE
 /// ```
+#[derive(Debug)]
 struct PageHeader {
     /// The Page's free space available.
     free_space: u16,
@@ -113,18 +115,30 @@ impl Page {
 
     /// Adds a given [`Cell`] to the page, which can possibly overflow it.
     pub fn push(&mut self, cell: Box<Cell>) {
+        let idx = self.buffer.header().slot_count + self.overflow.len() as u16;
+
+        self.insert(idx, cell)
+    }
+
+    pub fn insert(&mut self, idx: SlotId, cell: Box<Cell>) {
         let content_length = cell.content.len();
-        let idx = self.buffer.size as u16;
-        let max = Self::max_content_size(Self::usable_space(idx as usize));
+        let max = Self::max_content_size(Self::usable_space(self.buffer.size));
 
         assert!(
             content_length <= max as usize,
             "Unable to storage a content with {content_length} size where the max allowed is {max}"
         );
 
-        // match !self.overflow.is_empty() {
-        //
-        // }
+        match !self.overflow.is_empty() {
+            true => {
+                self.overflow.insert(idx, cell);
+            }
+            false => {
+                if let Err(cell) = self.try_insert(idx, cell) {
+                    self.overflow.insert(idx, cell);
+                }
+            }
+        }
     }
 
     /// Attempts to insert the given [`Cell`]in this page.
@@ -142,7 +156,7 @@ impl Page {
         let space_available = {
             let right = self.buffer.header().last_used_offset;
             let left = self.buffer.header().slot_count * SLOT_SIZE;
-            left - right
+            right - left
         };
 
         if space_available < cell_size {
@@ -166,7 +180,7 @@ impl Page {
         mutable_header.last_used_offset = offset;
         mutable_header.free_space -= cell_size;
         mutable_header.slot_count += 1;
-
+        
         let idx = id as usize;
 
         if id < self.buffer.header().slot_count {
@@ -355,6 +369,8 @@ mod tests {
 
     /// Asserts that the given page contains all the provided cells in the correct order.
     fn assert_eq_cells(page: &Page, cells: &[Box<Cell>]) {
+        // println!("Page: {page:#?}, cells: {cells:#?}");
+
         assert_eq!(
             page.buffer.header().slot_count,
             cells.len() as u16,
@@ -414,12 +430,20 @@ mod tests {
 
     #[test]
     fn test_push_different_bytes_sizes_cell() {
-        let cells = fixed_size_cells(32, 3);
+        let cells = fixed_size_cells(50, 10);
+        let cells_clone = fixed_size_cells(50, 10);
+        
         let size = page_size_to_fit(&cells);
 
         let mut page = Page::alloc(size);
-        cells.into_iter().map(|cell| page.push(cell));
+        for cell in cells_clone {
+            println!("Pushed {cell:?}");
+            page.push(cell);
+        }
         
-        todo!()
+        println!("page {:#?}", page.buffer.header());
+        println!("slot count {}", page.buffer.header().slot_count);
+        
+        // assert_consecutive_cell_offsets(&page, &cells)
     }
 }
