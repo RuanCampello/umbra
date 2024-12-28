@@ -2,6 +2,7 @@
 // ! As this manually alloc memory, it contains the only database's `unsafe` module.
 
 mod buffer;
+mod overflow;
 
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 use std::collections::HashMap;
@@ -55,18 +56,6 @@ struct PageHeader {
     padding: u16,
     /// Last child of this page.
     pub right_child: PageNumber,
-}
-
-impl PageHeader {
-    pub fn new(size: usize) -> Self {
-        Self {
-            free_space: 0,
-            slot_count: 0,
-            last_used_offset: (size - PAGE_HEADER_SIZE as usize) as u16,
-            padding: 0,
-            right_child: 0,
-        }
-    }
 }
 
 ///The Cell struct holds a [`crate::core::btree::BTree`] entry (key/value) and a pointer to a node with smaller keys.
@@ -230,6 +219,18 @@ impl Cell {
     /// the space required to store its offset in the slot array.
     pub fn storage_size(&self) -> u16 {
         SLOT_SIZE + self.total_size()
+    }
+}
+
+impl PageHeader {
+    pub fn new(size: usize) -> Self {
+        Self {
+            free_space: 0,
+            slot_count: 0,
+            last_used_offset: (size - PAGE_HEADER_SIZE as usize) as u16,
+            padding: 0,
+            right_child: 0,
+        }
     }
 }
 
