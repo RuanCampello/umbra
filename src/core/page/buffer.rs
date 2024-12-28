@@ -11,7 +11,7 @@ use std::{alloc, mem};
 /// Provides methods for accessing header and content directly.
 pub(in crate::core::page) struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
-    size: usize,
+    pub(in crate::core::page) size: usize,
     /// Pointer to the content.
     content: NonNull<[u8]>,
     /// Pointer to the header.
@@ -154,7 +154,7 @@ impl<Header> BufferWithHeader<Header> {
     }
 
     /// The number of bytes that can be used for `content`.
-    fn usable_space(size: usize) -> u16 {
+    pub(crate) fn usable_space(size: usize) -> u16 {
         (size - size_of::<Header>()) as u16
     }
 }

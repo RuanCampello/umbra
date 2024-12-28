@@ -4,39 +4,43 @@
 mod buffer;
 
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::{self, alloc, ptr};
 
 /// Fixed-size slotted page for storing [`super::btree::BTree`] nodes, used in indexes and tables.
 ///
-/// The page uses a "slot array" to manage offsets pointing to stored cells. 
-/// [`Cell`] grow from the end of the page, while the slot array grows from the 
-/// start, leaving free space in the middle. Rearranging or deleting cells 
+/// The page uses a "slot array" to manage offsets pointing to stored cells.
+/// [`Cell`] grow from the end of the page, while the slot array grows from the
+/// start, leaving free space in the middle. Rearranging or deleting cells
 /// only modifies the slot array, making these operations efficient.
 ///
 /// ```text
-/// 
+///
 ///   HEADER   SLOT ARRAY   FREE SPACE    USED CELLS
 ///  +------+----+----+----+----------+--------+--------+
 ///  |      | O1 | O2 | O3 | ->    <- | CELL 3 | CELL 2 |
 ///  +------+----+----+----+----------+--------+--------+
-/// 
+///
 /// ```
-/// 
+///
 struct Page {
+    /// In-memory buffer containing data read from disk, including a header.
     buffer: BufferWithHeader<PageHeader>,
+    /// Map storing overflow cells, keyed by their slot IDs.
+    overflow: HashMap<SlotId, Box<Cell>>,
 }
 
 /// Slotted page header.
 ///
 /// ```text
-///                           HEADER                                          CONTENT
-/// +-------------------------------------------------------------+-----------------------+
-/// | +------------+------------+------------------+-------------+ |                       |
-/// | | free_space | slot_count | last_used_offset | right_child | |                       |
-/// | +------------+------------+------------------+-------------+ |                       |
-/// +-------------------------------------------------------------+-----------------------+
-///                                          PAGE
+///                           HEADER                                     CONTENT
+/// +-------------------------------------------------------------+-------------------+
+/// | +------------+------------+------------------+-------------+ |                  |
+/// | | free_space | slot_count | last_used_offset | right_child | |                  |
+/// | +------------+------------+------------------+-------------+ |                  |
+/// +-------------------------------------------------------------+-------------------+
+///                                     PAGE
 /// ```
 struct PageHeader {
     /// The Page's free space available.
@@ -86,12 +90,46 @@ struct CellHeader {
     left_child: PageNumber,
 }
 
+/// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore can be indexed with 2 bytes.
+type SlotId = u16;
+
 const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
 const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
 const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const MIN_PAGE_SIZE: usize = 512;
 const MAX_PAGE_SIZE: usize = 64 << 10;
+
+impl Page {
+    /// Allocates a new page with a given size.
+    pub fn alloc(size: usize) -> Self {
+        Self::from(BufferWithHeader::<PageHeader>::for_page(size))
+    }
+
+    /// Calculates the available space within a page for storing [`Cell`] instances.
+    ///
+    /// This value is determined by subtracting the size of the page header from the
+    /// total page size. Since [`MAX_PAGE_SIZE`] is 64 KiB, the usable space should
+    /// typically be less than [`u16::MAX`], as a zero-sized page header would be
+    /// impractical.
+    ///
+    /// Check [`BufferWithHeader::usable_space`].
+    pub fn usable_space(page_size: usize) -> u16 {
+        BufferWithHeader::<PageHeader>::usable_space(page_size)
+    }
+}
+
+impl<Header> From<BufferWithHeader<Header>> for Page {
+    fn from(buffer: BufferWithHeader<Header>) -> Self {
+        let mut buffer = buffer.cast();
+        *buffer.mutable_header() = PageHeader::new(buffer.size);
+
+        Self {
+            buffer,
+            overflow: HashMap::new(),
+        }
+    }
+}
 
 impl Cell {
     pub fn new(mut content: Vec<u8>) -> Box<Self> {
