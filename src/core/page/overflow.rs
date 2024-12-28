@@ -1,5 +1,4 @@
-use crate::core::page::buffer::BufferWithHeader;
-use crate::core::PageNumber;
+use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 
 /// Cell overflow page.
 ///

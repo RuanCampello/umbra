@@ -15,7 +15,7 @@ pub(in crate::core::page) struct BufferWithHeader<Header> {
     /// Pointer to the content.
     pub(crate) content: NonNull<[u8]>,
     /// Pointer to the header.
-    header: NonNull<Header>,
+    pub(crate) header: NonNull<Header>,
 }
 
 impl<Header> BufferWithHeader<Header> {

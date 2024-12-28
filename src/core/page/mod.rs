@@ -3,6 +3,7 @@
 
 mod buffer;
 mod overflow;
+mod zero;
 
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 use std::collections::HashMap;
