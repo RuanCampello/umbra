@@ -6,6 +6,7 @@ mod overflow;
 mod zero;
 
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ptr::NonNull;
@@ -110,6 +111,74 @@ impl Page {
         BufferWithHeader::<PageHeader>::usable_space(page_size)
     }
 
+    /// Adds a given [`Cell`] to the page, which can possibly overflow it.
+    pub fn push(&mut self, cell: Box<Cell>) {
+        let content_length = cell.content.len();
+        let idx = self.buffer.size as u16;
+        let max = Self::max_content_size(Self::usable_space(idx as usize));
+
+        assert!(
+            content_length <= max as usize,
+            "Unable to storage a content with {content_length} size where the max allowed is {max}"
+        );
+
+        // match !self.overflow.is_empty() {
+        //
+        // }
+    }
+
+    /// Attempts to insert the given [`Cell`]in this page.
+    ///
+    /// If there's enough contiguous free space, inserts the cell directly.
+    /// Otherwise, defragments the page to create enough space and then inserts.
+    pub fn try_insert(&mut self, id: SlotId, cell: Box<Cell>) -> Result<SlotId, Box<Cell>> {
+        let cell_size = cell.storage_size();
+
+        // what would you expect?
+        if self.buffer.header().free_space < cell_size {
+            return Err(cell);
+        }
+
+        let space_available = {
+            let right = self.buffer.header().last_used_offset;
+            let left = self.buffer.header().slot_count * SLOT_SIZE;
+            left - right
+        };
+
+        if space_available < cell_size {
+            // TODO: we can fit it, but we'll need to defrag it first
+        }
+
+        let offset = self.buffer.header().last_used_offset - cell.total_size();
+
+        unsafe {
+            let cell_header_size = cell.header.size as usize;
+
+            let header: NonNull<CellHeader> = self.buffer.content.byte_add(offset as usize).cast();
+            header.write(cell.header);
+            let mut content = NonNull::slice_from_raw_parts(header.add(1).cast(), cell_header_size);
+
+            content.as_mut().copy_from_slice(&cell.content)
+        }
+
+        let mutable_header = self.buffer.mutable_header();
+
+        mutable_header.last_used_offset = offset;
+        mutable_header.free_space -= cell_size;
+        mutable_header.slot_count += 1;
+
+        let idx = id as usize;
+
+        if id < self.buffer.header().slot_count {
+            let right = self.buffer.header().slot_count as usize - 1;
+
+            self.mutable_slot_array().copy_within(idx..right, idx + 1)
+        }
+
+        self.mutable_slot_array()[idx] = offset;
+        Ok(id)
+    }
+
     /// Returns a [`Cell`] reference of a given [`SlotId`].
     pub fn cell(&self, id: SlotId) -> &Cell {
         let cell = self.cell_pointer(id);
@@ -154,6 +223,11 @@ impl Page {
     /// Returns a mutable reference of the slot array slice.
     fn mutable_slot_array(&mut self) -> &mut [u16] {
         unsafe { self.slot_array_pointer().as_mut() }
+    }
+
+    /// The maximum content size that can be stored in a given usable space.
+    fn max_content_size(usable_size: u16) -> u16 {
+        (usable_size - CELL_HEADER_SIZE - SLOT_SIZE) & !(CELL_ALIGNMENT as u16 - 1)
     }
 }
 
@@ -248,6 +322,19 @@ mod tests {
             .collect()
     }
 
+    fn fixed_size_cells(size: usize, amount: usize) -> Vec<Box<Cell>> {
+        create_cells_with_size(&vec![size; amount])
+    }
+
+    fn page_size_to_fit(cells: &[Box<Cell>]) -> usize {
+        let size = PAGE_HEADER_SIZE + cells.iter().map(|page| page.storage_size()).sum::<u16>();
+
+        alloc::Layout::from_size_align(size as usize, CELL_ALIGNMENT)
+            .expect("Failed to create layout")
+            .pad_to_align()
+            .size()
+    }
+
     /// Calls [`assert_eq_cells`] to perform general assertions on the page and cells.
     /// Calculates the expected offset for each cell based on its size and the preceding cells.
     /// Asserts that the calculated expected offset matches the actual offset stored in the page's slot array for each cell.
@@ -323,5 +410,16 @@ mod tests {
         assert_eq!(buffer.size, TOTAL_SIZE);
         assert_eq!(buffer.header(), &header);
         assert_eq!(buffer.content(), &[content_byte; CONTENT_SIZE]);
+    }
+
+    #[test]
+    fn test_push_different_bytes_sizes_cell() {
+        let cells = fixed_size_cells(32, 3);
+        let size = page_size_to_fit(&cells);
+
+        let mut page = Page::alloc(size);
+        cells.into_iter().map(|cell| page.push(cell));
+        
+        todo!()
     }
 }
