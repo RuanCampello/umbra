@@ -4,6 +4,7 @@ use crate::core::{
 };
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
+use std::ptr;
 
 /// The first page of the DB file (offset 0) is a special case.
 ///
@@ -40,6 +41,27 @@ struct DatabaseHeader {
 /// This means literally "dusk", because "umbra" wouldn't fit in an [`core::u32`].
 const DATABASE_IDENTIFIER: u32 = 0x6475736b;
 
+impl PageZero {
+    pub fn alloc(size: usize) -> Self {
+        Self::from(BufferWithHeader::<DatabaseHeader>::for_page(size))
+    }
+
+    /// Erase all the metadata and returns the underlying buffer.
+    fn buffer(mut self) -> BufferWithHeader<DatabaseHeader> {
+        let Page {
+            buffer, overflow, ..
+        } = unsafe { ManuallyDrop::take(&mut self.page) };
+
+        std::mem::forget(buffer);
+        std::mem::drop(overflow);
+
+        let buffer = unsafe { ManuallyDrop::take(&mut self.buffer) };
+        std::mem::forget(self); // very poetic, init?
+
+        buffer
+    }
+}
+
 impl DatabaseHeader {
     pub fn new(size: usize) -> Self {
         Self {
@@ -50,6 +72,12 @@ impl DatabaseHeader {
             first_free_page: 0,
             last_free_page: 0,
         }
+    }
+}
+
+impl Drop for PageZero {
+    fn drop(&mut self) {
+        unsafe { drop(ptr::from_mut(self).read().buffer()) }
     }
 }
 
