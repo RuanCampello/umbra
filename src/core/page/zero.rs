@@ -46,6 +46,16 @@ impl PageZero {
         Self::from(BufferWithHeader::<DatabaseHeader>::for_page(size))
     }
 
+    /// Returns a reference of the slot [`Page`].
+    pub fn btree_page(&self) -> &Page {
+        &self.page
+    }
+
+    /// Returns a mutable reference of the slot [`Page`].
+    pub fn mutable_btree_page(&mut self) -> &mut Page {
+        &mut self.page
+    }
+
     /// Erase all the metadata and returns the underlying buffer.
     fn buffer(mut self) -> BufferWithHeader<DatabaseHeader> {
         let Page {

@@ -144,6 +144,10 @@ impl<Header> BufferWithHeader<Header> {
         unsafe { self.content.as_mut() }
     }
 
+    pub fn content(&self) -> &[u8] {
+        unsafe { self.content.as_ref() }
+    }
+
     /// Consumes `self` and return the memory buffer pointer.
     pub fn into_non_null(self) -> NonNull<[u8]> {
         mem::ManuallyDrop::new(self).as_non_null()

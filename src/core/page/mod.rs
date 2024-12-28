@@ -236,7 +236,8 @@ impl PageHeader {
 }
 
 mod tests {
-    use crate::core::page::*;
+    use crate::core::page::{overflow::*, *};
+    use std::slice;
 
     /// Helper function to create cells with variables sizes.
     fn create_cells_with_size(sizes: &[usize]) -> Vec<Box<Cell>> {
@@ -293,5 +294,34 @@ mod tests {
                 "Data mismatch for cell at index {idx}"
             );
         }
+    }
+
+    #[test]
+    fn test_buffer_with_header_construction() {
+        const HEADER_SIZE: usize = size_of::<OverflowPageHeader>();
+        const CONTENT_SIZE: usize = 69;
+        const TOTAL_SIZE: usize = HEADER_SIZE + CONTENT_SIZE;
+
+        let mut buffer = BufferWithHeader::<OverflowPageHeader>::new(TOTAL_SIZE);
+        let header = OverflowPageHeader::new(10, CONTENT_SIZE as u16);
+        let content_byte = 0b11000; // 24 in decimal
+
+        *buffer.mutable_header() = header.clone();
+        buffer.mutable_content().fill(content_byte);
+
+        let mut expected_buffer = [0; TOTAL_SIZE];
+        expected_buffer[HEADER_SIZE..].fill(content_byte);
+
+        unsafe {
+            expected_buffer[..HEADER_SIZE].copy_from_slice(slice::from_raw_parts(
+                ptr::from_ref(&header).cast(),
+                HEADER_SIZE,
+            ));
+        };
+
+        assert_eq!(buffer.as_slice(), &expected_buffer);
+        assert_eq!(buffer.size, TOTAL_SIZE);
+        assert_eq!(buffer.header(), &header);
+        assert_eq!(buffer.content(), &[content_byte; CONTENT_SIZE]);
     }
 }

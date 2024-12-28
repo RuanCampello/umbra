@@ -47,14 +47,14 @@ pub(in crate::core::page) struct OverflowPage {
 }
 
 /// Header of an overflow page.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Clone)]
 pub(in crate::core::page) struct OverflowPageHeader {
     /// Next overflow page in the linked list.
     pub next: PageNumber,
     /// Number of bytes stored in this page.
     pub num_bytes: u16,
     /// Padding for alignment.
-    padding: u16,
+    pub(crate) padding: u16,
 }
 
 /// Free pages can be represented using the [`OverflowPage`] struct,
@@ -64,6 +64,16 @@ type FreePage = OverflowPage;
 impl OverflowPage {
     pub fn alloc(size: usize) -> Self {
         Self::from(BufferWithHeader::<OverflowPageHeader>::for_page(size))
+    }
+}
+
+impl OverflowPageHeader {
+    pub fn new(next: PageNumber, num_bytes: u16) -> Self {
+        Self {
+            next,
+            num_bytes,
+            padding: 0,
+        }
     }
 }
 
