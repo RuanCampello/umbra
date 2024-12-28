@@ -11,9 +11,9 @@ use std::{alloc, mem};
 /// Provides methods for accessing header and content directly.
 pub(in crate::core::page) struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
-    pub(in crate::core::page) size: usize,
+    pub(crate) size: usize,
     /// Pointer to the content.
-    content: NonNull<[u8]>,
+    pub(crate) content: NonNull<[u8]>,
     /// Pointer to the header.
     header: NonNull<Header>,
 }
@@ -134,6 +134,10 @@ impl<Header> BufferWithHeader<Header> {
 
     pub fn mutable_header(&mut self) -> &mut Header {
         unsafe { self.header.as_mut() }
+    }
+
+    pub fn header(&self) -> &Header {
+        unsafe { self.header.as_ref() }
     }
 
     pub fn mutable_content(&mut self) -> &mut [u8] {

@@ -6,6 +6,7 @@ mod buffer;
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ptr::NonNull;
 use std::{self, alloc, ptr};
 
 /// Fixed-size slotted page for storing [`super::btree::BTree`] nodes, used in indexes and tables.
@@ -95,6 +96,7 @@ type SlotId = u16;
 
 const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
 const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
+const SLOT_SIZE: u16 = size_of::<u16>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
 const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const MIN_PAGE_SIZE: usize = 512;
@@ -116,6 +118,52 @@ impl Page {
     /// Check [`BufferWithHeader::usable_space`].
     pub fn usable_space(page_size: usize) -> u16 {
         BufferWithHeader::<PageHeader>::usable_space(page_size)
+    }
+
+    /// Returns a [`Cell`] reference of a given [`SlotId`].
+    pub fn cell(&self, id: SlotId) -> &Cell {
+        let cell = self.cell_pointer(id);
+
+        unsafe { cell.as_ref() }
+    }
+
+    /// Returns a pointer to a [`Cell`] of a given [`SlotId`].
+    fn cell_pointer(&self, id: SlotId) -> NonNull<Cell> {
+        let length = self.buffer.header().slot_count;
+        debug_assert!(
+            id < length,
+            "SlotId {id} out of bounds for slot array with length {length}"
+        );
+
+        unsafe { self.cell_at_offset(self.slot_array()[id as usize]) }
+    }
+
+    /// Returns a [`Cell`] pointer of a given offset.
+    unsafe fn cell_at_offset(&self, offset: u16) -> NonNull<Cell> {
+        let header: NonNull<CellHeader> = self.buffer.content.byte_add(offset as usize).cast();
+
+        let cell =
+            ptr::slice_from_raw_parts(header.cast::<u8>().as_ptr(), header.as_ref().size as usize)
+                as *mut Cell;
+        NonNull::new_unchecked(cell)
+    }
+
+    /// Returns a pointer to the slot array.
+    fn slot_array_pointer(&self) -> NonNull<[u16]> {
+        NonNull::slice_from_raw_parts(
+            self.buffer.content.cast(),
+            self.buffer.header().slot_count as usize,
+        )
+    }
+
+    /// Returns the reference of the slot array slice.
+    fn slot_array(&self) -> &[u16] {
+        unsafe { self.slot_array_pointer().as_ref() }
+    }
+
+    /// Returns a mutable reference of the slot array slice.
+    fn mutable_slot_array(&mut self) -> &mut [u16] {
+        unsafe { self.slot_array_pointer().as_mut() }
     }
 }
 
@@ -171,5 +219,77 @@ impl Cell {
             .unwrap()
             .pad_to_align()
             .size() as u16
+    }
+
+    /// The cell's total size, including the header.
+    pub fn total_size(&self) -> u16 {
+        CELL_HEADER_SIZE + self.header.size
+    }
+
+    /// Returns the total size of the cell in storage, including its header and
+    /// the space required to store its offset in the slot array.
+    pub fn storage_size(&self) -> u16 {
+        SLOT_SIZE + self.total_size()
+    }
+}
+
+mod tests {
+    use crate::core::page::*;
+
+    /// Helper function to create cells with variables sizes.
+    fn create_cells_with_size(sizes: &[usize]) -> Vec<Box<Cell>> {
+        sizes
+            .iter()
+            .enumerate()
+            .map(|(idx, size)| Cell::new(vec![idx as u8 + 1; *size]))
+            .collect()
+    }
+
+    /// Calls [`assert_eq_cells`] to perform general assertions on the page and cells.
+    /// Calculates the expected offset for each cell based on its size and the preceding cells.
+    /// Asserts that the calculated expected offset matches the actual offset stored in the page's slot array for each cell.
+    fn assert_consecutive_cell_offsets(page: &Page, cells: &[Box<Cell>]) {
+        assert_eq_cells(page, cells);
+
+        let mut expected_offset = page.buffer.size - PAGE_HEADER_SIZE as usize;
+        for (i, cell) in cells.iter().enumerate() {
+            expected_offset -= cell.total_size() as usize;
+
+            assert_eq!(
+                page.slot_array()[i],
+                expected_offset as u16,
+                "Offset mismatch for cell at index {i}: {cell:?}"
+            );
+        }
+    }
+
+    /// Asserts that the given page contains all the provided cells in the correct order.
+    fn assert_eq_cells(page: &Page, cells: &[Box<Cell>]) {
+        assert_eq!(
+            page.buffer.header().slot_count,
+            cells.len() as u16,
+            "Number of slots in page header does not match the number of inserted cells"
+        );
+
+        // calculate expected free space
+        let used_space =
+            PAGE_HEADER_SIZE + cells.iter().map(|cell| cell.storage_size()).sum::<u16>();
+        let expected_free_space = page.buffer.size - used_space as usize;
+
+        assert_eq!(
+            page.buffer.header().free_space,
+            expected_free_space as u16,
+            "Page with size {} should contain {expected_free_space} bytes of free space after inserting paylods of sizes {:?}",
+            page.buffer.size,
+            cells.iter().map(|cell| cell.header.size).collect::<Vec<_>>(),
+        );
+
+        for (idx, cell) in cells.iter().enumerate() {
+            assert_eq!(
+                page.cell(idx as u16),
+                cell.as_ref(),
+                "Data mismatch for cell at index {idx}"
+            );
+        }
     }
 }
