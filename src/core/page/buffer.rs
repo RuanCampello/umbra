@@ -198,6 +198,7 @@ impl<Header> AsMut<[u8]> for BufferWithHeader<Header> {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use crate::core::page::*;
 

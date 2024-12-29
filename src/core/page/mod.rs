@@ -6,7 +6,7 @@ mod overflow;
 mod zero;
 
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::{self, alloc, ptr};
@@ -154,7 +154,7 @@ impl Page {
         };
 
         if space_available < cell_size {
-            // TODO: we can fit it, but we'll need to defrag it first
+            self.defragment()
         }
 
         let offset = self.buffer.header().last_used_offset - cell.total_size();
@@ -185,6 +185,34 @@ impl Page {
 
         self.mutable_slot_array()[idx] = offset;
         Ok(id)
+    }
+
+    /// Defragments the page by shifting cells to the right to create a single contiguous free space block.
+    pub fn defragment(&mut self) {
+        let mut offsets = BinaryHeap::from_iter(
+            self.slot_array()
+                .iter()
+                .enumerate()
+                .map(|(idx, offset)| (*offset, idx)),
+        );
+
+        let mut dest = self.buffer.size - PAGE_HEADER_SIZE as usize;
+
+        // moves the cell to its new position in the buffer, updating the destination index.
+        while let Some((offset, idx)) = offsets.pop() {
+            unsafe {
+                let cell = self.cell_at_offset(offset);
+                let size = cell.as_ref().total_size() as usize;
+                dest -= size;
+
+                cell.cast::<u8>()
+                    .copy_to(self.buffer.content.byte_add(dest).cast::<u8>(), size)
+            }
+
+            self.mutable_slot_array()[idx] = dest as u16;
+        }
+
+        self.buffer.mutable_header().last_used_offset = dest as u16;
     }
 
     /// Returns a [`Cell`] reference of a given [`SlotId`].
@@ -305,6 +333,40 @@ impl Cell {
     }
 }
 
+impl Clone for Box<Cell> {
+    fn clone(&self) -> Self {
+        self.as_ref().to_owned()
+    }
+}
+
+impl ToOwned for Cell {
+    type Owned = Box<Cell>;
+
+    fn to_owned(&self) -> Self::Owned {
+        let header_size = size_of::<CellHeader>();
+        let content_size = self.content.len();
+        let total_size = header_size + content_size;
+
+        let layout = alloc::Layout::from_size_align(total_size, align_of::<CellHeader>())
+            .expect("Unable to create layout for Cell");
+        let ptr = unsafe { alloc::alloc(layout) };
+        if ptr.is_null() {
+            panic!("Memory allocation failed for Cell");
+        }
+
+        unsafe {
+            ptr::copy_nonoverlapping(&self.header as *const CellHeader, ptr as *mut CellHeader, 1);
+            let content_ptr = ptr.add(header_size);
+
+            ptr::copy_nonoverlapping(self.content.as_ptr(), content_ptr, content_size);
+
+            Box::from_raw(
+                ptr::slice_from_raw_parts_mut(ptr as *mut CellHeader, content_size) as *mut Cell,
+            )
+        }
+    }
+}
+
 impl PageHeader {
     pub fn new(size: usize) -> Self {
         Self {
@@ -317,9 +379,16 @@ impl PageHeader {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use crate::core::page::{overflow::*, *};
     use std::slice;
+
+    impl Page {
+        fn push_all_cells<'a>(&'a mut self, cells: &'a [Box<Cell>]) {
+            cells.iter().for_each(|cell| self.push(cell.clone()))
+        }
+    }
 
     /// Helper function to create cells with variables sizes.
     fn create_cells_with_size(sizes: &[usize]) -> Vec<Box<Cell>> {
@@ -424,18 +493,23 @@ mod tests {
 
     #[test]
     fn test_push_different_bytes_sizes_cell() {
-        let cells = fixed_size_cells(50, 10);
-        let cells_clone = fixed_size_cells(50, 10);
-
+        let cells = fixed_size_cells(69, 10);
         let size = page_size_to_fit(&cells);
 
         let mut page = Page::alloc(size);
-        for cell in cells_clone {
-            page.push(cell);
-        }
+        page.push_all_cells(&cells);
+
         println!("page {:#?}", page.buffer.header());
         println!("slot count {}", page.buffer.header().slot_count);
 
         assert_consecutive_cell_offsets(&page, &cells)
     }
+
+    // #[test]
+    // fn test_defragmentation() {
+    //     let cells = create_cells_with_size(&[59, 99, 69, 420]);
+    //     let mut page = Page::alloc(page_size_to_fit(&cells));
+    //     page.push_all_cells(&cells);
+    // TODO: test removal before 
+    // }
 }
