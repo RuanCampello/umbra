@@ -29,9 +29,6 @@ impl<Header> BufferWithHeader<Header> {
     pub fn for_page(size: usize) -> Self {
         println!("MIN {MIN_PAGE_SIZE} MAX {MAX_PAGE_SIZE} SIZE {size}");
 
-        // let size = size.clamp(MIN_PAGE_SIZE, MAX_PAGE_SIZE);
-        // println!("Clamped size: {size}");
-
         assert!(
             (MIN_PAGE_SIZE..=MAX_PAGE_SIZE).contains(&size),
             "Page size {size} is not between {MIN_PAGE_SIZE} and {MAX_PAGE_SIZE}"
@@ -217,14 +214,12 @@ mod tests {
 
     #[test]
     #[should_panic]
-    #[ignore]
     fn test_allocation_below_min() {
         BufferWithHeader::<CellHeader>::for_page(MIN_PAGE_SIZE - 1);
     }
 
     #[test]
     #[should_panic]
-    #[ignore]
     fn test_allocation_above_max() {
         BufferWithHeader::<CellHeader>::for_page(MAX_PAGE_SIZE + 1);
     }

@@ -6,7 +6,6 @@ mod overflow;
 mod zero;
 
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ptr::NonNull;
@@ -129,15 +128,10 @@ impl Page {
             "Unable to storage a content with {content_length} size where the max allowed is {max}"
         );
 
-        match !self.overflow.is_empty() {
-            true => {
-                self.overflow.insert(idx, cell);
-            }
-            false => {
-                if let Err(cell) = self.try_insert(idx, cell) {
-                    self.overflow.insert(idx, cell);
-                }
-            }
+        if !self.overflow.is_empty() {
+            self.overflow.insert(idx, cell);
+        } else if let Err(cell) = self.try_insert(idx, cell) {
+            self.overflow.insert(idx, cell);
         }
     }
 
@@ -180,7 +174,7 @@ impl Page {
         mutable_header.last_used_offset = offset;
         mutable_header.free_space -= cell_size;
         mutable_header.slot_count += 1;
-        
+
         let idx = id as usize;
 
         if id < self.buffer.header().slot_count {
@@ -314,7 +308,7 @@ impl Cell {
 impl PageHeader {
     pub fn new(size: usize) -> Self {
         Self {
-            free_space: 0,
+            free_space: Page::usable_space(size),
             slot_count: 0,
             last_used_offset: (size - PAGE_HEADER_SIZE as usize) as u16,
             padding: 0,
@@ -341,7 +335,7 @@ mod tests {
     }
 
     fn page_size_to_fit(cells: &[Box<Cell>]) -> usize {
-        let size = PAGE_HEADER_SIZE + cells.iter().map(|page| page.storage_size()).sum::<u16>();
+        let size = PAGE_HEADER_SIZE + cells.iter().map(|cell| cell.storage_size()).sum::<u16>();
 
         alloc::Layout::from_size_align(size as usize, CELL_ALIGNMENT)
             .expect("Failed to create layout")
@@ -432,18 +426,16 @@ mod tests {
     fn test_push_different_bytes_sizes_cell() {
         let cells = fixed_size_cells(50, 10);
         let cells_clone = fixed_size_cells(50, 10);
-        
+
         let size = page_size_to_fit(&cells);
 
         let mut page = Page::alloc(size);
         for cell in cells_clone {
-            println!("Pushed {cell:?}");
             page.push(cell);
         }
-        
         println!("page {:#?}", page.buffer.header());
         println!("slot count {}", page.buffer.header().slot_count);
-        
-        // assert_consecutive_cell_offsets(&page, &cells)
+
+        assert_consecutive_cell_offsets(&page, &cells)
     }
 }
