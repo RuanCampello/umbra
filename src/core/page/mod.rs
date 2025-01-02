@@ -7,7 +7,7 @@ mod zero;
 
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 use std::collections::{BinaryHeap, HashMap};
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
 use std::{self, alloc, ptr};
 
@@ -267,6 +267,31 @@ impl Page {
     }
 }
 
+impl Debug for Page {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut debug_struct = f.debug_struct("Page");
+
+        debug_struct
+            .field("size", &self.buffer.size)
+            .field("slot array", &self.slot_array())
+            .field("header", &self.buffer.header())
+            .field("overflow", &self.overflow);
+
+        let mut cells_debug_list = f.debug_list();
+        for slot in 0..self.buffer.header().slot_count {
+            let cell = self.cell(slot);
+
+            cells_debug_list.entry(&format_args!(
+                "Cell {{ size: {:?}, content: {:?} }}",
+                cell.header.size, &cell.content
+            ));
+        }
+
+        cells_debug_list.finish()?;
+        debug_struct.finish()
+    }
+}
+
 impl<Header> From<BufferWithHeader<Header>> for Page {
     fn from(buffer: BufferWithHeader<Header>) -> Self {
         let mut buffer = buffer.cast();
@@ -388,6 +413,17 @@ mod tests {
         fn push_all_cells<'a>(&'a mut self, cells: &'a [Box<Cell>]) {
             cells.iter().for_each(|cell| self.push(cell.clone()))
         }
+
+        fn create_page_with_cells(sizes: &[usize]) -> (Self, Vec<Box<Cell>>) {
+            let cells = create_cells_with_size(sizes);
+            let size = page_size_to_fit(&cells);
+
+            println!("SIZE BUILT {size}");
+            let mut page = Page::alloc(size);
+            page.push_all_cells(&cells);
+
+            (page, Vec::from(cells))
+        }
     }
 
     /// Helper function to create cells with variables sizes.
@@ -432,8 +468,6 @@ mod tests {
 
     /// Asserts that the given page contains all the provided cells in the correct order.
     fn assert_eq_cells(page: &Page, cells: &[Box<Cell>]) {
-        // println!("Page: {page:#?}, cells: {cells:#?}");
-
         assert_eq!(
             page.buffer.header().slot_count,
             cells.len() as u16,
@@ -499,17 +533,18 @@ mod tests {
         let mut page = Page::alloc(size);
         page.push_all_cells(&cells);
 
-        println!("page {:#?}", page.buffer.header());
-        println!("slot count {}", page.buffer.header().slot_count);
-
         assert_consecutive_cell_offsets(&page, &cells)
     }
 
-    // #[test]
-    // fn test_defragmentation() {
-    //     let cells = create_cells_with_size(&[59, 99, 69, 420]);
-    //     let mut page = Page::alloc(page_size_to_fit(&cells));
-    //     page.push_all_cells(&cells);
-    // TODO: test removal before 
-    // }
+    #[test]
+    fn test_defragmentation() {
+        // let cells = create_cells_with_size(&[59, 99, 69, 420]);
+        // let mut page = Page::alloc(page_size_to_fit(&cells));
+        // page.push_all_cells(&cells);
+
+        let (page, cells) = Page::create_page_with_cells(&[59, 99, 69, 420, 24]);
+
+        println!("PAGE {:#?}", page);
+        // TODO: test removal before
+    }
 }
