@@ -154,7 +154,7 @@ impl<File: FileOperations> Journal<File> {
         self.buffer.extend_from_slice(&page_number.to_le_bytes()); // write the page_number.
         self.buffer.extend_from_slice(page.as_ref()); // write its actual content.
 
-        let checksum = (self.journal_number as u16).wrapping_add(page_number);
+        let checksum = (self.journal_number as u16).wrapping_add(page_number as u16);
 
         self.buffer.extend_from_slice(&checksum.to_le_bytes());
 
@@ -209,7 +209,7 @@ mod tests {
         let page_content = vec![1u8; page_size];
 
         journal
-            .push(page_number, &page_content)
+            .push(page_number.into(), &page_content)
             .expect("Was unable to push to journal");
         assert_eq!(journal.buffered_pages, 1);
 
@@ -227,7 +227,7 @@ mod tests {
         let second_page_content = vec![2u8; page_size];
 
         journal
-            .push(second_page_number, &second_page_content)
+            .push(second_page_number.into(), &second_page_content)
             .expect("Was unable to push to journal's second page");
         assert_eq!(journal.buffered_pages, 2);
         assert_eq!(

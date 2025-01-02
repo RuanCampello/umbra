@@ -27,7 +27,6 @@ use std::{self, alloc, ptr};
 ///
 /// ```
 ///
-#[derive(Debug)]
 struct Page {
     /// In-memory buffer containing data read from disk, including a header.
     buffer: BufferWithHeader<PageHeader>,
@@ -271,23 +270,46 @@ impl Debug for Page {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut debug_struct = f.debug_struct("Page");
 
-        debug_struct
-            .field("size", &self.buffer.size)
-            .field("slot array", &self.slot_array())
-            .field("header", &self.buffer.header())
-            .field("overflow", &self.overflow);
-
-        let mut cells_debug_list = f.debug_list();
-        for slot in 0..self.buffer.header().slot_count {
-            let cell = self.cell(slot);
-
-            cells_debug_list.entry(&format_args!(
-                "Cell {{ size: {:?}, content: {:?} }}",
-                cell.header.size, &cell.content
-            ));
+        struct DebugCell<'a> {
+            size: u16,
+            content: &'a [u8],
         }
 
-        cells_debug_list.finish()?;
+        impl<'a> Debug for DebugCell<'a> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("Cell")
+                    .field("size", &self.size)
+                    .field("content", &self.content)
+                    .finish()
+            }
+        }
+
+        debug_struct
+            .field("slot array", &self.slot_array())
+            .field("header", &self.buffer.header())
+            .field("overflow", &self.overflow)
+            .field("size", &self.buffer.size)
+            .field("cells", &{
+                struct ClosureDebug<'a, F: Fn(&mut Formatter<'_>) -> std::fmt::Result>(&'a F);
+                impl<'a, F: Fn(&mut Formatter<'_>) -> std::fmt::Result> Debug for ClosureDebug<'a, F> {
+                    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                        (self.0)(f)
+                    }
+                }
+
+                ClosureDebug(&|f: &mut Formatter<'_>| {
+                    let mut list = f.debug_list();
+                    for slot in 0..self.buffer.header().slot_count {
+                        let cell = self.cell(slot);
+                         list.entry(&DebugCell {
+                            size: cell.header.size,
+                            content: &cell.content,
+                        });
+                    }
+                    list.finish()
+                })
+            });
+
         debug_struct.finish()
     }
 }
