@@ -127,7 +127,7 @@ impl Page {
             "Unable to storage a content with {content_length} size where the max allowed is {max}"
         );
 
-        if !self.overflow.is_empty() {
+        if self.is_overflow() {
             self.overflow.insert(idx, cell);
         } else if let Err(cell) = self.try_insert(idx, cell) {
             self.overflow.insert(idx, cell);
@@ -214,6 +214,28 @@ impl Page {
         self.buffer.mutable_header().last_used_offset = dest as u16;
     }
 
+    /// Removes a cell pointer of a given [`SlotId`].
+    pub fn remove(&mut self, id: SlotId) -> Box<Cell> {
+        debug_assert!(
+            !self.is_overflow(),
+            "Remove is not meant to handle overflow indexes"
+        );
+
+        let len = self.buffer.header().slot_count;
+        assert!(id < len, "Index {id} out of range for {len} length");
+
+        let cell = self.cell(id).to_owned();
+
+        let idx = id as usize;
+        self.mutable_slot_array()
+            .copy_within(idx + 1..len as usize, idx); // remove the idx
+        self.buffer.mutable_header().free_space += cell.total_size(); // adds back the free space
+        self.buffer.mutable_header().free_space += SLOT_SIZE;
+        self.buffer.mutable_header().slot_count -= 1;
+
+        cell
+    }
+
     /// Returns a [`Cell`] reference of a given [`SlotId`].
     pub fn cell(&self, id: SlotId) -> &Cell {
         let cell = self.cell_pointer(id);
@@ -263,6 +285,10 @@ impl Page {
     /// The maximum content size that can be stored in a given usable space.
     fn max_content_size(usable_size: u16) -> u16 {
         (usable_size - CELL_HEADER_SIZE - SLOT_SIZE) & !(CELL_ALIGNMENT as u16 - 1)
+    }
+
+    fn is_overflow(&self) -> bool {
+        !self.overflow.is_empty()
     }
 }
 
