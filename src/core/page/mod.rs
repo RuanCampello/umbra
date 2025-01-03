@@ -586,13 +586,19 @@ mod tests {
 
     #[test]
     fn test_defragmentation() {
-        // let cells = create_cells_with_size(&[59, 99, 69, 420]);
-        // let mut page = Page::alloc(page_size_to_fit(&cells));
-        // page.push_all_cells(&cells);
+        let (mut page, mut cells) = Page::create_page_with_cells(&[59, 99, 69, 420, 24]);
 
-        let (page, cells) = Page::create_page_with_cells(&[59, 99, 69, 420, 24]);
+        // remove cells at indices 1 and 2 from both the page and the cell vector.
+        // this creates fragmentation within the page's cell structure.
+        for idx in [1, 2] {
+            page.remove(idx);
+            cells.remove(idx as usize);
+        }
+        
+        // perform defragmentation on the page to consolidate fragmented cells,
+        // ensuring all remaining cells are stored contiguously in memory.
+        page.defragment();
 
-        println!("PAGE {:#?}", page);
-        // TODO: test removal before
+        assert_consecutive_cell_offsets(&page, &cells)
     }
 }
