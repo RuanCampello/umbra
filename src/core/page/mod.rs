@@ -236,11 +236,64 @@ impl Page {
         cell
     }
 
+    /// Tries to replace a [`Cell`] at a given [`SlotId`] with a new one.
+    pub fn replace(&mut self, new: Box<Cell>, id: SlotId) -> Box<Cell> {
+        debug_assert!(
+            !self.is_overflow(),
+            "Replace it not meant to handle overflow indexes"
+        );
+
+        match self.try_replace(new, id) {
+            Ok(old) => old,
+            Err(new) => {
+                let current = self.remove(id);
+                self.overflow.insert(id, new);
+                current
+            }
+        }
+    }
+
+    fn try_replace(&mut self, new: Box<Cell>, id: SlotId) -> Result<Box<Cell>, Box<Cell>> {
+        let current = self.cell(id);
+
+        // this can't fit (that's what she said)
+        if self.buffer.header().free_space + current.total_size() < new.total_size() {
+            return Err(new);
+        }
+
+        // if the new cell is smaller than the current
+        if new.header.size <= current.header.size {
+            let free_bytes = current.header.size - new.header.size;
+            let cell = self.cloned_cell(id);
+            let current = self.mutable_cell(id);
+
+            current.content[..new.content.len()].copy_from_slice(&new.content);
+            current.header = new.header;
+            self.buffer.mutable_header().free_space += free_bytes;
+
+            return Ok(cell);
+        }
+
+        // worst place to be. the new can fit, but we have to remove the old one before.
+        // this can potentially cause page defragmentation.
+        let current = self.remove(id);
+        self.try_insert(id, new).expect("It should fit, he said");
+
+        Ok(current)
+    }
+
     /// Returns a [`Cell`] reference of a given [`SlotId`].
     pub fn cell(&self, id: SlotId) -> &Cell {
         let cell = self.cell_pointer(id);
 
         unsafe { cell.as_ref() }
+    }
+
+    /// Returns a mutable reference of a [`Cell`] at a given [`SlotId`].
+    fn mutable_cell(&mut self, id: SlotId) -> &mut Cell {
+        let mut cell = self.cell_pointer(id);
+
+        unsafe { cell.as_mut() }
     }
 
     /// Returns a pointer to a [`Cell`] of a given [`SlotId`].
@@ -262,6 +315,11 @@ impl Page {
             ptr::slice_from_raw_parts(header.cast::<u8>().as_ptr(), header.as_ref().size as usize)
                 as *mut Cell;
         NonNull::new_unchecked(cell)
+    }
+
+    /// Returns an owned [`Cell`] at given [`SlotId`] by coping it.
+    fn cloned_cell(&self, id: SlotId) -> Box<Cell> {
+        self.cell(id).to_owned()
     }
 
     /// Returns a pointer to the slot array.
