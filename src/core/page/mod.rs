@@ -675,4 +675,15 @@ mod tests {
         assert_eq!(page.slot_array(), offsets);
         assert_eq_cells(&page, &cells);
     }
+
+    #[test]
+    fn test_replace() {
+        let (mut page, mut cells) = Page::create_page_with_cells(&[64, 32, 122, 420]);
+
+        let cell = Cell::new(vec![4; 32]);
+        cells[1] = cell.clone();
+
+        page.replace(cell, 1);
+        assert_consecutive_cell_offsets(&page, &cells);
+    }
 }
