@@ -1,8 +1,16 @@
 <div align="center">
     <h1>Umbra</h1>
     <img alt="Logo" src=".github/umbra-logo.png" width="250" height="250" />
-    <h6>A zero-dependency Rust database implemented from scratch 🦇</h6>
+    <h5>A zero-dependency Rust database implemented from scratch 🦇</h5>
 </div>
+
+---
+
+### ✨ Just so you know
+
+Umbra is a project I started during my summer vacation of December 2024 to early 2025 because I was bored as hell.
+
+---
 
 ## Database Architecture
 
