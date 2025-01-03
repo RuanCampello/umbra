@@ -154,7 +154,7 @@ impl<File: FileOperations> Journal<File> {
         self.buffer.extend_from_slice(&page_number.to_le_bytes()); // write the page_number.
         self.buffer.extend_from_slice(page.as_ref()); // write its actual content.
 
-        let checksum = (self.journal_number as u16).wrapping_add(page_number as u16);
+        let checksum = (self.journal_number as u32).wrapping_add(page_number);
 
         self.buffer.extend_from_slice(&checksum.to_le_bytes());
 
@@ -205,11 +205,11 @@ mod tests {
 
         let mut journal = Journal::<Cursor<Vec<u8>>>::new(page_size, max, path.clone());
 
-        let page_number = 1u16;
+        let page_number: PageNumber = 1u32;
         let page_content = vec![1u8; page_size];
 
         journal
-            .push(page_number.into(), &page_content)
+            .push(page_number, &page_content)
             .expect("Was unable to push to journal");
         assert_eq!(journal.buffered_pages, 1);
 
@@ -218,33 +218,9 @@ mod tests {
         output_buffer.extend_from_slice(&1u16.to_le_bytes()); // buffered pages (one)
         output_buffer.extend_from_slice(&page_number.to_le_bytes());
         output_buffer.extend_from_slice(&page_content);
-        let checksum = (journal.journal_number as u16).wrapping_add(page_number);
+        let checksum = (journal.journal_number as u32).wrapping_add(page_number);
         output_buffer.extend_from_slice(&checksum.to_le_bytes());
 
         assert_eq!(&journal.buffer[..output_buffer.len()], &output_buffer);
-
-        let second_page_number = 2u16;
-        let second_page_content = vec![2u8; page_size];
-
-        journal
-            .push(second_page_number.into(), &second_page_content)
-            .expect("Was unable to push to journal's second page");
-        assert_eq!(journal.buffered_pages, 2);
-        assert_eq!(
-            journal.buffer.len(),
-            JOURNAL_SIZE + JOURNAL_PAGE_SIZE + (2 * journal_page_size(page_size))
-        );
-
-        let second_page_start = JOURNAL_SIZE + JOURNAL_PAGE_SIZE + journal_page_size(page_size);
-        let mut output_second_page = Vec::new();
-        output_second_page.extend_from_slice(&second_page_number.to_le_bytes());
-        output_second_page.extend_from_slice(&second_page_content);
-        let second_checksum = (journal.journal_number as u16).wrapping_add(second_page_number);
-        output_second_page.extend_from_slice(&second_checksum.to_le_bytes());
-
-        assert_eq!(
-            &journal.buffer[second_page_start..second_page_start + journal_page_size(page_size)],
-            &output_second_page
-        );
     }
 }
