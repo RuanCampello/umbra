@@ -29,7 +29,7 @@ struct Journal<File> {
     /// The maximum of pages to be loaded in memory.
     max_pages: usize,
     /// The current number of pages held in the `buffer`.
-    buffered_pages: u16,
+    buffered_pages: u32,
     /// The random journal's identifier.
     journal_number: u64,
     path: PathBuf,
@@ -39,9 +39,9 @@ struct Journal<File> {
 type FrameId = usize;
 
 const JOURNAL_SIZE: usize = size_of::<u64>();
-const JOURNAL_PAGE_SIZE: usize = size_of::<u16>();
-const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u16>();
-const JOURNAL_HEADER_SIZE: usize = size_of::<u16>();
+const JOURNAL_PAGE_SIZE: usize = size_of::<u32>();
+const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u32>();
+const JOURNAL_HEADER_SIZE: usize = JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
 
 const DEFAULT_PAGE_SIZE: usize = 4096;
 const DEFAULT_BUFFERED_PAGES: usize = 10;
@@ -215,12 +215,36 @@ mod tests {
 
         let mut output_buffer = Vec::new();
         output_buffer.extend_from_slice(&journal.journal_number.to_le_bytes()); // file header identifier
-        output_buffer.extend_from_slice(&1u16.to_le_bytes()); // buffered pages (one)
+        output_buffer.extend_from_slice(&1u32.to_le_bytes()); // buffered pages (one)
         output_buffer.extend_from_slice(&page_number.to_le_bytes());
         output_buffer.extend_from_slice(&page_content);
         let checksum = (journal.journal_number as u32).wrapping_add(page_number);
         output_buffer.extend_from_slice(&checksum.to_le_bytes());
 
         assert_eq!(&journal.buffer[..output_buffer.len()], &output_buffer);
+
+        let second_page_number: PageNumber = 2u32;
+        let second_page_content = vec![2u8; page_size];
+
+        journal
+            .push(second_page_number, &second_page_content)
+            .expect("Was unable to push to journal's second page");
+        assert_eq!(journal.buffered_pages, 2);
+        assert_eq!(
+            journal.buffer.len(),
+            JOURNAL_SIZE + JOURNAL_PAGE_SIZE + (2 * journal_page_size(page_size))
+        );
+
+        let second_page_start = JOURNAL_SIZE + JOURNAL_PAGE_SIZE + journal_page_size(page_size);
+        let mut output_second_page = Vec::new();
+        output_second_page.extend_from_slice(&second_page_number.to_le_bytes());
+        output_second_page.extend_from_slice(&second_page_content);
+        let second_checksum = (journal.journal_number as u32).wrapping_add(second_page_number);
+        output_second_page.extend_from_slice(&second_checksum.to_le_bytes());
+
+        assert_eq!(
+            &journal.buffer[second_page_start..second_page_start + journal_page_size(page_size)],
+            &output_second_page
+        );
     }
 }
