@@ -12,7 +12,7 @@ use std::ops::Bound;
 use std::ptr::NonNull;
 use std::{self, alloc, iter, ptr};
 
-/// Fixed-size slotted page for storing [`super::btree::BTree`] nodes, used in indexes and tables.
+/// Fixed-size slotted page for storing [Btree](super::btree::BTree) nodes, used in indexes and tables.
 ///
 /// The page uses a "slot array" to manage offsets pointing to stored cells.
 /// [`Cell`] grow from the end of the page, while the slot array grows from the
@@ -28,7 +28,7 @@ use std::{self, alloc, iter, ptr};
 ///
 /// ```
 ///
-struct Page {
+pub(in crate::core) struct Page {
     /// In-memory buffer containing data read from disk, including a header.
     buffer: BufferWithHeader<PageHeader>,
     /// Map storing overflow cells, keyed by their slot IDs.
@@ -61,7 +61,7 @@ struct PageHeader {
     pub right_child: PageNumber,
 }
 
-///The Cell struct holds a [`crate::core::btree::BTree`] entry (key/value) and a pointer to a node with smaller keys.
+///The Cell struct holds a [Btree](crate::core::btree::BTree) entry (key/value) and a pointer to a node with smaller keys.
 /// It works with the BTree to rearrange entries during overflow or underflow situations.
 /// This uses a DST (Dynamically Sized Type), which is complex but improves efficiency when working with references and ownership.
 #[derive(Debug, PartialEq)]
@@ -84,7 +84,7 @@ struct CellHeader {
 }
 
 /// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore can be indexed with 2 bytes.
-type SlotId = u16;
+pub(in crate::core) type SlotId = u16;
 
 const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
 const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;

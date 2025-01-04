@@ -1,5 +1,6 @@
 // ! Disk management and B-Tree data structure implementation.
 
+use crate::core::page::SlotId;
 use crate::core::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
 use crate::sql::statements::Type;
 use std::cmp::Ordering;
@@ -14,6 +15,57 @@ pub(in crate::core) struct BTree<Cmp> {
 
     /// The bytes comparator used to get [`Ordering`].
     comparator: Cmp,
+}
+
+struct Sibling {
+    page: PageNumber,
+
+    /// The index of the [Cell](crate::core::page::Cell) that points to this node.
+    index: SlotId,
+}
+
+/// Result of a search in [`Btree].
+struct Search {
+    page: PageNumber,
+
+    /// Stores the searched element index on [`Ok`] or
+    /// the index where it should be on [`Err`]
+    index: Result<u16, u16>,
+}
+
+/// Compares the `self.0` using a `memcmp`.
+/// If the integer keys at the beginning of buffer array are stored as big endians,
+/// that's all needed to determine its [`Ordering`].
+pub(crate) struct FixedSizeCmp(pub usize);
+
+/// Compares UTF-8 strings.
+#[derive(Debug, PartialEq)]
+pub(crate) struct StringCmp(pub usize);
+
+/// No allocations comparing to [`Box`].
+pub(crate) enum BTreeKeyCmp {
+    MemCmp(FixedSizeCmp),
+    StrCmp(StringCmp),
+}
+
+/// Represents the result of reading content from the [`BTree`].
+enum Content<'a> {
+    /// Content was found within a single page and can be accessed directly as a slice.
+    PageRef(&'a [u8]),
+    /// The content spans multiple pages and has been reassembled into a contiguous buffer.
+    Reassembled(Box<[u8]>),
+}
+
+/// Specifies the search direction for finding a key within a leaf node of a [`BTree`].
+///
+/// Max: Search for the maximum key within the leaf node.
+///
+/// Min: Search for the minimum key within the leaf node.
+enum LeafKeySearch {
+    /// Search for the maximum key.
+    Max,
+    /// Search for the minimum key.
+    Min,
 }
 
 const DEFAULT_BALANCED_SIBLINGS: usize = 1;
@@ -36,10 +88,11 @@ impl<Cmp: BytesCmp> BTree<Cmp> {
     }
 }
 
-/// Compares the `self.0` using a `memcmp`.
-/// If the integer keys at the beginning of buffer array are stored as big endians,
-/// that's all needed to determine its [`Ordering`].
-pub(crate) struct FixedSizeCmp(pub usize);
+impl Sibling {
+    pub fn new(page: PageNumber, index: u16) -> Self {
+        Self { page, index }
+    }
+}
 
 impl FixedSizeCmp {
     /// This only make sense with simple data types.
@@ -58,10 +111,6 @@ impl TryFrom<&Type> for FixedSizeCmp {
         }
     }
 }
-
-/// Compares UTF-8 strings.
-#[derive(Debug, PartialEq)]
-pub(crate) struct StringCmp(pub usize);
 
 /// Computes the length of a string reading its first `self.0` as a big endian.
 impl BytesCmp for StringCmp {
@@ -107,12 +156,6 @@ impl BytesCmp for &Box<dyn BytesCmp> {
     }
 }
 
-/// No allocations comparing to [`Box`].
-pub(crate) enum BTreeKeyCmp {
-    MemCmp(FixedSizeCmp),
-    StrCmp(StringCmp),
-}
-
 impl From<&Type> for BTreeKeyCmp {
     fn from(value: &Type) -> Self {
         match value {
@@ -127,6 +170,15 @@ impl BytesCmp for BTreeKeyCmp {
         match self {
             Self::MemCmp(mem) => mem.cmp(a, b),
             Self::StrCmp(str) => str.cmp(a, b),
+        }
+    }
+}
+
+impl<'a> AsRef<[u8]> for Content<'a> {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::PageRef(reference) => reference,
+            Self::Reassembled(boxed) => boxed,
         }
     }
 }
