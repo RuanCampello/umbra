@@ -559,6 +559,7 @@ impl PageHeader {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::page::zero::{DatabaseHeader, PageZero};
     use crate::core::page::{overflow::*, *};
     use std::slice;
 
@@ -688,6 +689,40 @@ mod tests {
         assert_eq!(buffer.size, TOTAL_SIZE);
         assert_eq!(buffer.header(), &header);
         assert_eq!(buffer.content(), &[content_byte; CONTENT_SIZE]);
+    }
+
+    #[test]
+    fn test_page_zero_construction() {
+        const DATABASE_HEADER_SIZE: usize = size_of::<DatabaseHeader>();
+
+        let page_size = 512;
+        let slot_page = page_size - DATABASE_HEADER_SIZE;
+        let min_cells = 4;
+        let overflowed_cells = min_cells + (min_cells / 2);
+
+        let content_size =
+            Page::max_content_size(Page::usable_space(slot_page) / min_cells) as usize;
+
+        let mut page = PageZero::alloc(page_size);
+        let mut cells: Vec<Box<Cell>> = Vec::new();
+
+        (1..=overflowed_cells).for_each(|idx| {
+            let cell = Cell::new(vec![idx as u8; content_size]);
+            cells.push(cell.clone());
+            page.mutable_btree_page().push(cell);
+        });
+
+        assert!(page.btree_page().is_overflow());
+        assert_eq!(page.btree_page().overflow.len(), 2);
+        assert_eq!(page.buffer.size, page_size);
+        assert_eq!(page.btree_page().buffer.size, slot_page);
+
+        cells[..min_cells as usize]
+            .iter()
+            .enumerate()
+            .for_each(|(idx, cell)| {
+                assert_eq!(page.btree_page().cell(idx as u16), cell.as_ref());
+            });
     }
 
     #[test]
