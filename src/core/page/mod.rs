@@ -649,6 +649,18 @@ mod tests {
         }
     }
 
+    #[allow(clippy::filter_map_bool_then)]
+    /// Creates an array with the given range based on the passed array, but ignoring the given indexes.
+    fn offsets_but_indexes<T: Copy>(
+        array: &[T],
+        range: std::ops::Range<usize>,
+        idxs_to_ignore: &[usize],
+    ) -> Vec<T> {
+        range
+            .filter_map(|idx| (!idxs_to_ignore.contains(&idx)).then(|| array[idx]))
+            .collect::<Vec<_>>()
+    }
+
     #[test]
     fn test_buffer_with_header_construction() {
         const HEADER_SIZE: usize = size_of::<OverflowPageHeader>();
@@ -711,11 +723,7 @@ mod tests {
     fn test_delete() {
         let (mut page, mut cells) = Page::create_page_with_cells(&[59, 99, 69, 420, 24]);
 
-        #[allow(clippy::filter_map_bool_then)]
-        let offsets: Vec<u16> = (0..cells.len())
-            .filter_map(|idx| (idx != 1).then(|| page.slot_array()[idx]))
-            .collect(); // 0 to len excluding 1 idx
-
+        let offsets: Vec<u16> = offsets_but_indexes(page.slot_array(), 0..cells.len(), &[1]);
         page.remove(1);
         cells.remove(1);
 
@@ -733,5 +741,20 @@ mod tests {
         // TODO: test replace with deletion
         page.replace(cell, 1);
         assert_consecutive_cell_offsets(&page, &cells);
+    }
+
+    #[test]
+    fn test_drain() {
+        let (mut page, mut cells) = Page::create_page_with_cells(&[64, 32, 122, 194, 32, 99]);
+
+        let offsets: Vec<u16> = offsets_but_indexes(page.slot_array(), 0..cells.len(), &[1, 2]);
+
+        assert_eq!(
+            page.drain(1..=2).collect::<Vec<_>>(),
+            cells.drain(1..=2).collect::<Vec<_>>()
+        );
+        assert_eq!(page.slot_array(), offsets);
+
+        assert_eq_cells(&page, &cells)
     }
 }
