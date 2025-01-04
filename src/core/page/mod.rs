@@ -8,8 +8,9 @@ mod zero;
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 use std::collections::{BinaryHeap, HashMap};
 use std::fmt::{Debug, Formatter};
+use std::ops::Bound;
 use std::ptr::NonNull;
-use std::{self, alloc, ptr};
+use std::{self, alloc, iter, ptr};
 
 /// Fixed-size slotted page for storing [`super::btree::BTree`] nodes, used in indexes and tables.
 ///
@@ -113,7 +114,7 @@ impl Page {
 
     /// Adds a given [`Cell`] to the page, which can possibly overflow it.
     pub fn push(&mut self, cell: Box<Cell>) {
-        let idx = self.buffer.header().slot_count + self.overflow.len() as u16;
+        let idx = self.len() as u16;
 
         self.insert(idx, cell)
     }
@@ -253,6 +254,48 @@ impl Page {
         }
     }
 
+    /// Removes the [`Cell`]s in the given range and returns its owned version.
+    pub fn drain<'a>(
+        &'a mut self,
+        range: impl std::ops::RangeBounds<usize>,
+    ) -> impl Iterator<Item = Box<Cell>> + 'a {
+        let left = match range.start_bound() {
+            Bound::Unbounded => 0,
+            Bound::Included(idx) => *idx,
+            Bound::Excluded(idx) => idx + 1,
+        };
+
+        let right = match range.end_bound() {
+            Bound::Unbounded => self.len(),
+            Bound::Excluded(i) => *i,
+            Bound::Included(i) => i + 1,
+        };
+
+        let mut drain_idx = left;
+        let mut slot_idx = left;
+
+        iter::from_fn(move || {
+            if drain_idx < right {
+                let cell = self.overflow.remove(&(drain_idx as u16)).unwrap_or({
+                    let cell = self.cloned_cell(slot_idx as SlotId);
+                    slot_idx += 1;
+                    cell
+                });
+                drain_idx += 1;
+
+                Some(cell)
+            } else {
+                self.buffer.mutable_header().free_space += (left..right)
+                    .map(|slot| self.cell(slot as u16).storage_size())
+                    .sum::<u16>();
+                self.mutable_slot_array().copy_within(slot_idx.., left);
+                self.buffer.mutable_header().slot_count -= (slot_idx - left) as u16;
+
+                None
+            }
+        })
+    }
+
     fn try_replace(&mut self, new: Box<Cell>, id: SlotId) -> Result<Box<Cell>, Box<Cell>> {
         let current = self.cell(id);
 
@@ -347,6 +390,10 @@ impl Page {
 
     fn is_overflow(&self) -> bool {
         !self.overflow.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.buffer.header().slot_count as usize + self.overflow.len()
     }
 }
 
@@ -683,6 +730,7 @@ mod tests {
         let cell = Cell::new(vec![4; 32]);
         cells[1] = cell.clone();
 
+        // TODO: test replace with deletion
         page.replace(cell, 1);
         assert_consecutive_cell_offsets(&page, &cells);
     }
