@@ -87,6 +87,7 @@ pub(in crate::core) struct Cache {
     /// The maximum number of pages that this cache can handle.
     max_size: usize,
     pinned_pages: usize,
+    clock: FrameId,
     /// The buffer pool.
     buffer: Vec<Frame>,
     /// Our babies, the page table. Map with the [`PageNumber`] and
@@ -118,6 +119,7 @@ impl Cache {
             buffer: Vec::with_capacity(DEFAULT_MAX),
             pages: HashMap::with_capacity(DEFAULT_MAX),
             pinned_pages: 0,
+            clock: 0,
         }
     }
 
@@ -133,6 +135,7 @@ impl Cache {
             buffer: Vec::with_capacity(max_size),
             pages: HashMap::with_capacity(max_size),
             pinned_pages: 0,
+            clock: 0,
         }
     }
 
@@ -163,7 +166,61 @@ impl Cache {
             return *id;
         }
 
-        todo!()
+        // if the buffer is not full, we can alloc the new page and return its id
+        if self.buffer.len() < self.max_size {
+            let id = self.buffer.len();
+            self.pages.insert(page_number, id);
+
+            self.buffer
+                .push(Frame::new(page_number, MemoryPage::alloc(id)))
+        }
+
+        // the buffer is full, so we must evict
+        self.cycle_clock();
+
+        let frame = &mut self.buffer[self.clock];
+        self.pages.remove(&frame.page_number);
+
+        // the current frame now holds the new page
+        frame.page_number = page_number;
+        frame.set(REFERENCE_FLAG);
+        self.pages.insert(page_number, self.clock);
+
+        self.clock
+    }
+
+    /// [Ticks](Self::tick) clock until it points to a page that can be evicted.
+    fn cycle_clock(&mut self) {
+        let initial_round = self.clock;
+        let mut rounds = 0;
+
+        while !self.is_evictable(self.clock) {
+            self.buffer[self.clock].unset(REFERENCE_FLAG);
+            self.tick();
+
+            #[cfg(debug_assertions)]
+            {
+                if rounds == 10 {
+                    panic!("clock has go {rounds} full round and didn't found any page that could be evicted")
+                }
+
+                if self.clock == initial_round {
+                    rounds += 1;
+                }
+            }
+        }
+    }
+
+    /// Moves the clock to buffer's next frame.
+    fn tick(&mut self) {
+        self.clock = (self.clock + 1) % self.buffer.len();
+    }
+
+    /// Returns `true` if the page at the given [`FrameId`] can be evicted safely.
+    fn is_evictable(&self, frame_id: FrameId) -> bool {
+        let frame = &self.buffer[frame_id];
+
+        !frame.is_set(REFERENCE_FLAG) && !frame.is_set(PINNED_FLAG) && !frame.page.is_overflow()
     }
 
     /// Returns the [`FrameId`] of a given page, if exists, and marks it flag as [referenced](REFERENCE_FLAG).

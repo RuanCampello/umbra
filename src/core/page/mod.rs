@@ -596,6 +596,20 @@ impl PageHeader {
     }
 }
 
+impl MemoryPage {
+    pub fn alloc(size: usize) -> Self {
+        MemoryPage::Ordinary(Page::alloc(size))
+    }
+
+    pub fn is_overflow(&self) -> bool {
+        match self {
+            Self::Ordinary(btree) => btree.is_overflow(),
+            Self::Zero(page_zero) => page_zero.btree_page().is_overflow(),
+            _ => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::page::zero::{DatabaseHeader, PageZero};
