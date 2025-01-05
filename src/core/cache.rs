@@ -1,5 +1,5 @@
-// ! Page's cache implementation.
-// !
+//! Page's cache implementation.
+//!
 //! This module provides an in-memory page cache with an eviction policy.
 //! It must return owned values by indexing, preventing common Rust's borrowing errors.
 
@@ -9,7 +9,78 @@ use crate::core::PageNumber;
 use crate::method_builder;
 use std::collections::HashMap;
 
-// TODO: document this
+/// # Clock-Based Page Cache
+///
+/// Implements a page cache with a clock eviction policy.
+///
+/// ## Structure
+///
+/// The cache uses a **buffer pool** to store pages, with each page wrapped in
+/// a [`Frame`], which includes metadata like a reference bit and dirty flag.
+///
+/// A **page table** maps page numbers to buffer pool indexes using a
+/// [`HashMap`]. When the buffer reaches its `max_size`, the clock algorithm
+/// decides which page to evict.
+///
+/// Example of the cache with `max_size = 4` after loading pages `[1, 2, 3, 4]`:
+///
+/// ```text
+///    PAGE TABLE                      BUFFER POOL
+/// +------+-------+               +---------------+
+/// | PAGE | FRAME |               | PAGE 1        |
+/// +------+-------+               | ref: 0 dty: 0 |
+/// |  1   |   0   |               +---------------+
+/// +------+-------+                       ^
+/// |  2   |   1   |                       |
+/// +------+-------+   +---------------+   +----------+   +---------------+
+/// |  3   |   2   |   | PAGE 4        |   | CLOCK: 0 |   | PAGE 2        |
+/// +------+-------+   | ref: 0 dty: 0 |   +----------+   | ref: 0 dty: 0 |
+/// |  4   |   3   |   +---------------+                  +---------------+
+/// +------+-------+
+///                                   +---------------+
+///                                   | PAGE 3        |
+///                                   | ref: 0 dty: 0 |
+///                                   +---------------+
+/// ```
+///
+/// ## Eviction Policy
+///
+/// When the buffer is full, the **clock algorithm** evicts pages:
+/// - The clock pointer cycles through frames.
+/// - If a page's reference bit is `0`, it is evicted.
+/// - If a page's reference bit is `1`, it is reset to `0` for future eviction.
+///
+/// Example: After loading page 5, page 1 is evicted:
+///
+/// ```text
+///    PAGE TABLE                      BUFFER POOL
+/// +------+-------+               +---------------+
+/// | PAGE | FRAME |               | PAGE 5        |
+/// +------+-------+               | ref: 1 dty: 0 |
+/// |  5   |   0   |               +---------------+
+/// +------+-------+                       ^
+/// |  2   |   1   |                       |
+/// +------+-------+   +---------------+   +----------+   +---------------+
+/// |  3   |   2   |   | PAGE 4        |   | CLOCK: 0 |   | PAGE 2        |
+/// +------+-------+   | ref: 0 dty: 0 |   +----------+   | ref: 0 dty: 0 |
+/// |  4   |   3   |   +---------------+                  +---------------+
+/// +------+-------+
+///                                   +---------------+
+///                                   | PAGE 3        |
+///                                   | ref: 0 dty: 0 |
+///                                   +---------------+
+/// ```
+///
+/// ## Reference & Dirty Bits
+///
+/// - **Reference Bit**: Tracks whether a page was recently used.
+/// - **Dirty Flag**: Set when a page is modified (via mutable access).
+///
+/// ## Key Properties
+///
+/// - **Efficient Eviction**: Approximation of Least Recently Used (LRU).
+/// - **Write Tracking**: Dirty pages are identified for disk writes.
+///
 pub(in crate::core) struct Cache {
     /// See [Pager](super::pager::Pager).
     pub page_size: usize,

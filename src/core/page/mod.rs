@@ -1,5 +1,5 @@
-// ! Implementation of disk "page".
-// ! As this manually alloc memory, it contains the only database's `unsafe` module.
+//! Implementation of disk "page".
+//! As this manually alloc memory, it contains the only database's `unsafe` module.
 
 mod buffer;
 mod overflow;

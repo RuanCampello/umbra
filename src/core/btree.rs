@@ -1,4 +1,4 @@
-// ! Disk management and B-Tree data structure implementation.
+//! Disk management and B-Tree data structure implementation.
 
 use crate::core::io::FileOperations;
 use crate::core::page::SlotId;
