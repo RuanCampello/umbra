@@ -65,6 +65,13 @@ impl Cache {
         }
     }
 
+    /// Invalidates the given page.
+    pub fn invalidate(&mut self, page_number: PageNumber) {
+        if let Some(id) = self.pages.remove(&page_number) {
+            self.buffer[id].flags = 0;
+        }
+    }
+
     /// Returns the [`FrameId`] of a given page, if exists.
     /// If not or the cache has been invalidated before its call, returns [`None`].
     pub fn get(&mut self, page_number: PageNumber) -> Option<FrameId> {
@@ -76,6 +83,16 @@ impl Cache {
         self.reference_page(page_number).inspect(|id| {
             self.buffer[*id].set(DIRTY_FLAG);
         })
+    }
+
+    /// Maps a given [`PageNumber`] to a [`FrameId`].
+    pub fn map(&mut self, page_number: PageNumber) -> FrameId {
+        // best case: the page is already cached
+        if let Some(id) = self.pages.get(&page_number) {
+            return *id;
+        }
+
+        todo!()
     }
 
     /// Returns the [`FrameId`] of a given page, if exists, and marks it flag as [referenced](REFERENCE_FLAG).
@@ -124,5 +141,35 @@ impl std::ops::Index<FrameId> for Cache {
     type Output = MemoryPage;
     fn index(&self, index: FrameId) -> &Self::Output {
         &self.buffer[index].page
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::page::*;
+
+    impl Cache {
+        pub fn with_pages(number_of_pages: usize, max_size: usize) -> (Self, Vec<MemoryPage>) {
+            const TEST_PAGE_SIZE: usize = 256;
+
+            let pages = (0..number_of_pages).map(|idx| {
+                let mut page = Page::alloc(TEST_PAGE_SIZE);
+                let content = vec![idx as u8; Page::ideal_max_content_size(TEST_PAGE_SIZE, 1)];
+
+                page.push(Cell::new(content));
+                MemoryPage::Ordinary(page)
+            });
+
+            let mut cache = Self::default();
+            let iterator = (0..pages.len()).zip(pages.clone()).take(number_of_pages);
+
+            iterator.for_each(|(page_number, mem_page)| {
+                let id = cache.map(page_number as _);
+                cache.buffer[id].page = mem_page;
+            });
+
+            (cache, pages.collect())
+        }
     }
 }

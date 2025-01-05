@@ -67,7 +67,7 @@ struct PageHeader {
 /// It works with the BTree to rearrange entries during overflow or underflow situations.
 /// This uses a DST (Dynamically Sized Type), which is complex but improves efficiency when working with references and ownership.
 #[derive(Debug, PartialEq)]
-struct Cell {
+pub(in crate::core) struct Cell {
     header: CellHeader,
 
     /// When `header.is_overflow` is true, those last 4 bytes are going to point to an overflow page.
@@ -355,6 +355,20 @@ impl Page {
         let cell = self.cell_pointer(id);
 
         unsafe { cell.as_ref() }
+    }
+
+    pub fn ideal_max_content_size(page_size: usize, min_cells: usize) -> usize {
+        debug_assert!(min_cells > 0, "Why?");
+
+        let ideal_size =
+            Page::max_content_size(Page::usable_space(page_size) / min_cells as u16) as usize;
+
+        debug_assert!(
+            ideal_size > 0,
+            "Page with {page_size} size it too small for {min_cells} cells"
+        );
+
+        ideal_size
     }
 
     /// Returns a mutable reference of a [`Cell`] at a given [`SlotId`].
@@ -725,8 +739,7 @@ mod tests {
         let min_cells = 4;
         let overflowed_cells = min_cells + (min_cells / 2);
 
-        let content_size =
-            Page::max_content_size(Page::usable_space(slot_page) / min_cells) as usize;
+        let content_size = Page::ideal_max_content_size(slot_page, min_cells);
 
         let mut page = PageZero::alloc(page_size);
         let mut cells: Vec<Box<Cell>> = Vec::new();
