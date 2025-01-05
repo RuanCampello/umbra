@@ -9,7 +9,7 @@ use std::{fs, io};
 pub(in crate::core) struct BlockIo<IO> {
     /// Wrapped I/O operator.
     io: IO,
-    block_size: usize,
+    pub block_size: usize,
     pub page_size: usize,
 }
 

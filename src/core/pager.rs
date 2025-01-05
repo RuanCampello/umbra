@@ -112,6 +112,11 @@ impl<File> Pager<File> {
         self
     }
 
+    pub fn block_size(mut self, block_size: usize) -> Self {
+        self.update_blocks_size(block_size);
+        self
+    }
+
     /// Update all instances that use `page_size` to the new `page_size`.
     fn update_pages_size(&mut self, page_size: usize) {
         self.page_size = page_size;
@@ -120,7 +125,12 @@ impl<File> Pager<File> {
         self.file.page_size = page_size;
     }
 
-    method_builder!(block_size, usize);
+    /// Performs the same as [`Self::update_pages_size`] but for `block_size`.
+    fn update_blocks_size(&mut self, block_size: usize) {
+        self.block_size = block_size;
+        self.file.block_size = block_size;
+    }
+
     method_builder!(dirty_pages, HashSet<PageNumber>);
     method_builder!(journal_pages, HashSet<PageNumber>);
 }
