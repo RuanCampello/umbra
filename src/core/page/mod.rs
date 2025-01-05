@@ -30,6 +30,7 @@ use std::{self, alloc, iter, ptr};
 ///
 /// ```
 ///
+#[derive(PartialEq)]
 pub(in crate::core) struct Page {
     /// In-memory buffer containing data read from disk, including a header.
     buffer: BufferWithHeader<PageHeader>,
@@ -48,7 +49,7 @@ pub(in crate::core) struct Page {
 /// +-------------------------------------------------------------+-------------------+
 ///                                     PAGE
 /// ```
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct PageHeader {
     /// The Page's free space available.
     free_space: u16,
@@ -85,6 +86,7 @@ struct CellHeader {
     left_child: PageNumber,
 }
 
+#[derive(Debug, PartialEq)]
 pub(in crate::core) enum MemoryPage {
     Zero(PageZero),
     /// A usual database page containg a [Btree](crate::core::btree::BTree).
@@ -122,6 +124,7 @@ impl<Page> PageConversion for Page where
 impl Page {
     /// Allocates a new page with a given size.
     pub fn alloc(size: usize) -> Self {
+        println!("given {size}");
         Self::from(BufferWithHeader::<PageHeader>::for_page(size))
     }
 

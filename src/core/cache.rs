@@ -81,6 +81,7 @@ use std::collections::HashMap;
 /// - **Efficient Eviction**: Approximation of Least Recently Used (LRU).
 /// - **Write Tracking**: Dirty pages are identified for disk writes.
 ///
+#[derive(Debug)]
 pub(in crate::core) struct Cache {
     /// See [Pager](super::pager::Pager).
     pub page_size: usize,
@@ -96,6 +97,7 @@ pub(in crate::core) struct Cache {
 }
 
 /// Holds a page and bits representing flags' list.
+#[derive(Debug)]
 struct Frame {
     flags: u8,
     page_number: PageNumber,
@@ -279,17 +281,19 @@ mod tests {
 
     impl Cache {
         pub fn with_pages(number_of_pages: usize, max_size: usize) -> (Self, Vec<MemoryPage>) {
-            const TEST_PAGE_SIZE: usize = 256;
+            const PAGE_SIZE: usize = 1024;
 
             let pages = (0..number_of_pages).map(|idx| {
-                let mut page = Page::alloc(TEST_PAGE_SIZE);
-                let content = vec![idx as u8; Page::ideal_max_content_size(TEST_PAGE_SIZE, 1)];
+                let mut page = Page::alloc(PAGE_SIZE);
+                let content = vec![idx as u8; Page::ideal_max_content_size(PAGE_SIZE, 1)];
 
                 page.push(Cell::new(content));
                 MemoryPage::Ordinary(page)
             });
 
-            let mut cache = Self::default();
+            let mut cache = Self::with_max_size(max_size);
+            cache.page_size = PAGE_SIZE;
+
             let iterator = (0..pages.len()).zip(pages.clone()).take(number_of_pages);
 
             iterator.for_each(|(page_number, mem_page)| {
@@ -299,5 +303,18 @@ mod tests {
 
             (cache, pages.collect())
         }
+    }
+
+    #[test]
+    fn test_reference_page() {
+        let (mut cache, pages) = Cache::with_pages(3, 3);
+
+        pages.into_iter().enumerate().for_each(|(idx, page)| {
+            let id = cache.get(idx as _);
+
+            assert_eq!(id, Some(idx));
+            assert_eq!(page, cache.buffer[idx].page);
+            assert_eq!(REFERENCE_FLAG, cache.buffer[idx].flags);
+        })
     }
 }
