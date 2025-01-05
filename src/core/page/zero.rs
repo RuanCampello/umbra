@@ -29,7 +29,7 @@ pub(in crate::core) struct PageZero {
 /// essential metadata used by the [Pager](crate::core::pager::Pager) for
 /// managing pages and free space within the database.
 #[derive(Debug)]
-pub(in crate::core::page) struct DatabaseHeader {
+pub(in crate::core) struct DatabaseHeader {
     pub identifier: u32,
     pub page_size: u16,
     total_pages: u16,

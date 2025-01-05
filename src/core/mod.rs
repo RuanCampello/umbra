@@ -1,6 +1,7 @@
 use crate::sql::statements::Type;
 
 pub(in crate::core) mod btree;
+mod cache;
 pub(in crate::core) mod io;
 mod page;
 mod pager;

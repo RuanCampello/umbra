@@ -102,8 +102,6 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp> BTree<'p, File, Cmp> {
         page: PageNumber,
         entry: &[u8],
     ) -> std::io::Result<Result<u16, u16>> {
-        let size = self.pager.get(page)?;
-
         todo!()
     }
 }

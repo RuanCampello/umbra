@@ -1,9 +1,10 @@
+use crate::core::cache::Cache;
 use crate::core::io::FileOperations;
 use crate::core::page::zero::{PageZero, DATABASE_IDENTIFIER};
 use crate::core::page::{MemoryPage, PageConversion};
 use crate::core::random::Rng;
 use crate::core::{io::BlockIo, PageNumber};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{self, Read, Seek, Write};
 use std::path::PathBuf;
 
@@ -11,12 +12,10 @@ use std::path::PathBuf;
 /// It manages IO over a "block" in disk to storage the database.
 pub(in crate::core) struct Pager<File> {
     file: BlockIo<File>,
+    cache: Cache,
     /// Block size to read/write a buffer.
     block_size: usize,
     page_size: usize,
-    /// Our babies, the page table. Map with the [`PageNumber`] and
-    /// its index on the buffer.
-    pages: HashMap<PageNumber, FrameId>,
     /// The modified files.
     dirty_pages: HashSet<PageNumber>,
     /// Written pages.
@@ -41,16 +40,15 @@ struct Journal<File> {
     file: Option<File>,
 }
 
-type FrameId = usize;
-
 const JOURNAL_SIZE: usize = size_of::<u64>();
 const JOURNAL_PAGE_SIZE: usize = size_of::<u32>();
 const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u32>();
 const JOURNAL_HEADER_SIZE: usize = JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
 
-const DEFAULT_PAGE_SIZE: usize = 4096;
+pub(in crate::core) const DEFAULT_PAGE_SIZE: usize = 4096;
 const DEFAULT_BUFFERED_PAGES: usize = 10;
 
+#[macro_export]
 macro_rules! method_builder {
     ($field:ident, $ty:ty) => {
         pub fn $field(mut self, value: $ty) -> Self {
@@ -64,6 +62,7 @@ impl Pager<io::Cursor<Vec<u8>>> {
     pub fn default() -> Self {
         let io: io::Cursor<Vec<u8>> = io::Cursor::new(Vec::new());
         let block_size = usize::default();
+        let cache = Cache::default();
 
         Self {
             file: BlockIo::new(io, block_size, DEFAULT_PAGE_SIZE),
@@ -74,9 +73,9 @@ impl Pager<io::Cursor<Vec<u8>>> {
             ),
             dirty_pages: HashSet::new(),
             journal_pages: HashSet::new(),
-            pages: HashMap::new(),
             page_size: DEFAULT_PAGE_SIZE,
             block_size,
+            cache,
         }
     }
 
@@ -86,8 +85,16 @@ impl Pager<io::Cursor<Vec<u8>>> {
         self
     }
 
+    pub fn page_size(mut self, page_size: usize) -> Self {
+        self.page_size = page_size;
+        self.cache.page_size = page_size;
+        self.journal.page_size = page_size;
+        self.file.page_size = page_size;
+
+        self
+    }
+
     method_builder!(block_size, usize);
-    method_builder!(page_size, usize);
     method_builder!(dirty_pages, HashSet<PageNumber>);
     method_builder!(journal_pages, HashSet<PageNumber>);
 }
@@ -170,14 +177,6 @@ impl<File: Seek + FileOperations> Pager<File> {
         }
 
         Ok(())
-    }
-}
-
-impl<File: Seek + Write> std::ops::Index<FrameId> for Pager<File> {
-    type Output = MemoryPage;
-
-    fn index(&self, index: FrameId) -> &Self::Output {
-        todo!()
     }
 }
 
