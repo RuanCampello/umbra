@@ -59,13 +59,35 @@ macro_rules! method_builder {
 }
 
 impl Pager<io::Cursor<Vec<u8>>> {
+    /// Creates a default `Pager` with [`Cursor<Vec<u8>>`] as the file.
     pub fn default() -> Self {
-        let io: io::Cursor<Vec<u8>> = io::Cursor::new(Vec::new());
+        let io = io::Cursor::new(Vec::new());
         let block_size = usize::default();
         let cache = Cache::default();
 
         Self {
             file: BlockIo::new(io, block_size, DEFAULT_PAGE_SIZE),
+            journal: Journal::new(
+                DEFAULT_PAGE_SIZE,
+                DEFAULT_BUFFERED_PAGES,
+                PathBuf::default(),
+            ),
+            dirty_pages: HashSet::new(),
+            journal_pages: HashSet::new(),
+            page_size: DEFAULT_PAGE_SIZE,
+            block_size,
+            cache,
+        }
+    }
+}
+
+impl<File> Pager<File> {
+    pub fn new(file: File) -> Self {
+        let block_size = usize::default();
+        let cache = Cache::default();
+
+        Self {
+            file: BlockIo::new(file, block_size, DEFAULT_PAGE_SIZE),
             journal: Journal::new(
                 DEFAULT_PAGE_SIZE,
                 DEFAULT_BUFFERED_PAGES,
@@ -86,12 +108,16 @@ impl Pager<io::Cursor<Vec<u8>>> {
     }
 
     pub fn page_size(mut self, page_size: usize) -> Self {
+        self.update_pages_size(page_size);
+        self
+    }
+
+    /// Update all instances that use `page_size` to the new `page_size`.
+    fn update_pages_size(&mut self, page_size: usize) {
         self.page_size = page_size;
         self.cache.page_size = page_size;
         self.journal.page_size = page_size;
         self.file.page_size = page_size;
-
-        self
     }
 
     method_builder!(block_size, usize);
@@ -111,9 +137,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         let page_size = header.page_size as usize;
 
         if identifier == DATABASE_IDENTIFIER {
-            self.page_size = page_size;
-            self.journal.page_size = page_size;
-            self.file.page_size = page_size;
+            &self.update_pages_size(page_size);
 
             return Ok(());
         }
