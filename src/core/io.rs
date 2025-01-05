@@ -10,7 +10,7 @@ pub(in crate::core) struct BlockIo<IO> {
     /// Wrapped I/O operator.
     io: IO,
     block_size: usize,
-    page_size: usize,
+    pub page_size: usize,
 }
 
 const DEVELOPMENT_IO_LIMIT: usize = 150 << 20;

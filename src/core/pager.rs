@@ -1,17 +1,22 @@
 use crate::core::io::FileOperations;
+use crate::core::page::zero::{PageZero, DATABASE_IDENTIFIER};
+use crate::core::page::{MemoryPage, PageConversion};
 use crate::core::random::Rng;
 use crate::core::{io::BlockIo, PageNumber};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Seek, Write};
 use std::path::PathBuf;
 
 /// Inspired by [SQLite 2.8.1 pager].
 /// It manages IO over a "block" in disk to storage the database.
-pub(crate) struct Pager<File> {
+pub(in crate::core) struct Pager<File> {
     file: BlockIo<File>,
     /// Block size to read/write a buffer.
     block_size: usize,
     page_size: usize,
+    /// Our babies, the page table. Map with the [`PageNumber`] and
+    /// its index on the buffer.
+    pages: HashMap<PageNumber, FrameId>,
     /// The modified files.
     dirty_pages: HashSet<PageNumber>,
     /// Written pages.
@@ -69,6 +74,7 @@ impl Pager<io::Cursor<Vec<u8>>> {
             ),
             dirty_pages: HashSet::new(),
             journal_pages: HashSet::new(),
+            pages: HashMap::new(),
             page_size: DEFAULT_PAGE_SIZE,
             block_size,
         }
@@ -84,6 +90,62 @@ impl Pager<io::Cursor<Vec<u8>>> {
     method_builder!(page_size, usize);
     method_builder!(dirty_pages, HashSet<PageNumber>);
     method_builder!(journal_pages, HashSet<PageNumber>);
+}
+
+impl<File: Seek + Write + Read + FileOperations> Pager<File> {
+    /// Initialise a database file.
+    pub fn init(&mut self) -> io::Result<()> {
+        let mut page_zero = PageZero::alloc(self.page_size);
+        page_zero.as_mut().fill(0);
+        self.file.read(0, page_zero.as_mut())?;
+
+        let header = page_zero.buffer.header();
+        let identifier = header.identifier;
+        let page_size = header.page_size as usize;
+
+        if identifier == DATABASE_IDENTIFIER {
+            self.page_size = page_size;
+            self.journal.page_size = page_size;
+            self.file.page_size = page_size;
+
+            return Ok(());
+        }
+
+        if identifier.swap_bytes() == DATABASE_IDENTIFIER {
+            panic!("The database file identifier was created using a different endian")
+        }
+
+        let page_zero = PageZero::alloc(self.page_size);
+        self.write(0, page_zero.as_ref())?;
+
+        Ok(())
+    }
+
+    /// Loads the page from disk.
+    // TODO: this can be cached in the future.
+    fn lookup<Page: PageConversion + AsMut<[u8]>>(
+        &mut self,
+        page_number: PageNumber,
+    ) -> io::Result<usize> {
+        todo!()
+    }
+
+    fn get_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&Page>
+    where
+        Page: PageConversion + AsMut<[u8]>,
+        &'p Page: TryFrom<&'p MemoryPage>,
+        <&'p Page as TryFrom<&'p MemoryPage>>::Error: std::fmt::Debug,
+    {
+        let idx = self.lookup::<Page>(page_number);
+
+        todo!()
+    }
+}
+
+impl<File: Seek + Write> Pager<File> {
+    pub fn write(&mut self, page_number: PageNumber, buffer: &[u8]) -> io::Result<usize> {
+        self.file.write(page_number, buffer)
+    }
 }
 
 impl<File: Seek + Read> Pager<File> {
@@ -108,6 +170,14 @@ impl<File: Seek + FileOperations> Pager<File> {
         }
 
         Ok(())
+    }
+}
+
+impl<File: Seek + Write> std::ops::Index<FrameId> for Pager<File> {
+    type Output = MemoryPage;
+
+    fn index(&self, index: FrameId) -> &Self::Output {
+        todo!()
     }
 }
 

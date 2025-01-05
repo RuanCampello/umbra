@@ -3,8 +3,10 @@
 
 mod buffer;
 mod overflow;
-mod zero;
+pub(in crate::core) mod zero;
 
+use crate::core::page::overflow::{OverflowPage, OverflowPageHeader};
+use crate::core::page::zero::{DatabaseHeader, PageZero};
 use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 use std::collections::{BinaryHeap, HashMap};
 use std::fmt::{Debug, Formatter};
@@ -83,6 +85,13 @@ struct CellHeader {
     left_child: PageNumber,
 }
 
+pub(in crate::core) enum MemoryPage {
+    Zero(PageZero),
+    /// A usual database page containg a [Btree](crate::core::btree::BTree).
+    Ordinary(Page),
+    Overflow(OverflowPage),
+}
+
 /// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore can be indexed with 2 bytes.
 pub(in crate::core) type SlotId = u16;
 
@@ -93,6 +102,22 @@ const PAGE_ALIGNMENT: usize = 4096;
 const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const MIN_PAGE_SIZE: usize = 512;
 const MAX_PAGE_SIZE: usize = 64 << 10;
+
+pub(in crate::core) trait PageConversion:
+    From<BufferWithHeader<PageHeader>>
+    + From<BufferWithHeader<OverflowPageHeader>>
+    + From<BufferWithHeader<DatabaseHeader>>
+    + Into<MemoryPage>
+{
+}
+
+impl<Page> PageConversion for Page where
+    Page: From<BufferWithHeader<PageHeader>>
+        + From<BufferWithHeader<OverflowPageHeader>>
+        + From<BufferWithHeader<DatabaseHeader>>
+        + Into<MemoryPage>
+{
+}
 
 impl Page {
     /// Allocates a new page with a given size.
@@ -432,7 +457,7 @@ impl Debug for Page {
                     let mut list = f.debug_list();
                     for slot in 0..self.buffer.header().slot_count {
                         let cell = self.cell(slot);
-                         list.entry(&DebugCell {
+                        list.entry(&DebugCell {
                             size: cell.header.size,
                             content: &cell.content,
                         });

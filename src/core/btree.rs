@@ -1,18 +1,23 @@
 // ! Disk management and B-Tree data structure implementation.
 
+use crate::core::io::FileOperations;
 use crate::core::page::SlotId;
+use crate::core::pager::Pager;
 use crate::core::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
 use crate::sql::statements::Type;
 use std::cmp::Ordering;
+use std::io::{Read, Seek, Write};
 
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
 /// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualizer of this data structure.
-pub(in crate::core) struct BTree<Cmp> {
+pub(in crate::core) struct BTree<'p, File, Cmp> {
     root: PageNumber,
     min_keys: usize,
     balanced_siblings: usize,
 
+    // TODO: this should be ideally a owned value not a mutable reference.
+    pager: &'p mut Pager<File>,
     /// The bytes comparator used to get [`Ordering`].
     comparator: Cmp,
 }
@@ -49,7 +54,7 @@ pub(crate) enum BTreeKeyCmp {
 }
 
 /// Represents the result of reading content from the [`BTree`].
-enum Content<'a> {
+pub(in crate::core) enum Content<'a> {
     /// Content was found within a single page and can be accessed directly as a slice.
     PageRef(&'a [u8]),
     /// The content spans multiple pages and has been reassembled into a contiguous buffer.
@@ -77,9 +82,36 @@ pub(crate) trait BytesCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
 }
 
-impl<Cmp: BytesCmp> BTree<Cmp> {
-    pub fn new(root: PageNumber, comparator: Cmp) -> Self {
+impl<'p, File: Read + Write + Seek + FileOperations, Cmp> BTree<'p, File, Cmp> {
+    /// Returns a value of a given key.
+    pub fn get(&mut self, entry: &[u8]) -> std::io::Result<Option<Content>> {
+        todo!()
+    }
+
+    fn search(
+        &mut self,
+        page: PageNumber,
+        entry: &[u8],
+        parents: &mut [PageNumber],
+    ) -> std::io::Result<Search> {
+        todo!()
+    }
+
+    fn binary_search(
+        &mut self,
+        page: PageNumber,
+        entry: &[u8],
+    ) -> std::io::Result<Result<u16, u16>> {
+        let size = self.pager.get(page)?;
+
+        todo!()
+    }
+}
+
+impl<'p, File, Cmp: BytesCmp> BTree<'p, File, Cmp> {
+    pub fn new(pager: &'p mut Pager<File>, root: PageNumber, comparator: Cmp) -> Self {
         Self {
+            pager,
             root,
             comparator,
             balanced_siblings: DEFAULT_BALANCED_SIBLINGS,

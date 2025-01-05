@@ -16,7 +16,7 @@ use std::ptr;
 /// uniform size, this special case for the first page does not introduce
 /// any significant issues, especially with reasonable page sizes (e.g., 4096 bytes or larger).
 /// Using an entire page solely for the [`DatabaseHeader`] would be inefficient in such cases.
-pub(in crate::core::page) struct PageZero {
+pub(in crate::core) struct PageZero {
     /// Page buffer, including the [`DatabaseHeader`].
     pub buffer: ManuallyDrop<BufferWithHeader<DatabaseHeader>>,
     /// Inner B-Tree slotted page.
@@ -30,8 +30,8 @@ pub(in crate::core::page) struct PageZero {
 /// managing pages and free space within the database.
 #[derive(Debug)]
 pub(in crate::core::page) struct DatabaseHeader {
-    identifier: u32,
-    page_size: u16,
+    pub identifier: u32,
+    pub page_size: u16,
     total_pages: u16,
     free_pages: u16,
     first_free_page: PageNumber,
@@ -39,7 +39,7 @@ pub(in crate::core::page) struct DatabaseHeader {
 }
 
 /// This means literally "dusk", because "umbra" wouldn't fit in an [`core::u32`].
-const DATABASE_IDENTIFIER: u32 = 0x6475736b;
+pub(in crate::core) const DATABASE_IDENTIFIER: u32 = 0x6475736b;
 
 impl PageZero {
     pub fn alloc(size: usize) -> Self {
@@ -88,6 +88,18 @@ impl DatabaseHeader {
 impl Drop for PageZero {
     fn drop(&mut self) {
         unsafe { drop(ptr::from_mut(self).read().buffer()) }
+    }
+}
+
+impl AsRef<[u8]> for PageZero {
+    fn as_ref(&self) -> &[u8] {
+        self.buffer.as_ref()
+    }
+}
+
+impl AsMut<[u8]> for PageZero {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.buffer.as_mut()
     }
 }
 

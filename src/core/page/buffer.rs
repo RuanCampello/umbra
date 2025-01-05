@@ -9,7 +9,7 @@ use std::{alloc, mem};
 /// Represents a buffer split into a header and content.
 /// Header size is determined by the generic type `Header`.
 /// Provides methods for accessing header and content directly.
-pub(in crate::core::page) struct BufferWithHeader<Header> {
+pub(in crate::core) struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
     pub(crate) size: usize,
     /// Pointer to the content.
