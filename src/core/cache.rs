@@ -56,10 +56,13 @@ impl Cache {
             "Buffer pool must be at least {DEFAULT_MIN}"
         );
 
-        let mut cache = Self::default();
-        cache.max_size = max_size;
-
-        cache
+        Self {
+            page_size: DEFAULT_PAGE_SIZE,
+            max_size,
+            buffer: Vec::with_capacity(max_size),
+            pages: HashMap::with_capacity(max_size),
+            pinned_pages: 0,
+        }
     }
 
     /// Returns the [`FrameId`] of a given page, if exists.
@@ -92,6 +95,7 @@ impl Cache {
 
     method_builder!(page_size, usize);
     method_builder!(max_size, usize);
+    method_builder!(pinned_pages, usize);
 }
 
 impl Frame {
