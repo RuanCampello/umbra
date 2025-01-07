@@ -16,7 +16,7 @@ use std::ptr;
 /// uniform size, this special case for the first page does not introduce
 /// any significant issues, especially with reasonable page sizes (e.g., 4096 bytes or larger).
 /// Using an entire page solely for the [`DatabaseHeader`] would be inefficient in such cases.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::core) struct PageZero {
     /// Page buffer, including the [`DatabaseHeader`].
     pub buffer: ManuallyDrop<BufferWithHeader<DatabaseHeader>>,
@@ -29,7 +29,7 @@ pub(in crate::core) struct PageZero {
 /// This struct is located at the beginning of the database file and contains
 /// essential metadata used by the [Pager](crate::core::pager::Pager) for
 /// managing pages and free space within the database.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::core) struct DatabaseHeader {
     pub identifier: u32,
     pub page_size: u16,

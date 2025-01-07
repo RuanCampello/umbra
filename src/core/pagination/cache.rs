@@ -8,6 +8,7 @@ use crate::core::pagination::pager::DEFAULT_PAGE_SIZE;
 use crate::core::PageNumber;
 use crate::method_builder;
 use std::collections::HashMap;
+use std::mem;
 
 /// # Clock-Based Page Cache
 ///
@@ -161,6 +162,12 @@ impl Cache {
         })
     }
 
+    /// Loads a page from memory into the buffer and returns the evicted page.
+    pub fn load(&mut self, page_number: PageNumber, page: MemoryPage) -> MemoryPage {
+        let id = self.map(page_number);
+        mem::replace(&mut self.buffer[id].page, page)
+    }
+
     /// Maps a given [`PageNumber`] to a [`FrameId`].
     pub fn map(&mut self, page_number: PageNumber) -> FrameId {
         // best case: the page is already cached
@@ -279,8 +286,17 @@ mod tests {
     use super::*;
     use crate::core::page::*;
 
+    enum Fetch {
+        All,
+        UntilBufferEnd,
+    }
+
     impl Cache {
-        pub fn with_pages(number_of_pages: usize, max_size: usize) -> (Self, Vec<MemoryPage>) {
+        pub fn with_pages(
+            number_of_pages: usize,
+            max_size: usize,
+            fetch: Fetch,
+        ) -> (Self, Vec<MemoryPage>) {
             const PAGE_SIZE: usize = 1024;
             let pages = (0..number_of_pages).map(|idx| {
                 let mut page = Page::alloc(PAGE_SIZE);
@@ -293,7 +309,10 @@ mod tests {
 
             let mut cache = Self::with_max_size(max_size);
 
-            let iterator = (0..pages.len()).zip(pages.clone()).take(number_of_pages);
+            let iterator = (0..pages.len()).zip(pages.clone()).take(match fetch {
+                Fetch::All => number_of_pages,
+                Fetch::UntilBufferEnd => cache.max_size,
+            });
 
             iterator.for_each(|(page_number, mem_page)| {
                 let id = cache.map(page_number as _);
@@ -306,15 +325,53 @@ mod tests {
 
     #[test]
     fn test_reference_page() {
-        let (mut cache, pages) = Cache::with_pages(3, 3);
+        let (mut cache, pages) = Cache::with_pages(3, 3, Fetch::All);
 
         pages.into_iter().enumerate().for_each(|(idx, page)| {
             let id = cache.get(idx as _);
-            
+
             // See [`BufferWithHeader`] `PartialEq` implementation.
             assert_eq!(page, cache.buffer[idx].page);
             assert_eq!(id, Some(idx));
             assert_eq!(REFERENCE_FLAG, cache.buffer[idx].flags);
         })
+    }
+
+    #[test]
+    fn test_mark_as_dirty() {
+        let (mut cache, pages) = Cache::with_pages(3, 3, Fetch::UntilBufferEnd);
+
+        pages.into_iter().enumerate().for_each(|(idx, page)| {
+            let id = cache.get_mut(idx as _);
+
+            // See [`BufferWithHeader`] `PartialEq` implementation.
+            assert_eq!(page, cache.buffer[idx].page);
+            assert_eq!(id, Some(idx));
+            assert_eq!(REFERENCE_FLAG | DIRTY_FLAG, cache.buffer[idx].flags);
+        })
+    }
+
+    #[test]
+    fn test_evict_first_unreferenced_page() {
+        let (mut cache, pages) = Cache::with_pages(4, 3, Fetch::UntilBufferEnd);
+
+        (0..2).for_each(|idx| {
+            cache.get(idx);
+        }); // make all pages but the last have `REFERENCE_FLAG`
+
+        let evicted = cache.load(3, pages[3].clone()); // this must evict the 2nd page then replace it with the 3rd
+
+        assert_eq!(evicted, pages[2].clone());
+        assert_eq!(cache.clock, cache.max_size - 1);
+        assert_eq!(
+            cache.buffer[cache.max_size - 1].page,
+            pages[pages.len() - 1]
+        );
+        assert_eq!(cache.pages[&3], cache.max_size - 1);
+
+        for (idx, page) in pages[..cache.max_size - 1].iter().enumerate() {
+            assert_eq!(*page, cache.buffer[idx].page);
+            assert_eq!(idx, cache.pages[&(idx as _)]);
+        }
     }
 }

@@ -30,7 +30,7 @@ use std::{self, alloc, iter, ptr};
 ///
 /// ```
 ///
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub(in crate::core) struct Page {
     /// In-memory buffer containing data read from disk, including a header.
     buffer: BufferWithHeader<PageHeader>,
@@ -49,7 +49,7 @@ pub(in crate::core) struct Page {
 /// +-------------------------------------------------------------+-------------------+
 ///                                     PAGE
 /// ```
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct PageHeader {
     /// The Page's free space available.
     free_space: u16,
@@ -86,7 +86,7 @@ struct CellHeader {
     left_child: PageNumber,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::core) enum MemoryPage {
     Zero(PageZero),
     /// A usual database page containg a [Btree](crate::core::btree::BTree).

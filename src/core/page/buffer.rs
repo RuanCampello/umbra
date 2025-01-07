@@ -9,7 +9,6 @@ use std::{alloc, mem};
 /// Represents a buffer split into a header and content.
 /// Header size is determined by the generic type `Header`.
 /// Provides methods for accessing header and content directly.
-#[derive(Clone)]
 pub(in crate::core) struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
     pub(crate) size: usize,
@@ -200,6 +199,14 @@ impl<Header> AsRef<[u8]> for BufferWithHeader<Header> {
 impl<Header> AsMut<[u8]> for BufferWithHeader<Header> {
     fn as_mut(&mut self) -> &mut [u8] {
         self.as_mutable_slice()
+    }
+}
+
+impl<Header> Clone for BufferWithHeader<Header> {
+    fn clone(&self) -> Self {
+        let mut cloned = Self::new(self.size);
+        cloned.as_mutable_slice().copy_from_slice(self.as_slice());
+        cloned
     }
 }
 
