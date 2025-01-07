@@ -1,7 +1,7 @@
 //! Disk management and B-Tree data structure implementation.
 
-use crate::core::pagination::io::FileOperations;
 use crate::core::page::SlotId;
+use crate::core::pagination::io::FileOperations;
 use crate::core::pagination::pager::Pager;
 use crate::core::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
 use crate::sql::statements::Type;

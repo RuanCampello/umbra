@@ -424,8 +424,6 @@ mod tests {
         let (mut cache, pages) = Cache::with_pages(10, 10, Fetch::UntilBufferEnd);
         cache.max_pinned_percentage = 30.0;
 
-        println!("{:#?}", cache);
-
         (0..=2).for_each(|idx| {
             cache.pin(idx);
         });

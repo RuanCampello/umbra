@@ -1,7 +1,7 @@
 use super::cache::Cache;
 use super::io::{BlockIo, FileOperations};
 use crate::core::page::zero::{PageZero, DATABASE_IDENTIFIER};
-use crate::core::page::{MemoryPage, PageConversion};
+use crate::core::page::{MemoryPage, Page, PageConversion};
 use crate::core::random::Rng;
 use crate::core::PageNumber;
 use std::collections::HashSet;
@@ -162,6 +162,11 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         Ok(())
     }
 
+    /// Returns a reference to a [Btree](crate::core::btree) [page](crate::core::page::Page).
+    pub fn get(&mut self, page_number: PageNumber) -> io::Result<&Page> {
+        self.get_as::<Page>(page_number)
+    }
+
     /// Loads the page from disk.
     // TODO: this can be cached in the future.
     fn lookup<Page: PageConversion + AsMut<[u8]>>(
@@ -177,9 +182,10 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         &'p Page: TryFrom<&'p MemoryPage>,
         <&'p Page as TryFrom<&'p MemoryPage>>::Error: std::fmt::Debug,
     {
-        let idx = self.lookup::<Page>(page_number);
+        let idx = self.lookup::<Page>(page_number)?;
+        let memory_page = &self.cache[idx];
 
-        todo!()
+        Ok(memory_page.try_into().expect("Error converting page type"))
     }
 }
 

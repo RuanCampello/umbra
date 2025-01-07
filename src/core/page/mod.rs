@@ -486,6 +486,18 @@ impl Debug for Page {
     }
 }
 
+impl AsRef<[u8]> for Page {
+    fn as_ref(&self) -> &[u8] {
+        self.buffer.as_ref()
+    }
+}
+
+impl AsMut<[u8]> for Page {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.buffer.as_mut()
+    }
+}
+
 impl<Header> From<BufferWithHeader<Header>> for Page {
     fn from(buffer: BufferWithHeader<Header>) -> Self {
         let mut buffer = buffer.cast();
@@ -608,6 +620,106 @@ impl MemoryPage {
             Self::Ordinary(btree) => btree.is_overflow(),
             Self::Zero(page_zero) => page_zero.btree_page().is_overflow(),
             _ => false,
+        }
+    }
+}
+
+// check `Cache::get_as` to see why all those implementations
+
+impl AsRef<[u8]> for MemoryPage {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Ordinary(page) => page.as_ref(),
+            Self::Zero(page_zero) => page_zero.as_ref(),
+            Self::Overflow(page) => page.as_ref(),
+        }
+    }
+}
+
+impl From<Page> for MemoryPage {
+    fn from(value: Page) -> Self {
+        Self::Ordinary(value)
+    }
+}
+
+impl From<PageZero> for MemoryPage {
+    fn from(value: PageZero) -> Self {
+        Self::Zero(value)
+    }
+}
+
+impl From<OverflowPage> for MemoryPage {
+    fn from(value: OverflowPage) -> Self {
+        Self::Overflow(value)
+    }
+}
+
+// TODO: use macros to reduce this duplication
+
+impl<'p> TryFrom<&'p MemoryPage> for &'p Page {
+    type Error = String;
+
+    fn try_from(value: &'p MemoryPage) -> Result<Self, Self::Error> {
+        match value {
+            MemoryPage::Ordinary(page) => Ok(page),
+            MemoryPage::Zero(zero) => Ok(zero.btree_page()),
+            other => Err(format!("Cannot convert {other:?} into Page")),
+        }
+    }
+}
+
+impl<'p> TryFrom<&'p mut MemoryPage> for &'p mut Page {
+    type Error = String;
+
+    fn try_from(value: &'p mut MemoryPage) -> Result<Self, Self::Error> {
+        match value {
+            MemoryPage::Ordinary(page) => Ok(page),
+            MemoryPage::Zero(zero) => Ok(zero.mutable_btree_page()),
+            other => Err(format!("Cannot convert {other:?} into Page")),
+        }
+    }
+}
+
+impl<'p> TryFrom<&'p MemoryPage> for &'p PageZero {
+    type Error = String;
+
+    fn try_from(value: &'p MemoryPage) -> Result<Self, Self::Error> {
+        match value {
+            MemoryPage::Zero(zero) => Ok(zero),
+            other => Err(format!("Cannot convert {other:?} into PageZero")),
+        }
+    }
+}
+
+impl<'p> TryFrom<&'p mut MemoryPage> for &'p mut PageZero {
+    type Error = String;
+
+    fn try_from(value: &'p mut MemoryPage) -> Result<Self, Self::Error> {
+        match value {
+            MemoryPage::Zero(zero) => Ok(zero),
+            other => Err(format!("Cannot convert {other:?} into PageZero")),
+        }
+    }
+}
+
+impl<'p> TryFrom<&'p MemoryPage> for &'p OverflowPage {
+    type Error = String;
+
+    fn try_from(value: &'p MemoryPage) -> Result<Self, Self::Error> {
+        match value {
+            MemoryPage::Overflow(overflow) => Ok(overflow),
+            other => Err(format!("Cannot convert {other:?} into OverflowPage")),
+        }
+    }
+}
+
+impl<'p> TryFrom<&'p mut MemoryPage> for &'p mut OverflowPage {
+    type Error = String;
+
+    fn try_from(value: &'p mut MemoryPage) -> Result<Self, Self::Error> {
+        match value {
+            MemoryPage::Overflow(overflow) => Ok(overflow),
+            other => Err(format!("Cannot convert {other:?} into OverflowPage")),
         }
     }
 }

@@ -85,3 +85,9 @@ impl<Header> From<BufferWithHeader<Header>> for OverflowPage {
         Self { buffer }
     }
 }
+
+impl AsRef<[u8]> for OverflowPage {
+    fn as_ref(&self) -> &[u8] {
+        self.buffer.as_ref()
+    }
+}
