@@ -54,7 +54,7 @@ pub(in crate::core::page) struct OverflowPageHeader {
     /// Number of bytes stored in this page.
     pub num_bytes: u16,
     /// Padding for alignment.
-    pub(crate) padding: u16,
+    pub padding: u16,
 }
 
 /// Free pages can be represented using the [`OverflowPage`] struct,

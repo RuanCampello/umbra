@@ -4,7 +4,7 @@
 //! It must return owned values by indexing, preventing common Rust's borrowing errors.
 
 use crate::core::page::MemoryPage;
-use crate::core::pager::DEFAULT_PAGE_SIZE;
+use crate::core::pagination::pager::DEFAULT_PAGE_SIZE;
 use crate::core::PageNumber;
 use crate::method_builder;
 use std::collections::HashMap;

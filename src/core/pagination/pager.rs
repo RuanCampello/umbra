@@ -1,9 +1,9 @@
-use crate::core::cache::Cache;
-use crate::core::io::FileOperations;
+use super::cache::Cache;
+use super::io::{BlockIo, FileOperations};
 use crate::core::page::zero::{PageZero, DATABASE_IDENTIFIER};
 use crate::core::page::{MemoryPage, PageConversion};
 use crate::core::random::Rng;
-use crate::core::{io::BlockIo, PageNumber};
+use crate::core::PageNumber;
 use std::collections::HashSet;
 use std::io::{self, Read, Seek, Write};
 use std::path::PathBuf;
