@@ -168,6 +168,21 @@ impl Cache {
         mem::replace(&mut self.buffer[id].page, page)
     }
 
+    /// Pin is meant to mark a given page as `unevictable`.
+    /// Returns `true` if the page exists and was pinned.
+    pub fn pin(&mut self, page_number: PageNumber) -> bool {
+        let pinned = self.pages.get(&page_number).map_or(false, |id| {
+            self.buffer[*id].set(PINNED_FLAG);
+            true
+        });
+
+        if pinned {
+            self.pinned_pages += 1
+        }
+
+        pinned
+    }
+
     /// Maps a given [`PageNumber`] to a [`FrameId`].
     pub fn map(&mut self, page_number: PageNumber) -> FrameId {
         // best case: the page is already cached
@@ -292,7 +307,7 @@ mod tests {
     }
 
     impl Cache {
-        pub fn with_pages(
+        fn with_pages(
             number_of_pages: usize,
             max_size: usize,
             fetch: Fetch,
