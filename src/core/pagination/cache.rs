@@ -89,6 +89,8 @@ pub(in crate::core) struct Cache {
     /// The maximum number of pages that this cache can handle.
     max_size: usize,
     pinned_pages: usize,
+    /// The maximum percentage of pages that can be [pinned](Cache::pin) at once.
+    max_pinned_percentage: f32,
     clock: FrameId,
     /// The buffer pool.
     buffer: Vec<Frame>,
@@ -113,6 +115,7 @@ const PINNED_FLAG: u8 = 0b100;
 
 const DEFAULT_MAX: usize = 1024;
 const DEFAULT_MIN: usize = 2;
+const DEFAULT_MAX_PINNED_PERCENTAGE: f32 = 60.0;
 
 impl Cache {
     pub fn default() -> Self {
@@ -121,6 +124,7 @@ impl Cache {
             max_size: DEFAULT_MAX,
             buffer: Vec::with_capacity(DEFAULT_MAX),
             pages: HashMap::with_capacity(DEFAULT_MAX),
+            max_pinned_percentage: DEFAULT_MAX_PINNED_PERCENTAGE,
             pinned_pages: 0,
             clock: 0,
         }
@@ -137,6 +141,7 @@ impl Cache {
             max_size,
             buffer: Vec::with_capacity(max_size),
             pages: HashMap::with_capacity(max_size),
+            max_pinned_percentage: DEFAULT_MAX_PINNED_PERCENTAGE,
             pinned_pages: 0,
             clock: 0,
         }
@@ -171,6 +176,12 @@ impl Cache {
     /// Pin is meant to mark a given page as `unevictable`.
     /// Returns `true` if the page exists and was pinned.
     pub fn pin(&mut self, page_number: PageNumber) -> bool {
+        let pinned_percentage = (self.pinned_pages as f32 / self.max_size as f32) * 100.0;
+
+        if pinned_percentage >= self.max_pinned_percentage {
+            return false;
+        }
+
         let pinned = self.pages.get(&page_number).map_or(false, |id| {
             self.buffer[*id].set(PINNED_FLAG);
             true
@@ -265,6 +276,7 @@ impl Cache {
     method_builder!(page_size, usize);
     method_builder!(max_size, usize);
     method_builder!(pinned_pages, usize);
+    method_builder!(max_pinned_percentage, f32);
 }
 
 impl Frame {
@@ -405,5 +417,23 @@ mod tests {
         assert_eq!(pages[0], cache.buffer[0].page);
         assert_eq!(pages[3], cache.buffer[1].page);
         assert_eq!(pages[2], cache.buffer[2].page);
+    }
+
+    #[test]
+    fn test_eviction_on_pinned_pages_limit() {
+        let (mut cache, pages) = Cache::with_pages(10, 10, Fetch::UntilBufferEnd);
+        cache.max_pinned_percentage = 30.0;
+
+        println!("{:#?}", cache);
+
+        (0..=2).for_each(|idx| {
+            cache.pin(idx);
+        });
+
+        let pinned = cache.pin(3);
+
+        assert!(!pinned);
+        assert_eq!(0, cache.buffer[3].flags);
+        assert_eq!(3, cache.pinned_pages);
     }
 }
