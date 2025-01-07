@@ -167,12 +167,37 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         self.get_as::<Page>(page_number)
     }
 
-    /// Loads the page from disk.
-    // TODO: this can be cached in the future.
+    /// Returns the cache id for a given [`PageNumber`].
     fn lookup<Page: PageConversion + AsMut<[u8]>>(
         &mut self,
         page_number: PageNumber,
     ) -> io::Result<usize> {
+        if let Some(idx) = self.cache.get(page_number) {
+            return Ok(idx);
+        }
+
+        if page_number == 0 {
+            self.load::<PageZero>(page_number)?;
+        } else {
+            self.load::<Page>(page_number)?;
+        }
+
+        Ok(self.cache.get(page_number).unwrap())
+    }
+
+    /// Like [`Cache::load`], loads the page from disk and move it to the cache.
+    fn load<Page: PageConversion + AsMut<[u8]>>(
+        &mut self,
+        page_number: PageNumber,
+    ) -> io::Result<()> {
+        let idx = self.map_page::<Page>(page_number)?;
+        self.file.read(page_number, self.cache[idx].as_mut())?;
+
+        Ok(())
+    }
+
+    /// Maps the given [`PageNumber`] into an entry on cache.
+    fn map_page<Page>(&self, page_number: PageNumber) -> io::Result<usize> {
         todo!()
     }
 

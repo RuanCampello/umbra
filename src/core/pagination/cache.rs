@@ -308,6 +308,12 @@ impl std::ops::Index<FrameId> for Cache {
     }
 }
 
+impl std::ops::IndexMut<FrameId> for Cache {
+    fn index_mut(&mut self, index: FrameId) -> &mut Self::Output {
+        &mut self.buffer[index].page
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

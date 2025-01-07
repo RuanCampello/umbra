@@ -91,3 +91,9 @@ impl AsRef<[u8]> for OverflowPage {
         self.buffer.as_ref()
     }
 }
+
+impl  AsMut<[u8]> for OverflowPage {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.buffer.as_mut()
+    }
+}

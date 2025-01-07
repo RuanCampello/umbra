@@ -636,6 +636,16 @@ impl AsRef<[u8]> for MemoryPage {
     }
 }
 
+impl AsMut<[u8]> for MemoryPage {
+    fn as_mut(&mut self) -> &mut [u8] {
+        match self {
+            Self::Ordinary(page) => page.as_mut(),
+            Self::Zero(page) => page.as_mut(),
+            Self::Overflow(page) => page.as_mut(),
+        }
+    }
+}
+
 impl From<Page> for MemoryPage {
     fn from(value: Page) -> Self {
         Self::Ordinary(value)
