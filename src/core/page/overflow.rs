@@ -43,7 +43,7 @@ use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 #[derive(Debug, PartialEq, Clone)]
 pub(in crate::core::page) struct OverflowPage {
     /// In-memory page buffer.
-    buffer: BufferWithHeader<OverflowPageHeader>,
+    pub(in crate::core) buffer: BufferWithHeader<OverflowPageHeader>,
 }
 
 /// Header of an overflow page.
@@ -92,7 +92,7 @@ impl AsRef<[u8]> for OverflowPage {
     }
 }
 
-impl  AsMut<[u8]> for OverflowPage {
+impl AsMut<[u8]> for OverflowPage {
     fn as_mut(&mut self) -> &mut [u8] {
         self.buffer.as_mut()
     }

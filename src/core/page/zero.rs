@@ -19,7 +19,7 @@ use std::ptr;
 #[derive(Debug, PartialEq, Clone)]
 pub(in crate::core) struct PageZero {
     /// Page buffer, including the [`DatabaseHeader`].
-    pub buffer: ManuallyDrop<BufferWithHeader<DatabaseHeader>>,
+    pub(in crate::core) buffer: ManuallyDrop<BufferWithHeader<DatabaseHeader>>,
     /// Inner B-Tree slotted page.
     page: ManuallyDrop<Page>,
 }
@@ -58,7 +58,7 @@ impl PageZero {
     }
 
     /// Erase all the metadata and returns the underlying buffer.
-    fn buffer(mut self) -> BufferWithHeader<DatabaseHeader> {
+    pub fn buffer(mut self) -> BufferWithHeader<DatabaseHeader> {
         let Page {
             buffer, overflow, ..
         } = unsafe { ManuallyDrop::take(&mut self.page) };

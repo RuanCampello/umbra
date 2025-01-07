@@ -33,7 +33,7 @@ use std::{self, alloc, iter, ptr};
 #[derive(PartialEq, Clone)]
 pub(in crate::core) struct Page {
     /// In-memory buffer containing data read from disk, including a header.
-    buffer: BufferWithHeader<PageHeader>,
+    pub(in crate::core) buffer: BufferWithHeader<PageHeader>,
     /// Map storing overflow cells, keyed by their slot IDs.
     overflow: HashMap<SlotId, Box<Cell>>,
 }
@@ -613,6 +613,21 @@ impl PageHeader {
 impl MemoryPage {
     pub fn alloc(size: usize) -> Self {
         MemoryPage::Ordinary(Page::alloc(size))
+    }
+
+    /// Converts this page into another [`MemoryPage`] type.
+    pub fn reinit_as<P: PageConversion>(&mut self) {
+        unsafe {
+            let memory_page = ptr::from_mut(self);
+
+            let converted = match memory_page.read() {
+                Self::Zero(zero) => P::from(zero.buffer()),
+                Self::Overflow(overflow) => P::from(overflow.buffer),
+                Self::Ordinary(page) => P::from(page.buffer),
+            };
+
+            memory_page.write(converted.into())
+        }
     }
 
     pub fn is_overflow(&self) -> bool {

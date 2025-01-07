@@ -176,10 +176,9 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
             return Ok(idx);
         }
 
-        if page_number == 0 {
-            self.load::<PageZero>(page_number)?;
-        } else {
-            self.load::<Page>(page_number)?;
+        match page_number {
+            0 => self.load::<PageZero>(page_number)?,
+            _ => self.load::<Page>(page_number)?,
         }
 
         Ok(self.cache.get(page_number).unwrap())
@@ -197,8 +196,11 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
     }
 
     /// Maps the given [`PageNumber`] into an entry on cache.
-    fn map_page<Page>(&self, page_number: PageNumber) -> io::Result<usize> {
-        todo!()
+    fn map_page<Page: PageConversion>(&mut self, page_number: PageNumber) -> io::Result<usize> {
+        let idx = self.cache.map(page_number);
+        self.cache[idx].reinit_as::<Page>();
+
+        Ok(idx)
     }
 
     fn get_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&Page>
