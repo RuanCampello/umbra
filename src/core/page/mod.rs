@@ -124,7 +124,6 @@ impl<Page> PageConversion for Page where
 impl Page {
     /// Allocates a new page with a given size.
     pub fn alloc(size: usize) -> Self {
-        println!("given {size}");
         Self::from(BufferWithHeader::<PageHeader>::for_page(size))
     }
 
@@ -364,7 +363,7 @@ impl Page {
         debug_assert!(min_cells > 0, "Why?");
 
         let ideal_size =
-            Page::max_content_size(Page::usable_space(page_size) / min_cells as u16) as usize;
+            Page::max_content_size(Self::usable_space(page_size) / min_cells as u16) as usize;
 
         debug_assert!(
             ideal_size > 0,

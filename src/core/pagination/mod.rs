@@ -1,6 +1,6 @@
 //! Pagination implementation.
 //!
-//! This module contains all datastructures that deals with IO.
+//! This module contains all data-structures that deals with IO.
 //! It also has an in-memory cache implementation.
 
 mod cache;

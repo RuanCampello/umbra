@@ -9,7 +9,7 @@ use std::{alloc, mem};
 /// Represents a buffer split into a header and content.
 /// Header size is determined by the generic type `Header`.
 /// Provides methods for accessing header and content directly.
-#[derive(PartialEq, Clone)]
+#[derive(Clone)]
 pub(in crate::core) struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
     pub(crate) size: usize,
@@ -28,8 +28,6 @@ impl<Header> BufferWithHeader<Header> {
 
     /// Works as [`Self::new`] but checks range bounds.
     pub fn for_page(size: usize) -> Self {
-        println!("MIN {MIN_PAGE_SIZE} MAX {MAX_PAGE_SIZE} SIZE {size}");
-
         assert!(
             (MIN_PAGE_SIZE..=MAX_PAGE_SIZE).contains(&size),
             "Page size {size} is not between {MIN_PAGE_SIZE} and {MAX_PAGE_SIZE}"
@@ -184,6 +182,12 @@ impl<Header: Debug> Debug for BufferWithHeader<Header> {
             .field("header", &self.header)
             .field("size", &self.size)
             .finish()
+    }
+}
+
+impl<Header> PartialEq for BufferWithHeader<Header> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref().eq(other.as_ref())
     }
 }
 

@@ -81,7 +81,7 @@ use std::collections::HashMap;
 /// - **Efficient Eviction**: Approximation of Least Recently Used (LRU).
 /// - **Write Tracking**: Dirty pages are identified for disk writes.
 ///
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(in crate::core) struct Cache {
     /// See [Pager](super::pager::Pager).
     pub page_size: usize,
@@ -97,7 +97,7 @@ pub(in crate::core) struct Cache {
 }
 
 /// Holds a page and bits representing flags' list.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Frame {
     flags: u8,
     page_number: PageNumber,
@@ -174,7 +174,7 @@ impl Cache {
             self.pages.insert(page_number, id);
 
             self.buffer
-                .push(Frame::new(page_number, MemoryPage::alloc(id)))
+                .push(Frame::new(page_number, MemoryPage::alloc(self.page_size)))
         }
 
         // the buffer is full, so we must evict
@@ -282,23 +282,22 @@ mod tests {
     impl Cache {
         pub fn with_pages(number_of_pages: usize, max_size: usize) -> (Self, Vec<MemoryPage>) {
             const PAGE_SIZE: usize = 1024;
-
             let pages = (0..number_of_pages).map(|idx| {
                 let mut page = Page::alloc(PAGE_SIZE);
-                let content = vec![idx as u8; Page::ideal_max_content_size(PAGE_SIZE, 1)];
-
+                let ideal_size = Page::ideal_max_content_size(PAGE_SIZE, 1);
+                let content = vec![idx as u8; ideal_size];
                 page.push(Cell::new(content));
+
                 MemoryPage::Ordinary(page)
             });
 
             let mut cache = Self::with_max_size(max_size);
-            cache.page_size = PAGE_SIZE;
 
             let iterator = (0..pages.len()).zip(pages.clone()).take(number_of_pages);
 
             iterator.for_each(|(page_number, mem_page)| {
                 let id = cache.map(page_number as _);
-                cache.buffer[id].page = mem_page;
+                cache.buffer[id].page = mem_page
             });
 
             (cache, pages.collect())
@@ -311,9 +310,10 @@ mod tests {
 
         pages.into_iter().enumerate().for_each(|(idx, page)| {
             let id = cache.get(idx as _);
-
-            assert_eq!(id, Some(idx));
+            
+            // See [`BufferWithHeader`] `PartialEq` implementation.
             assert_eq!(page, cache.buffer[idx].page);
+            assert_eq!(id, Some(idx));
             assert_eq!(REFERENCE_FLAG, cache.buffer[idx].flags);
         })
     }

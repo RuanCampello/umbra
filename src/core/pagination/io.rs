@@ -6,6 +6,7 @@ use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::{fs, io};
 
+#[derive(PartialEq)]
 pub(in crate::core) struct BlockIo<IO> {
     /// Wrapped I/O operator.
     io: IO,
