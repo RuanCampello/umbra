@@ -389,4 +389,21 @@ mod tests {
             assert_eq!(idx, cache.pages[&(idx as _)]);
         }
     }
+
+    #[test]
+    fn test_non_eviction_of_pinned_pages() {
+        let (mut cache, pages) = Cache::with_pages(4, 3, Fetch::UntilBufferEnd);
+        let pinned = cache.pin(0);
+
+        cache.load(3, pages[3].clone()); // must evict but not the first page cause its pinned
+
+        assert!(pinned);
+        assert_eq!(PINNED_FLAG, cache.buffer[0].flags);
+        assert_eq!(1, cache.clock);
+
+        // checking the pages' integrity
+        assert_eq!(pages[0], cache.buffer[0].page);
+        assert_eq!(pages[3], cache.buffer[1].page);
+        assert_eq!(pages[2], cache.buffer[2].page);
+    }
 }
