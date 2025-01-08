@@ -6,8 +6,9 @@ use super::pagination::pager::Pager;
 use super::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
 use crate::core::page::overflow::OverflowPage;
 use crate::sql::statements::Type;
-use std::cmp::{min, Ordering};
-use std::io::{Read, Seek, Write};
+use std::cmp::{min, Ordering, Reverse};
+use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::io::{Read, Result as IOResult, Seek, Write};
 
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
@@ -22,6 +23,7 @@ pub(in crate::core) struct BTree<'p, File, Cmp> {
     comparator: Cmp,
 }
 
+#[derive(Debug)]
 struct Sibling {
     page: PageNumber,
 
@@ -83,13 +85,18 @@ pub(crate) trait BytesCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
 }
 
+/// [`BTree`] common keys iterator
+trait Keys: IntoIterator<Item = u64> {}
+impl<Type> Keys for Type where Type: IntoIterator<Item = u64> {}
+
 impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, File, Cmp> {
     /// Returns a value of a given key.
-    pub fn get(&mut self, entry: &[u8]) -> std::io::Result<Option<Content>> {
+    pub fn get(&mut self, entry: &[u8]) -> IOResult<Option<Content>> {
         todo!()
     }
 
-    pub fn insert(&mut self, entry: Vec<u8>) -> std::io::Result<()> {
+    /// Inserts a new entry into the tree or replace it if already exists.
+    pub fn insert(&mut self, entry: Vec<u8>) -> IOResult<()> {
         let mut parents = Vec::new();
         let search = self.search(self.root, &entry, &mut parents)?;
 
@@ -97,16 +104,19 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         let node = self.pager.get_mut(search.page)?;
 
         match search.index {
+            // if the key was found, we just need to replace it
             Ok(idx) => {
                 cell.header.left_child = node.cell(idx).header.left_child;
                 let curr_cell = node.replace(cell, idx);
 
+                self.pager.free_cell(curr_cell)?;
                 todo!()
             }
+            // wasn't found, insert it
             Err(idx) => node.insert(idx, cell),
         }
 
-        todo!()
+        self.balance(search.page, &mut parents)
     }
 
     fn search(
@@ -114,11 +124,11 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         page: PageNumber,
         entry: &[u8],
         parents: &mut Vec<PageNumber>,
-    ) -> std::io::Result<Search> {
+    ) -> IOResult<Search> {
         let index = self.binary_search(page, entry)?;
         let node = self.pager.get(page)?;
 
-        // recursion breaking condition
+        // recursion-breaking condition
         if index.is_ok() || node.is_leaf() {
             return Ok(Search { page, index });
         }
@@ -133,7 +143,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         &mut self,
         page_number: PageNumber,
         entry: &[u8],
-    ) -> std::io::Result<Result<u16, u16>> {
+    ) -> IOResult<Result<u16, u16>> {
         let mut size = self.pager.get(page_number)?.len();
 
         let mut left = 0;
@@ -168,8 +178,226 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         Ok(Err(left))
     }
 
-    /// Allocates a [`Cell`] that can store all the given content.
-    fn allocate_cell(&mut self, content: Vec<u8>) -> std::io::Result<Box<Cell>> {
+    /// BTree balancing algorithm.
+    /// You can check out this mostly same `balance`
+    /// implementation for this [Sqlite](https://www.sqlite.org/src/file?name=src/btree.c&ci=590f963b6599e4e2)
+    /// version.
+    fn balance(
+        &mut self,
+        mut page_number: PageNumber,
+        parents: &mut Vec<PageNumber>,
+    ) -> IOResult<()> {
+        let node = self.pager.get(page_number)?;
+        let is_root = parents.is_empty();
+        let is_underflow = !is_root || node.len() == 0 || node.is_underflow();
+
+        // the node is balanced, so no need of doing anything
+        if !node.is_underflow() && is_underflow {
+            return Ok(());
+        }
+
+        // underflow in root
+        if is_root && is_underflow {
+            // if the node has no children, there's nothing we can do
+            if node.is_leaf() {
+                return Ok(());
+            }
+
+            let child_page_number = node.header().right_child;
+            let space_needed = self.pager.get(child_page_number)?.bytes_occupied();
+
+            if self.pager.get(page_number)?.header().free_space < space_needed {
+                return Ok(());
+            }
+
+            let child = self.pager.get_mut(child_page_number)?;
+            let grand_child = child.header().right_child;
+            let cells: Vec<Box<Cell>> = child.drain(..).collect();
+
+            self.pager.free_page(child_page_number)?;
+
+            let root = self.pager.get_mut(page_number)?;
+            root.push_all(cells);
+            root.mutable_header().right_child = grand_child;
+
+            return Ok(());
+        }
+
+        // overflow in root
+        if is_root && node.is_overflow() {
+            let new_page_number = self.pager.allocate_page::<Page>()?;
+
+            let root = self.pager.get_mut(page_number)?;
+            let grand_child =
+                std::mem::replace(&mut root.mutable_header().right_child, new_page_number);
+            let cells: Vec<Box<Cell>> = root.drain(..).collect();
+
+            // the created page
+            let child = self.pager.get_mut(new_page_number)?;
+            child.push_all(cells);
+            parents.push(page_number);
+
+            page_number = new_page_number
+        }
+
+        let parent = parents.remove(parents.len() - 1);
+        let mut siblings = self.siblings(page_number, parent)?;
+
+        debug_assert_eq!(
+            HashSet::<PageNumber>::from_iter(siblings.iter().map(|sibling| sibling.page)).len(),
+            siblings.len(),
+            "Sibling array contains duplicates {siblings:#?}"
+        );
+
+        let mut cells = VecDeque::new();
+        let div_idx = siblings[0].index;
+
+        siblings
+            .iter()
+            .enumerate()
+            .try_for_each(|(idx, sibling)| -> IOResult<()> {
+                cells.extend(self.pager.get_mut(sibling.page)?.drain(..));
+
+                if idx > siblings.len() - 1 {
+                    let mut div = self.pager.get_mut(parent)?.remove(div_idx);
+                    div.header.left_child = self.pager.get(sibling.page)?.header().right_child;
+                    cells.push_back(div);
+                }
+                Ok(())
+            })?;
+
+        let usable_space = Page::usable_space(self.pager.page_size);
+        let mut total_size_per_age = vec![0];
+        let mut number_of_cells_per_page = vec![0];
+
+        // compute the distribution (left-based, yeah lil comrade)
+        cells.iter().for_each(|cell| {
+            let idx = number_of_cells_per_page.len() - 1;
+            match total_size_per_age[idx] + cell.storage_size() <= usable_space {
+                true => {
+                    number_of_cells_per_page[idx] += 1;
+                    total_size_per_age[idx] += cell.storage_size()
+                }
+                false => {
+                    number_of_cells_per_page.push(0);
+                    total_size_per_age.push(0)
+                }
+            }
+        });
+
+        if number_of_cells_per_page.len() >= 2 {
+            let mut div_cell = cells.len() - number_of_cells_per_page.last().unwrap() - 1;
+
+            (1..=(total_size_per_age.len() - 1)).rev().for_each(|idx| {
+                // checkout underflow
+                while total_size_per_age[idx] < usable_space / 2 {
+                    number_of_cells_per_page[idx] += 1;
+                    total_size_per_age[idx] += &cells[div_cell].storage_size();
+
+                    number_of_cells_per_page[idx - 1] -= 1;
+                    total_size_per_age[idx - 1] -= &cells[div_cell - 1].storage_size();
+
+                    div_cell -= 1
+                }
+            });
+
+            // adjustment to maintain the left-based assumption
+            if total_size_per_age[0] < usable_space / 2 {
+                number_of_cells_per_page[0] += 1;
+                total_size_per_age[1] -= 1;
+            }
+        }
+
+        let right_child = self
+            .pager
+            .get(siblings.last().unwrap().page)?
+            .header()
+            .right_child;
+
+        // alloc the missing pages
+        while siblings.len() < number_of_cells_per_page.len() {
+            let page = self.pager.allocate_page::<Page>()?;
+            let parent_idx = siblings.last().unwrap().index + 1;
+
+            siblings.push(Sibling::new(page, parent_idx));
+        }
+
+        // free unneeded pages
+        while number_of_cells_per_page.len() < siblings.len() {
+            self.pager.free_page(siblings.pop().unwrap().page)?;
+        }
+
+        // put this baby in ascending order, you know, sequential IO wins from this
+        BinaryHeap::from_iter(siblings.iter().map(|sibling| Reverse(sibling.page)))
+            .iter()
+            .enumerate()
+            .for_each(|(idx, Reverse(page))| siblings[idx].page = *page);
+
+        // correct the pointers
+        let last_sibling = &siblings[siblings.len() - 1];
+        self.pager
+            .get_mut(last_sibling.page)?
+            .mutable_header()
+            .right_child = right_child;
+
+        let parent_node = self.pager.get_mut(parent)?;
+        match div_idx == parent_node.len() {
+            true => parent_node.mutable_header().right_child = last_sibling.page,
+            false => parent_node.mutable_cell(div_idx).header.left_child = last_sibling.page,
+        }
+
+        // redistribution
+        number_of_cells_per_page
+            .iter()
+            .enumerate()
+            .try_for_each(|(idx, num)| -> IOResult<()> {
+                let page = self.pager.get_mut(siblings[idx].page)?;
+                (0..*num).for_each(|_| page.push(cells.pop_front().unwrap()));
+
+                if idx < siblings.len() - 1 {
+                    let mut div = cells.pop_front().unwrap();
+
+                    page.mutable_header().right_child = div.header.left_child;
+                    div.header.left_child = siblings[idx].page;
+                    self.pager.get_mut(parent)?.insert(siblings[idx].index, div);
+                }
+
+                Ok(())
+            })?;
+
+        self.balance(parent, parents)?;
+        Ok(())
+    }
+
+    // TODO: explain this madness
+    fn siblings(&mut self, page_number: PageNumber, parent: PageNumber) -> IOResult<Vec<Sibling>> {
+        let mut siblings_per_size = self.balanced_siblings as u16;
+        let parent = self.pager.get(parent)?;
+
+        let idx = parent
+            .iter_children()
+            .position(|p| p == page_number)
+            .unwrap() as u16;
+
+        if idx == 0 || idx == parent.len() {
+            siblings_per_size *= 2;
+        }
+
+        let left = idx.saturating_sub(siblings_per_size)..idx;
+        let right = (idx + 1)..min(idx + siblings_per_size + 1, parent.len() + 1);
+        let sibling = |idx| Sibling::new(parent.children(idx), idx);
+
+        let siblings: Vec<Sibling> = left
+            .map(sibling)
+            .chain(std::iter::once(Sibling::new(page_number, idx)))
+            .chain(right.map(sibling))
+            .collect();
+
+        Ok(siblings)
+    }
+
+    /// Allocates a [`Cell`] that can store all the given content. Which can [overflow](OverflowPage).
+    fn allocate_cell(&mut self, content: Vec<u8>) -> IOResult<Box<Cell>> {
         let max_content = Page::ideal_max_content_size(self.pager.page_size, self.min_keys);
 
         // in this case, we don't need to use an OverflowPage
@@ -212,10 +440,6 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         }
 
         Ok(cell)
-    }
-
-    fn allocate_page<Page: PageConversion>(&mut self, page: Page) {
-        todo!()
     }
 }
 
@@ -331,8 +555,6 @@ mod tests {
     use crate::core::btree::*;
 
     type MemoryBuffer = std::io::Cursor<Vec<u8>>;
-    trait Keys: IntoIterator<Item = u64> {}
-    impl<Type> Keys for Type where Type: IntoIterator<Item = u64> {}
 
     #[derive(Debug, PartialEq)]
     /// We can make an entire tree in-memory and then compare it to an actual [`BTree`].
@@ -380,7 +602,7 @@ mod tests {
             todo!()
         }
 
-        fn try_insert_keys<K: Keys>(&mut self, keys: K) -> std::io::Result<()> {
+        fn try_insert_keys<K: Keys>(&mut self, keys: K) -> IOResult<()> {
             // keys.into_iter().for_each(|key| self.insert());
             todo!()
         }

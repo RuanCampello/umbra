@@ -11,11 +11,11 @@ use std::{alloc, mem};
 /// Provides methods for accessing header and content directly.
 pub(in crate::core) struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
-    pub(crate) size: usize,
+    pub size: usize,
     /// Pointer to the content.
-    pub(crate) content: NonNull<[u8]>,
+    pub content: NonNull<[u8]>,
     /// Pointer to the header.
-    pub(crate) header: NonNull<Header>,
+    pub header: NonNull<Header>,
 }
 
 impl<Header> BufferWithHeader<Header> {

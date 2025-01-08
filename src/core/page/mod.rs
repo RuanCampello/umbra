@@ -50,9 +50,9 @@ pub(in crate::core) struct Page {
 ///                                     PAGE
 /// ```
 #[derive(Debug, PartialEq, Clone)]
-struct PageHeader {
+pub(in crate::core) struct PageHeader {
     /// The Page's free space available.
-    free_space: u16,
+    pub free_space: u16,
     /// Number of entries in the slot array.
     slot_count: u16,
     /// Offset of the last inserted cell, starting from the page content.
@@ -144,6 +144,17 @@ impl Page {
         let idx = self.len() as u16;
 
         self.insert(idx, cell)
+    }
+
+    /// Iterates over an array of [cells](Cell) and [push](Self::push) it into the page.
+    pub fn push_all(&mut self, cells: Vec<Box<Cell>>) {
+        cells.into_iter().for_each(|cell| self.push(cell))
+    }
+
+    /// Returns an iterable of its children.
+    pub fn iter_children(&self) -> impl DoubleEndedIterator<Item = PageNumber> + '_ {
+        let len = if self.is_leaf() { 0 } else { self.len() + 1 };
+        (0..len).map(|child| self.children(child))
     }
 
     pub fn insert(&mut self, idx: SlotId, cell: Box<Cell>) {
@@ -382,6 +393,24 @@ impl Page {
         self.buffer.header().right_child == 0
     }
 
+    /// Returns true if the current page is `underflow`.
+    /// This means that the page has less than half of occupied space.
+    pub fn is_underflow(&self) -> bool {
+        self.buffer.header().free_space > Self::usable_space(self.buffer.size) / 2
+    }
+    /// Returns the number of bytes used by this [`Page`] instance, including the header.
+    pub fn bytes_occupied(&self) -> u16 {
+        Self::usable_space(self.buffer.size) - self.buffer.header().free_space
+    }
+
+    pub fn header(&self) -> &PageHeader {
+        self.buffer.header()
+    }
+
+    pub fn mutable_header(&mut self) -> &mut PageHeader {
+        self.buffer.mutable_header()
+    }
+
     /// Returns the child node at the given [index](SlotId).
     pub fn children(&self, slot_id: SlotId) -> PageNumber {
         match slot_id == self.len() {
@@ -390,8 +419,12 @@ impl Page {
         }
     }
 
+    pub fn is_overflow(&self) -> bool {
+        !self.overflow.is_empty()
+    }
+
     /// Returns a mutable reference of a [`Cell`] at a given [`SlotId`].
-    fn mutable_cell(&mut self, id: SlotId) -> &mut Cell {
+    pub fn mutable_cell(&mut self, id: SlotId) -> &mut Cell {
         let mut cell = self.cell_pointer(id);
 
         unsafe { cell.as_mut() }
@@ -444,10 +477,6 @@ impl Page {
     /// The maximum content size that can be stored in a given usable space.
     fn max_content_size(usable_size: u16) -> u16 {
         (usable_size - CELL_HEADER_SIZE - SLOT_SIZE) & !(CELL_ALIGNMENT as u16 - 1)
-    }
-
-    fn is_overflow(&self) -> bool {
-        !self.overflow.is_empty()
     }
 }
 

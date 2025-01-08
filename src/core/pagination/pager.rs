@@ -273,7 +273,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         header.last_free_page = page_number;
 
         *self.get_mut_as::<PageZero>(0)?.buffer.mutable_header() = header;
-        
+
         Ok(())
     }
 
