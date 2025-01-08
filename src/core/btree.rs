@@ -1,6 +1,6 @@
 //! Disk management and B-Tree data structure implementation.
 
-use super::page::{Cell, Page, PageConversion, SlotId};
+use super::page::{Cell, Page, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::Pager;
 use super::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
@@ -19,7 +19,7 @@ pub(in crate::core) struct BTree<'p, File, Cmp> {
     balanced_siblings: usize,
     // TODO: this should be ideally a owned value not a mutable reference.
     pager: &'p mut Pager<File>,
-    /// The bytes comparator used to get [`Ordering`].
+    /// The byte comparator used to get [`Ordering`].
     comparator: Cmp,
 }
 
@@ -41,7 +41,7 @@ struct Search {
 }
 
 /// Compares the `self.0` using a `memcmp`.
-/// If the integer keys at the beginning of buffer array are stored as big endians,
+/// If the integer keys at the beginning of buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
 #[derive(Default)]
 pub(crate) struct FixedSizeCmp(pub usize);
@@ -110,7 +110,6 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
                 let curr_cell = node.replace(cell, idx);
 
                 self.pager.free_cell(curr_cell)?;
-                todo!()
             }
             // wasn't found, insert it
             Err(idx) => node.insert(idx, cell),
@@ -235,6 +234,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             // the created page
             let child = self.pager.get_mut(new_page_number)?;
             child.push_all(cells);
+            child.mutable_header().right_child = grand_child;
             parents.push(page_number);
 
             page_number = new_page_number
@@ -462,7 +462,7 @@ impl Sibling {
 }
 
 impl FixedSizeCmp {
-    /// This only make sense with simple data types.
+    /// This only makes sense with simple data types.
     pub fn new<T>() -> Self {
         Self(size_of::<T>())
     }
