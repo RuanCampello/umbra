@@ -3,7 +3,7 @@ use super::io::{BlockIo, FileOperations};
 use crate::core::btree::Content;
 use crate::core::page::overflow::OverflowPage;
 use crate::core::page::zero::{PageZero, DATABASE_IDENTIFIER};
-use crate::core::page::{MemoryPage, Page, PageConversion, SlotId};
+use crate::core::page::{Cell, MemoryPage, Page, PageConversion, SlotId};
 use crate::core::random::Rng;
 use crate::core::PageNumber;
 use std::collections::HashSet;
@@ -232,6 +232,49 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         }
 
         Ok(Content::Reassembled(content.into()))
+    }
+
+    /// Frees the pages used by this given [`Cell`].
+    pub fn free_cell(&mut self, cell: Box<Cell>) -> io::Result<()> {
+        if !cell.header.is_overflow {
+            return Ok(());
+        }
+
+        let mut overflow_page = cell.overflow_page();
+        while overflow_page != 0 {
+            let page = self.get_as::<OverflowPage>(overflow_page)?;
+            let next = page.buffer.header().next;
+
+            self.free_page(overflow_page)?;
+            overflow_page = next
+        }
+
+        Ok(())
+    }
+
+    /// Adds a given page to the `free` list.
+    pub fn free_page(&mut self, page_number: PageNumber) -> io::Result<()> {
+        let idx = self.lookup::<OverflowPage>(page_number)?;
+        self.push_to_written_queue(page_number, idx)?;
+
+        self.cache[idx].reinit_as::<OverflowPage>();
+
+        let mut header = self.get_as::<PageZero>(0).map(PageZero::header).copied()?;
+
+        match header.first_free_page == 0 {
+            true => header.free_pages = page_number as _,
+            false => {
+                let last_free = self.get_mut_as::<OverflowPage>(page_number)?;
+                last_free.buffer.mutable_header().next = page_number;
+            }
+        }
+
+        header.free_pages += 1;
+        header.last_free_page = page_number;
+
+        *self.get_mut_as::<PageZero>(0)?.buffer.mutable_header() = header;
+        
+        Ok(())
     }
 
     /// Same as [allocate_page_disk](Self::allocate_page_disk) but maps into a given page type and create a [`Cache`] entry for it.
