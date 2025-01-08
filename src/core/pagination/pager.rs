@@ -1,7 +1,9 @@
 use super::cache::Cache;
 use super::io::{BlockIo, FileOperations};
+use crate::core::btree::Content;
+use crate::core::page::overflow::OverflowPage;
 use crate::core::page::zero::{PageZero, DATABASE_IDENTIFIER};
-use crate::core::page::{MemoryPage, Page, PageConversion};
+use crate::core::page::{MemoryPage, Page, PageConversion, SlotId};
 use crate::core::random::Rng;
 use crate::core::PageNumber;
 use std::collections::HashSet;
@@ -167,6 +169,52 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         self.get_as::<Page>(page_number)
     }
 
+    pub fn get_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&Page>
+    where
+        Page: PageConversion + AsMut<[u8]>,
+        &'p Page: TryFrom<&'p MemoryPage>,
+        <&'p Page as TryFrom<&'p MemoryPage>>::Error: std::fmt::Debug,
+    {
+        let idx = self.lookup::<Page>(page_number)?;
+        let memory_page = &self.cache[idx];
+
+        Ok(memory_page.try_into().expect("Error converting page type"))
+    }
+
+    /// Joins a given page [content](Content) into a contiguous memory space.
+    pub(crate) fn reassemble_content(
+        &mut self,
+        page_number: PageNumber,
+        slot_id: SlotId,
+    ) -> io::Result<Content> {
+        let cell = self.get(page_number)?.cell(slot_id);
+
+        if !cell.header.is_overflow {
+            return Ok(Content::PageRef(
+                &self.get(page_number)?.cell(slot_id).content,
+            ));
+        }
+
+        let mut overflow = cell.overflow_page();
+        let mut content = Vec::from(&cell.content[..cell.content.len() - size_of::<PageNumber>()]);
+
+        while overflow != 0 {
+            let page = self.get_as::<OverflowPage>(overflow)?;
+            content.extend_from_slice(page.content());
+            let page_header = page.buffer.header();
+
+            let next = page_header.next;
+            debug_assert_ne!(
+                next, overflow,
+                "Overflow Page points to itself, causing an infinity loop {page_header:#?}",
+            );
+
+            overflow = next
+        }
+
+        Ok(Content::Reassembled(content.into()))
+    }
+
     /// Returns the cache id for a given [`PageNumber`].
     fn lookup<Page: PageConversion + AsMut<[u8]>>(
         &mut self,
@@ -201,18 +249,6 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         self.cache[idx].reinit_as::<Page>();
 
         Ok(idx)
-    }
-
-    fn get_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&Page>
-    where
-        Page: PageConversion + AsMut<[u8]>,
-        &'p Page: TryFrom<&'p MemoryPage>,
-        <&'p Page as TryFrom<&'p MemoryPage>>::Error: std::fmt::Debug,
-    {
-        let idx = self.lookup::<Page>(page_number)?;
-        let memory_page = &self.cache[idx];
-
-        Ok(memory_page.try_into().expect("Error converting page type"))
     }
 }
 

@@ -1,9 +1,9 @@
 //! Disk management and B-Tree data structure implementation.
 
-use crate::core::page::SlotId;
-use crate::core::pagination::io::FileOperations;
-use crate::core::pagination::pager::Pager;
-use crate::core::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
+use super::page::SlotId;
+use super::pagination::io::FileOperations;
+use super::pagination::pager::Pager;
+use super::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
 use crate::sql::statements::Type;
 use std::cmp::Ordering;
 use std::io::{Read, Seek, Write};
@@ -82,7 +82,7 @@ pub(crate) trait BytesCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
 }
 
-impl<'p, File: Read + Write + Seek + FileOperations, Cmp> BTree<'p, File, Cmp> {
+impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, File, Cmp> {
     /// Returns a value of a given key.
     pub fn get(&mut self, entry: &[u8]) -> std::io::Result<Option<Content>> {
         todo!()
@@ -92,17 +92,59 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp> BTree<'p, File, Cmp> {
         &mut self,
         page: PageNumber,
         entry: &[u8],
-        parents: &mut [PageNumber],
+        parents: &mut Vec<PageNumber>,
     ) -> std::io::Result<Search> {
-        todo!()
+        let index = self.binary_search(page, entry)?;
+        let node = self.pager.get(page)?;
+
+        // recursion breaking condition
+        if index.is_ok() || node.is_leaf() {
+            return Ok(Search { page, index });
+        }
+
+        parents.push(page);
+        let next = node.children(index.unwrap_err());
+
+        self.search(next, entry, parents)
     }
 
     fn binary_search(
         &mut self,
-        page: PageNumber,
+        page_number: PageNumber,
         entry: &[u8],
     ) -> std::io::Result<Result<u16, u16>> {
-        todo!()
+        let mut size: u16 = self.pager.get(page_number)?.len() as u16;
+
+        let mut left = 0;
+        let mut right = size;
+
+        while left < right {
+            let mid = (left + right) / 2;
+
+            let cell = self.pager.get(page_number)?.cell(mid as _);
+            let overflow: Box<[u8]>;
+
+            let content = match cell.header.is_overflow {
+                false => &cell.content,
+                true => match self.pager.reassemble_content(page_number, mid as _)? {
+                    Content::Reassembled(buffer) => {
+                        overflow = buffer.clone();
+                        &overflow
+                    }
+                    _ => panic!("Couldn't complete reassemble content"),
+                },
+            };
+
+            match self.comparator.cmp(content, entry) {
+                Ordering::Equal => return Ok(Ok(mid)),
+                Ordering::Greater => right = mid,
+                Ordering::Less => left = mid + 1,
+            }
+
+            size = right - left
+        }
+
+        Ok(Err(left))
     }
 }
 

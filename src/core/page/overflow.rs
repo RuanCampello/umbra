@@ -41,20 +41,20 @@ use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 /// the last 4 bytes of the cell's payload contain a pointer to the first
 /// overflow page for that cell.
 #[derive(Debug, PartialEq, Clone)]
-pub(in crate::core::page) struct OverflowPage {
+pub(in crate::core) struct OverflowPage {
     /// In-memory page buffer.
     pub(in crate::core) buffer: BufferWithHeader<OverflowPageHeader>,
 }
 
 /// Header of an overflow page.
 #[derive(Debug, Default, PartialEq, Clone)]
-pub(in crate::core::page) struct OverflowPageHeader {
+pub(in crate::core) struct OverflowPageHeader {
     /// Next overflow page in the linked list.
-    pub next: PageNumber,
+    pub(in crate::core) next: PageNumber,
     /// Number of bytes stored in this page.
-    pub num_bytes: u16,
+    pub(in crate::core::page) num_bytes: u16,
     /// Padding for alignment.
-    pub padding: u16,
+    pub(in crate::core::page) padding: u16,
 }
 
 /// Free pages can be represented using the [`OverflowPage`] struct,
@@ -64,6 +64,11 @@ type FreePage = OverflowPage;
 impl OverflowPage {
     pub fn alloc(size: usize) -> Self {
         Self::from(BufferWithHeader::<OverflowPageHeader>::for_page(size))
+    }
+
+    /// Returns a reference of the content, excluding the header.
+    pub fn content(&self) -> &[u8] {
+        &self.buffer.content()[..self.buffer.header().num_bytes as usize]
     }
 }
 

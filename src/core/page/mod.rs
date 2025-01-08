@@ -2,7 +2,7 @@
 //! As this manually alloc memory, it contains the only database's `unsafe` module.
 
 mod buffer;
-mod overflow;
+pub(in crate::core) mod overflow;
 pub(in crate::core) mod zero;
 
 use crate::core::page::overflow::{OverflowPage, OverflowPageHeader};
@@ -33,7 +33,7 @@ use std::{self, alloc, iter, ptr};
 #[derive(PartialEq, Clone)]
 pub(in crate::core) struct Page {
     /// In-memory buffer containing data read from disk, including a header.
-    pub(in crate::core) buffer: BufferWithHeader<PageHeader>,
+    buffer: BufferWithHeader<PageHeader>,
     /// Map storing overflow cells, keyed by their slot IDs.
     overflow: HashMap<SlotId, Box<Cell>>,
 }
@@ -69,14 +69,14 @@ struct PageHeader {
 /// This uses a DST (Dynamically Sized Type), which is complex but improves efficiency when working with references and ownership.
 #[derive(Debug, PartialEq)]
 pub(in crate::core) struct Cell {
-    header: CellHeader,
+    pub(in crate::core) header: CellHeader,
 
     /// When `header.is_overflow` is true, those last 4 bytes are going to point to an overflow page.
-    content: [u8],
+    pub(in crate::core) content: [u8],
 }
 
 #[derive(Debug, PartialEq)]
-struct CellHeader {
+pub(in crate::core) struct CellHeader {
     pub is_overflow: bool,
     /// Padding bytes to ensure correct alignment and avoid undefined behavior.
     padding: u8,
@@ -293,7 +293,7 @@ impl Page {
         };
 
         let right = match range.end_bound() {
-            Bound::Unbounded => self.len(),
+            Bound::Unbounded => self.len() as usize,
             Bound::Excluded(i) => *i,
             Bound::Included(i) => i + 1,
         };
@@ -373,6 +373,23 @@ impl Page {
         ideal_size
     }
 
+    pub fn len(&self) -> u16 {
+        self.buffer.header().slot_count + self.overflow.len() as u16
+    }
+
+    /// Returns `true` if the current page hasn't any children.
+    pub fn is_leaf(&self) -> bool {
+        self.buffer.header().right_child == 0
+    }
+
+    /// Returns the child node at the given [index](SlotId).
+    pub fn children(&self, slot_id: SlotId) -> PageNumber {
+        match slot_id == self.len() {
+            true => self.buffer.header().right_child,
+            false => self.cell(slot_id).header.left_child,
+        }
+    }
+
     /// Returns a mutable reference of a [`Cell`] at a given [`SlotId`].
     fn mutable_cell(&mut self, id: SlotId) -> &mut Cell {
         let mut cell = self.cell_pointer(id);
@@ -431,10 +448,6 @@ impl Page {
 
     fn is_overflow(&self) -> bool {
         !self.overflow.is_empty()
-    }
-
-    fn len(&self) -> usize {
-        self.buffer.header().slot_count as usize + self.overflow.len()
     }
 }
 
@@ -561,6 +574,19 @@ impl Cell {
     /// the space required to store its offset in the slot array.
     pub fn storage_size(&self) -> u16 {
         SLOT_SIZE + self.total_size()
+    }
+
+    /// Returns the first [overflowed page](OverflowPage) index found of this cell.
+    pub fn overflow_page(&self) -> PageNumber {
+        if !self.header.is_overflow {
+            return 0;
+        }
+
+        PageNumber::from_le_bytes(
+            self.content[self.content.len() - size_of::<PageNumber>()..]
+                .try_into()
+                .expect("Failed to parse the overflow page number"),
+        )
     }
 }
 
