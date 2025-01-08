@@ -29,14 +29,14 @@ pub(in crate::core) struct PageZero {
 /// This struct is located at the beginning of the database file and contains
 /// essential metadata used by the [Pager](crate::core::pager::Pager) for
 /// managing pages and free space within the database.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(in crate::core) struct DatabaseHeader {
     pub identifier: u32,
     pub page_size: u16,
-    total_pages: u16,
-    free_pages: u16,
-    first_free_page: PageNumber,
-    last_free_page: PageNumber,
+    pub total_pages: u16,
+    pub free_pages: u16,
+    pub first_free_page: PageNumber,
+    pub last_free_page: PageNumber,
 }
 
 /// This means literally "dusk", because "umbra" wouldn't fit in an [`core::u32`].
@@ -45,6 +45,11 @@ pub(in crate::core) const DATABASE_IDENTIFIER: u32 = 0x6475736b;
 impl PageZero {
     pub fn alloc(size: usize) -> Self {
         Self::from(BufferWithHeader::<DatabaseHeader>::for_page(size))
+    }
+
+    /// Returns a reference of a [`DatabaseHeader`].
+    pub fn header(&self) -> &DatabaseHeader {
+        self.buffer.header()
     }
 
     /// Returns a reference of the slot [`Page`].

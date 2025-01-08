@@ -83,7 +83,7 @@ pub(in crate::core) struct CellHeader {
     /// Size of the cell's content.
     size: u16,
     /// [`PageNumber`] of the Btree node containing keys smaller than this cell's key.
-    left_child: PageNumber,
+    pub left_child: PageNumber,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -555,6 +555,15 @@ impl Cell {
                 content.len(),
             ) as *mut Cell)
         }
+    }
+
+    pub fn new_overflow(mut content: Vec<u8>, overflow_page: PageNumber) -> Box<Self> {
+        content.extend_from_slice(&overflow_page.to_le_bytes());
+
+        let mut cell = Self::new(content);
+        cell.header.is_overflow = true;
+
+        cell
     }
 
     /// Calculates the aligned size of the data based on CELL_ALIGNMENT.

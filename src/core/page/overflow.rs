@@ -52,7 +52,7 @@ pub(in crate::core) struct OverflowPageHeader {
     /// Next overflow page in the linked list.
     pub(in crate::core) next: PageNumber,
     /// Number of bytes stored in this page.
-    pub(in crate::core::page) num_bytes: u16,
+    pub(in crate::core) num_bytes: u16,
     /// Padding for alignment.
     pub(in crate::core::page) padding: u16,
 }
@@ -69,6 +69,11 @@ impl OverflowPage {
     /// Returns a reference of the content, excluding the header.
     pub fn content(&self) -> &[u8] {
         &self.buffer.content()[..self.buffer.header().num_bytes as usize]
+    }
+
+    /// The total space that can be used for overflow content.
+    pub fn usable_space(page_size: usize) -> u16 {
+        BufferWithHeader::<OverflowPageHeader>::usable_space(page_size)
     }
 }
 

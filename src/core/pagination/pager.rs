@@ -1,4 +1,4 @@
-use super::cache::Cache;
+use super::cache::{Cache, FrameId};
 use super::io::{BlockIo, FileOperations};
 use crate::core::btree::Content;
 use crate::core::page::overflow::OverflowPage;
@@ -17,7 +17,7 @@ pub(in crate::core) struct Pager<File> {
     cache: Cache,
     /// Block size to read/write a buffer.
     block_size: usize,
-    page_size: usize,
+    pub page_size: usize,
     /// The modified files.
     dirty_pages: HashSet<PageNumber>,
     /// Written pages.
@@ -181,6 +181,25 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         Ok(memory_page.try_into().expect("Error converting page type"))
     }
 
+    pub fn get_mut(&mut self, page_number: PageNumber) -> io::Result<&mut Page> {
+        self.get_mut_as::<Page>(page_number)
+    }
+
+    /// The same as [get_as](Self::get_as) but for a mutable reference. Of course, it marks the page as `dirty`.
+    pub fn get_mut_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&mut Page>
+    where
+        Page: PageConversion + AsMut<[u8]>,
+        &'p mut Page: TryFrom<&'p mut MemoryPage>,
+        <&'p mut Page as TryFrom<&'p mut MemoryPage>>::Error: std::fmt::Debug,
+    {
+        let idx = self.lookup::<Page>(page_number)?;
+        self.push_to_written_queue(page_number, idx)?;
+
+        let memory_page = &mut self.cache[idx];
+
+        Ok(memory_page.try_into().expect("Error converting page type"))
+    }
+
     /// Joins a given page [content](Content) into a contiguous memory space.
     pub(crate) fn reassemble_content(
         &mut self,
@@ -213,6 +232,44 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         }
 
         Ok(Content::Reassembled(content.into()))
+    }
+
+    /// Same as [allocate_page_disk](Self::allocate_page_disk) but maps into a given page type and create a [`Cache`] entry for it.
+    pub fn allocate_page<Page: PageConversion>(&mut self) -> io::Result<PageNumber> {
+        let page_number = self.allocate_page_disk()?;
+        self.map_page::<Page>(page_number)?;
+
+        Ok(page_number)
+    }
+
+    /// Allocates a new page on disk.
+    fn allocate_page_disk(&mut self) -> io::Result<PageNumber> {
+        let mut header = self.get_as::<PageZero>(0).map(PageZero::header).copied()?;
+
+        let free_page = match header.first_free_page == 0 {
+            true => {
+                let page = header.total_pages;
+                header.total_pages += 1;
+
+                page.into()
+            }
+            false => {
+                let page = header.first_free_page;
+                let free_page = self.get_as::<OverflowPage>(page)?;
+                header.first_free_page = free_page.buffer.header().next;
+                header.free_pages -= 1;
+
+                page
+            }
+        };
+
+        if header.first_free_page == 0 {
+            header.last_free_page = 0;
+        };
+
+        *self.get_mut_as::<PageZero>(0)?.buffer.mutable_header() = header;
+
+        Ok(free_page)
     }
 
     /// Returns the cache id for a given [`PageNumber`].
@@ -277,6 +334,21 @@ impl<File: Seek + FileOperations> Pager<File> {
         if !self.journal_pages.contains(&page_number) {
             self.journal.push(page_number, content)?;
             self.journal_pages.insert(page_number);
+        }
+
+        Ok(())
+    }
+}
+
+impl<File: Write + FileOperations> Pager<File> {
+    /// Append the given page to `already written` pages in the journal.
+    fn push_to_written_queue(&mut self, page_number: PageNumber, id: FrameId) -> io::Result<()> {
+        // TODO: mark as `dirty` in cache
+        self.dirty_pages.insert(page_number);
+
+        if !self.journal_pages.contains(&page_number) {
+            self.journal_pages.insert(page_number);
+            self.journal.push(page_number, &self.cache[id])?;
         }
 
         Ok(())

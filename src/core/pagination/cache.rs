@@ -107,7 +107,7 @@ struct Frame {
     page: MemoryPage,
 }
 
-type FrameId = usize;
+pub(in crate::core) type FrameId = usize;
 
 const REFERENCE_FLAG: u8 = 0b001;
 const DIRTY_FLAG: u8 = 0b010;
