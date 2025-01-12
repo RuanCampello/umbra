@@ -7,7 +7,7 @@ use crate::core::page::{Cell, MemoryPage, Page, PageConversion, SlotId};
 use crate::core::random::Rng;
 use crate::core::PageNumber;
 use std::collections::HashSet;
-use std::fmt::{Debug, Formatter, Pointer};
+use std::fmt::{Debug, Formatter};
 use std::io::{self, Read, Seek, Write};
 use std::path::PathBuf;
 
@@ -29,7 +29,7 @@ pub(in crate::core) struct Pager<File> {
 /// The journal file implements "commit" and "rollback" using a chunk-based format.
 /// Each chunk starts with a magic number and a page count, followed by page metadata.
 /// Pages store their number, content, and a simple checksum (not a true checksum).
-/// An in-memory buffer minimizes sys-calls and avoids file seeks for efficiency.
+/// An in-memory buffer minimizes sys-calls and avoids a file seeks for efficiency.
 struct Journal<File> {
     buffer: Vec<u8>,
     page_size: usize,
@@ -367,7 +367,7 @@ impl<File: Seek + Read> Pager<File> {
 }
 
 impl<File: Seek + FileOperations> Pager<File> {
-    /// Adds a given page to the queue of "pages to be written" if it has not being already written.
+    /// Adds a given page to the queue of "pages to be written" if it has not been already written.
     fn push_to_queue(
         &mut self,
         page_number: PageNumber,

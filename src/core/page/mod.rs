@@ -17,7 +17,7 @@ use std::{self, alloc, iter, ptr};
 /// Fixed-size slotted page for storing [Btree](super::btree::BTree) nodes, used in indexes and tables.
 ///
 /// The page uses a "slot array" to manage offsets pointing to stored cells.
-/// [`Cell`] grow from the end of the page, while the slot array grows from the
+/// [`Cell`] grows from the end of the page, while the slot array grows from the
 /// start, leaving free space in the middle. Rearranging or deleting cells
 /// only modifies the slot array, making these operations efficient.
 ///
@@ -66,12 +66,12 @@ pub(in crate::core) struct PageHeader {
 
 ///The Cell struct holds a [Btree](crate::core::btree::BTree) entry (key/value) and a pointer to a node with smaller keys.
 /// It works with the BTree to rearrange entries during overflow or underflow situations.
-/// This uses a DST (Dynamically Sized Type), which is complex but improves efficiency when working with references and ownership.
+/// This uses a DST (Dynamically Sized Type), which is complex, but improves efficiency when working with references and ownership.
 #[derive(Debug, PartialEq)]
 pub(in crate::core) struct Cell {
     pub(in crate::core) header: CellHeader,
 
-    /// When `header.is_overflow` is true, those last 4 bytes are going to point to an overflow page.
+    /// When `header.is_overflow` is true, those last four bytes are going to point to an overflow page.
     pub(in crate::core) content: [u8],
 }
 
@@ -89,12 +89,12 @@ pub(in crate::core) struct CellHeader {
 #[derive(Debug, PartialEq, Clone)]
 pub(in crate::core) enum MemoryPage {
     Zero(PageZero),
-    /// A usual database page containg a [Btree](crate::core::btree::BTree).
+    /// A usual database page contain a [Btree](crate::core::btree::BTree).
     Ordinary(Page),
     Overflow(OverflowPage),
 }
 
-/// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore can be indexed with 2 bytes.
+/// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore can be indexed with two bytes.
 pub(in crate::core) type SlotId = u16;
 
 const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
@@ -175,7 +175,7 @@ impl Page {
 
     /// Attempts to insert the given [`Cell`]in this page.
     ///
-    /// If there's enough contiguous free space, inserts the cell directly.
+    /// If there's enough contiguous free space, insert the cell directly.
     /// Otherwise, defragments the page to create enough space and then inserts.
     pub fn try_insert(&mut self, id: SlotId, cell: Box<Cell>) -> Result<SlotId, Box<Cell>> {
         let cell_size = cell.storage_size();
@@ -842,7 +842,7 @@ mod tests {
         }
     }
 
-    /// Helper function to create cells with variables sizes.
+    /// Helper function to create cells with variable sizes.
     fn create_cells_with_size(sizes: &[usize]) -> Vec<Box<Cell>> {
         sizes
             .iter()
@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(
             page.buffer.header().free_space,
             expected_free_space as u16,
-            "Page with size {} should contain {expected_free_space} bytes of free space after inserting paylods of sizes {:?}",
+            "Page with size {} should contain {expected_free_space} bytes of free space after inserting payloads of sizes {:?}",
             page.buffer.size,
             cells.iter().map(|cell| cell.header.size).collect::<Vec<_>>(),
         );

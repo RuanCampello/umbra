@@ -38,7 +38,7 @@ use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 /// ```
 ///
 /// When a [CellHeader::is_overflow](super::CellHeader) flag is set in a cell's header,
-/// the last 4 bytes of the cell's payload contain a pointer to the first
+/// the last four bytes of the cell's payload contain a pointer to the first
 /// overflow page for that cell.
 #[derive(Debug, PartialEq, Clone)]
 pub(in crate::core) struct OverflowPage {

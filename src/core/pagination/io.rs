@@ -65,7 +65,7 @@ impl FileOperations for File {
     }
 }
 
-/// This is a memory buffer implementation used primarily for test, but it can be used as the most primitive form of in-memory database.
+/// This is a memory buffer implementation used primarily for test, but it can be used as the most primitive form of an in-memory database.
 impl FileOperations for Cursor<Vec<u8>> {
     fn create(_path: impl AsRef<Path>) -> io::Result<Self>
     where

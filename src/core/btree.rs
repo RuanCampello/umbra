@@ -605,17 +605,6 @@ mod tests {
     }
 
     impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
-        fn with_keys<K: Keys>(keys: K) -> Self {
-            let mut default = Self::default();
-            // println!("tree before inserting {default:#?}");
-            default
-                .try_insert_keys(keys)
-                .expect("Failed to create Btree with {keys:?}");
-
-            // println!("tree after inserting {default:#?}");
-            default
-        }
-
         fn try_insert_keys<K: Keys>(&mut self, keys: K) -> IOResult<()> {
             for key in keys {
                 self.insert(Vec::from(key.to_be_bytes()))?;
@@ -649,7 +638,7 @@ mod tests {
             Ok(node)
         }
 
-        fn on<K: Keys>(
+        fn with_keys<K: Keys>(
             &mut self,
             keys: K,
             pager: &'p mut Pager<MemoryBuffer>,
@@ -674,7 +663,7 @@ mod tests {
     #[test]
     fn test_fill_root() -> IOResult<()> {
         let pager = &mut Pager::default();
-        let btree = BTree::default().on(1..=3, pager)?;
+        let btree = BTree::default().with_keys(1..=3, pager)?;
 
         assert_eq!(Node::try_from(btree)?, Node::new([1, 2, 3]));
 

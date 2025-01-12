@@ -219,7 +219,7 @@ fn high_u64_bits(a: u64, b: u64) -> u64 {
 }
 
 /// Generates a random seed using [`std::collections::hash_map::HashMap`].
-/// For more information random numbers' generation in rust, see the discussion [here](https://blog.orhun.dev/zero-deps-random-in-rust/).
+/// For more information about random numbers' generation in rust, see the discussion [here](https://blog.orhun.dev/zero-deps-random-in-rust/).
 fn random_seed() -> Option<u64> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hash;
