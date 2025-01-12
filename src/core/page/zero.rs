@@ -10,7 +10,7 @@ use std::ptr;
 ///
 /// It contains an additional [`DatabaseHeader`] along with the regular [`Page`] data.
 /// This results in less usable space for storing [Cells](crate::core::page::Cell) instances compared
-/// to subsequent pages.
+/// to the following pages.
 ///
 /// Note: While B-Tree balancing algorithms typically operate on pages of
 /// uniform size, this special case for the first page does not introduce
@@ -27,7 +27,7 @@ pub(in crate::core) struct PageZero {
 /// Header of the database file.
 ///
 /// This struct is located at the beginning of the database file and contains
-/// essential metadata used by the [Pager](crate::core::pager::Pager) for
+/// essential metadata used by the [Pager](crate::core::pagination::pager::Pager) for
 /// managing pages and free space within the database.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(in crate::core) struct DatabaseHeader {

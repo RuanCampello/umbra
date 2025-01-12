@@ -82,7 +82,7 @@ use std::mem;
 /// - **Efficient Eviction**: Approximation of Least Recently Used (LRU).
 /// - **Write Tracking**: Dirty pages are identified for disk writes.
 ///
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::core) struct Cache {
     /// See [Pager](super::pager::Pager).
     pub page_size: usize,
@@ -100,7 +100,7 @@ pub(in crate::core) struct Cache {
 }
 
 /// Holds a page and bits representing flags' list.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct Frame {
     flags: u8,
     page_number: PageNumber,

@@ -13,6 +13,7 @@ use std::io::{Read, Result as IOResult, Seek, Write};
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
 /// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualizer of this data structure.
+#[derive(Debug)]
 pub(in crate::core) struct BTree<'p, File, Cmp> {
     root: PageNumber,
     min_keys: usize,
@@ -43,7 +44,7 @@ struct Search {
 /// Compares the `self.0` using a `memcmp`.
 /// If the integer keys at the beginning of buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct FixedSizeCmp(pub usize);
 
 /// Compares UTF-8 strings.
@@ -553,6 +554,7 @@ impl<'a> AsRef<[u8]> for Content<'a> {
 #[cfg(test)]
 mod tests {
     use crate::core::btree::*;
+    use crate::method_builder;
 
     type MemoryBuffer = std::io::Cursor<Vec<u8>>;
 
@@ -595,21 +597,70 @@ mod tests {
         }
     }
 
-    impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
-        fn with_keys<K: Keys>(keys: K) -> Self {
-            let mut default = Self::default();
+    impl<'p> TryFrom<BTree<'p, MemoryBuffer, FixedSizeCmp>> for Node {
+        type Error = std::io::Error;
 
-            todo!()
-        }
-
-        fn try_insert_keys<K: Keys>(&mut self, keys: K) -> IOResult<()> {
-            // keys.into_iter().for_each(|key| self.insert());
-            todo!()
+        fn try_from(mut btree: BTree<'p, MemoryBuffer, FixedSizeCmp>) -> Result<Self, Self::Error> {
+            btree.into_node(btree.root)
         }
     }
 
+    impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
+        fn with_keys<K: Keys>(keys: K) -> Self {
+            let mut default = Self::default();
+            default
+                .try_insert_keys(keys)
+                .expect("Failed to create Btree with {keys:?}");
+            
+            println!("with keys: {default:#?}");
+            default
+        }
+
+        fn try_insert_keys<K: Keys>(&mut self, keys: K) -> IOResult<()> {
+            for key in keys {
+                self.insert(Vec::from(key.to_be_bytes()))?;
+            }
+
+            Ok(())
+        }
+
+        fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
+            let page = self.pager.get(root)?;
+            let mut node = Node {
+                keys: (0..page.len())
+                    .map(|idx| {
+                        u64::from_be_bytes(
+                            page.cell(idx).content[..size_of::<u64>()]
+                                .try_into()
+                                .unwrap(),
+                        )
+                    })
+                    .collect(),
+                children: vec![],
+            };
+
+            let children = page.iter_children().collect::<Vec<PageNumber>>();
+            for page in children {
+                node.children.push(self.into_node(page)?);
+            }
+
+            Ok(node)
+        }
+
+        method_builder!(pager, &'p mut Pager<MemoryBuffer>);
+    }
+
     #[test]
-    fn test_fill_root() {
+    fn test_fill_root() -> IOResult<()> {
         let pager = &mut Pager::default();
+        let pager_clone = &mut pager.clone();
+        let btree = BTree::with_keys(1..=3).pager(pager_clone);
+        
+        println!("{btree:#?}");
+
+        assert_eq!(pager, btree.pager);
+        assert_eq!(Node::try_from(btree)?, Node::new([1, 2, 3]));
+
+        Ok(())
     }
 }
