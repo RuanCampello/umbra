@@ -30,7 +30,7 @@ use std::{self, alloc, iter, ptr};
 ///
 /// ```
 ///
-#[derive(PartialEq, Clone)]
+#[derive(Clone)]
 pub(in crate::core) struct Page {
     /// In-memory buffer containing data read from disk, including a header.
     buffer: BufferWithHeader<PageHeader>,
@@ -549,6 +549,12 @@ impl<Header> From<BufferWithHeader<Header>> for Page {
             buffer,
             overflow: HashMap::new(),
         }
+    }
+}
+
+impl PartialEq for Page {
+    fn eq(&self, other: &Self) -> bool {
+        self.buffer == other.buffer
     }
 }
 

@@ -13,7 +13,6 @@ use std::io::{Read, Result as IOResult, Seek, Write};
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
 /// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualizer of this data structure.
-#[derive(Debug)]
 pub(in crate::core) struct BTree<'p, File, Cmp> {
     root: PageNumber,
     min_keys: usize,
@@ -608,11 +607,12 @@ mod tests {
     impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
         fn with_keys<K: Keys>(keys: K) -> Self {
             let mut default = Self::default();
+            // println!("tree before inserting {default:#?}");
             default
                 .try_insert_keys(keys)
                 .expect("Failed to create Btree with {keys:?}");
-            
-            println!("with keys: {default:#?}");
+
+            // println!("tree after inserting {default:#?}");
             default
         }
 
@@ -626,9 +626,11 @@ mod tests {
 
         fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
             let page = self.pager.get(root)?;
+
             let mut node = Node {
                 keys: (0..page.len())
                     .map(|idx| {
+                        // deserialization
                         u64::from_be_bytes(
                             page.cell(idx).content[..size_of::<u64>()]
                                 .try_into()
@@ -647,18 +649,33 @@ mod tests {
             Ok(node)
         }
 
+        fn on<K: Keys>(
+            &mut self,
+            keys: K,
+            pager: &'p mut Pager<MemoryBuffer>,
+        ) -> IOResult<BTree<'p, MemoryBuffer, FixedSizeCmp>> {
+            let root = pager.allocate_page::<Page>()?;
+
+            let mut btree = BTree {
+                pager,
+                root,
+                balanced_siblings: self.balanced_siblings,
+                comparator: FixedSizeCmp::new::<u64>(),
+                min_keys: self.min_keys,
+            };
+
+            btree.try_insert_keys(keys)?;
+            Ok(btree)
+        }
+
         method_builder!(pager, &'p mut Pager<MemoryBuffer>);
     }
 
     #[test]
     fn test_fill_root() -> IOResult<()> {
         let pager = &mut Pager::default();
-        let pager_clone = &mut pager.clone();
-        let btree = BTree::with_keys(1..=3).pager(pager_clone);
-        
-        println!("{btree:#?}");
+        let btree = BTree::default().on(1..=3, pager)?;
 
-        assert_eq!(pager, btree.pager);
         assert_eq!(Node::try_from(btree)?, Node::new([1, 2, 3]));
 
         Ok(())

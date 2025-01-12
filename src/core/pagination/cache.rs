@@ -82,12 +82,12 @@ use std::mem;
 /// - **Efficient Eviction**: Approximation of Least Recently Used (LRU).
 /// - **Write Tracking**: Dirty pages are identified for disk writes.
 ///
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub(in crate::core) struct Cache {
     /// See [Pager](super::pager::Pager).
     pub page_size: usize,
     /// The maximum number of pages that this cache can handle.
-    max_size: usize,
+    pub max_size: usize,
     pinned_pages: usize,
     /// The maximum percentage of pages that can be [pinned](Cache::pin) at once.
     max_pinned_percentage: f32,
@@ -100,7 +100,7 @@ pub(in crate::core) struct Cache {
 }
 
 /// Holds a page and bits representing flags' list.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 struct Frame {
     flags: u8,
     page_number: PageNumber,

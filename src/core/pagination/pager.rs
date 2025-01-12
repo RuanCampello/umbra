@@ -7,12 +7,12 @@ use crate::core::page::{Cell, MemoryPage, Page, PageConversion, SlotId};
 use crate::core::random::Rng;
 use crate::core::PageNumber;
 use std::collections::HashSet;
+use std::fmt::{Debug, Formatter, Pointer};
 use std::io::{self, Read, Seek, Write};
 use std::path::PathBuf;
 
 /// Inspired by [SQLite 2.8.1 pager].
 /// It manages IO over a "block" in disk to storage the database.
-#[derive(Debug, PartialEq, Clone)]
 pub(in crate::core) struct Pager<File> {
     file: BlockIo<File>,
     cache: Cache,
@@ -30,7 +30,6 @@ pub(in crate::core) struct Pager<File> {
 /// Each chunk starts with a magic number and a page count, followed by page metadata.
 /// Pages store their number, content, and a simple checksum (not a true checksum).
 /// An in-memory buffer minimizes sys-calls and avoids file seeks for efficiency.
-#[derive(Debug, PartialEq, Clone)]
 struct Journal<File> {
     buffer: Vec<u8>,
     page_size: usize,
@@ -397,6 +396,16 @@ impl<File: Write + FileOperations> Pager<File> {
         }
 
         Ok(())
+    }
+}
+
+impl<File> Debug for Pager<File> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pager")
+            .field("page_size", &self.page_size)
+            .field("cache_size", &self.cache.max_size)
+            .field("journal_buffer_size", &self.journal.max_pages)
+            .finish()
     }
 }
 
