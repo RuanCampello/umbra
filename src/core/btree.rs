@@ -554,7 +554,6 @@ impl<'a> AsRef<[u8]> for Content<'a> {
 mod tests {
     use crate::core::btree::*;
     use crate::method_builder;
-
     type MemoryBuffer = std::io::Cursor<Vec<u8>>;
 
     #[derive(Debug, PartialEq)]
@@ -583,7 +582,7 @@ mod tests {
                 }
 
                 let pager = PAGER.as_mut().unwrap();
-                let comparator = FixedSizeCmp::default();
+                let comparator = FixedSizeCmp::new::<u64>();
 
                 Self {
                     root: 0,
@@ -606,8 +605,9 @@ mod tests {
 
     impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
         fn try_insert_keys<K: Keys>(&mut self, keys: K) -> IOResult<()> {
+            let serialize = |key: u64| key.to_be_bytes();
             for key in keys {
-                self.insert(Vec::from(key.to_be_bytes()))?;
+                self.insert(Vec::from(serialize(key)))?;
             }
 
             Ok(())
@@ -616,16 +616,13 @@ mod tests {
         fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
             let page = self.pager.get(root)?;
 
+            let deserialize = |content: &[u8]| {
+                u64::from_be_bytes(content[..size_of::<u64>()].try_into().unwrap())
+            };
+
             let mut node = Node {
                 keys: (0..page.len())
-                    .map(|idx| {
-                        // deserialization
-                        u64::from_be_bytes(
-                            page.cell(idx).content[..size_of::<u64>()]
-                                .try_into()
-                                .unwrap(),
-                        )
-                    })
+                    .map(|idx| deserialize(&page.cell(idx).content))
                     .collect(),
                 children: vec![],
             };
@@ -640,8 +637,8 @@ mod tests {
 
         fn with_keys<K: Keys>(
             &mut self,
-            keys: K,
             pager: &'p mut Pager<MemoryBuffer>,
+            keys: K,
         ) -> IOResult<BTree<'p, MemoryBuffer, FixedSizeCmp>> {
             let root = pager.allocate_page::<Page>()?;
 
@@ -663,7 +660,8 @@ mod tests {
     #[test]
     fn test_fill_root() -> IOResult<()> {
         let pager = &mut Pager::default();
-        let btree = BTree::default().with_keys(1..=3, pager)?;
+        pager.init()?;
+        let btree = BTree::default().with_keys(pager, 1..=3)?;
 
         assert_eq!(Node::try_from(btree)?, Node::new([1, 2, 3]));
 
