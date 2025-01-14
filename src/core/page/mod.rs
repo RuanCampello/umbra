@@ -78,7 +78,7 @@ pub(in crate::core) struct Cell {
 #[derive(Debug, PartialEq)]
 pub(in crate::core) struct CellHeader {
     pub is_overflow: bool,
-    /// Padding bytes to ensure correct alignment and avoid undefined behavior.
+    /// Padding bytes to ensure correct alignment and avoid undefined behaviour.
     padding: u8,
     /// Size of the cell's content.
     size: u16,
@@ -97,11 +97,11 @@ pub(in crate::core) enum MemoryPage {
 /// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore can be indexed with two bytes.
 pub(in crate::core) type SlotId = u16;
 
-const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
-const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
-const SLOT_SIZE: u16 = size_of::<u16>() as u16;
+pub(in crate::core) const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
+pub(in crate::core) const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
+pub(in crate::core) const SLOT_SIZE: u16 = size_of::<u16>() as u16;
+pub(in crate::core) const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
-const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const MIN_PAGE_SIZE: usize = 512;
 const MAX_PAGE_SIZE: usize = 64 << 10;
 

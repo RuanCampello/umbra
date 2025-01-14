@@ -187,11 +187,12 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         parents: &mut Vec<PageNumber>,
     ) -> IOResult<()> {
         let node = self.pager.get(page_number)?;
+        println!("node {node:#?} page {page_number} parents {parents:#?}");
         let is_root = parents.is_empty();
-        let is_underflow = !is_root || node.len() == 0 || node.is_underflow();
+        let is_underflow = node.len() == 0 || !is_root && node.is_underflow();
 
         // the node is balanced, so no need of doing anything
-        if !node.is_underflow() && is_underflow {
+        if !node.is_underflow() && !is_underflow {
             return Ok(());
         }
 
@@ -554,6 +555,9 @@ impl<'a> AsRef<[u8]> for Content<'a> {
 mod tests {
     use crate::core::btree::*;
     use crate::method_builder;
+    use std::alloc::Layout;
+    use crate::core::page::{CELL_ALIGNMENT, CELL_HEADER_SIZE, PAGE_HEADER_SIZE, SLOT_SIZE};
+
     type MemoryBuffer = std::io::Cursor<Vec<u8>>;
 
     #[derive(Debug, PartialEq)]
@@ -569,6 +573,35 @@ mod tests {
                 keys: keys.into_iter().collect(),
                 children: Vec::new(),
             }
+        }
+    }
+
+    impl Pager<MemoryBuffer> {
+        fn for_test() -> Self {
+            let size = Pager::optimal_page_size(4);
+            let mut pager = Pager::default().page_size(size);
+            pager.init().expect("Failed to init pager for btree testing");
+            
+            pager
+        }
+        
+        fn optimal_page_size(order: usize) -> usize {
+            let max = size_of::<u64>();
+            let min = order - 1;
+
+            let align_up = |size, align| {
+                Layout::from_size_align(size, align)
+                    .unwrap()
+                    .pad_to_align()
+                    .size()
+            };
+
+            let cell_storage_size =
+                CELL_HEADER_SIZE + SLOT_SIZE + align_up(max, CELL_ALIGNMENT) as u16;
+
+            let total_size = PAGE_HEADER_SIZE + cell_storage_size * min as u16;
+
+            align_up(total_size as usize, CELL_ALIGNMENT)
         }
     }
 
@@ -659,8 +692,7 @@ mod tests {
 
     #[test]
     fn test_fill_root() -> IOResult<()> {
-        let pager = &mut Pager::default();
-        pager.init()?;
+        let pager = &mut Pager::for_test();
         let btree = BTree::default().with_keys(pager, 1..=3)?;
 
         assert_eq!(Node::try_from(btree)?, Node::new([1, 2, 3]));

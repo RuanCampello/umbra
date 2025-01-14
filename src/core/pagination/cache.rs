@@ -330,7 +330,7 @@ mod tests {
             max_size: usize,
             fetch: Fetch,
         ) -> (Self, Vec<MemoryPage>) {
-            const PAGE_SIZE: usize = 1024;
+            const PAGE_SIZE: usize = 256;
             let pages = (0..number_of_pages).map(|idx| {
                 let mut page = Page::alloc(PAGE_SIZE);
                 let ideal_size = Page::ideal_max_content_size(PAGE_SIZE, 1);
