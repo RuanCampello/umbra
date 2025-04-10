@@ -1,6 +1,6 @@
 <div align="center">
     <h1>Umbra</h1>
-    <img alt="Logo" src=".github/umbra-logo.png" width="250" height="250" />
+    <img alt="Logo" src=".github/umbra-icon.png" width="250" height="250" />
     <h5>A zero-dependency Rust database implemented from scratch 🦇</h5>
 </div>
 
