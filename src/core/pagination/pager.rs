@@ -201,40 +201,6 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         Ok(memory_page.try_into().expect("Error converting page type"))
     }
 
-    /// Joins a given page [content](Content) into a contiguous memory space.
-    pub(crate) fn reassemble_content(
-        &mut self,
-        page_number: PageNumber,
-        slot_id: SlotId,
-    ) -> io::Result<Content> {
-        let cell = self.get(page_number)?.cell(slot_id);
-
-        if !cell.header.is_overflow {
-            return Ok(Content::PageRef(
-                &self.get(page_number)?.cell(slot_id).content,
-            ));
-        }
-
-        let mut overflow = cell.overflow_page();
-        let mut content = Vec::from(&cell.content[..cell.content.len() - size_of::<PageNumber>()]);
-
-        while overflow != 0 {
-            let page = self.get_as::<OverflowPage>(overflow)?;
-            content.extend_from_slice(page.content());
-            let page_header = page.buffer.header();
-
-            let next = page_header.next;
-            debug_assert_ne!(
-                next, overflow,
-                "Overflow Page points to itself, causing an infinity loop {page_header:#?}",
-            );
-
-            overflow = next
-        }
-
-        Ok(Content::Reassembled(content.into()))
-    }
-
     /// Frees the pages used by this given [`Cell`].
     pub fn free_cell(&mut self, cell: Box<Cell>) -> io::Result<()> {
         if !cell.header.is_overflow {
@@ -462,6 +428,40 @@ impl<File: FileOperations> Journal<File> {
         self.buffer[pages_range].copy_from_slice(&self.buffered_pages.to_le_bytes());
         Ok(())
     }
+}
+
+/// Joins a given page [content](Content) into a contiguous memory space.
+pub(in crate::core) fn reassemble_content<File: Seek + Write + Read + FileOperations>(
+    pager: &mut Pager<File>,
+    page_number: PageNumber,
+    slot_id: SlotId,
+) -> io::Result<Content> {
+    let cell = pager.get(page_number)?.cell(slot_id);
+
+    if !cell.header.is_overflow {
+        return Ok(Content::PageRef(
+            &pager.get(page_number)?.cell(slot_id).content,
+        ));
+    }
+
+    let mut overflow = cell.overflow_page();
+    let mut content = Vec::from(&cell.content[..cell.content.len() - size_of::<PageNumber>()]);
+
+    while overflow != 0 {
+        let page = pager.get_as::<OverflowPage>(overflow)?;
+        content.extend_from_slice(page.content());
+        let page_header = page.buffer.header();
+
+        let next = page_header.next;
+        debug_assert_ne!(
+            next, overflow,
+            "Overflow Page points to itself, causing an infinity loop {page_header:#?}",
+        );
+
+        overflow = next
+    }
+
+    Ok(Content::Reassembled(content.into()))
 }
 
 fn journal_chunk_size(page_size: usize, pages_number: usize) -> usize {

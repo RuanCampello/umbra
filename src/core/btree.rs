@@ -2,7 +2,7 @@
 
 use super::page::{Cell, Page, SlotId};
 use super::pagination::io::FileOperations;
-use super::pagination::pager::Pager;
+use super::pagination::pager::{reassemble_content, Pager};
 use super::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
 use crate::core::page::overflow::OverflowPage;
 use crate::sql::statements::Type;
@@ -12,7 +12,7 @@ use std::io::{Read, Result as IOResult, Seek, Write};
 
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
-/// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualizer of this data structure.
+/// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualiser of this data structure.
 pub(in crate::core) struct BTree<'p, File, Cmp> {
     root: PageNumber,
     min_keys: usize,
@@ -92,7 +92,12 @@ impl<Type> Keys for Type where Type: IntoIterator<Item = u64> {}
 impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, File, Cmp> {
     /// Returns a value of a given key.
     pub fn get(&mut self, entry: &[u8]) -> IOResult<Option<Content>> {
-        todo!()
+        let search = self.search(self.root, entry, &mut Vec::new())?;
+
+        match search.index {
+            Err(_) => Ok(None),
+            Ok(index) => Ok(Some(reassemble_content(self.pager, search.page, index)?)),
+        }
     }
 
     /// Inserts a new entry into the tree or replace it if already exists.
@@ -156,7 +161,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
             let content = match cell.header.is_overflow {
                 false => &cell.content,
-                true => match self.pager.reassemble_content(page_number, mid as _)? {
+                true => match reassemble_content(self.pager, page_number, mid as _)? {
                     Content::Reassembled(buffer) => {
                         overflow = buffer.clone();
                         &overflow
@@ -187,12 +192,11 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         parents: &mut Vec<PageNumber>,
     ) -> IOResult<()> {
         let node = self.pager.get(page_number)?;
-        println!("node {node:#?} page {page_number} parents {parents:#?}");
         let is_root = parents.is_empty();
         let is_underflow = node.len() == 0 || !is_root && node.is_underflow();
 
         // the node is balanced, so no need of doing anything
-        if !node.is_underflow() && !is_underflow {
+        if !node.is_overflow() && !is_underflow {
             return Ok(());
         }
 
@@ -234,13 +238,13 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
             // the created page
             let child = self.pager.get_mut(new_page_number)?;
-            child.push_all(cells);
+            cells.into_iter().for_each(|cell| child.push(cell));
             child.mutable_header().right_child = grand_child;
-            parents.push(page_number);
 
+            parents.push(page_number);
             page_number = new_page_number
         }
-
+        
         let parent = parents.remove(parents.len() - 1);
         let mut siblings = self.siblings(page_number, parent)?;
 
@@ -554,17 +558,17 @@ impl<'a> AsRef<[u8]> for Content<'a> {
 #[cfg(test)]
 mod tests {
     use crate::core::btree::*;
+    use crate::core::page::{CELL_ALIGNMENT, CELL_HEADER_SIZE, PAGE_HEADER_SIZE, SLOT_SIZE};
     use crate::method_builder;
     use std::alloc::Layout;
-    use crate::core::page::{CELL_ALIGNMENT, CELL_HEADER_SIZE, PAGE_HEADER_SIZE, SLOT_SIZE};
 
     type MemoryBuffer = std::io::Cursor<Vec<u8>>;
 
     #[derive(Debug, PartialEq)]
     /// We can make an entire tree in-memory and then compare it to an actual [`BTree`].
     struct Node {
-        children: Vec<Node>,
         keys: Vec<u64>,
+        children: Vec<Self>,
     }
 
     impl Node {
@@ -580,14 +584,16 @@ mod tests {
         fn for_test() -> Self {
             let size = Pager::optimal_page_size(4);
             let mut pager = Pager::default().page_size(size);
-            pager.init().expect("Failed to init pager for btree testing");
-            
+            pager
+                .init()
+                .expect("Failed to init pager for btree testing");
+
             pager
         }
-        
+
         fn optimal_page_size(order: usize) -> usize {
-            let max = size_of::<u64>();
-            let min = order - 1;
+            let max_key_size = size_of::<u64>();
+            let min_keys = order - 1;
 
             let align_up = |size, align| {
                 Layout::from_size_align(size, align)
@@ -597,9 +603,8 @@ mod tests {
             };
 
             let cell_storage_size =
-                CELL_HEADER_SIZE + SLOT_SIZE + align_up(max, CELL_ALIGNMENT) as u16;
-
-            let total_size = PAGE_HEADER_SIZE + cell_storage_size * min as u16;
+                CELL_HEADER_SIZE + SLOT_SIZE + align_up(max_key_size, CELL_ALIGNMENT) as u16;
+            let total_size = PAGE_HEADER_SIZE + (cell_storage_size * min_keys as u16);
 
             align_up(total_size as usize, CELL_ALIGNMENT)
         }
@@ -648,7 +653,6 @@ mod tests {
 
         fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
             let page = self.pager.get(root)?;
-
             let deserialize = |content: &[u8]| {
                 u64::from_be_bytes(content[..size_of::<u64>()].try_into().unwrap())
             };

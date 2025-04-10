@@ -102,7 +102,7 @@ pub(in crate::core) const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
 pub(in crate::core) const SLOT_SIZE: u16 = size_of::<u16>() as u16;
 pub(in crate::core) const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
-const MIN_PAGE_SIZE: usize = 512;
+const MIN_PAGE_SIZE: usize = 64;
 const MAX_PAGE_SIZE: usize = 64 << 10;
 
 pub(in crate::core) trait PageConversion:
