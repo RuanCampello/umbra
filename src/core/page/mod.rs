@@ -306,8 +306,8 @@ impl Page {
 
         let right = match range.end_bound() {
             Bound::Unbounded => self.len() as usize,
-            Bound::Excluded(i) => *i,
             Bound::Included(i) => i + 1,
+            Bound::Excluded(i) => *i,
         };
 
         let mut drain_idx = left;
@@ -315,16 +315,19 @@ impl Page {
 
         iter::from_fn(move || {
             if drain_idx < right {
-                let cell = self.overflow.remove(&(drain_idx as u16)).unwrap_or({
-                    let cell = self.cloned_cell(slot_idx as SlotId);
-                    slot_idx += 1;
-                    cell
-                });
+                let cell = self
+                    .overflow
+                    .remove(&(drain_idx as u16))
+                    .unwrap_or_else(|| {
+                        let cell = self.cloned_cell(slot_idx as _);
+                        slot_idx += 1;
+                        cell
+                    });
                 drain_idx += 1;
 
                 Some(cell)
             } else {
-                self.buffer.mutable_header().free_space += (left..right)
+                self.buffer.mutable_header().free_space += (left..slot_idx)
                     .map(|slot| self.cell(slot as u16).storage_size())
                     .sum::<u16>();
                 self.mutable_slot_array().copy_within(slot_idx.., left);
@@ -434,7 +437,7 @@ impl Page {
     /// Returns a pointer to a [`Cell`] of a given [`SlotId`].
     fn cell_pointer(&self, id: SlotId) -> NonNull<Cell> {
         let length = self.buffer.header().slot_count;
-        println!("index {id:#?} {length}");
+        println!("index {id:#?} {length} header {:#?}", self.buffer.header());
         debug_assert!(
             id < length,
             "SlotId {id} out of bounds for slot array with length {length}"

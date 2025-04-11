@@ -32,6 +32,7 @@ struct Sibling {
 }
 
 /// Result of a search in [`Btree].
+#[derive(Debug)]
 struct Search {
     page: PageNumber,
 
@@ -131,7 +132,6 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
     ) -> IOResult<Search> {
         let index = self.binary_search(page, entry)?;
         let node = self.pager.get(page)?;
-
         // recursion-breaking condition
         if index.is_ok() || node.is_leaf() {
             return Ok(Search { page, index });
@@ -197,13 +197,11 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
         // the node is balanced, so no need of doing anything
         if !node.is_overflow() && !is_underflow {
-            println!("first");
             return Ok(());
         }
 
         // underflow in root
         if is_root && is_underflow {
-            println!("second");
             // if the node has no children, there's nothing we can do
             if node.is_leaf() {
                 return Ok(());
@@ -213,7 +211,6 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             let space_needed = self.pager.get(child_page_number)?.bytes_occupied();
 
             if self.pager.get(page_number)?.header().free_space < space_needed {
-                println!("third");
                 return Ok(());
             }
 
@@ -227,7 +224,6 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             root.push_all(cells);
             root.mutable_header().right_child = grand_child;
 
-            println!("forth");
             return Ok(());
         }
 
