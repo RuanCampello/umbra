@@ -109,7 +109,6 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
         let mut cell = self.allocate_cell(entry)?;
         let node = self.pager.get_mut(search.page)?;
-
         match search.index {
             // if the key was found, we just need to replace it
             Ok(idx) => {
@@ -554,8 +553,10 @@ mod tests {
     use crate::core::page::{CELL_ALIGNMENT, CELL_HEADER_SIZE, PAGE_HEADER_SIZE, SLOT_SIZE};
     use crate::method_builder;
     use std::alloc::Layout;
+    use std::fmt::Debug;
 
     type MemoryBuffer = std::io::Cursor<Vec<u8>>;
+    type Key = u64;
 
     #[derive(Debug, PartialEq)]
     /// We can make an entire tree in-memory and then compare it to an actual [`BTree`].
@@ -636,17 +637,21 @@ mod tests {
     }
 
     impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
-        fn try_insert_keys<K: Keys>(&mut self, keys: K) -> IOResult<()> {
-            let serialize = |key: u64| key.to_be_bytes();
-            keys.into_iter().try_for_each(|key| -> IOResult<()> {
-                self.insert(Vec::from(serialize(key)))?;
-                Ok(())
-            })
+        fn try_insert_key(&mut self, keys: impl IntoIterator<Item = Key> + Debug) -> IOResult<()> {
+            // println!("serializing...");
+            // println!("Keys {keys:#?}");
+            for key in keys {
+                let serialized_key = serialize_key(key);
+                println!("key {serialized_key:#?}");
+                // println!("iterating...");
+                self.insert(Vec::from(serialized_key))?;
+            }
+
+            Ok(())
         }
 
         fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
             let page = self.pager.get(root)?;
-            println!("page {page:#?} root {root}");
 
             let deserialize = |content: &[u8]| {
                 u64::from_be_bytes(content[..size_of::<u64>()].try_into().unwrap())
@@ -667,11 +672,12 @@ mod tests {
             Ok(node)
         }
 
-        fn with_keys<K: Keys>(
+        fn with_keys(
             &mut self,
             pager: &'p mut Pager<MemoryBuffer>,
-            keys: K,
+            keys: impl IntoIterator<Item = Key> + Debug,
         ) -> IOResult<BTree<'p, MemoryBuffer, FixedSizeCmp>> {
+            println!("allocing...");
             let root = pager.allocate_page::<Page>()?;
 
             let mut btree = BTree {
@@ -682,11 +688,15 @@ mod tests {
                 min_keys: self.min_keys,
             };
 
-            btree.try_insert_keys(keys)?;
+            btree.try_insert_key(keys)?;
             Ok(btree)
         }
 
         method_builder!(pager, &'p mut Pager<MemoryBuffer>);
+    }
+
+    fn serialize_key(key: Key) -> [u8; size_of::<Key>()] {
+        key.to_be_bytes()
     }
 
     #[test]

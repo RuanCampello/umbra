@@ -180,8 +180,6 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         let idx = self.lookup::<Page>(page_number)?;
         let memory_page = &self.cache[idx];
 
-        println!("idx found in the lookup {idx}");
-
         Ok(memory_page.try_into().expect("Error converting page type"))
     }
 
@@ -250,6 +248,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
     /// Same as [allocate_page_disk](Self::allocate_page_disk) but maps into a given page type and create a [`Cache`] entry for it.
     pub fn allocate_page<Page: PageConversion>(&mut self) -> io::Result<PageNumber> {
         let page_number = self.allocate_page_disk()?;
+        println!("allocated page {page_number}");
         self.map_page::<Page>(page_number)?;
 
         Ok(page_number)
@@ -259,23 +258,23 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
     fn allocate_page_disk(&mut self) -> io::Result<PageNumber> {
         let mut header = self.get_as::<PageZero>(0).map(PageZero::header).copied()?;
 
-        let free_page = match header.first_free_page == 0 {
-            true => {
-                let page = header.total_pages;
-                header.total_pages += 1;
+        let free_page = if header.first_free_page == 0 {
+            // if there are no free pages, allocate a new one
+            let page = header.total_pages;
+            header.total_pages += 1;
 
-                page.into()
-            }
-            false => {
-                let page = header.first_free_page;
-                let free_page = self.get_as::<OverflowPage>(page)?;
-                header.first_free_page = free_page.buffer.header().next;
-                header.free_pages -= 1;
+            page
+        } else {
+            // take a page from the free list
+            let page = header.first_free_page;
+            let free_page = self.get_as::<OverflowPage>(page)?;
+            header.first_free_page = free_page.buffer.header().next;
+            header.free_pages -= 1;
 
-                page
-            }
+            page
         };
 
+        // clear last_free_page if free list is now empty
         if header.first_free_page == 0 {
             header.last_free_page = 0;
         };
@@ -321,6 +320,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         }
 
         let idx = self.cache.map(page_number);
+        println!("Mapped idx {idx}");
         self.cache[idx].reinit_as::<Page>();
 
         Ok(idx)
@@ -336,16 +336,16 @@ impl<File: Seek + Write + FileOperations> Pager<File> {
         self.journal.persist()?;
 
         let page_numbers = BinaryHeap::from_iter(self.dirty_pages.iter().copied().map(Reverse));
-        
+
         for Reverse(page_number) in page_numbers {
             let idx = self.cache.get(page_number).unwrap();
             let page = &self.cache[idx];
-            
+
             self.file.write(page_number, page.as_ref())?;
             self.cache.mark_clean(page_number);
             self.dirty_pages.remove(&page_number);
         }
-        
+
         Ok(())
     }
 }

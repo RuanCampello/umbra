@@ -34,7 +34,7 @@ pub(in crate::core) struct PageZero {
 pub(in crate::core) struct DatabaseHeader {
     pub identifier: u32,
     pub page_size: u16,
-    pub total_pages: u16,
+    pub total_pages: u32,
     pub free_pages: u16,
     pub first_free_page: PageNumber,
     pub last_free_page: PageNumber,

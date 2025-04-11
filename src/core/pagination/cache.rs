@@ -120,13 +120,13 @@ const DEFAULT_MAX_PINNED_PERCENTAGE: f32 = 60.0;
 impl Cache {
     pub fn default() -> Self {
         Self {
-            page_size: DEFAULT_PAGE_SIZE,
-            max_size: DEFAULT_MAX,
-            buffer: Vec::with_capacity(DEFAULT_MAX),
-            pages: HashMap::with_capacity(DEFAULT_MAX),
-            max_pinned_percentage: DEFAULT_MAX_PINNED_PERCENTAGE,
             pinned_pages: 0,
             clock: 0,
+            page_size: DEFAULT_PAGE_SIZE,
+            max_size: DEFAULT_MAX,
+            max_pinned_percentage: DEFAULT_MAX_PINNED_PERCENTAGE,
+            buffer: Vec::with_capacity(DEFAULT_MAX),
+            pages: HashMap::with_capacity(DEFAULT_MAX),
         }
     }
 
@@ -207,7 +207,9 @@ impl Cache {
             self.pages.insert(page_number, id);
 
             self.buffer
-                .push(Frame::new(page_number, MemoryPage::alloc(self.page_size)))
+                .push(Frame::new(page_number, MemoryPage::alloc(self.page_size)));
+            
+            return id;
         }
 
         // the buffer is full, so we must evict
@@ -258,7 +260,7 @@ impl Cache {
 
             #[cfg(debug_assertions)]
             {
-                if rounds == 10 {
+                if rounds == 3 {
                     panic!("clock has go {rounds} full round and didn't found any page that could be evicted")
                 }
 
