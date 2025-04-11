@@ -9,6 +9,7 @@ use crate::sql::statements::Type;
 use std::cmp::{min, Ordering, Reverse};
 use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::io::{Read, Result as IOResult, Seek, Write};
+use std::mem;
 
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
@@ -215,34 +216,32 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             }
 
             let child = self.pager.get_mut(child_page_number)?;
-            let grand_child = child.header().right_child;
-            let cells: Vec<Box<Cell>> = child.drain(..).collect();
+            let grandchild = child.header().right_child;
+            let cells = child.drain(..).collect::<Vec<_>>();
 
             self.pager.free_page(child_page_number)?;
 
             let root = self.pager.get_mut(page_number)?;
             root.push_all(cells);
-            root.mutable_header().right_child = grand_child;
+            root.mutable_header().right_child = grandchild;
 
             return Ok(());
         }
 
         // overflow in root
         if is_root && node.is_overflow() {
-            let new_page_number = self.pager.allocate_page::<Page>()?;
+            let new_page = self.pager.allocate_page::<Page>()?;
 
             let root = self.pager.get_mut(page_number)?;
-            let grand_child =
-                std::mem::replace(&mut root.mutable_header().right_child, new_page_number);
-            let cells: Vec<Box<Cell>> = root.drain(..).collect();
+            let grandchild = mem::replace(&mut root.mutable_header().right_child, new_page);
+            let cells = root.drain(..).collect::<Vec<_>>();
 
-            // the created page
-            let child = self.pager.get_mut(new_page_number)?;
-            cells.into_iter().for_each(|cell| child.push(cell));
-            child.mutable_header().right_child = grand_child;
+            let new_child = self.pager.get_mut(new_page)?;
+            cells.into_iter().for_each(|cell| new_child.push(cell));
+            new_child.mutable_header().right_child = grandchild;
 
             parents.push(page_number);
-            page_number = new_page_number
+            page_number = new_page;
         }
 
         let parent = parents.remove(parents.len() - 1);
@@ -262,8 +261,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             .enumerate()
             .try_for_each(|(idx, sibling)| -> IOResult<()> {
                 cells.extend(self.pager.get_mut(sibling.page)?.drain(..));
-
-                if idx > siblings.len() - 1 {
+                if idx < siblings.len() - 1 {
                     let mut div = self.pager.get_mut(parent)?.remove(div_idx);
                     div.header.left_child = self.pager.get(sibling.page)?.header().right_child;
                     cells.push_back(div);
@@ -272,44 +270,40 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             })?;
 
         let usable_space = Page::usable_space(self.pager.page_size);
-        let mut total_size_per_age = vec![0];
+
+        let mut total_size_in_each_page = vec![0];
         let mut number_of_cells_per_page = vec![0];
 
         // compute the distribution (left-based, yeah lil comrade)
         cells.iter().for_each(|cell| {
-            let idx = number_of_cells_per_page.len() - 1;
-            match total_size_per_age[idx] + cell.storage_size() <= usable_space {
-                true => {
-                    number_of_cells_per_page[idx] += 1;
-                    total_size_per_age[idx] += cell.storage_size()
-                }
-                false => {
-                    number_of_cells_per_page.push(0);
-                    total_size_per_age.push(0)
-                }
+            let i = number_of_cells_per_page.len() - 1;
+            if total_size_in_each_page[i] + cell.storage_size() <= usable_space {
+                number_of_cells_per_page[i] += 1;
+                total_size_in_each_page[i] += cell.storage_size();
+            } else {
+                number_of_cells_per_page.push(0);
+                total_size_in_each_page.push(0);
             }
         });
 
         if number_of_cells_per_page.len() >= 2 {
             let mut div_cell = cells.len() - number_of_cells_per_page.last().unwrap() - 1;
-
-            (1..=(total_size_per_age.len() - 1)).rev().for_each(|idx| {
+            (1..total_size_in_each_page.len()).rev().for_each(|i| {
                 // checkout underflow
-                while total_size_per_age[idx] < usable_space / 2 {
-                    number_of_cells_per_page[idx] += 1;
-                    total_size_per_age[idx] += &cells[div_cell].storage_size();
+                while total_size_in_each_page[i] < usable_space / 2 {
+                    number_of_cells_per_page[i] += 1;
+                    total_size_in_each_page[i] += &cells[div_cell].storage_size();
 
-                    number_of_cells_per_page[idx - 1] -= 1;
-                    total_size_per_age[idx - 1] -= &cells[div_cell - 1].storage_size();
-
-                    div_cell -= 1
+                    number_of_cells_per_page[i - 1] -= 1;
+                    total_size_in_each_page[i - 1] -= &cells[div_cell - 1].storage_size();
+                    div_cell -= 1;
                 }
             });
 
             // adjustment to maintain the left-based assumption
-            if total_size_per_age[0] < usable_space / 2 {
+            if total_size_in_each_page[0] < usable_space / 2 {
                 number_of_cells_per_page[0] += 1;
-                total_size_per_age[1] -= 1;
+                number_of_cells_per_page[1] -= 1;
             }
         }
 
@@ -323,7 +317,6 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         while siblings.len() < number_of_cells_per_page.len() {
             let page = self.pager.allocate_page::<Page>()?;
             let parent_idx = siblings.last().unwrap().index + 1;
-
             siblings.push(Sibling::new(page, parent_idx));
         }
 

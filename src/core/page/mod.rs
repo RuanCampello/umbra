@@ -437,7 +437,6 @@ impl Page {
     /// Returns a pointer to a [`Cell`] of a given [`SlotId`].
     fn cell_pointer(&self, id: SlotId) -> NonNull<Cell> {
         let length = self.buffer.header().slot_count;
-        println!("index {id:#?} {length} header {:#?}", self.buffer.header());
         debug_assert!(
             id < length,
             "SlotId {id} out of bounds for slot array with length {length}"
