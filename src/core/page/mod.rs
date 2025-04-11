@@ -76,6 +76,7 @@ pub(in crate::core) struct Cell {
 }
 
 #[derive(Debug, PartialEq)]
+#[repr(C, align(8))]
 pub(in crate::core) struct CellHeader {
     pub is_overflow: bool,
     /// Padding bytes to ensure correct alignment and avoid undefined behaviour.
@@ -102,7 +103,7 @@ pub(in crate::core) const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
 pub(in crate::core) const SLOT_SIZE: u16 = size_of::<u16>() as u16;
 pub(in crate::core) const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
-const MIN_PAGE_SIZE: usize = 64;
+const MIN_PAGE_SIZE: usize = 32;
 const MAX_PAGE_SIZE: usize = 64 << 10;
 
 pub(in crate::core) trait PageConversion:
@@ -433,6 +434,7 @@ impl Page {
     /// Returns a pointer to a [`Cell`] of a given [`SlotId`].
     fn cell_pointer(&self, id: SlotId) -> NonNull<Cell> {
         let length = self.buffer.header().slot_count;
+        println!("index {id:#?} {length}");
         debug_assert!(
             id < length,
             "SlotId {id} out of bounds for slot array with length {length}"
@@ -834,7 +836,6 @@ mod tests {
             let cells = create_cells_with_size(sizes);
             let size = page_size_to_fit(&cells);
 
-            println!("SIZE BUILT {size}");
             let mut page = Page::alloc(size);
             page.push_all_cells(&cells);
 

@@ -41,6 +41,7 @@ use crate::core::{page::buffer::BufferWithHeader, PageNumber};
 /// the last four bytes of the cell's payload contain a pointer to the first
 /// overflow page for that cell.
 #[derive(Debug, PartialEq, Clone)]
+#[repr(C)]
 pub(in crate::core) struct OverflowPage {
     /// In-memory page buffer.
     pub(in crate::core) buffer: BufferWithHeader<OverflowPageHeader>,

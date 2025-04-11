@@ -8,7 +8,7 @@
 
 ### ✨ Just so you know
 
-Umbra is a project I started during my summer vacation of December 2024 to early 2025 because I was bored as hell.
+Umbra is a project I started during my summer holiday of December 2024 to early 2025 because I was bored as hell.
 
 ---
 

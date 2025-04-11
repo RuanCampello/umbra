@@ -219,8 +219,6 @@ mod tests {
         let buffer = BufferWithHeader::<CellHeader>::new(MIN_PAGE_SIZE);
         assert_eq!(buffer.size, MIN_PAGE_SIZE);
 
-        println!("Buffer {buffer:#?}");
-
         let buffer = BufferWithHeader::<CellHeader>::new(MAX_PAGE_SIZE);
         assert_eq!(buffer.size, MAX_PAGE_SIZE);
     }

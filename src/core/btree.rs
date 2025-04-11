@@ -197,11 +197,13 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
         // the node is balanced, so no need of doing anything
         if !node.is_overflow() && !is_underflow {
+            println!("first");
             return Ok(());
         }
 
         // underflow in root
         if is_root && is_underflow {
+            println!("second");
             // if the node has no children, there's nothing we can do
             if node.is_leaf() {
                 return Ok(());
@@ -211,6 +213,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             let space_needed = self.pager.get(child_page_number)?.bytes_occupied();
 
             if self.pager.get(page_number)?.header().free_space < space_needed {
+                println!("third");
                 return Ok(());
             }
 
@@ -224,6 +227,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             root.push_all(cells);
             root.mutable_header().right_child = grand_child;
 
+            println!("forth");
             return Ok(());
         }
 
@@ -244,7 +248,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             parents.push(page_number);
             page_number = new_page_number
         }
-        
+
         let parent = parents.remove(parents.len() - 1);
         let mut siblings = self.siblings(page_number, parent)?;
 
@@ -593,6 +597,7 @@ mod tests {
 
         fn optimal_page_size(order: usize) -> usize {
             let max_key_size = size_of::<u64>();
+
             let min_keys = order - 1;
 
             let align_up = |size, align| {
@@ -700,6 +705,22 @@ mod tests {
         let btree = BTree::default().with_keys(pager, 1..=3)?;
 
         assert_eq!(Node::try_from(btree)?, Node::new([1, 2, 3]));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_root() -> IOResult<()> {
+        let pager = &mut Pager::for_test();
+        let btree = BTree::default().with_keys(pager, 1..=4)?;
+
+        assert_eq!(
+            Node::try_from(btree)?,
+            Node {
+                keys: vec![3],
+                children: vec![Node::new([1, 2]), Node::new([4])]
+            }
+        );
 
         Ok(())
     }
