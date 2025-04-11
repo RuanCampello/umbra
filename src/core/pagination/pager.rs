@@ -6,7 +6,8 @@ use crate::core::page::zero::{PageZero, DATABASE_IDENTIFIER};
 use crate::core::page::{Cell, MemoryPage, Page, PageConversion, SlotId};
 use crate::core::random::Rng;
 use crate::core::PageNumber;
-use std::collections::HashSet;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::io::{self, Read, Seek, Write};
 use std::path::PathBuf;
@@ -174,10 +175,12 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
     where
         Page: PageConversion + AsMut<[u8]>,
         &'p Page: TryFrom<&'p MemoryPage>,
-        <&'p Page as TryFrom<&'p MemoryPage>>::Error: std::fmt::Debug,
+        <&'p Page as TryFrom<&'p MemoryPage>>::Error: Debug,
     {
         let idx = self.lookup::<Page>(page_number)?;
         let memory_page = &self.cache[idx];
+
+        println!("idx found in the lookup {idx}");
 
         Ok(memory_page.try_into().expect("Error converting page type"))
     }
@@ -312,10 +315,38 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
 
     /// Maps the given [`PageNumber`] into an entry on cache.
     fn map_page<Page: PageConversion>(&mut self, page_number: PageNumber) -> io::Result<usize> {
+        println!("Mapping page {}", page_number);
+        if self.cache.must_evict_dirty_page() {
+            self.write_dirty_pages()?;
+        }
+
         let idx = self.cache.map(page_number);
         self.cache[idx].reinit_as::<Page>();
 
         Ok(idx)
+    }
+}
+
+impl<File: Seek + Write + FileOperations> Pager<File> {
+    pub fn write_dirty_pages(&mut self) -> io::Result<()> {
+        if self.dirty_pages.is_empty() {
+            return Ok(());
+        }
+
+        self.journal.persist()?;
+
+        let page_numbers = BinaryHeap::from_iter(self.dirty_pages.iter().copied().map(Reverse));
+        
+        for Reverse(page_number) in page_numbers {
+            let idx = self.cache.get(page_number).unwrap();
+            let page = &self.cache[idx];
+            
+            self.file.write(page_number, page.as_ref())?;
+            self.cache.mark_clean(page_number);
+            self.dirty_pages.remove(&page_number);
+        }
+        
+        Ok(())
     }
 }
 
@@ -402,6 +433,33 @@ impl<File> Journal<File> {
     }
 }
 
+impl<File: Write + FileOperations> Journal<File> {
+    /// Saves the data written to the journal to disk.
+    pub fn persist(&mut self) -> io::Result<()> {
+        self.write()?;
+        self.flush()?;
+        self.sync()?;
+
+        Ok(())
+    }
+
+    /// Passes the in-memory buffer to the journal file then clears it.
+    fn write(&mut self) -> io::Result<()> {
+        if self.buffer.len() <= JOURNAL_HEADER_SIZE {
+            return Ok(());
+        }
+
+        if self.file.is_none() {
+            self.file = Some(FileOperations::create(&self.path)?);
+        }
+
+        self.file.as_mut().unwrap().write_all(&self.buffer)?;
+        self.clear_buff();
+
+        Ok(())
+    }
+}
+
 impl<File: Write> Journal<File> {
     pub fn flush(&mut self) -> io::Result<()> {
         self.file.as_mut().unwrap().flush()
@@ -427,6 +485,10 @@ impl<File: FileOperations> Journal<File> {
         self.buffered_pages += 1;
         self.buffer[pages_range].copy_from_slice(&self.buffered_pages.to_le_bytes());
         Ok(())
+    }
+
+    fn sync(&mut self) -> io::Result<()> {
+        self.file.as_mut().unwrap().save()
     }
 }
 

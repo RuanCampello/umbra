@@ -224,6 +224,29 @@ impl Cache {
         self.clock
     }
 
+    /// Checks if the current page in the clock buffer should be evicted.
+    /// Returns `true` only if the current clock page is [dirty](DIRTY_FLAG) and the `buffer` is full.
+    pub fn must_evict_dirty_page(&mut self) -> bool {
+        if self.buffer.len() < self.max_size {
+            return false;
+        }
+
+        self.cycle_clock();
+        self.buffer[self.clock].is_set(DIRTY_FLAG)
+    }
+
+    pub fn mark_clean(&mut self, page_number: PageNumber) -> bool {
+        self.unset_flags(page_number, DIRTY_FLAG)
+    }
+
+    fn unset_flags(&mut self, page_number: PageNumber, flags: u8) -> bool {
+        self.pages.get(&page_number).map_or(false, |frame_id| {
+            self.buffer[*frame_id].unset(flags);
+
+            true
+        })
+    }
+
     /// [Ticks](Self::tick) clock until it points to a page that can be evicted.
     fn cycle_clock(&mut self) {
         let initial_round = self.clock;

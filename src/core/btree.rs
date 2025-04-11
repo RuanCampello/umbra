@@ -638,15 +638,16 @@ mod tests {
     impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
         fn try_insert_keys<K: Keys>(&mut self, keys: K) -> IOResult<()> {
             let serialize = |key: u64| key.to_be_bytes();
-            for key in keys {
+            keys.into_iter().try_for_each(|key| -> IOResult<()> {
                 self.insert(Vec::from(serialize(key)))?;
-            }
-
-            Ok(())
+                Ok(())
+            })
         }
 
         fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
             let page = self.pager.get(root)?;
+            println!("page {page:#?} root {root}");
+
             let deserialize = |content: &[u8]| {
                 u64::from_be_bytes(content[..size_of::<u64>()].try_into().unwrap())
             };
@@ -689,6 +690,27 @@ mod tests {
     }
 
     #[test]
+    fn test_insertion() -> IOResult<()> {
+        let pager = &mut Pager::for_test();
+        let btree = BTree::default().with_keys(pager, 1..=15)?;
+
+        assert_eq!(
+            Node::try_from(btree)?,
+            Node {
+                keys: vec![4, 8, 12],
+                children: vec![
+                    Node::new([1, 2, 3]),
+                    Node::new([5, 6, 7]),
+                    Node::new([9, 10, 11]),
+                    Node::new([13, 14, 15]),
+                ]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_fill_root() -> IOResult<()> {
         let pager = &mut Pager::for_test();
         let btree = BTree::default().with_keys(pager, 1..=3)?;
@@ -708,6 +730,22 @@ mod tests {
             Node {
                 keys: vec![3],
                 children: vec![Node::new([1, 2]), Node::new([4])]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_leaf_node() -> IOResult<()> {
+        let pager = &mut Pager::for_test();
+        let btree = BTree::default().with_keys(pager, 1..=8)?;
+
+        assert_eq!(
+            Node::try_from(btree)?,
+            Node {
+                keys: vec![3, 6],
+                children: vec![Node::new([1, 2]), Node::new([4, 5]), Node::new([7, 8])]
             }
         );
 

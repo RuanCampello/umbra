@@ -145,8 +145,8 @@ impl<IO: Seek + Read> BlockIo<IO> {
         // TODO: If the page is not greater than the block, multiple pages can be read at once.
         let mut block: Vec<u8> = vec![0; cap];
         let _ = self.io.read(&mut block)?;
-
         buffer.copy_from_slice(&block[body_offset..body_offset + self.page_size]);
+
         Ok(self.page_size)
     }
 }
