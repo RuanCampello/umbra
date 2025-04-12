@@ -620,7 +620,7 @@ mod tests {
                 Self {
                     root: 0,
                     min_keys: 1,
-                    balanced_siblings: 0,
+                    balanced_siblings: DEFAULT_BALANCED_SIBLINGS,
                     pager,
                     comparator,
                 }
@@ -637,17 +637,14 @@ mod tests {
     }
 
     impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
-        fn try_insert_key(&mut self, keys: impl IntoIterator<Item = Key> + Debug) -> IOResult<()> {
-            // println!("serializing...");
-            // println!("Keys {keys:#?}");
-            for key in keys {
-                let serialized_key = serialize_key(key);
-                println!("key {serialized_key:#?}");
-                // println!("iterating...");
-                self.insert(Vec::from(serialized_key))?;
-            }
+        fn try_insert_key<K: Keys>(&mut self, keys: K) -> IOResult<()> {
+            let serialize = |key: u64| key.to_be_bytes();
 
-            Ok(())
+            keys.into_iter().try_for_each(|key| -> IOResult<()> {
+                self.insert(Vec::from(serialize(key)))?;
+
+                Ok(())
+            })
         }
 
         fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
@@ -672,12 +669,11 @@ mod tests {
             Ok(node)
         }
 
-        fn with_keys(
+        fn with_keys<K: Keys>(
             &mut self,
             pager: &'p mut Pager<MemoryBuffer>,
-            keys: impl IntoIterator<Item = Key> + Debug,
+            keys: K,
         ) -> IOResult<BTree<'p, MemoryBuffer, FixedSizeCmp>> {
-            println!("allocing...");
             let root = pager.allocate_page::<Page>()?;
 
             let mut btree = BTree {
@@ -693,10 +689,6 @@ mod tests {
         }
 
         method_builder!(pager, &'p mut Pager<MemoryBuffer>);
-    }
-
-    fn serialize_key(key: Key) -> [u8; size_of::<Key>()] {
-        key.to_be_bytes()
     }
 
     #[test]

@@ -248,7 +248,6 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
     /// Same as [allocate_page_disk](Self::allocate_page_disk) but maps into a given page type and create a [`Cache`] entry for it.
     pub fn allocate_page<Page: PageConversion>(&mut self) -> io::Result<PageNumber> {
         let page_number = self.allocate_page_disk()?;
-        println!("allocated page {page_number}");
         self.map_page::<Page>(page_number)?;
 
         Ok(page_number)
@@ -314,13 +313,11 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
 
     /// Maps the given [`PageNumber`] into an entry on cache.
     fn map_page<Page: PageConversion>(&mut self, page_number: PageNumber) -> io::Result<usize> {
-        println!("Mapping page {}", page_number);
         if self.cache.must_evict_dirty_page() {
             self.write_dirty_pages()?;
         }
 
         let idx = self.cache.map(page_number);
-        println!("Mapped idx {idx}");
         self.cache[idx].reinit_as::<Page>();
 
         Ok(idx)
