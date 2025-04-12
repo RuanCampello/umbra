@@ -5,6 +5,7 @@
 use std::fmt::{Display, Formatter, Write};
 
 /// SQL tokens.
+#[derive(PartialEq)]
 pub(in crate::sql) enum Token {
     Whitespace(Whitespace),
     Identifier(String),
@@ -24,8 +25,11 @@ pub(in crate::sql) enum Token {
     Semicolon,
     LeftParen,
     RightParen,
+    /// That's not an actual SQL Token, but helps mark the end of token's stream.
+    Eof,
 }
 
+#[derive(PartialEq)]
 pub(in crate::sql) enum Whitespace {
     Tab,
     Space,
@@ -35,7 +39,7 @@ pub(in crate::sql) enum Whitespace {
 /// A little subset of SQL keywords.
 ///
 /// [Here](https://www.ibm.com/docs/en/informix-servers/12.10.0?topic=appendixes-keywords-sql-informix) there are much more than that, if you want to check out.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(in crate::sql) enum Keyword {
     Select,
     Create,
@@ -105,7 +109,7 @@ impl Display for Token {
 }
 
 impl Whitespace {
-    fn as_char(&self) -> char {
+    pub(in crate::sql) fn as_char(&self) -> char {
         match self {
             Self::Tab => '\t',
             Self::Space => ' ',
