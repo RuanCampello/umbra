@@ -737,8 +737,6 @@ mod tests {
 
     impl<'p> BTree<'p, MemoryBuffer, FixedSizeCmp> {
         fn try_insert_key<K: Keys>(&mut self, keys: K) -> IOResult<()> {
-            let serialize = |key: u64| key.to_be_bytes();
-
             keys.into_iter().try_for_each(|key| -> IOResult<()> {
                 self.insert(Vec::from(serialize(key)))?;
 
@@ -788,6 +786,10 @@ mod tests {
         }
 
         method_builder!(pager, &'p mut Pager<MemoryBuffer>);
+    }
+
+    fn serialize(key: Key) -> [u8; size_of::<Key>()] {
+        key.to_be_bytes()
     }
 
     #[test]
@@ -917,10 +919,26 @@ mod tests {
         Ok(())
     }
 
+    #[test]
     fn test_delete_from_leaf() -> IOResult<()> {
         let pager = &mut Pager::for_test();
-        let btree = BTree::default().with_keys(pager, 1..=15)?;
+        let mut btree = BTree::default().with_keys(pager, 1..=15)?;
 
-        todo!()
+        btree.remove(&serialize(13))?;
+
+        assert_eq!(
+            Node::try_from(btree)?,
+            Node {
+                keys: vec![4, 8, 12],
+                children: vec![
+                    Node::new([1, 2, 3]),
+                    Node::new([5, 6, 7]),
+                    Node::new([9, 10, 11]),
+                    Node::new([14, 15]),
+                ]
+            }
+        );
+
+        Ok(())
     }
 }
