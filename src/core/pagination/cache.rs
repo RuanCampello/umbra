@@ -208,7 +208,7 @@ impl Cache {
 
             self.buffer
                 .push(Frame::new(page_number, MemoryPage::alloc(self.page_size)));
-            
+
             return id;
         }
 
