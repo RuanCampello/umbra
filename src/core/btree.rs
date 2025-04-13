@@ -753,4 +753,67 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_propagate_root() -> IOResult<()> {
+        let pager = &mut Pager::for_test();
+        let btree = BTree::default().with_keys(pager, 1..=16)?;
+
+        assert_eq!(
+            Node::try_from(btree)?,
+            Node {
+                keys: vec![11],
+                children: vec![
+                    Node {
+                        keys: vec![4, 8],
+                        children: vec![
+                            Node::new([1, 2, 3]),
+                            Node::new([5, 6, 7]),
+                            Node::new([9, 10])
+                        ]
+                    },
+                    Node {
+                        keys: vec![14],
+                        children: vec![Node::new([12, 13]), Node::new([15, 16])]
+                    }
+                ]
+            }
+        );
+
+        Ok(())
+    }
+
+    fn test_internal_node_split() -> IOResult<()> {
+        let pager = &mut Pager::for_test();
+        let btree = BTree::default().with_keys(pager, 1..=27)?;
+
+        assert_eq!(
+            Node::try_from(btree)?,
+            Node {
+                keys: vec![15],
+                children: vec![
+                    Node {
+                        keys: vec![4, 8, 11],
+                        children: vec![
+                            Node::new([1, 2, 3]),
+                            Node::new([5, 6, 7]),
+                            Node::new([9, 10]),
+                            Node::new([12, 13, 14])
+                        ]
+                    },
+                    Node {
+                        keys: vec![19, 22, 25],
+                        children: vec![
+                            Node::new([16, 17, 18]),
+                            Node::new([20, 21]),
+                            Node::new([23, 24]),
+                            Node::new([26, 27]),
+                        ]
+                    },
+                ]
+            },
+        );
+
+        Ok(())
+    }
 }
