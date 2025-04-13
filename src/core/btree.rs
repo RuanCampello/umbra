@@ -42,6 +42,13 @@ struct Search {
     index: Result<u16, u16>,
 }
 
+/// The result of a [remove](BTree::remove) operation in the BTree.
+struct Removal {
+    cell: Box<Cell>,
+    leaf_node: PageNumber,
+    internal_node: Option<PageNumber>,
+}
+
 /// Compares the `self.0` using a `memcmp`.
 /// If the integer keys at the beginning of buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
@@ -122,6 +129,75 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         }
 
         self.balance(search.page, &mut parents)
+    }
+
+    pub fn remove(&mut self, entry: &[u8]) -> IOResult<Option<Box<Cell>>> {
+        let mut parents = Vec::new();
+        let Some(Removal {
+            cell,
+            leaf_node,
+            internal_node,
+        }) = self.remove_entry(entry, &mut parents)?
+        else {
+            return Ok(None);
+        };
+
+        self.balance(leaf_node, &mut parents);
+
+        if let Some(node) = internal_node {
+            if let Some(index) = parents.iter().position(|n| n.eq(&node)) {
+                parents.drain(index..);
+                self.balance(node, &mut parents)?;
+            }
+        }
+
+        Ok(Some(cell))
+    }
+
+    fn remove_entry(
+        &mut self,
+        entry: &[u8],
+        parents: &mut Vec<PageNumber>,
+    ) -> IOResult<Option<Removal>> {
+        let search = self.search(self.root, entry, parents)?;
+        let node = self.pager.get(search.page)?;
+
+        // not found, can't remove the entry
+        let Ok(index) = search.index else {
+            return Ok(None);
+        };
+
+        // this is the simplest case, we just need to remove the key
+        if node.is_leaf() {
+            let cell = self.pager.get_mut(search.page)?.remove(index);
+
+            return Ok(Some(Removal {
+                cell,
+                leaf_node: search.page,
+                internal_node: None,
+            }));
+        }
+
+        let left_c = node.children(index);
+        let right_c = node.children(index.saturating_add(1));
+
+        parents.push(search.page);
+
+        let (leaf, key) = match self.pager.get(left_c)?.len() >= self.pager.get(right_c)?.len() {
+            true => self.search_leaf_key(left_c, parents, LeafKeySearch::Max)?,
+            false => self.search_leaf_key(right_c, parents, LeafKeySearch::Min)?,
+        };
+
+        let mut placeholder = self.pager.get_mut(leaf)?.remove(key);
+        let node = self.pager.get_mut(search.page)?;
+        placeholder.header.left_child = node.children(index);
+        let cell = node.replace(placeholder, index);
+
+        Ok(Some(Removal {
+            cell,
+            leaf_node: leaf,
+            internal_node: Some(search.page),
+        }))
     }
 
     fn search(
@@ -391,6 +467,29 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             .collect();
 
         Ok(siblings)
+    }
+
+    fn search_leaf_key(
+        &mut self,
+        page_number: PageNumber,
+        parents: &mut Vec<PageNumber>,
+        leaf_key_search: LeafKeySearch,
+    ) -> IOResult<(PageNumber, u16)> {
+        let node = self.pager.get(page_number)?;
+
+        let (key, child) = match leaf_key_search {
+            LeafKeySearch::Min => (0, 0),
+            LeafKeySearch::Max => (node.len().saturating_sub(1), node.len()),
+        };
+
+        if node.is_leaf() {
+            return Ok((page_number, key));
+        }
+
+        parents.push(page_number);
+        let children = node.children(child);
+
+        self.search_leaf_key(children, parents, leaf_key_search)
     }
 
     /// Allocates a [`Cell`] that can store all the given content. Which can [overflow](OverflowPage).
@@ -816,5 +915,12 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    fn test_delete_from_leaf() -> IOResult<()> {
+        let pager = &mut Pager::for_test();
+        let btree = BTree::default().with_keys(pager, 1..=15)?;
+
+        todo!()
     }
 }
