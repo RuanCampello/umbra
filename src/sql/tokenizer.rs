@@ -1,6 +1,6 @@
 //! SQL tokenizer that generates ours [tokens](Token) instances.
 
-use crate::sql::tokens::{Token, Whitespace};
+use crate::sql::tokens::{Keyword, Token, Whitespace};
 use std::iter::Peekable;
 use std::str::Chars;
 
@@ -128,11 +128,59 @@ impl<'input> Tokenizer<'input> {
             '(' => self.consume(Token::LeftParen),
             ')' => self.consume(Token::RightParen),
             ';' => self.consume(Token::Semicolon),
+            _ if Token::is_keyword(c) => self.tokenize_keyword(),
             _ => {
                 let err = ErrorKind::UnexpectedToken(*c);
                 self.error(err)
             }
         }
+    }
+
+    fn tokenize_keyword(&mut self) -> TokenizerResult {
+        let value: String = self.stream.take_while(Token::is_keyword).collect();
+
+        let keyword = match value.to_uppercase().as_str() {
+            "SELECT" => Keyword::Select,
+            "CREATE" => Keyword::Create,
+            "UPDATE" => Keyword::Update,
+            "DELETE" => Keyword::Delete,
+            "INSERT" => Keyword::Insert,
+            "VALUES" => Keyword::Values,
+            "INTO" => Keyword::Into,
+            "SET" => Keyword::Set,
+            "DROP" => Keyword::Drop,
+            "FROM" => Keyword::From,
+            "TABLE" => Keyword::Table,
+            "WHERE" => Keyword::Where,
+            "AND" => Keyword::And,
+            "OR" => Keyword::Or,
+            "TRUE" => Keyword::True,
+            "FALSE" => Keyword::False,
+            "PRIMARY" => Keyword::Primary,
+            "KEY" => Keyword::Key,
+            "UNIQUE" => Keyword::Unique,
+            "INT" => Keyword::Int,
+            "BIGINT" => Keyword::BigInt,
+            "BY" => Keyword::By,
+            "DATABASE" => Keyword::Database,
+            "UNSIGNED" => Keyword::Unsigned,
+            "VARCHAR" => Keyword::Varchar,
+            "BOOL" => Keyword::Bool,
+            "INDEX" => Keyword::Index,
+            "ORDER" => Keyword::Order,
+            "ON" => Keyword::On,
+            "START" => Keyword::Start,
+            "TRANSACTION" => Keyword::Transaction,
+            "ROLLBACK" => Keyword::Rollback,
+            "COMMIT" => Keyword::Commit,
+            "EXPLAIN" => Keyword::Explain,
+            _ => Keyword::None,
+        };
+
+        Ok(match keyword {
+            Keyword::None => Token::Identifier(value),
+            _ => Token::Keyword(keyword),
+        })
     }
 
     fn next_token_with_location(&mut self) -> Result<TokenWithLocation, TokenizerError> {

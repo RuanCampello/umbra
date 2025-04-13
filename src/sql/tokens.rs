@@ -75,6 +75,14 @@ pub(in crate::sql) enum Keyword {
     Rollback,
     Commit,
     Explain,
+    /// This is not an actual SQL keyword, but it's used for convenience.
+    None,
+}
+
+impl Token {
+    pub(in crate::sql) fn is_keyword(c: &char) -> bool {
+        c.is_ascii_lowercase() || c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_'
+    }
 }
 
 impl Display for Token {
@@ -161,6 +169,7 @@ impl Keyword {
             Self::Rollback => "ROLLBACK",
             Self::Commit => "COMMIT",
             Self::Explain => "EXPLAIN",
+            Self::None => "_",
         }
     }
 }
