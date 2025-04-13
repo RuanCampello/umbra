@@ -104,11 +104,11 @@ impl<'input> Tokenizer<'input> {
                 _ => Ok(Token::Whitespace(Whitespace::Newline)),
             },
             '<' => match self.stream.peek_next() {
-                Some('=') => self.consume(Token::Eq),
+                Some('=') => self.consume(Token::LtEq),
                 _ => Ok(Token::Lt),
             },
             '>' => match self.stream.peek_next() {
-                Some('=') => self.consume(Token::Eq),
+                Some('=') => self.consume(Token::GtEq),
                 _ => Ok(Token::Gt),
             },
             '!' => match self.stream.peek_next() {
@@ -128,6 +128,7 @@ impl<'input> Tokenizer<'input> {
             '(' => self.consume(Token::LeftParen),
             ')' => self.consume(Token::RightParen),
             ';' => self.consume(Token::Semicolon),
+            '0'..='9' => self.tokenize_number(),
             _ if Token::is_keyword(c) => self.tokenize_keyword(),
             _ => {
                 let err = ErrorKind::UnexpectedToken(*c);
@@ -181,6 +182,10 @@ impl<'input> Tokenizer<'input> {
             Keyword::None => Token::Identifier(value),
             _ => Token::Keyword(keyword),
         })
+    }
+    
+    fn tokenize_number(&mut self) -> TokenizerResult {
+        Ok(Token::Number(self.stream.take_while(char::is_ascii_digit).collect()))
     }
 
     fn next_token_with_location(&mut self) -> Result<TokenWithLocation, TokenizerError> {
@@ -327,6 +332,40 @@ mod tests {
                 Token::Keyword(Keyword::From),
                 Token::Whitespace(Whitespace::Space),
                 Token::Identifier("users".into()),
+                Token::Semicolon,
+                Token::Eof,
+            ])
+        )
+    }
+    
+    #[test]
+    fn test_tokenize_where() {
+        let sql = "SELECT id, price, discount FROM products WHERE price >= 100;";
+        
+        assert_eq!(
+            Tokenizer::new(sql).tokenize(),
+            Ok(vec![
+                Token::Keyword(Keyword::Select),
+                Token::Whitespace(Whitespace::Space),
+                Token::Identifier("id".into()),
+                Token::Comma,
+                Token::Whitespace(Whitespace::Space),
+                Token::Identifier("price".into()),
+                Token::Comma,
+                Token::Whitespace(Whitespace::Space),
+                Token::Identifier("discount".into()),
+                Token::Whitespace(Whitespace::Space),
+                Token::Keyword(Keyword::From),
+                Token::Whitespace(Whitespace::Space),
+                Token::Identifier("products".into()),
+                Token::Whitespace(Whitespace::Space),
+                Token::Keyword(Keyword::Where),
+                Token::Whitespace(Whitespace::Space),
+                Token::Identifier("price".into()),
+                Token::Whitespace(Whitespace::Space),
+                Token::GtEq,
+                Token::Whitespace(Whitespace::Space),
+                Token::Number("100".into()),
                 Token::Semicolon,
                 Token::Eof,
             ])
