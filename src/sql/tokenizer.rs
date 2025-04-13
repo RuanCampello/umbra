@@ -21,7 +21,7 @@ struct Stream<'input> {
     chars: Peekable<Chars<'input>>,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 struct TokenizerError {
     kind: ErrorKind,
     location: Location,
@@ -41,13 +41,13 @@ struct IntoIter<'input> {
     tokenizer: Tokenizer<'input>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Location {
     line: usize,
     col: usize,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum ErrorKind {
     UnexpectedToken(char),
     UnexpectedOperator { unexpected: char, operator: Token },
@@ -66,7 +66,7 @@ impl<'input> Tokenizer<'input> {
         }
     }
 
-    pub fn tokenizer(&mut self) -> Result<Vec<Token>, TokenizerError> {
+    pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
         self.iter()
             .map(|token| token.map(TokenWithLocation::token_only))
             .collect()
@@ -303,5 +303,33 @@ impl Default for Location {
     fn default() -> Self {
         // yeah, Lua-esque, Brazil mentioned
         Location { line: 1, col: 1 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tokenize_select() {
+        let sql = "SELECT id, name FROM users;";
+
+        assert_eq!(
+            Tokenizer::new(sql).tokenize(),
+            Ok(vec![
+                Token::Keyword(Keyword::Select),
+                Token::Whitespace(Whitespace::Space),
+                Token::Identifier("id".into()),
+                Token::Comma,
+                Token::Whitespace(Whitespace::Space),
+                Token::Identifier("name".into()),
+                Token::Whitespace(Whitespace::Space),
+                Token::Keyword(Keyword::From),
+                Token::Whitespace(Whitespace::Space),
+                Token::Identifier("users".into()),
+                Token::Semicolon,
+                Token::Eof,
+            ])
+        )
     }
 }
