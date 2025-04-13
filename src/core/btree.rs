@@ -783,6 +783,7 @@ mod tests {
         Ok(())
     }
 
+    #[test]
     fn test_internal_node_split() -> IOResult<()> {
         let pager = &mut Pager::for_test();
         let btree = BTree::default().with_keys(pager, 1..=27)?;
