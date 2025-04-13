@@ -744,6 +744,12 @@ mod tests {
             })
         }
 
+        fn try_remove_keys<K: Keys>(&mut self, keys: K) -> IOResult<Vec<Option<Box<Cell>>>> {
+            keys.into_iter()
+                .map(|key| self.remove(&serialize(key)))
+                .collect()
+        }
+
         fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
             let page = self.pager.get(root)?;
 
@@ -856,6 +862,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies root split behaviour when inserting enough keys to overflow it.
     fn test_propagate_root() -> IOResult<()> {
         let pager = &mut Pager::for_test();
         let btree = BTree::default().with_keys(pager, 1..=16)?;
@@ -885,6 +892,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks that an internal node correctly splits and redistributes keys during insertion.
     fn test_internal_node_split() -> IOResult<()> {
         let pager = &mut Pager::for_test();
         let btree = BTree::default().with_keys(pager, 1..=27)?;
@@ -920,6 +928,7 @@ mod tests {
     }
 
     #[test]
+    /// Confirms that deleting a key from a leaf node rebalances the tree without merging.
     fn test_delete_from_leaf() -> IOResult<()> {
         let pager = &mut Pager::for_test();
         let mut btree = BTree::default().with_keys(pager, 1..=15)?;
@@ -935,6 +944,46 @@ mod tests {
                     Node::new([5, 6, 7]),
                     Node::new([9, 10, 11]),
                     Node::new([14, 15]),
+                ]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    /// Validates merging of nodes and key redistribution after multiple deletions.
+    fn test_merge_nodes() -> IOResult<()> {
+        let pager = &mut Pager::for_test();
+        let mut btree = BTree::default().with_keys(pager, 1..=35)?;
+
+        btree
+            .try_remove_keys(1..=3)
+            .and_then(|_| btree.remove(&serialize(35)))?;
+
+        assert_eq!(
+            Node::try_from(btree)?,
+            Node {
+                keys: vec![19],
+                children: vec![
+                    Node {
+                        keys: vec![7, 11, 15],
+                        children: vec![
+                            Node::new([4, 5, 6]),
+                            Node::new([8, 9, 10]),
+                            Node::new([12, 13, 14]),
+                            Node::new([16, 17, 18]),
+                        ]
+                    },
+                    Node {
+                        keys: vec![23, 27, 31],
+                        children: vec![
+                            Node::new([20, 21, 22]),
+                            Node::new([24, 25, 26]),
+                            Node::new([28, 29, 30]),
+                            Node::new([32, 33, 34]),
+                        ]
+                    },
                 ]
             }
         );
