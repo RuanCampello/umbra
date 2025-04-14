@@ -10,6 +10,7 @@ pub(in crate::sql) enum Token {
     Whitespace(Whitespace),
     Identifier(String),
     Keyword(Keyword),
+    String(String),
     Number(String),
     Eq,
     Neq,
@@ -92,6 +93,7 @@ impl Display for Token {
             Self::Identifier(identifier) => f.write_str(identifier),
             Self::Keyword(keyword) => f.write_str(keyword.as_str()),
             Self::Number(number) => f.write_str(number),
+            Self::String(string) => write!(f, "\"{string}\""),
             token => {
                 let s = match token {
                     Self::Eq => "=",

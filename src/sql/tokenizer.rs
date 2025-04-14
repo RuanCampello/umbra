@@ -123,11 +123,13 @@ impl<'input> Tokenizer<'input> {
 
                 None => self.error(ErrorKind::OperatorUnclosed(Token::Neq)),
             },
+            '*' => self.consume(Token::Mul),
             '=' => self.consume(Token::Eq),
             ',' => self.consume(Token::Comma),
             '(' => self.consume(Token::LeftParen),
             ')' => self.consume(Token::RightParen),
             ';' => self.consume(Token::Semicolon),
+            '"' | '\'' => self.tokenize_string(),
             '0'..='9' => self.tokenize_number(),
             _ if Token::is_keyword(c) => self.tokenize_keyword(),
             _ => {
@@ -183,9 +185,21 @@ impl<'input> Tokenizer<'input> {
             _ => Token::Keyword(keyword),
         })
     }
-    
+
     fn tokenize_number(&mut self) -> TokenizerResult {
-        Ok(Token::Number(self.stream.take_while(char::is_ascii_digit).collect()))
+        Ok(Token::Number(
+            self.stream.take_while(char::is_ascii_digit).collect(),
+        ))
+    }
+
+    fn tokenize_string(&mut self) -> TokenizerResult {
+        let quote = self.stream.next().unwrap();
+        let string = self.stream.take_while(|c| *c != quote).collect();
+
+        match self.stream.next().is_some_and(|c| c == quote) {
+            true => Ok(Token::String(string)),
+            false => self.error(ErrorKind::StringUnclosed),
+        }
     }
 
     fn next_token_with_location(&mut self) -> Result<TokenWithLocation, TokenizerError> {
@@ -337,11 +351,11 @@ mod tests {
             ])
         )
     }
-    
+
     #[test]
     fn test_tokenize_where() {
         let sql = "SELECT id, price, discount FROM products WHERE price >= 100;";
-        
+
         assert_eq!(
             Tokenizer::new(sql).tokenize(),
             Ok(vec![
@@ -369,6 +383,20 @@ mod tests {
                 Token::Semicolon,
                 Token::Eof,
             ])
+        )
+    }
+
+    #[test]
+    fn test_tokenize_string() {
+        let sql = "SELECT name FROM users WHERE name = 'John Doe";
+
+        assert_eq!(
+            Tokenizer::new(sql).tokenize(),
+            Err(TokenizerError {
+                kind: ErrorKind::StringUnclosed,
+                location: Location { line: 1, col: 46 },
+                input: sql.into(),
+            })
         )
     }
 }
