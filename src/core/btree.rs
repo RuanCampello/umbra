@@ -5,7 +5,7 @@ use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
 use super::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
 use crate::core::page::overflow::OverflowPage;
-use crate::sql::statements::Type;
+use crate::sql::statement::Type;
 use std::cmp::{min, Ordering, Reverse};
 use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::io::{Read, Result as IOResult, Seek, Write};

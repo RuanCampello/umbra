@@ -1,3 +1,3 @@
-pub mod statements;
+pub mod statement;
 mod tokenizer;
 mod tokens;

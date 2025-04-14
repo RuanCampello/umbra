@@ -1,4 +1,4 @@
-use crate::sql::statements::Type;
+use crate::sql::statement::Type;
 
 pub(in crate::core) mod btree;
 mod page;
