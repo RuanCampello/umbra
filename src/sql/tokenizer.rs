@@ -385,10 +385,38 @@ mod tests {
             ])
         )
     }
+    
+    #[test]
+    fn test_unsupported_token() {
+        let sql = "SELECT id, name FROM users WHERE name = @";
+
+        assert_eq!(
+            Tokenizer::new(sql).tokenize(),
+            Err(TokenizerError {
+                kind: ErrorKind::UnexpectedToken('@'),
+                location: Location { line: 1, col: 41 },
+                input: sql.into(),
+            })
+        )
+    }
 
     #[test]
     fn test_tokenize_string() {
         let sql = "SELECT name FROM users WHERE name = 'John Doe";
+
+        assert_eq!(
+            Tokenizer::new(sql).tokenize(),
+            Err(TokenizerError {
+                kind: ErrorKind::StringUnclosed,
+                location: Location { line: 1, col: 46 },
+                input: sql.into(),
+            })
+        )
+    }
+
+    #[test]
+    fn test_tokenize_double_string() {
+        let sql = "SELECT name FROM users WHERE name = \"John Doe";
 
         assert_eq!(
             Tokenizer::new(sql).tokenize(),
