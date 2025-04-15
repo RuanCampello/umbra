@@ -4,12 +4,12 @@ use crate::sql::tokens::{Keyword, Token, Whitespace};
 use std::iter::Peekable;
 use std::str::Chars;
 
-struct Tokenizer<'input> {
+pub(in crate::sql) struct Tokenizer<'input> {
     stream: Stream<'input>,
     reached_eof: bool,
 }
 
-struct TokenWithLocation {
+pub(in crate::sql) struct TokenWithLocation {
     pub token: Token,
     pub location: Location,
 }
@@ -22,10 +22,10 @@ struct Stream<'input> {
 }
 
 #[derive(Debug, PartialEq)]
-struct TokenizerError {
-    kind: ErrorKind,
-    location: Location,
-    input: String,
+pub(in crate::sql) struct TokenizerError {
+    pub kind: ErrorKind,
+    pub location: Location,
+    pub input: String,
 }
 
 struct TakeWhile<'stream, 'input, Pred> {
@@ -33,22 +33,22 @@ struct TakeWhile<'stream, 'input, Pred> {
     predicate: Pred,
 }
 
-struct Iter<'token, 'input> {
+pub(in crate::sql) struct Iter<'token, 'input> {
     tokenizer: &'token mut Tokenizer<'input>,
 }
 
-struct IntoIter<'input> {
+pub(in crate::sql) struct IntoIter<'input> {
     tokenizer: Tokenizer<'input>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Location {
+pub(in crate::sql) struct Location {
     line: usize,
     col: usize,
 }
 
 #[derive(Debug, PartialEq)]
-enum ErrorKind {
+pub(in crate::sql) enum ErrorKind {
     UnexpectedToken(char),
     UnexpectedOperator { unexpected: char, operator: Token },
     OperatorUnclosed(Token),
@@ -237,13 +237,13 @@ impl<'token, 'input> IntoIterator for &'token mut Tokenizer<'input> {
 }
 
 impl TokenWithLocation {
+    pub fn token_ref(&self) -> &Token {
+        &self.token
+    }
+
     /// Returns the [Token] discarding the [Location]
     fn token_only(self) -> Token {
         self.token
-    }
-
-    fn token_ref(&self) -> &Token {
-        &self.token
     }
 }
 
@@ -385,7 +385,7 @@ mod tests {
             ])
         )
     }
-    
+
     #[test]
     fn test_unsupported_token() {
         let sql = "SELECT id, name FROM users WHERE name = @";
