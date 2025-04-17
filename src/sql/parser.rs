@@ -49,13 +49,43 @@ impl<'input> Parser<'input> {
         }
     }
 
-    fn parse_statement(&mut self) -> ParserResult<Statement> {
-        // let statement = match self.expect_one(&Self::supported_statements())? {
-        // Keyword::Select => {
-        //     let cols = self.parse_separated_tokens(Self::parse_s)
-        // }
-        // }
+    pub fn parse_statement(&mut self) -> ParserResult<Statement> {
+        let statement = match self.expect_one(&Self::supported_statements())? {
+            Keyword::Select => {
+                let cols = self.parse_separated_tokens(|parser| parser.parse_expr(None), false)?;
+                self.expect_keyword(Keyword::From)?;
+                let (from, r#where) = self.parse_from_and_where()?;
+                // TODO: parse order by
+                Statement::Select {
+                    columns: cols,
+                    from,
+                    r#where,
+                    order_by: vec![],
+                }
+            }
+            Keyword::Create => {
+                let keyword = self.expect_one(&[
+                    Keyword::Database,
+                    Keyword::Table,
+                    Keyword::Unique,
+                    Keyword::Index,
+                ])?;
+
+                todo!()
+            }
+            _ => unreachable!(),
+        };
         todo!()
+    }
+
+    fn parse_ident(&mut self) -> ParserResult<String> {
+        self.next_token().and_then(|token| match token {
+            Token::Identifier(identifier) => Ok(identifier),
+            _ => Err(self.error(ErrorKind::Expected {
+                expected: Token::Identifier(Default::default()),
+                found: token,
+            })),
+        })
     }
 
     fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression> {
@@ -180,6 +210,17 @@ impl<'input> Parser<'input> {
         Ok(parsed)
     }
 
+    fn parse_from_and_where(&mut self) -> ParserResult<(String, Option<Expression>)> {
+        let from = self.parse_ident()?;
+        let r#where = if self.consume_optional(Token::Keyword(Keyword::Where)) {
+            Some(self.parse_expr(None)?)
+        } else {
+            None
+        };
+
+        Ok((from, r#where))
+    }
+
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
         self.skip_whitespaces();
         self.peek_token_stream()
@@ -199,6 +240,11 @@ impl<'input> Parser<'input> {
                     found: token,
                 })),
             })
+    }
+
+    fn expect_keyword(&mut self, expected: Keyword) -> ParserResult<Keyword> {
+        self.expect_token(Token::Keyword(expected))
+            .map(|_| expected)
     }
 
     fn skip_whitespaces(&mut self) {
