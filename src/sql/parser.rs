@@ -1,4 +1,4 @@
-use crate::sql::statement::Statement;
+use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
 use crate::sql::tokenizer::{self, Location, TokenWithLocation, Tokenizer, TokenizerError};
 use crate::sql::tokens::{Keyword, Token};
 use std::iter::Peekable;
@@ -27,6 +27,8 @@ enum ErrorKind {
 
 type ParserResult<T> = Result<T, ParserError>;
 
+const UNARY_ARITHMETIC_OPERATOR: u8 = 50;
+
 impl<'input> Parser<'input> {
     pub fn new(input: &'input str) -> Self {
         Self {
@@ -48,15 +50,121 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_statement(&mut self) -> ParserResult<Statement> {
+        // let statement = match self.expect_one(&Self::supported_statements())? {
+        // Keyword::Select => {
+        //     let cols = self.parse_separated_tokens(Self::parse_s)
+        // }
+        // }
         todo!()
+    }
+
+    fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression> {
+        let mut expr = self.parse_pref()?;
+        let mut next = self.get_precedence();
+
+        while precedence.unwrap_or(0) < next {
+            expr = self.parse_infix(expr, next)?;
+            next = self.get_precedence();
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_infix(&mut self, left: Expression, precedence: u8) -> ParserResult<Expression> {
+        let op = match self.next_token()? {
+            Token::Eq => BinaryOperator::Eq,
+            Token::Neq => BinaryOperator::Neq,
+            Token::Gt => BinaryOperator::Gt,
+            Token::GtEq => BinaryOperator::GtEq,
+            Token::Lt => BinaryOperator::Lt,
+            Token::LtEq => BinaryOperator::LtEq,
+            Token::Plus => BinaryOperator::Plus,
+            Token::Minus => BinaryOperator::Minus,
+            Token::Mul => BinaryOperator::Mul,
+            Token::Div => BinaryOperator::Div,
+            Token::Keyword(Keyword::And) => BinaryOperator::And,
+            Token::Keyword(Keyword::Or) => BinaryOperator::Or,
+            token => {
+                return Err(self.error(ErrorKind::Expected {
+                    expected: Token::Eq,
+                    found: token,
+                }))
+            }
+        };
+
+        let right = Box::new(self.parse_expr(Some(precedence))?);
+        Ok(Expression::BinaryOperator {
+            operator: op,
+            left: Box::new(left),
+            right,
+        })
+    }
+
+    fn parse_pref(&mut self) -> ParserResult<Expression> {
+        match self.next_token()? {
+            Token::Identifier(identifier) => Ok(Expression::Identifier(identifier)),
+            Token::String(string) => Ok(Expression::Value(Value::String(string))),
+            Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
+            Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
+            Token::Mul => Ok(Expression::Wildcard),
+            Token::LeftParen => {
+                let expr = self.parse_expr(None)?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Nested(Box::new(expr)))
+            }
+            Token::Number(number) => Ok(Expression::Value(Value::Number(
+                number
+                    .parse()
+                    // TODO: add proper error of int out of range
+                    .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
+            ))),
+            token @ (Token::Minus | Token::Plus) => {
+                let op = match token {
+                    Token::Minus => UnaryOperator::Plus,
+                    Token::Plus => UnaryOperator::Minus,
+                    _ => unreachable!(),
+                };
+
+                let expr = Box::new(self.parse_expr(Some(UNARY_ARITHMETIC_OPERATOR))?);
+                Ok(Expression::UnaryOperator { operator: op, expr })
+            }
+            token => Err(self.error(ErrorKind::ExpectedOneOf {
+                expected: vec![
+                    Token::Identifier(Default::default()),
+                    Token::Number(Default::default()),
+                    Token::String(Default::default()),
+                    Token::Mul,
+                    Token::Minus,
+                    Token::Plus,
+                    Token::LeftParen,
+                ],
+                found: token,
+            })),
+        }
+    }
+
+    fn get_precedence(&mut self) -> u8 {
+        let Some(Ok(token)) = self.peek_token() else {
+            return 0;
+        };
+
+        match token {
+            Token::Keyword(Keyword::Or) => 5,
+            Token::Keyword(Keyword::And) => 10,
+            Token::Eq | Token::Neq | Token::Gt | Token::GtEq | Token::Lt | Token::LtEq => 20,
+            Token::Plus | Token::Minus => 30,
+            Token::Mul | Token::Div => 40,
+            _ => 0,
+        }
     }
 
     fn parse_separated_tokens<T>(
         &mut self,
         mut subparser: impl FnMut(&mut Self) -> ParserResult<T>,
-        parentesis: bool,
+        parentheses: bool,
     ) -> ParserResult<Vec<T>> {
-        if parentesis {
+        if parentheses {
             self.expect_token(Token::LeftParen)?;
         }
 
@@ -65,7 +173,7 @@ impl<'input> Parser<'input> {
             parsed.push(subparser(self)?);
         }
 
-        if parentesis {
+        if parentheses {
             self.expect_token(Token::RightParen)?;
         }
 

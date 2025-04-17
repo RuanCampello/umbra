@@ -7,7 +7,7 @@ use std::fmt::{Display, Write};
 
 /// SQL statements,
 #[derive(Debug, PartialEq)]
-pub(crate) enum Statement {
+pub(in crate::sql) enum Statement {
     Create(String),
     Select {
         columns: Vec<Expression>,
@@ -34,18 +34,18 @@ pub(crate) enum Statement {
 
 /// The `UPDATE` assignment instruction.
 #[derive(Debug, PartialEq)]
-pub(crate) struct Assignment {
+pub(in crate::sql) struct Assignment {
     pub identifier: String,
     pub value: Expression,
 }
 
-pub(crate) struct Column {
+pub(in crate::sql) struct Column {
     name: String,
     data_type: Type,
     constraints: Vec<Constraint>,
 }
 
-pub(crate) enum Create {
+pub(in crate::sql) enum Create {
     Database(String),
     Table {
         name: String,
@@ -60,14 +60,24 @@ pub(crate) enum Create {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Expression {
+pub(in crate::sql) enum Expression {
     Identifier(String),
-    Value(String),
+    Value(Value),
+    Wildcard,
+    UnaryOperator {
+        operator: UnaryOperator,
+        expr: Box<Self>,
+    },
+    BinaryOperator {
+        operator: BinaryOperator,
+        left: Box<Self>,
+        right: Box<Self>,
+    },
     Nested(Box<Self>),
 }
 
-#[derive(PartialEq)]
-pub(crate) enum Value {
+#[derive(Debug, PartialEq)]
+pub(in crate::sql) enum Value {
     String(String),
     Number(i128),
     Boolean(bool),
@@ -77,6 +87,28 @@ pub(crate) enum Value {
 enum Constraint {
     PrimaryKey,
     Unique,
+}
+
+#[derive(Debug, PartialEq)]
+pub(in crate::sql) enum UnaryOperator {
+    Plus,
+    Minus,
+}
+
+#[derive(Debug, PartialEq)]
+pub(in crate::sql) enum BinaryOperator {
+    Eq,
+    Neq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+    Plus,
+    Minus,
+    Mul,
+    Div,
+    And,
+    Or,
 }
 
 /// SQL data types.
