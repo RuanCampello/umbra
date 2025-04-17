@@ -6,6 +6,7 @@ use std::cmp::Ordering;
 use std::fmt::{Display, Write};
 
 /// SQL statements,
+#[derive(Debug, PartialEq)]
 pub(crate) enum Statement {
     Create(String),
     Select {
@@ -32,6 +33,7 @@ pub(crate) enum Statement {
 }
 
 /// The `UPDATE` assignment instruction.
+#[derive(Debug, PartialEq)]
 pub(crate) struct Assignment {
     pub identifier: String,
     pub value: Expression,
@@ -57,6 +59,7 @@ pub(crate) enum Create {
     },
 }
 
+#[derive(Debug, PartialEq)]
 pub(crate) enum Expression {
     Identifier(String),
     Value(String),
