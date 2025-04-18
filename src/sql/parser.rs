@@ -1,6 +1,6 @@
 use crate::sql::statement::{
-    Assignment, BinaryOperator, Column, Create, Drop, Expression, Statement, Type, UnaryOperator,
-    Value,
+    Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Statement, Type,
+    UnaryOperator, Value,
 };
 use crate::sql::tokenizer::{self, Location, TokenWithLocation, Tokenizer, TokenizerError};
 use crate::sql::tokens::{Keyword, Token};
@@ -301,7 +301,27 @@ impl<'input> Parser<'input> {
             Keyword::Bool => Type::Boolean,
             _ => unreachable!(),
         };
-        todo!()
+
+        let mut constraints = Vec::new();
+        while let Some(constraint) = self
+            .consume_one(&[Keyword::Primary, Keyword::Unique])
+            .as_optional()
+        {
+            match constraint {
+                Keyword::Primary => {
+                    self.expect_keyword(Keyword::Key)?;
+                    constraints.push(Constraint::PrimaryKey);
+                }
+                Keyword::Unique => constraints.push(Constraint::Unique),
+                _ => unreachable!(),
+            }
+        }
+
+        Ok(Column {
+            name,
+            data_type,
+            constraints,
+        })
     }
 
     fn parse_assign(&mut self) -> ParserResult<Assignment> {

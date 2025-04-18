@@ -45,9 +45,9 @@ pub(in crate::sql) struct Assignment {
 
 #[derive(Debug, PartialEq)]
 pub(in crate::sql) struct Column {
-    name: String,
-    data_type: Type,
-    constraints: Vec<Constraint>,
+    pub name: String,
+    pub data_type: Type,
+    pub constraints: Vec<Constraint>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -96,7 +96,7 @@ pub(in crate::sql) enum Value {
 }
 
 #[derive(Debug, PartialEq)]
-enum Constraint {
+pub(in crate::sql) enum Constraint {
     PrimaryKey,
     Unique,
 }
