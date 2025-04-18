@@ -714,4 +714,19 @@ mod tests {
             }))
         );
     }
+
+    #[test]
+    fn test_insert() {
+        let sql = "INSERT INTO departments (id, name) VALUES (1, 'HR');";
+        let statement = Parser::new(sql).parse_statement();
+        
+        assert_eq!(statement, Ok(Statement::Insert {
+            into: "departments".to_string(),
+            columns: vec!["id".to_string(), "name".to_string()],
+            values: vec![
+                Expression::Value(Value::Number(1)),
+                Expression::Value(Value::String("HR".to_string())),
+            ],
+        }))
+    }
 }
