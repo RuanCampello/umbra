@@ -547,4 +547,45 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn test_parse_select_where() {
+        let input = "SELECT title, author FROM books WHERE author = 'Agatha Christie';";
+        let statement = Parser::new(input).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Select {
+                columns: vec![
+                    Expression::Identifier("title".to_string()),
+                    Expression::Identifier("author".to_string())
+                ],
+                from: "books".to_string(),
+                r#where: Some(Expression::BinaryOperator {
+                    operator: BinaryOperator::Eq,
+                    left: Box::new(Expression::Identifier("author".to_string())),
+                    right: Box::new(Expression::Value(Value::String(
+                        "Agatha Christie".to_string()
+                    ))),
+                }),
+                order_by: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_asterisk() {
+        let input = "SELECT * FROM users;";
+        let statement = Parser::new(input).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Select {
+                columns: vec![Expression::Wildcard],
+                from: "users".to_string(),
+                r#where: None,
+                order_by: vec![],
+            })
+        );
+    }
 }
