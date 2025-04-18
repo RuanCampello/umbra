@@ -719,14 +719,61 @@ mod tests {
     fn test_insert() {
         let sql = "INSERT INTO departments (id, name) VALUES (1, 'HR');";
         let statement = Parser::new(sql).parse_statement();
-        
-        assert_eq!(statement, Ok(Statement::Insert {
-            into: "departments".to_string(),
-            columns: vec!["id".to_string(), "name".to_string()],
-            values: vec![
-                Expression::Value(Value::Number(1)),
-                Expression::Value(Value::String("HR".to_string())),
-            ],
-        }))
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Insert {
+                into: "departments".to_string(),
+                columns: vec!["id".to_string(), "name".to_string()],
+                values: vec![
+                    Expression::Value(Value::Number(1)),
+                    Expression::Value(Value::String("HR".to_string())),
+                ],
+            })
+        )
+    }
+
+    #[test]
+    fn test_multiple_statements() -> ParserResult<()> {
+        let sql = r#"
+            DROP TABLE bills;
+            CREATE TABLE departments (
+                id INT UNSIGNED PRIMARY KEY,
+                name VARCHAR(69)
+            );
+            SELECT * FROM employees;
+        "#;
+        let statements = Parser::new(sql).try_parse()?;
+
+        assert_eq!(statements.len(), 3);
+        assert_eq!(
+            statements,
+            vec![
+                Statement::Drop(Drop::Table("bills".to_string())),
+                Statement::Create(Create::Table {
+                    name: "departments".to_string(),
+                    columns: vec![
+                        Column {
+                            name: "id".to_string(),
+                            data_type: Type::UnsignedInteger,
+                            constraints: vec![Constraint::PrimaryKey],
+                        },
+                        Column {
+                            name: "name".to_string(),
+                            data_type: Type::Varchar(69),
+                            constraints: vec![],
+                        },
+                    ],
+                }),
+                Statement::Select {
+                    columns: vec![Expression::Wildcard],
+                    from: "employees".to_string(),
+                    r#where: None,
+                    order_by: vec![],
+                }
+            ]
+        );
+
+        Ok(())
     }
 }
