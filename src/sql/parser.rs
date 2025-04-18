@@ -6,17 +6,17 @@ use crate::sql::tokenizer::{self, Location, TokenWithLocation, Tokenizer, Tokeni
 use crate::sql::tokens::{Keyword, Token};
 use std::iter::Peekable;
 
-pub(crate) struct Parser<'input> {
+pub(in crate::sql) struct Parser<'input> {
     input: &'input str,
     tokenizer: Peekable<tokenizer::IntoIter<'input>>,
     location: Location,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct ParserError {
-    pub kind: ErrorKind,
-    pub location: Location,
-    pub input: String,
+pub(in crate::sql) struct ParserError {
+    kind: ErrorKind,
+    location: Location,
+    input: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -28,7 +28,7 @@ enum ErrorKind {
     UnexpectedEof,
 }
 
-type ParserResult<T> = Result<T, ParserError>;
+pub(in crate::sql) type ParserResult<T> = Result<T, ParserError>;
 
 const UNARY_ARITHMETIC_OPERATOR: u8 = 50;
 
@@ -349,16 +349,16 @@ impl<'input> Parser<'input> {
 
     fn parse_separated_tokens<T>(
         &mut self,
-        mut subparser: impl FnMut(&mut Self) -> ParserResult<T>,
+        mut sub_parser: impl FnMut(&mut Self) -> ParserResult<T>,
         parentheses: bool,
     ) -> ParserResult<Vec<T>> {
         if parentheses {
             self.expect_token(Token::LeftParen)?;
         }
 
-        let mut parsed = vec![subparser(self)?];
+        let mut parsed = vec![sub_parser(self)?];
         while self.consume_optional(Token::Comma) {
-            parsed.push(subparser(self)?);
+            parsed.push(sub_parser(self)?);
         }
 
         if parentheses {
