@@ -618,9 +618,9 @@ mod tests {
                         constraints: vec![],
                     },
                     Column {
-                      name: "age".to_string(),
-                      data_type: Type::Integer,
-                      constraints: vec![],
+                        name: "age".to_string(),
+                        data_type: Type::Integer,
+                        constraints: vec![],
                     },
                     Column {
                         name: "is_manager".to_string(),
@@ -628,6 +628,89 @@ mod tests {
                         constraints: vec![],
                     },
                 ],
+            }))
+        );
+    }
+
+    #[test]
+    fn test_update_where() {
+        let sql = r#"
+            UPDATE employees
+            SET
+                salary = salary * 2,
+                bonus = 2000
+            WHERE
+                department = 'engineering'
+                AND performance_score >= 80
+                AND (years_of_service > 3 OR is_team_lead = TRUE);
+        "#;
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Update {
+                table: "employees".to_string(),
+                columns: vec![
+                    Assignment {
+                        identifier: "salary".to_string(),
+                        value: Expression::BinaryOperator {
+                            operator: BinaryOperator::Mul,
+                            left: Box::new(Expression::Identifier("salary".to_string())),
+                            right: Box::new(Expression::Value(Value::Number(2))),
+                        },
+                    },
+                    Assignment {
+                        identifier: "bonus".to_string(),
+                        value: Expression::Value(Value::Number(2000)),
+                    },
+                ],
+                r#where: Some(Expression::BinaryOperator {
+                    operator: BinaryOperator::And,
+                    left: Box::new(Expression::BinaryOperator {
+                        operator: BinaryOperator::And,
+                        left: Box::new(Expression::BinaryOperator {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("department".to_string())),
+                            right: Box::new(Expression::Value(Value::String(
+                                "engineering".to_string(),
+                            ))),
+                        }),
+                        right: Box::new(Expression::BinaryOperator {
+                            operator: BinaryOperator::GtEq,
+                            left: Box::new(Expression::Identifier("performance_score".to_string())),
+                            right: Box::new(Expression::Value(Value::Number(80))),
+                        }),
+                    }),
+                    right: Box::new(Expression::Nested(Box::new(Expression::BinaryOperator {
+                        operator: BinaryOperator::Or,
+                        left: Box::new(Expression::BinaryOperator {
+                            operator: BinaryOperator::Gt,
+                            left: Box::new(Expression::Identifier("years_of_service".to_string())),
+                            right: Box::new(Expression::Value(Value::Number(3))),
+                        }),
+                        right: Box::new(Expression::BinaryOperator {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("is_team_lead".to_string())),
+                            right: Box::new(Expression::Value(Value::Boolean(true))),
+                        }),
+                    })))
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn test_unique_index() {
+        let sql = "CREATE UNIQUE INDEX content_idx ON pages(content);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Index {
+                name: "content_idx".to_string(),
+                table: "pages".to_string(),
+                column: "content".to_string(),
+                unique: true,
             }))
         );
     }
