@@ -168,7 +168,7 @@ impl<'input> Tokenizer<'input> {
             "DATABASE" => Keyword::Database,
             "UNSIGNED" => Keyword::Unsigned,
             "VARCHAR" => Keyword::Varchar,
-            "BOOL" => Keyword::Bool,
+            "BOOLEAN" => Keyword::Bool,
             "INDEX" => Keyword::Index,
             "ORDER" => Keyword::Order,
             "ON" => Keyword::On,

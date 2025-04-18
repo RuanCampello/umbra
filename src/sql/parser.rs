@@ -588,4 +588,47 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn test_create_table() {
+        let input = r#"
+            CREATE TABLE employees (
+                id INT PRIMARY KEY,
+                name VARCHAR(255),
+                age INT,
+                is_manager BOOLEAN
+            );
+        "#;
+
+        let statement = Parser::new(input).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Table {
+                name: "employees".to_string(),
+                columns: vec![
+                    Column {
+                        name: "id".to_string(),
+                        data_type: Type::Integer,
+                        constraints: vec![Constraint::PrimaryKey],
+                    },
+                    Column {
+                        name: "name".to_string(),
+                        data_type: Type::Varchar(255),
+                        constraints: vec![],
+                    },
+                    Column {
+                      name: "age".to_string(),
+                      data_type: Type::Integer,
+                      constraints: vec![],
+                    },
+                    Column {
+                        name: "is_manager".to_string(),
+                        data_type: Type::Boolean,
+                        constraints: vec![],
+                    },
+                ],
+            }))
+        );
+    }
 }
