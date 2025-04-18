@@ -30,6 +30,10 @@ pub(in crate::sql) enum Statement {
         from: String,
         r#where: Option<Expression>,
     },
+    Drop(Drop),
+    Commit,
+    Rollback,
+    Explain(Box<Self>),
 }
 
 /// The `UPDATE` assignment instruction.
@@ -59,6 +63,12 @@ pub(in crate::sql) enum Create {
         column: String,
         unique: bool,
     },
+}
+
+#[derive(Debug, PartialEq)]
+pub(in crate::sql) enum Drop {
+    Table(String),
+    Database(String),
 }
 
 #[derive(Debug, PartialEq)]

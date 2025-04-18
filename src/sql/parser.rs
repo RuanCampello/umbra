@@ -1,4 +1,7 @@
-use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
+use crate::sql::statement::{
+    Assignment, BinaryOperator, Column, Create, Drop, Expression, Statement, Type, UnaryOperator,
+    Value,
+};
 use crate::sql::tokenizer::{self, Location, TokenWithLocation, Tokenizer, TokenizerError};
 use crate::sql::tokens::{Keyword, Token};
 use std::iter::Peekable;
@@ -71,11 +74,98 @@ impl<'input> Parser<'input> {
                     Keyword::Index,
                 ])?;
 
+                Statement::Create(match keyword {
+                    Keyword::Database => Create::Database(self.parse_ident()?),
+                    Keyword::Table => Create::Table {
+                        name: self.parse_ident()?,
+                        columns: self.parse_separated_tokens(Self::parse_col, true)?,
+                    },
+                    Keyword::Unique | Keyword::Index => {
+                        let unique = keyword.eq(&Keyword::Unique);
+                        if unique {
+                            self.expect_keyword(Keyword::Index)?;
+                        }
+
+                        let name = self.parse_ident()?;
+                        self.expect_keyword(Keyword::On)?;
+                        let table = self.parse_ident()?;
+                        self.expect_token(Token::LeftParen)?;
+                        let column = self.parse_ident()?;
+                        self.expect_token(Token::RightParen)?;
+
+                        Create::Index {
+                            name,
+                            table,
+                            column,
+                            unique,
+                        }
+                    }
+                    _ => unreachable!(),
+                })
+            }
+            Keyword::Insert => {
+                self.expect_keyword(Keyword::Into)?;
+                let into = self.parse_ident()?;
+                let columns: Vec<String> = match self.peek_token() {
+                    Some(_) => self.parse_separated_tokens(Self::parse_ident, true),
+                    None => Ok(vec![]),
+                }?;
+
+                self.expect_keyword(Keyword::Values)?;
+                let values = self.parse_separated_tokens(|parser| parser.parse_expr(None), true)?;
+
+                Statement::Insert {
+                    into,
+                    columns,
+                    values,
+                }
+            }
+            Keyword::Update => {
+                let table = self.parse_ident()?;
+                self.expect_keyword(Keyword::Set)?;
+
+                let columns = self.parse_separated_tokens(Self::parse_assign, false)?;
+                let r#where = match self.consume_optional(Token::Keyword(Keyword::Where)) {
+                    true => Some(self.parse_expr(None)?),
+                    false => None,
+                };
+
+                Statement::Update {
+                    columns,
+                    r#where,
+                    table,
+                }
+            }
+            Keyword::Drop => {
+                let keyword = self.expect_one(&[Keyword::Database, Keyword::Table])?;
+                let identifier = self.parse_ident()?;
+
+                Statement::Drop(match keyword {
+                    Keyword::Database => Drop::Database(identifier),
+                    Keyword::Table => Drop::Table(identifier),
+                    _ => unreachable!(),
+                })
+            }
+            Keyword::Delete => {
+                self.expect_keyword(Keyword::From)?;
+                let (from, r#where) = self.parse_from_and_where()?;
+
+                Statement::Delete { from, r#where }
+            }
+            Keyword::Start => {
+                self.expect_keyword(Keyword::Transaction)?;
+                // TODO: start transaction
                 todo!()
             }
+            Keyword::Commit => Statement::Commit,
+            Keyword::Rollback => Statement::Rollback,
+            Keyword::Explain => return Ok(Statement::Explain(Box::new(self.parse_statement()?))),
+
             _ => unreachable!(),
         };
-        todo!()
+
+        self.expect_token(Token::Semicolon)?;
+        Ok(statement)
     }
 
     fn parse_ident(&mut self) -> ParserResult<String> {
@@ -174,6 +264,54 @@ impl<'input> Parser<'input> {
         }
     }
 
+    fn parse_col(&mut self) -> ParserResult<Column> {
+        let name = self.parse_ident()?;
+
+        let data_type = match self.expect_one(&Self::supported_types())? {
+            int @ (Keyword::Int | Keyword::BigInt) => {
+                let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
+
+                match (int, unsigned) {
+                    (Keyword::Int, true) => Type::UnsignedInteger,
+                    (Keyword::Int, false) => Type::Integer,
+                    (Keyword::BigInt, true) => Type::UnsignedBigInteger,
+                    (Keyword::BigInt, false) => Type::BigInteger,
+                    _ => unreachable!(),
+                }
+            }
+            Keyword::Varchar => {
+                self.expect_token(Token::LeftParen)?;
+
+                let len = match self.next_token()? {
+                    Token::Number(number) => number.parse().map_err(|_| {
+                        // TODO: add correct error to incorrect varchar length
+                        self.error(ErrorKind::UnexpectedEof)
+                    })?,
+                    token => {
+                        return Err(self.error(ErrorKind::Expected {
+                            expected: Token::Number(Default::default()),
+                            found: token,
+                        }))?
+                    }
+                };
+
+                self.expect_token(Token::RightParen)?;
+                Type::Varchar(len)
+            }
+            Keyword::Bool => Type::Boolean,
+            _ => unreachable!(),
+        };
+        todo!()
+    }
+
+    fn parse_assign(&mut self) -> ParserResult<Assignment> {
+        let identifier = self.parse_ident()?;
+        self.expect_token(Token::Eq)?;
+        let value = self.parse_expr(None)?;
+
+        Ok(Assignment { identifier, value })
+    }
+
     fn get_precedence(&mut self) -> u8 {
         let Some(Ok(token)) = self.peek_token() else {
             return 0;
@@ -212,10 +350,9 @@ impl<'input> Parser<'input> {
 
     fn parse_from_and_where(&mut self) -> ParserResult<(String, Option<Expression>)> {
         let from = self.parse_ident()?;
-        let r#where = if self.consume_optional(Token::Keyword(Keyword::Where)) {
-            Some(self.parse_expr(None)?)
-        } else {
-            None
+        let r#where = match self.consume_optional(Token::Keyword(Keyword::Where)) {
+            true => Some(self.parse_expr(None)?),
+            false => None,
         };
 
         Ok((from, r#where))
@@ -338,6 +475,15 @@ impl<'input> Parser<'input> {
             Keyword::Commit,
             Keyword::Rollback,
             Keyword::Explain,
+        ]
+    }
+
+    fn supported_types() -> Vec<Keyword> {
+        vec![
+            Keyword::Int,
+            Keyword::BigInt,
+            Keyword::Bool,
+            Keyword::Varchar,
         ]
     }
 }
