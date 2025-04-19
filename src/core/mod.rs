@@ -1,6 +1,7 @@
 use crate::sql::statement::Type;
 
 pub(in crate::core) mod btree;
+mod date;
 mod page;
 mod pagination;
 pub(in crate::core) mod random;
