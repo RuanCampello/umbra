@@ -7,6 +7,12 @@
 
 use std::num::NonZeroI32;
 
+#[derive(Debug, PartialEq)]
+struct NaiveDateTime {
+    date: NaiveDate,
+    time: NaiveTime,
+}
+
 /// [ISO 8601](https://www.loc.gov/standards/datetime/iso-tc154-wg5_n0038_iso_wd_8601-1_2016-02-16.pdf)
 /// calendar date without timezone compact date representation storing year and ordinal day
 /// (1-366) in a single [`NonZeroI32`].
@@ -23,18 +29,21 @@ struct NaiveDate {
 }
 
 /// Packed time representation, stored in exactly three bytes.
-#[repr(C, packed)]
+#[repr(transparent)]
+#[derive(Debug, PartialEq)]
 struct NaiveTime {
     hms: u24,
 }
 
-#[repr(C, packed)]
+#[repr(transparent)]
 #[allow(non_camel_case_types)]
+#[derive(Debug, PartialEq)]
 struct u24([u8; 3]);
 
 #[allow(clippy::enum_variant_names, dead_code)]
 #[derive(Debug, PartialEq)]
 pub enum DateParseError {
+    InvalidDateTime,
     InvalidDate,
     InvalidTime,
     InvalidYear,
@@ -54,6 +63,19 @@ const CUMULATIVE_DAYS: [u16; 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 2
 
 pub trait Parse: Sized {
     fn parse_str(date: &str) -> DateError<Self>;
+}
+
+impl Parse for NaiveDateTime {
+    fn parse_str(date: &str) -> DateError<Self> {
+        if date.len() != 19 || date.as_bytes()[10] != b'T' {
+            return Err(DateParseError::InvalidDateTime);
+        }
+
+        let time = NaiveTime::parse_str(&date[11..])?;
+        let date = NaiveDate::parse_str(&date[0..10])?;
+
+        Ok(NaiveDateTime { date, time })
+    }
 }
 
 impl NaiveDate {
@@ -216,7 +238,7 @@ mod tests {
         assert_eq!(size_of::<NaiveTime>(), 3);
         assert_eq!(size_of::<u24>(), 3);
         debug_assert_eq!(align_of::<NaiveTime>(), 1, "NaiveTime must be packed");
-        debug_assert_eq!(align_of::<u24>(), 1, "u24 must be packed")
+        debug_assert_eq!(align_of::<u24>(), 1, "u24 must be packed");
     }
 
     #[test]
