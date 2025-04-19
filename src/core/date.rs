@@ -1,6 +1,6 @@
 //! A pure Rust date-handling library, providing essential date operations.  
 //!  
-//! This is a simplified reimplementation of [chrono](https://docs.rs/chrono/0.4.40/chrono/index.html)'s date functionality, designed to
+//! This is a simplified reimplementation of [chrono](https://docs.rs/chrono/0.4.40/chrono/index.html)'s date functionality, designed for
 //! essential date operations.
 
 use std::num::NonZeroI32;
@@ -118,11 +118,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse() {
+    fn test_date_parse() {
         let str = "2020-01-01";
         let date = NaiveDate::parse_str(str).unwrap();
 
         assert_eq!(date.year(), 2020);
         assert_eq!(date.ordinal(), 1);
+    }
+
+    #[test]
+    fn test_date_parse_with_leap() {
+        let leap = "2004-06-27";
+        let date = NaiveDate::parse_str(leap).unwrap();
+
+        assert_eq!(date.year(), 2004);
+        assert_eq!(date.ordinal(), 179);
+
+        let not_leap = "2005-06-27";
+        let date = NaiveDate::parse_str(not_leap).unwrap();
+
+        assert_eq!(date.year(), 2005);
+        assert_eq!(date.ordinal(), 178);
     }
 }
