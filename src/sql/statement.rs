@@ -91,6 +91,7 @@ pub(in crate::sql) enum Expression {
 #[derive(Debug, PartialEq)]
 pub(in crate::sql) enum Value {
     String(String),
+    DateTime(String),
     Number(i128),
     Boolean(bool),
 }

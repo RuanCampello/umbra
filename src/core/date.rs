@@ -2,30 +2,37 @@
 //!  
 //! This is a simplified reimplementation of [chrono](https://docs.rs/chrono/0.4.40/chrono/index.html)'s date functionality, designed for
 //! essential date operations.
+//!
+//! Do not make those packed bit manipulations at home, this isn't meant to be as safe as possible, it is more an exploration than anything else.
 
 use std::num::NonZeroI32;
 
-/// [ISO 8601](https://www.loc.gov/standards/datetime/iso-tc154-wg5_n0038_iso_wd_8601-1_2016-02-16.pdf) date and time without timezone.
-pub(crate) struct NaiveDateTime {
-    date: NaiveDate,
-    time: NaiveTime,
-}
-
-/// [ISO 8601](https://www.loc.gov/standards/datetime/iso-tc154-wg5_n0038_iso_wd_8601-1_2016-02-16.pdf) calendar date without timezone compact date representation storing year and ordinal day (1-366) in a single `NonZeroI32`.
+/// [ISO 8601](https://www.loc.gov/standards/datetime/iso-tc154-wg5_n0038_iso_wd_8601-1_2016-02-16.pdf)
+/// calendar date without timezone compact date representation storing year and ordinal day
+/// (1-366) in a single [`NonZeroI32`].
 ///
 /// Uses bit-packing:
 /// - **Upper 19 bits**: Year (`year << 13`)
 /// - **Lower 13 bits**: Day of the year (ordinal, 1-366)
 ///
 /// Enables efficient storage (four bytes) and operations while avoiding heap allocations.
-/// `NonZeroI32` allows `Option<NaiveDate>` to be space-optimised.
+/// [`NonZeroI32`] allows [`Option<NaiveDate>`] to be space-optimised.
 #[derive(Debug, PartialEq)]
 struct NaiveDate {
     yof: NonZeroI32,
 }
 
-struct NaiveTime {}
+/// Packed time representation, stored in exactly three bytes.
+#[repr(C, packed)]
+struct NaiveTime {
+    hms: u24,
+}
 
+#[repr(C, packed)]
+#[allow(non_camel_case_types)]
+struct u24([u8; 3]);
+
+#[allow(clippy::enum_variant_names, dead_code)]
 #[derive(Debug, PartialEq)]
 enum DateParseError {
     InvalidDate,
@@ -34,6 +41,9 @@ enum DateParseError {
     InvalidMonthDay,
     InvalidMonth,
     InvalidDay,
+    InvalidHour,
+    InvalidMinute,
+    InvalidSecond,
 }
 
 type DateError<T> = Result<T, DateParseError>;
@@ -113,6 +123,44 @@ impl NaiveDate {
     }
 }
 
+impl NaiveTime {
+    #[inline(always)]
+    pub fn new(hour: u8, minute: u8, second: u8) -> DateError<Self> {
+        if !(0..23).contains(&hour) {
+            return Err(DateParseError::InvalidHour);
+        };
+
+        if !(0..59).contains(&minute) {
+            return Err(DateParseError::InvalidMinute);
+        }
+
+        if !(0..59).contains(&second) {
+            return Err(DateParseError::InvalidSecond);
+        }
+
+        // pack layout: [hour:5 bits <<17] | [minute:6 bits <<11] | [second:6 bits <<5]
+        let val = ((hour as u32) << 17) | ((minute as u32) << 11) | ((second as u32) << 5);
+
+        Ok(Self { hms: u24::new(val) })
+    }
+}
+
+impl u24 {
+    #[inline(always)]
+    const fn new(val: u32) -> Self {
+        let low = (val & 0xFF) as u8;
+        let mid = ((val >> 8) & 0xFF) as u8;
+        let high = ((val >> 16) & 0xFF) as u8;
+        u24([low, mid, high])
+    }
+
+    #[inline(always)]
+    const fn get(&self) -> u32 {
+        let [low, mid, high] = self.0;
+        (low as u32) | ((mid as u32) << 8) | ((high as u32) << 16)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +187,24 @@ mod tests {
 
         assert_eq!(date.year(), 2005);
         assert_eq!(date.ordinal(), 178);
+    }
+
+    #[test]
+    fn test_size_and_align_of_time() {
+        assert_eq!(size_of::<NaiveTime>(), 3);
+        assert_eq!(size_of::<u24>(), 3);
+        debug_assert_eq!(align_of::<NaiveTime>(), 1, "NaiveTime must be packed");
+        debug_assert_eq!(align_of::<u24>(), 1, "u24 must be packed")
+    }
+
+    #[test]
+    fn test_no_ub_u24() {
+        let val = 0x00_FF_0A;
+        let u_24 = u24::new(val);
+        assert_eq!(u_24.get(), val);
+
+        let val_b = u_24.0;
+        let reconstructed = u24(val_b);
+        assert_eq!(reconstructed.get(), val);
     }
 }
