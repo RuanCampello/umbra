@@ -91,6 +91,17 @@ impl NaiveDate {
     }
 
     #[inline(always)]
+    fn days_in_month(year: i32, month: u16) -> u16 {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            #[rustfmt::skip]
+            2 => if NaiveDate::is_leap_year(year) { 29 } else { 28 },
+            _ => 0,
+        }
+    }
+
+    #[inline(always)]
     fn year(&self) -> i32 {
         self.yof.get() >> 13
     }
@@ -122,6 +133,10 @@ impl Parse for NaiveDate {
             return Err(DateParseError::InvalidMonthDay);
         }
 
+        if Self::days_in_month(year, month) < day {
+            return Err(DateParseError::InvalidDay);
+        }
+
         let mut ordinal = CUMULATIVE_DAYS[month as usize] + day;
         if month > 2 && Self::is_leap_year(year) {
             ordinal += 1
@@ -147,9 +162,21 @@ impl NaiveTime {
         }
 
         // pack layout: [hour:5 bits <<17] | [minute:6 bits <<11] | [second:6 bits <<5]
-        let val = ((hour as u32) << 17) | ((minute as u32) << 11) | ((second as u32) << 5);
+        let val = ((hour as u32) << 12) | ((minute as u32) << 6) | (second as u32);
 
         Ok(Self { hms: u24::new(val) })
+    }
+
+    fn hour(&self) -> u8 {
+        ((self.hms.get() >> 12) & 0x1f) as u8
+    }
+
+    fn minute(&self) -> u8 {
+        ((self.hms.get() >> 6) & 0x3f) as u8
+    }
+
+    fn second(&self) -> u8 {
+        (self.hms.get() & 0x3f) as u8
     }
 }
 
@@ -250,5 +277,24 @@ mod tests {
         let val_b = u_24.0;
         let reconstructed = u24(val_b);
         assert_eq!(reconstructed.get(), val);
+    }
+
+    #[test]
+    fn test_parse_time() {
+        let str = "12:34:56";
+        let time = NaiveTime::parse_str(str).unwrap();
+
+        assert_eq!(time, NaiveTime::new(12, 34, 56).unwrap());
+        assert_eq!(time.hour(), 12);
+        assert_eq!(time.minute(), 34);
+        assert_eq!(time.second(), 56);
+    }
+
+    #[test]
+    fn test_datetime_parse_invalid() {
+        assert!(NaiveDateTime::parse_str("2020-02-30T12:00:00").is_err()); // invalid date
+        assert!(NaiveDateTime::parse_str("2020-02-28T25:00:00").is_err()); // invalid time
+        assert!(NaiveDateTime::parse_str("badstring").is_err()); // totally invalid
+        assert!(NaiveDateTime::parse_str("2020-02-28X12:00:00").is_err()); // wrong delimiter
     }
 }
