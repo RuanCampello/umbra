@@ -34,7 +34,7 @@ struct u24([u8; 3]);
 
 #[allow(clippy::enum_variant_names, dead_code)]
 #[derive(Debug, PartialEq)]
-enum DateParseError {
+pub enum DateParseError {
     InvalidDate,
     InvalidTime,
     InvalidYear,
@@ -52,6 +52,10 @@ type DateError<T> = Result<T, DateParseError>;
 /// E.g. March 1st is the 59th day → CUMULATIVE_DAYS = 59.
 const CUMULATIVE_DAYS: [u16; 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
 
+pub trait Parse: Sized {
+    fn parse_str(date: &str) -> DateError<Self>;
+}
+
 impl NaiveDate {
     #[inline(always)]
     pub fn new(year: i32, ordinal: u16) -> Self {
@@ -65,15 +69,32 @@ impl NaiveDate {
     }
 
     #[inline(always)]
-    pub fn parse_str(date: &str) -> DateError<NaiveDate> {
+    fn year(&self) -> i32 {
+        self.yof.get() >> 13
+    }
+
+    #[inline(always)]
+    fn ordinal(&self) -> u16 {
+        (self.yof.get() & 0x1fff) as u16
+    }
+
+    #[inline(always)]
+    fn is_leap_year(year: i32) -> bool {
+        ((year & 3) == 0) && ((year % 25 != 0) || ((year & 15) == 0))
+    }
+}
+
+impl Parse for NaiveDate {
+    #[inline(always)]
+    fn parse_str(date: &str) -> DateError<NaiveDate> {
         let bytes = date.as_bytes();
         if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
             return Err(DateParseError::InvalidDate);
         }
 
-        let year = Self::parse_year(&bytes[0..4])?;
-        let month = Self::parse_month_or_day(&bytes[5..7])?;
-        let day = Self::parse_month_or_day(&bytes[8..10])?;
+        let year = parse_four_digit(&bytes[0..4])?;
+        let month = parse_two_digit(&bytes[5..7])?;
+        let day = parse_two_digit(&bytes[8..10])?;
 
         if !(1..=12).contains(&month) {
             return Err(DateParseError::InvalidMonthDay);
@@ -85,41 +106,6 @@ impl NaiveDate {
         }
 
         Ok(NaiveDate::new(year, ordinal))
-    }
-
-    #[inline(always)]
-    fn year(&self) -> i32 {
-        self.yof.get() >> 13
-    }
-
-    #[inline(always)]
-    fn ordinal(&self) -> u16 {
-        (self.yof.get() & 0x1fff) as u16
-    }
-
-    #[inline(always)]
-    fn parse_year(bytes: &[u8]) -> DateError<i32> {
-        if bytes.len() != 4 || !bytes.iter().all(|&b| b.is_ascii_digit()) {
-            return Err(DateParseError::InvalidYear);
-        }
-
-        Ok(((bytes[0] - b'0') as i32) * 1000
-            + ((bytes[1] - b'0') as i32) * 100
-            + ((bytes[2] - b'0') as i32) * 10
-            + ((bytes[3] - b'0') as i32))
-    }
-
-    #[inline(always)]
-    fn parse_month_or_day(bytes: &[u8]) -> Result<u16, DateParseError> {
-        if bytes.len() != 2 || !bytes.iter().all(|b| b.is_ascii_digit()) {
-            return Err(DateParseError::InvalidMonthDay);
-        }
-        Ok((bytes[0] - b'0') as u16 * 10 + (bytes[1] - b'0') as u16)
-    }
-
-    #[inline(always)]
-    fn is_leap_year(year: i32) -> bool {
-        ((year & 3) == 0) && ((year % 25 != 0) || ((year & 15) == 0))
     }
 }
 
@@ -143,6 +129,42 @@ impl NaiveTime {
 
         Ok(Self { hms: u24::new(val) })
     }
+}
+
+impl Parse for NaiveTime {
+    #[inline(always)]
+    fn parse_str(date: &str) -> DateError<Self> {
+        let bytes = date.as_bytes();
+        if bytes.len() != 8 || bytes[2] != b':' || bytes[5] != b':' {
+            return Err(DateParseError::InvalidTime);
+        };
+
+        let hour = parse_two_digit(&bytes[0..2])? as u8;
+        let minute = parse_two_digit(&bytes[3..5])? as u8;
+        let second = parse_two_digit(&bytes[6..8])? as u8;
+
+        NaiveTime::new(hour, minute, second)
+    }
+}
+
+#[inline(always)]
+fn parse_four_digit(bytes: &[u8]) -> DateError<i32> {
+    if bytes.len() != 4 || !bytes.iter().all(|&b| b.is_ascii_digit()) {
+        return Err(DateParseError::InvalidYear);
+    }
+
+    Ok(((bytes[0] - b'0') as i32) * 1000
+        + ((bytes[1] - b'0') as i32) * 100
+        + ((bytes[2] - b'0') as i32) * 10
+        + ((bytes[3] - b'0') as i32))
+}
+
+#[inline(always)]
+fn parse_two_digit(bytes: &[u8]) -> Result<u16, DateParseError> {
+    if bytes.len() != 2 || !bytes.iter().all(|b| b.is_ascii_digit()) {
+        return Err(DateParseError::InvalidMonthDay);
+    }
+    Ok((bytes[0] - b'0') as u16 * 10 + (bytes[1] - b'0') as u16)
 }
 
 impl u24 {

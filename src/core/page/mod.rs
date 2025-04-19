@@ -95,7 +95,7 @@ pub(in crate::core) enum MemoryPage {
     Overflow(OverflowPage),
 }
 
-/// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore can be indexed with two bytes.
+/// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore, can be indexed with two bytes.
 pub(in crate::core) type SlotId = u16;
 
 pub(in crate::core) const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
