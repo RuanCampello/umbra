@@ -8,7 +8,7 @@
 use std::num::NonZeroI32;
 
 #[derive(Debug, PartialEq)]
-struct NaiveDateTime {
+pub struct NaiveDateTime {
     date: NaiveDate,
     time: NaiveTime,
 }
@@ -63,6 +63,7 @@ const CUMULATIVE_DAYS: [u16; 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 2
 
 pub trait Parse: Sized {
     fn parse_str(date: &str) -> DateError<Self>;
+    fn timestamp(&self) -> i64;
 }
 
 impl Parse for NaiveDateTime {
@@ -75,6 +76,11 @@ impl Parse for NaiveDateTime {
         let date = NaiveDate::parse_str(&date[0..10])?;
 
         Ok(NaiveDateTime { date, time })
+    }
+
+    #[inline(always)]
+    fn timestamp(&self) -> i64 {
+        self.date.timestamp() + self.time.timestamp()
     }
 }
 
@@ -144,6 +150,29 @@ impl Parse for NaiveDate {
 
         Ok(NaiveDate::new(year, ordinal))
     }
+
+    #[inline(always)]
+    fn timestamp(&self) -> i64 {
+        let mut days = 0i64;
+
+        let year = self.year();
+        let ordinal = self.ordinal() as i64;
+
+        match year >= 1970 {
+            true => {
+                (1970..year).for_each(|y| days += if Self::is_leap_year(y) { 366 } else { 365 });
+
+                days += ordinal - 1
+            }
+            false => {
+                (year..1970).for_each(|y| days -= if Self::is_leap_year(y) { 366 } else { 365 });
+
+                days += ordinal - 1;
+            }
+        }
+
+        days * 86400
+    }
 }
 
 impl NaiveTime {
@@ -193,6 +222,11 @@ impl Parse for NaiveTime {
         let second = parse_two_digit(&bytes[6..8])? as u8;
 
         NaiveTime::new(hour, minute, second)
+    }
+
+    #[inline(always)]
+    fn timestamp(&self) -> i64 {
+        (self.hour() as i64) * 3600 + (self.minute() as i64) * 60 + (self.second() as i64)
     }
 }
 
@@ -294,7 +328,19 @@ mod tests {
     fn test_datetime_parse_invalid() {
         assert!(NaiveDateTime::parse_str("2020-02-30T12:00:00").is_err()); // invalid date
         assert!(NaiveDateTime::parse_str("2020-02-28T25:00:00").is_err()); // invalid time
-        assert!(NaiveDateTime::parse_str("badstring").is_err()); // totally invalid
+        assert!(NaiveDateTime::parse_str("bad-string").is_err()); // totally invalid
         assert!(NaiveDateTime::parse_str("2020-02-28X12:00:00").is_err()); // wrong delimiter
+    }
+
+    #[test]
+    fn test_datetime_timestamp() {
+        let dt = NaiveDateTime::parse_str("1970-01-01T00:00:00").unwrap();
+        assert_eq!(dt.timestamp(), 0);
+
+        let dt = NaiveDateTime::parse_str("1970-01-02T00:00:00").unwrap();
+        assert_eq!(dt.timestamp(), 86400);
+
+        let dt = NaiveDateTime::parse_str("2025-04-20T10:01:23").unwrap();
+        assert_eq!(dt.timestamp(), 1745143283);
     }
 }
