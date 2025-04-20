@@ -117,21 +117,18 @@ impl NaiveDate {
     fn month(&self) -> u16 {
         let ordinal = self.ordinal();
 
-        self.cumul_days()
-            .iter()
-            .enumerate()
-            .skip(1)
-            .find(|(_, &days)| ordinal <= days)
-            .map(|(idx, _)| idx as u16)
-            .unwrap_or(12)
+        (1..=12)
+            .rev()
+            .find(|&m| self.cumul_days()[m] < ordinal)
+            .unwrap_or(1) as u16
     }
 
     #[inline(always)]
     fn day(&self) -> u16 {
         let ordinal = self.ordinal();
-        let month = self.month();
+        let m = self.month();
 
-        ordinal - self.cumul_days()[(month - 1) as usize]
+        ordinal - self.cumul_days()[m as usize]
     }
 
     #[inline(always)]
@@ -209,28 +206,22 @@ impl Parse for NaiveDate {
 
 impl Display for NaiveDate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}-{:02}-{:02}",
-            self.year(),
-            self.ordinal(),
-            self.ordinal()
-        )
+        write!(f, "{}-{:02}-{:02}", self.year(), self.month(), self.day())
     }
 }
 
 impl NaiveTime {
     #[inline(always)]
     pub fn new(hour: u8, minute: u8, second: u8) -> DateError<Self> {
-        if !(0..23).contains(&hour) {
+        if !(0..=23).contains(&hour) {
             return Err(DateParseError::InvalidHour);
         };
 
-        if !(0..59).contains(&minute) {
+        if !(0..=59).contains(&minute) {
             return Err(DateParseError::InvalidMinute);
         }
 
-        if !(0..59).contains(&second) {
+        if !(0..=59).contains(&second) {
             return Err(DateParseError::InvalidSecond);
         }
 
@@ -278,7 +269,7 @@ impl Display for NaiveTime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}-{:02}-{:02}",
+            "{:02}-{:02}-{:02}",
             self.hour(),
             self.minute(),
             self.second()
@@ -352,6 +343,14 @@ mod tests {
         assert_eq!(date.month(), 6);
         assert_eq!(date.day(), 27);
         assert_eq!(date.ordinal(), 178);
+
+        let leap = "2008-02-29";
+        let date = NaiveDate::parse_str(leap).unwrap();
+
+        assert_eq!(date.year(), 2008);
+        assert_eq!(date.month(), 2);
+        assert_eq!(date.day(), 29);
+        assert_eq!(date.ordinal(), 60);
     }
 
     #[test]
