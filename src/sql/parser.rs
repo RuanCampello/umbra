@@ -1,3 +1,4 @@
+use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Statement, Type,
     UnaryOperator, Value,
@@ -26,6 +27,7 @@ enum ErrorKind {
     ExpectedOneOf { expected: Vec<Token>, found: Token },
     Unsupported(Token),
     UnexpectedEof,
+    FormatError(String),
 }
 
 pub(in crate::sql) type ParserResult<T> = Result<T, ParserError>;
@@ -226,6 +228,10 @@ impl<'input> Parser<'input> {
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
+            Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
+                self.parse_datetime(keyword)
+            }
+
             Token::Mul => Ok(Expression::Wildcard),
             Token::LeftParen => {
                 let expr = self.parse_expr(None)?;
@@ -299,6 +305,9 @@ impl<'input> Parser<'input> {
                 Type::Varchar(len)
             }
             Keyword::Bool => Type::Boolean,
+            Keyword::Timestamp => Type::DateTime,
+            Keyword::Date => Type::Date,
+            Keyword::Time => Type::Time,
             _ => unreachable!(),
         };
 
@@ -376,6 +385,39 @@ impl<'input> Parser<'input> {
         };
 
         Ok((from, r#where))
+    }
+
+    fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression> {
+        let value_str = match self.next_token()? {
+            Token::String(s) => s,
+            _ => return Err(self.error(ErrorKind::UnexpectedEof)),
+        };
+
+        let value = match keyword {
+            Keyword::Date => Date::parse_str(&value_str).map(Value::Date).map_err(|e| {
+                self.error(ErrorKind::FormatError(format!(
+                    "Invalid date format: {:?}",
+                    e
+                )))
+            })?,
+            Keyword::Time => Time::parse_str(&value_str).map(Value::Time).map_err(|e| {
+                self.error(ErrorKind::FormatError(format!(
+                    "Invalid time format: {:?}",
+                    e
+                )))
+            })?,
+            Keyword::Timestamp => DateTime::parse_str(&value_str)
+                .map(Value::DateTime)
+                .map_err(|e| {
+                    self.error(ErrorKind::FormatError(format!(
+                        "Invalid timestamp format: {:?}",
+                        e
+                    )))
+                })?,
+            _ => unreachable!(),
+        };
+
+        Ok(Expression::Value(value))
     }
 
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
@@ -504,6 +546,9 @@ impl<'input> Parser<'input> {
             Keyword::BigInt,
             Keyword::Bool,
             Keyword::Varchar,
+            Keyword::Time,
+            Keyword::Date,
+            Keyword::Timestamp,
         ]
     }
 }

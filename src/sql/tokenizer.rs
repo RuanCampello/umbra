@@ -177,6 +177,9 @@ impl<'input> Tokenizer<'input> {
             "ROLLBACK" => Keyword::Rollback,
             "COMMIT" => Keyword::Commit,
             "EXPLAIN" => Keyword::Explain,
+            "TIMESTAMP" => Keyword::Timestamp,
+            "DATE" => Keyword::Date,
+            "TIME" => Keyword::Time,
             _ => Keyword::None,
         };
 

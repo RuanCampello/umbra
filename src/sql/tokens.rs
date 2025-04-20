@@ -77,6 +77,8 @@ pub(in crate::sql) enum Keyword {
     Commit,
     Explain,
     Timestamp,
+    Date,
+    Time,
     /// This is not an actual SQL keyword, but it's used for convenience.
     None,
 }
@@ -179,6 +181,8 @@ impl Keyword {
             Self::Rollback => "ROLLBACK",
             Self::Commit => "COMMIT",
             Self::Explain => "EXPLAIN",
+            Self::Date => "DATE",
+            Self::Time => "TIME",
             Self::Timestamp => "TIMESTAMP",
             Self::None => "_",
         }

@@ -25,14 +25,14 @@ pub struct NaiveDateTime {
 /// Enables efficient storage (four bytes) and operations while avoiding heap allocations.
 /// [`NonZeroI32`] allows [`Option<NaiveDate>`] to be space-optimised.
 #[derive(Debug, PartialEq)]
-struct NaiveDate {
+pub struct NaiveDate {
     yof: NonZeroI32,
 }
 
 /// Packed time representation, stored in exactly three bytes.
 #[repr(transparent)]
 #[derive(Debug, PartialEq)]
-struct NaiveTime {
+pub struct NaiveTime {
     hms: u24,
 }
 
