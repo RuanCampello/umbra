@@ -5,6 +5,7 @@
 //!
 //! Do not make those packed bit manipulations at home, this isn't meant to be as safe as possible, it is more an exploration than anything else.
 
+use std::fmt::Display;
 use std::num::NonZeroI32;
 
 #[derive(Debug, PartialEq)]
@@ -113,8 +114,39 @@ impl NaiveDate {
     }
 
     #[inline(always)]
+    fn month(&self) -> u16 {
+        let ordinal = self.ordinal();
+
+        self.cumul_days()
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(_, &days)| ordinal <= days)
+            .map(|(idx, _)| idx as u16)
+            .unwrap_or(12)
+    }
+
+    #[inline(always)]
+    fn day(&self) -> u16 {
+        let ordinal = self.ordinal();
+        let month = self.month();
+
+        ordinal - self.cumul_days()[(month - 1) as usize]
+    }
+
+    #[inline(always)]
     fn ordinal(&self) -> u16 {
         (self.yof.get() & 0x1fff) as u16
+    }
+
+    fn cumul_days(&self) -> [u16; 13] {
+        const CUMULATIVE_DAYS_LEAP: [u16; 13] =
+            [0, 0, 31, 60, 91, 121, 152, 182, 213, 244, 275, 306, 336];
+
+        match NaiveDate::is_leap_year(self.year()) {
+            true => CUMULATIVE_DAYS_LEAP,
+            false => CUMULATIVE_DAYS,
+        }
     }
 
     #[inline(always)]
@@ -175,6 +207,18 @@ impl Parse for NaiveDate {
     }
 }
 
+impl Display for NaiveDate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}-{:02}-{:02}",
+            self.year(),
+            self.ordinal(),
+            self.ordinal()
+        )
+    }
+}
+
 impl NaiveTime {
     #[inline(always)]
     pub fn new(hour: u8, minute: u8, second: u8) -> DateError<Self> {
@@ -227,6 +271,18 @@ impl Parse for NaiveTime {
     #[inline(always)]
     fn timestamp(&self) -> i64 {
         (self.hour() as i64) * 3600 + (self.minute() as i64) * 60 + (self.second() as i64)
+    }
+}
+
+impl Display for NaiveTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}-{:02}-{:02}",
+            self.hour(),
+            self.minute(),
+            self.second()
+        )
     }
 }
 
@@ -285,12 +341,16 @@ mod tests {
         let date = NaiveDate::parse_str(leap).unwrap();
 
         assert_eq!(date.year(), 2004);
+        assert_eq!(date.month(), 6);
+        assert_eq!(date.day(), 27);
         assert_eq!(date.ordinal(), 179);
 
         let not_leap = "2005-06-27";
         let date = NaiveDate::parse_str(not_leap).unwrap();
 
         assert_eq!(date.year(), 2005);
+        assert_eq!(date.month(), 6);
+        assert_eq!(date.day(), 27);
         assert_eq!(date.ordinal(), 178);
     }
 
@@ -342,5 +402,8 @@ mod tests {
 
         let dt = NaiveDateTime::parse_str("2025-04-20T10:01:23").unwrap();
         assert_eq!(dt.timestamp(), 1745143283);
+
+        let date = NaiveDate::parse_str("1914-06-28").unwrap();
+        assert_eq!(date.timestamp(), -1751846400);
     }
 }
