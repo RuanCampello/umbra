@@ -5,7 +5,7 @@
 //!
 //! Do not make those packed bit manipulations at home, this isn't meant to be as safe as possible, it is more an exploration than anything else.
 
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::num::NonZeroI32;
 
 #[derive(Debug, PartialEq)]
@@ -82,6 +82,12 @@ impl Parse for NaiveDateTime {
     #[inline(always)]
     fn timestamp(&self) -> i64 {
         self.date.timestamp() + self.time.timestamp()
+    }
+}
+
+impl Display for NaiveDateTime {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{} {}", self.date, self.time))
     }
 }
 
@@ -266,10 +272,10 @@ impl Parse for NaiveTime {
 }
 
 impl Display for NaiveTime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:02}-{:02}-{:02}",
+            "{:02}:{:02}:{:02}",
             self.hour(),
             self.minute(),
             self.second()
