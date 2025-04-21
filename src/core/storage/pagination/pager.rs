@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 /// Inspired by [SQLite 2.8.1 pager].
 /// It manages IO over a "block" in disk to storage the database.
-pub(in crate::core) struct Pager<File> {
+pub(in crate::core::storage) struct Pager<File> {
     file: BlockIo<File>,
     cache: Cache,
     /// Block size to read/write a buffer.
@@ -48,7 +48,7 @@ const JOURNAL_PAGE_SIZE: usize = size_of::<u32>();
 const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u32>();
 const JOURNAL_HEADER_SIZE: usize = JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
 
-pub(in crate::core) const DEFAULT_PAGE_SIZE: usize = 4096;
+pub(in crate::core::storage::pagination) const DEFAULT_PAGE_SIZE: usize = 4096;
 const DEFAULT_BUFFERED_PAGES: usize = 10;
 
 #[macro_export]

@@ -83,7 +83,7 @@ use std::mem;
 /// - **Write Tracking**: Dirty pages are identified for disk writes.
 ///
 #[derive(Debug, PartialEq)]
-pub(in crate::core) struct Cache {
+pub(in crate::core::storage) struct Cache {
     /// See [Pager](super::pager::Pager).
     pub page_size: usize,
     /// The maximum number of pages that this cache can handle.
@@ -107,7 +107,7 @@ struct Frame {
     page: MemoryPage,
 }
 
-pub(in crate::core) type FrameId = usize;
+pub(in crate::core::storage) type FrameId = usize;
 
 const REFERENCE_FLAG: u8 = 0b001;
 const DIRTY_FLAG: u8 = 0b010;

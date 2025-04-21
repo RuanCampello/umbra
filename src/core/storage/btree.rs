@@ -14,7 +14,7 @@ use std::mem;
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
 /// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualiser of this data structure.
-pub(in crate::core) struct BTree<'p, File, Cmp> {
+pub(in crate::core::storage) struct BTree<'p, File, Cmp> {
     root: PageNumber,
     min_keys: usize,
     balanced_siblings: usize,
@@ -53,20 +53,20 @@ struct Removal {
 /// If the integer keys at the beginning of a buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
 #[derive(Debug, Default)]
-pub(crate) struct FixedSizeCmp(pub usize);
+pub(in crate::core::storage::btree) struct FixedSizeCmp(pub usize);
 
 /// Compares UTF-8 strings.
 #[derive(Debug, PartialEq)]
-pub(crate) struct StringCmp(pub usize);
+pub(in crate::core::storage::btree) struct StringCmp(pub usize);
 
 /// No allocations comparing to [`Box`].
-pub(crate) enum BTreeKeyCmp {
+pub(in crate::core::storage::btree) enum BTreeKeyCmp {
     MemCmp(FixedSizeCmp),
     StrCmp(StringCmp),
 }
 
 /// Represents the result of reading content from the [`BTree`].
-pub(in crate::core) enum Content<'a> {
+pub(in crate::core::storage) enum Content<'a> {
     /// Content was found within a single page and can be accessed directly as a slice.
     PageRef(&'a [u8]),
     /// The content spans multiple pages and has been reassembled into a contiguous buffer.

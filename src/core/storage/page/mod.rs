@@ -2,8 +2,8 @@
 //! As this manually alloc memory, it contains the only database's `unsafe` module.
 
 mod buffer;
-pub(in crate::core) mod overflow;
-pub(in crate::core) mod zero;
+pub(in crate::core::storage) mod overflow;
+pub(in crate::core::storage) mod zero;
 
 use crate::core::storage::page::buffer::BufferWithHeader;
 use crate::core::storage::page::overflow::{OverflowPage, OverflowPageHeader};

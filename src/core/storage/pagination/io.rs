@@ -7,7 +7,7 @@ use std::path::Path;
 use std::{fs, io};
 
 #[derive(Debug, PartialEq)]
-pub(in crate::core) struct BlockIo<IO> {
+pub(in crate::core::storage::pagination) struct BlockIo<IO> {
     /// Wrapped I/O operator.
     io: IO,
     pub block_size: usize,
@@ -17,7 +17,7 @@ pub(in crate::core) struct BlockIo<IO> {
 const DEVELOPMENT_IO_LIMIT: usize = 150 << 20;
 
 /// Generic file-related operations that are not implemented by [`io`].
-pub(in crate::core) trait FileOperations {
+pub(in crate::core::storage) trait FileOperations {
     fn create(path: impl AsRef<Path>) -> io::Result<Self>
     where
         Self: Sized;
