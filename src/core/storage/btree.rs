@@ -53,7 +53,7 @@ struct Removal {
 /// If the integer keys at the beginning of a buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
 #[derive(Debug, Default)]
-pub(in crate::core::storage::btree) struct FixedSizeCmp(pub usize);
+pub(in crate::core) struct FixedSizeCmp(pub usize);
 
 /// Compares UTF-8 strings.
 #[derive(Debug, PartialEq)]

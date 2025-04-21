@@ -44,7 +44,7 @@ pub(in crate::sql) struct Assignment {
 }
 
 #[derive(Debug, PartialEq)]
-pub(in crate::sql) struct Column {
+pub(in crate) struct Column {
     pub name: String,
     pub data_type: Type,
     pub constraints: Vec<Constraint>,
