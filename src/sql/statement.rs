@@ -5,7 +5,7 @@
 use std::cmp::Ordering;
 use std::fmt::{Display, Write};
 
-/// SQL statements,
+/// SQL statements.
 #[derive(Debug, PartialEq)]
 pub(in crate::sql) enum Statement {
     Create(Create),

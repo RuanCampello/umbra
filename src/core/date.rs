@@ -8,6 +8,34 @@
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroI32;
 
+/// A combined date and time representation without timezone information.
+///
+/// This struct combines [`NaiveDate`] (4 bytes)
+/// and [`NaiveTime`] (3 bytes) into a single datetime value,
+/// following the ISO 8601 format (e.g. "2023-01-15T14:30:00").
+///
+/// # Memory Layout
+/// - `date`: 4 bytes (packed [`NaiveDate`] with year and ordinal day)
+/// - `time`: 3 bytes (packed [`NaiveTime`] with hours, minutes, seconds)
+/// - Total size: 8 bytes (due to alignment padding after the 3-byte time)
+///
+/// # Features
+/// - Parsing from ISO 8601 formatted strings ("YYYY-MM-DDTHH:MM:SS")
+/// - Conversion to Unix timestamp (seconds since 1970-01-01 00:00:00 UTC)
+/// - Display formatting following ISO 8601 conventions
+///
+/// # Notes
+/// While the raw data requires only 7 bytes, the struct occupies 8 bytes due to:
+/// 1. Rust's memory alignment requirements
+/// 2. The following field (`time: NaiveTime`) being 3 bytes
+/// 3. Natural padding added by the compiler for optimal access
+///
+/// # Example
+/// ```
+/// let dt = NaiveDateTime::parse_str("2023-01-15T14:30:00").unwrap();
+/// assert_eq!(dt.to_string(), "2023-01-15 14:30:00");
+/// assert_eq!(dt.timestamp(), 1673793000);
+/// ```
 #[derive(Debug, PartialEq)]
 pub struct NaiveDateTime {
     date: NaiveDate,
@@ -405,6 +433,10 @@ mod tests {
     fn test_datetime_timestamp() {
         let dt = NaiveDateTime::parse_str("1970-01-01T00:00:00").unwrap();
         assert_eq!(dt.timestamp(), 0);
+
+        let dt = NaiveDateTime::parse_str("2023-01-15T14:30:00").unwrap();
+        assert_eq!(dt.to_string(), "2023-01-15 14:30:00");
+        assert_eq!(dt.timestamp(), 1673793000);
 
         let dt = NaiveDateTime::parse_str("1970-01-02T00:00:00").unwrap();
         assert_eq!(dt.timestamp(), 86400);

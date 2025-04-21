@@ -1,3 +1,10 @@
+//! That where we convert the raw SQL query into a tree of statements.
+//! The so-called AST.
+//!
+//! That involves the simplest validation in the SQL pipeline.
+//! We don't do the concrete type validation/coercion here, so, for example,
+//! [DateTime] will be parser, here, like a common [String].
+
 use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Statement, Type,
