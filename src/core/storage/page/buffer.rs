@@ -1,4 +1,4 @@
-use crate::core::page::{CELL_ALIGNMENT, MAX_PAGE_SIZE, MIN_PAGE_SIZE, PAGE_ALIGNMENT};
+use crate::core::storage::page::{CELL_ALIGNMENT, MAX_PAGE_SIZE, MIN_PAGE_SIZE, PAGE_ALIGNMENT};
 use std::any::type_name;
 use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
@@ -212,7 +212,7 @@ impl<Header> Clone for BufferWithHeader<Header> {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::page::*;
+    use crate::core::storage::page::*;
 
     #[test]
     fn test_buffer_allocation_size() {

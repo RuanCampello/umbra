@@ -1,7 +1,4 @@
-use crate::core::{
-    page::{buffer::BufferWithHeader, Page, PageHeader},
-    PageNumber,
-};
+use crate::core::storage::page::{buffer::BufferWithHeader, Page, PageHeader, PageNumber};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::ptr;

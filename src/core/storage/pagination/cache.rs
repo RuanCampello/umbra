@@ -3,9 +3,9 @@
 //! This module provides an in-memory page cache with an eviction policy.
 //! It must return owned values by indexing, preventing common Rust's borrowing errors.
 
-use crate::core::page::MemoryPage;
-use crate::core::pagination::pager::DEFAULT_PAGE_SIZE;
-use crate::core::PageNumber;
+use crate::core::storage::page::MemoryPage;
+use crate::core::storage::page::PageNumber;
+use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
 use crate::method_builder;
 use std::collections::HashMap;
 use std::mem;
@@ -342,7 +342,7 @@ impl std::ops::IndexMut<FrameId> for Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::page::*;
+    use crate::core::storage::page::*;
 
     enum Fetch {
         All,

@@ -1,10 +1,10 @@
 //! Disk management and B-Tree data structure implementation.
 
-use super::page::{Cell, Page, SlotId};
+use super::page::{Cell, Page, PageNumber, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
-use super::{byte_len_of_type, utf_8_length_bytes, PageNumber};
-use crate::core::page::overflow::OverflowPage;
+use crate::core::storage::page::overflow::OverflowPage;
+use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
 use crate::sql::statement::Type;
 use std::cmp::{min, Ordering, Reverse};
 use std::collections::{BinaryHeap, HashSet, VecDeque};
@@ -648,8 +648,8 @@ impl<'a> AsRef<[u8]> for Content<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::btree::*;
-    use crate::core::page::{CELL_ALIGNMENT, CELL_HEADER_SIZE, PAGE_HEADER_SIZE, SLOT_SIZE};
+    use crate::core::storage::btree::*;
+    use crate::core::storage::page::*;
     use crate::method_builder;
     use std::alloc::Layout;
     use std::fmt::Debug;

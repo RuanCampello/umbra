@@ -5,9 +5,9 @@ mod buffer;
 pub(in crate::core) mod overflow;
 pub(in crate::core) mod zero;
 
-use crate::core::page::overflow::{OverflowPage, OverflowPageHeader};
-use crate::core::page::zero::{DatabaseHeader, PageZero};
-use crate::core::{page::buffer::BufferWithHeader, PageNumber};
+use crate::core::storage::page::buffer::BufferWithHeader;
+use crate::core::storage::page::overflow::{OverflowPage, OverflowPageHeader};
+use crate::core::storage::page::zero::{DatabaseHeader, PageZero};
 use std::collections::{BinaryHeap, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::ops::Bound;
@@ -97,11 +97,12 @@ pub(in crate::core) enum MemoryPage {
 
 /// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore, can be indexed with two bytes.
 pub(in crate::core) type SlotId = u16;
+pub(in crate::core) type PageNumber = u32;
 
-pub(in crate::core) const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
-pub(in crate::core) const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
-pub(in crate::core) const SLOT_SIZE: u16 = size_of::<u16>() as u16;
-pub(in crate::core) const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
+pub(in crate::core::storage) const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
+pub(in crate::core::storage) const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
+pub(in crate::core::storage) const SLOT_SIZE: u16 = size_of::<u16>() as u16;
+pub(in crate::core::storage) const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
 const MIN_PAGE_SIZE: usize = 32;
 const MAX_PAGE_SIZE: usize = 64 << 10;
@@ -825,8 +826,8 @@ impl<'p> TryFrom<&'p mut MemoryPage> for &'p mut OverflowPage {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::page::zero::{DatabaseHeader, PageZero};
-    use crate::core::page::{overflow::*, *};
+    use crate::core::storage::page::zero::{DatabaseHeader, PageZero};
+    use crate::core::storage::page::{overflow::*, *};
     use std::slice;
 
     impl Page {

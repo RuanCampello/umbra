@@ -1,4 +1,4 @@
-use crate::core::{page::buffer::BufferWithHeader, PageNumber};
+use crate::core::storage::page::{buffer::BufferWithHeader, PageNumber};
 
 /// Cell overflow page.
 ///
@@ -55,7 +55,7 @@ pub(in crate::core) struct OverflowPageHeader {
     /// Number of bytes stored in this page.
     pub(in crate::core) num_bytes: u16,
     /// Padding for alignment.
-    pub(in crate::core::page) padding: u16,
+    pub(in crate::core::storage::page) padding: u16,
 }
 
 /// Free pages can be represented using the [`OverflowPage`] struct,

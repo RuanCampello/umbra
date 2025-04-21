@@ -1,11 +1,10 @@
 use super::cache::{Cache, FrameId};
 use super::io::{BlockIo, FileOperations};
-use crate::core::btree::Content;
-use crate::core::page::overflow::OverflowPage;
-use crate::core::page::zero::{PageZero, DATABASE_IDENTIFIER};
-use crate::core::page::{Cell, MemoryPage, Page, PageConversion, SlotId};
 use crate::core::random::Rng;
-use crate::core::PageNumber;
+use crate::core::storage::btree::Content;
+use crate::core::storage::page::overflow::OverflowPage;
+use crate::core::storage::page::zero::{PageZero, DATABASE_IDENTIFIER};
+use crate::core::storage::page::{Cell, MemoryPage, Page, PageConversion, PageNumber, SlotId};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::fmt::{Debug, Formatter};

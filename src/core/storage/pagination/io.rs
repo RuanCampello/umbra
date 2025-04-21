@@ -1,6 +1,6 @@
 //! IO operations based on "blocks" to suit a database.
 
-use crate::core::PageNumber;
+use crate::core::storage::page::PageNumber;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::Path;
