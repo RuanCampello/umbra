@@ -321,6 +321,12 @@ impl<'input> Iterator for IntoIter<'input> {
     }
 }
 
+impl Location {
+    pub fn new(line: usize, col: usize) -> Self {
+        Self { line, col }
+    }
+}
+
 impl Default for Location {
     fn default() -> Self {
         // yeah, Lua-esque, Brazil mentioned

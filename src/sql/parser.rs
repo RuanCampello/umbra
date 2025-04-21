@@ -890,4 +890,61 @@ mod tests {
             }))
         )
     }
+
+    #[test]
+    fn test_expected_one() {
+        let sql = "DROP VALUES employees";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Err(ParserError {
+                input: sql.into(),
+                location: Location::new(1, 6),
+                kind: ErrorKind::ExpectedOneOf {
+                    expected: vec![
+                        Token::Keyword(Keyword::Database),
+                        Token::Keyword(Keyword::Table)
+                    ],
+                    found: Token::Keyword(Keyword::Values)
+                }
+            })
+        )
+    }
+
+    #[test]
+    fn test_invalid_type() {
+        let sql = "CREATE TABLE employees (id SOMETHING, name VARCHAR)";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Err(ParserError {
+                input: sql.into(),
+                location: Location::new(1, 28),
+                kind: ErrorKind::ExpectedOneOf {
+                    expected: Parser::tokens_from_keywords(&Parser::supported_types()),
+                    found: Token::Identifier("SOMETHING".into())
+                },
+            })
+        )
+    }
+
+    #[test]
+    fn test_missing_parenthesis() {
+        let sql = "CREATE TABLE employees id INT, name VARCHAR(255);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Err(ParserError {
+                input: sql.into(),
+                location: Location::new(1, 24),
+                kind: ErrorKind::Expected {
+                    expected: Token::LeftParen,
+                    found: Token::Identifier("id".into())
+                }
+            })
+        )
+    }
 }
