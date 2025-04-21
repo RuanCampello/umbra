@@ -4,6 +4,9 @@
 //! That involves the simplest validation in the SQL pipeline.
 //! We don't do the concrete type validation/coercion here, so, for example,
 //! [DateTime] will be parser, here, like a common [String].
+//!
+//! It's mostly inspired by the way postgres'
+//! [parser stage](https://www.postgresql.org/docs/17/parser-stage.html) works.
 
 use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
 use crate::sql::statement::{
