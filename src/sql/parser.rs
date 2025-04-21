@@ -950,4 +950,40 @@ mod tests {
             })
         )
     }
+
+    #[test]
+    fn test_missing_identifier() {
+        let sql = "INSERT INTO 1 VALUES (2);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Err(ParserError {
+                location: Location::new(1, 13),
+                input: sql.into(),
+                kind: ErrorKind::Expected {
+                    expected: Token::Identifier(Default::default()),
+                    found: Token::Number("1".into()),
+                }
+            })
+        )
+    }
+
+    #[test]
+    fn test_invalid_varchar_len() {
+        let sql = "CREATE TABLE employees (id INT, name VARCHAR(SOMETHING));";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Err(ParserError {
+                location: Location::new(1, 46),
+                input: sql.into(),
+                kind: ErrorKind::Expected {
+                    expected: Token::Number(Default::default()),
+                    found: Token::Identifier("SOMETHING".into()),
+                }
+            })
+        )
+    }
 }
