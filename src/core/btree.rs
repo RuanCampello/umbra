@@ -3,7 +3,7 @@
 use super::page::{Cell, Page, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
-use super::{byte_len_of_int_type, utf_8_length_bytes, PageNumber};
+use super::{byte_len_of_type, utf_8_length_bytes, PageNumber};
 use crate::core::page::overflow::OverflowPage;
 use crate::sql::statement::Type;
 use std::cmp::{min, Ordering, Reverse};
@@ -50,7 +50,7 @@ struct Removal {
 }
 
 /// Compares the `self.0` using a `memcmp`.
-/// If the integer keys at the beginning of buffer array are stored as big endian,
+/// If the integer keys at the beginning of a buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
 #[derive(Debug, Default)]
 pub(crate) struct FixedSizeCmp(pub usize);
@@ -142,7 +142,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             return Ok(None);
         };
 
-        self.balance(leaf_node, &mut parents);
+        self.balance(leaf_node, &mut parents)?;
 
         if let Some(node) = internal_node {
             if let Some(index) = parents.iter().position(|n| n.eq(&node)) {
@@ -570,7 +570,7 @@ impl TryFrom<&Type> for FixedSizeCmp {
     fn try_from(data_type: &Type) -> Result<Self, Self::Error> {
         match data_type {
             Type::Varchar(_) | Type::Boolean => Err(()),
-            fixed => Ok(Self(byte_len_of_int_type(fixed))),
+            fixed => Ok(Self(byte_len_of_type(fixed))),
         }
     }
 }
@@ -608,7 +608,7 @@ impl From<&Type> for Box<dyn BytesCmp> {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Box::new(StringCmp(utf_8_length_bytes(*max))),
-            not_var_type => Box::new(FixedSizeCmp(byte_len_of_int_type(not_var_type))),
+            not_var_type => Box::new(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
 }
@@ -623,7 +623,7 @@ impl From<&Type> for BTreeKeyCmp {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Self::StrCmp(StringCmp(utf_8_length_bytes(*max))),
-            not_var_type => Self::MemCmp(FixedSizeCmp(byte_len_of_int_type(not_var_type))),
+            not_var_type => Self::MemCmp(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
 }

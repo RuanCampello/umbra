@@ -8,11 +8,13 @@ pub(in crate::core) mod random;
 
 type PageNumber = u32;
 
-/// Returns the byte length of a given SQL [`Type`] for integers.
-fn byte_len_of_int_type(data_type: &Type) -> usize {
+/// Returns the byte length of a given SQL [`Type`].
+fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
-        Type::Integer | Type::UnsignedInteger => 4,
-        Type::BigInteger | Type::UnsignedBigInteger => 8,
+        Type::BigInteger | Type::UnsignedBigInteger | Type::DateTime => 8,
+        Type::Integer | Type::UnsignedInteger | Type::Date => 4,
+        Type::Time => 3, // TODO: this can be 4, but let it happen
+        Type::Boolean => 1,
         _ => unreachable!("This must only be used for integers."),
     }
 }

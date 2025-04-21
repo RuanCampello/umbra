@@ -360,11 +360,15 @@ mod tests {
     }
 
     #[test]
-    fn test_size_and_align_of_time() {
+    fn test_size_and_align_of() {
         assert_eq!(size_of::<NaiveTime>(), 3);
         assert_eq!(size_of::<u24>(), 3);
-        debug_assert_eq!(align_of::<NaiveTime>(), 1, "NaiveTime must be packed");
-        debug_assert_eq!(align_of::<u24>(), 1, "u24 must be packed");
+
+        assert_eq!(size_of::<NaiveDate>(), 4);
+        assert_eq!(align_of::<NaiveDate>(), 4);
+
+        assert_eq!(size_of::<NaiveDateTime>(), 8);
+        assert_eq!(align_of::<NaiveDateTime>(), 4);
     }
 
     #[test]

@@ -247,8 +247,8 @@ impl<'input> Parser<'input> {
             ))),
             token @ (Token::Minus | Token::Plus) => {
                 let op = match token {
-                    Token::Minus => UnaryOperator::Plus,
-                    Token::Plus => UnaryOperator::Minus,
+                    Token::Minus => UnaryOperator::Minus,
+                    Token::Plus => UnaryOperator::Plus,
                     _ => unreachable!(),
                 };
 
@@ -388,26 +388,28 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression> {
-        let value_str = match self.next_token()? {
-            Token::String(s) => s,
-            _ => return Err(self.error(ErrorKind::UnexpectedEof)),
-        };
+        println!("here");
+        let value_str = self.parse_ident()?;
 
         let value = match keyword {
-            Keyword::Date => Date::parse_str(&value_str).map(Value::Date).map_err(|e| {
-                self.error(ErrorKind::FormatError(format!(
-                    "Invalid date format: {:?}",
-                    e
-                )))
-            })?,
-            Keyword::Time => Time::parse_str(&value_str).map(Value::Time).map_err(|e| {
-                self.error(ErrorKind::FormatError(format!(
-                    "Invalid time format: {:?}",
-                    e
-                )))
-            })?,
+            Keyword::Date => Date::parse_str(&value_str)
+                .map(|x| ToString::to_string(&x))
+                .map_err(|e| {
+                    self.error(ErrorKind::FormatError(format!(
+                        "Invalid date format: {:?}",
+                        e
+                    )))
+                })?,
+            Keyword::Time => Time::parse_str(&value_str)
+                .map(|x| ToString::to_string(&x))
+                .map_err(|e| {
+                    self.error(ErrorKind::FormatError(format!(
+                        "Invalid time format: {:?}",
+                        e
+                    )))
+                })?,
             Keyword::Timestamp => DateTime::parse_str(&value_str)
-                .map(Value::DateTime)
+                .map(|x| ToString::to_string(&x))
                 .map_err(|e| {
                     self.error(ErrorKind::FormatError(format!(
                         "Invalid timestamp format: {:?}",
@@ -417,7 +419,7 @@ impl<'input> Parser<'input> {
             _ => unreachable!(),
         };
 
-        Ok(Expression::Value(value))
+        Ok(Expression::Value(Value::String(value)))
     }
 
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
@@ -820,5 +822,65 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_time() {
+        let sql = "SELECT * FROM schedule WHERE start_time < '12:00:00';";
+        let statement = Parser::new(sql).parse_statement();
+        // the parser should parse the time as a string
+        // cause its to early in the pipeline to cast it
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Select {
+                columns: vec![Expression::Wildcard],
+                from: "schedule".to_string(),
+                r#where: Some(Expression::BinaryOperator {
+                    operator: BinaryOperator::Lt,
+                    left: Box::new(Expression::Identifier("start_time".to_string())),
+                    right: Box::new(Expression::Value(Value::String("12:00:00".into()))),
+                }),
+                order_by: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_date() {
+        let sql = r#"
+            CREATE TABLE events (
+            event_id INT PRIMARY KEY,
+            event_name VARCHAR(100),
+            event_date DATE
+        );
+        "#;
+        let statement = Parser::new(sql).parse_statement();
+        // here, however, the parser should parse the date as a date
+        // because it was an explicit date type in the sql
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Table {
+                name: "events".into(),
+                columns: vec![
+                    Column {
+                        name: "event_id".into(),
+                        data_type: Type::Integer,
+                        constraints: vec![Constraint::PrimaryKey],
+                    },
+                    Column {
+                        name: "event_name".into(),
+                        data_type: Type::Varchar(100),
+                        constraints: vec![]
+                    },
+                    Column {
+                        name: "event_date".into(),
+                        data_type: Type::Date,
+                        constraints: vec![]
+                    }
+                ]
+            }))
+        )
     }
 }

@@ -2,7 +2,6 @@
 //! See [this](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 //! to reach out about statements and/or AST.
 
-use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time};
 use std::cmp::Ordering;
 use std::fmt::{Display, Write};
 
@@ -92,9 +91,7 @@ pub(in crate::sql) enum Expression {
 #[derive(Debug, PartialEq)]
 pub(in crate::sql) enum Value {
     String(String),
-    Date(Date),
-    Time(Time),
-    DateTime(DateTime),
+    Timestamp(String),
     Number(i128),
     Boolean(bool),
 }
