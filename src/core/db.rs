@@ -3,36 +3,33 @@ use crate::core::storage::page::PageNumber;
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::statement::{Column, Value};
 use std::collections::HashMap;
-use std::marker::PhantomData;
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct TableMetadata {
+pub(crate) struct TableMetadata<'s> {
     root: PageNumber,
     name: String,
-    schema: Schema,
-    pub indexes: Vec<IndexMetadata>,
+    schema: Schema<'s>,
+    pub indexes: Vec<IndexMetadata<'s>>,
     row_id: RowId,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct IndexMetadata {
+pub(crate) struct IndexMetadata<'s> {
     root: PageNumber,
     pub name: String,
     column: Column,
-    schema: Schema,
+    schema: Schema<'s>,
     unique: bool,
 }
 
 #[derive(Debug, PartialEq)]
-struct Schema {
-    columns: Vec<Column>,
-    name_ptrs: HashMap<*const str, usize>,
-    // PhantomData ensures proper drop checking
-    _marker: PhantomData<Box<str>>,
+pub(crate) struct Schema<'s> {
+    columns: &'s [Column],
+    index: HashMap<&'s str, usize>,
 }
 
-struct Context {
-    tables: HashMap<String, TableMetadata>,
+struct Context<'s> {
+    tables: HashMap<String, TableMetadata<'s>>,
     max_size: usize,
 }
 
@@ -60,28 +57,21 @@ type RowId = u64;
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
 
-pub(crate) trait Ctx {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
+pub(crate) trait Ctx<'s> {
+    fn metadata(&'s mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
 }
 
-impl Schema {
-    pub fn new(columns: Vec<Column>) -> Self {
-        let mut name_ptrs = HashMap::new();
+impl<'s> Schema<'s> {
+    pub fn new(columns: &'s [Column]) -> Self {
+        let mut index = HashMap::new();
         for (i, col) in columns.iter().enumerate() {
-            let name_ptr = col.name.as_str() as *const str;
-            name_ptrs.insert(name_ptr, i);
+            index.insert(col.name.as_str(), i);
         }
-
-        Self {
-            columns,
-            name_ptrs,
-            _marker: PhantomData,
-        }
+        Self { columns, index }
     }
 
-    pub fn get_column(&self, name: &str) -> Option<&Column> {
-        let name_ptr = name as *const str;
-        self.name_ptrs.get(&name_ptr).map(|&i| &self.columns[i])
+    pub fn index_of(&self, col: &str) -> Option<usize> {
+        self.index.get(col).copied()
     }
 
     pub fn keys(&self) -> &Column {
@@ -89,7 +79,7 @@ impl Schema {
     }
 }
 
-impl TableMetadata {
+impl<'s> TableMetadata<'s> {
     pub fn next_id(&mut self) -> RowId {
         let row_id = self.row_id;
         self.row_id += 1;
@@ -110,8 +100,8 @@ impl TableMetadata {
     }
 }
 
-impl Ctx for Context {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
+impl<'s> Ctx<'s> for Context<'s> {
+    fn metadata(&'s mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         self.tables
             .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())

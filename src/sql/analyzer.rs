@@ -22,7 +22,10 @@ pub(crate) enum AlreadyExists {
 // TODO: we'll actually have a database error for this later
 type AnalyzerResult<T> = Result<T, DatabaseError>;
 
-pub(in crate::sql) fn analyze(statement: &Statement, ctx: &mut impl Ctx) -> AnalyzerResult<()> {
+pub(in crate::sql) fn analyze<'s>(
+    statement: &Statement,
+    ctx: &'s mut impl Ctx<'s>,
+) -> AnalyzerResult<()> {
     match statement {
         Statement::Create(Create::Table { name, columns }) => {
             match ctx.metadata(name) {
