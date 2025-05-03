@@ -8,7 +8,7 @@ use std::collections::HashMap;
 pub(crate) struct TableMetadata<'s> {
     root: PageNumber,
     name: String,
-    schema: Schema<'s>,
+    pub schema: Schema<'s>,
     pub indexes: Vec<IndexMetadata<'s>>,
     row_id: RowId,
 }
@@ -24,7 +24,7 @@ pub(crate) struct IndexMetadata<'s> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Schema<'s> {
-    columns: &'s [Column],
+    pub columns: &'s [Column],
     index: HashMap<&'s str, usize>,
 }
 
@@ -56,6 +56,7 @@ type RowId = u64;
 
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
+pub(crate) const DB_METADATA: &str = "limbo_db_meta";
 
 pub(crate) trait Ctx<'s> {
     fn metadata(&'s mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
@@ -72,6 +73,10 @@ impl<'s> Schema<'s> {
 
     pub fn index_of(&self, col: &str) -> Option<usize> {
         self.index.get(col).copied()
+    }
+
+    pub fn columns_ids(&self) -> Vec<String> {
+        self.columns.iter().map(|c| c.name.to_string()).collect()
     }
 
     pub fn keys(&self) -> &Column {

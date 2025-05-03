@@ -1,5 +1,5 @@
-use crate::core::db::{Ctx, DatabaseError, SqlError, ROW_COL_ID};
-use crate::sql::statement::{Constraint, Create, Statement};
+use crate::core::db::{Ctx, DatabaseError, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
+use crate::sql::statement::{Constraint, Create, Expression, Statement};
 use std::collections::HashSet;
 use std::fmt::Display;
 
@@ -10,7 +10,8 @@ pub(crate) enum AnalyzerError {
     MultiplePrimaryKeys,
     AlreadyExists(AlreadyExists),
     /// Attempt to assign Row Id special column manually.
-    RowIdAssigment,
+    RowIdAssignment,
+    MetadataAssignment,
 }
 
 #[derive(Debug, PartialEq)]
@@ -48,7 +49,7 @@ pub(in crate::sql) fn analyze<'s>(
                 }
 
                 if col.name.eq(ROW_COL_ID) {
-                    return Err(AnalyzerError::RowIdAssigment.into());
+                    return Err(AnalyzerError::RowIdAssignment.into());
                 }
 
                 if col.constraints.contains(&Constraint::PrimaryKey) {
@@ -77,9 +78,68 @@ pub(in crate::sql) fn analyze<'s>(
                 return Err(AnalyzerError::AlreadyExists(AlreadyExists::Index(name.into())).into());
             }
         }
+
+        Statement::Insert {
+            into,
+            values,
+            columns,
+        } => {
+            let metadata = ctx.metadata(into)?;
+            if into.eq(DB_METADATA) {
+                return Err(AnalyzerError::MetadataAssignment.into());
+            }
+
+            let mut columns = columns.as_slice();
+            let schema_columns: Vec<String>;
+
+            if columns.is_empty() {
+                schema_columns = metadata.schema.columns_ids();
+                columns = schema_columns.as_slice();
+
+                if columns[0].eq(ROW_COL_ID) {
+                    columns = &schema_columns[1..];
+                }
+            }
+
+            if columns.len() != values.len() {
+                return Err(AnalyzerError::MissingCols.into());
+            }
+
+            let mut duplicates = HashSet::new();
+            for col in columns {
+                if metadata.schema.index_of(col).is_none() {
+                    return Err(SqlError::InvalidColumn(col.into()).into());
+                }
+
+                if !duplicates.insert(col) {
+                    return Err(AnalyzerError::DuplicateCols(col.into()).into());
+                }
+
+                if col.eq(ROW_COL_ID) {
+                    return Err(AnalyzerError::MetadataAssignment.into());
+                }
+            }
+
+            let schema_len = match metadata.schema.columns[0].name.eq(ROW_COL_ID) {
+                true => &metadata.schema.columns.len() - 1,
+                false => metadata.schema.columns.len(),
+            };
+
+            if schema_len != columns.len() {
+                return Err(AnalyzerError::MissingCols.into());
+            }
+
+            for (expr, col) in values.iter().zip(columns) {
+                analyze_assignment(metadata, col, expr, false)?;
+            }
+        }
         _ => {}
     }
 
+    todo!()
+}
+
+fn analyze_assignment(table: &TableMetadata, column: &str, value: &Expression, allow_id: bool) -> Result<(), SqlError> {
     todo!()
 }
 
@@ -92,7 +152,15 @@ impl Display for AnalyzerError {
             AnalyzerError::MultiplePrimaryKeys => {
                 write!(f, "a table can only have one primary key")
             }
-            AnalyzerError::RowIdAssigment => write!(f, "row id column cannot be manually assigned"),
+            AnalyzerError::RowIdAssignment => {
+                write!(f, "row id column cannot be manually assigned")
+            }
+            AnalyzerError::MetadataAssignment => {
+                write!(
+                    f,
+                    "table {DB_METADATA} is reserved for internal use, it cannot be manually assigned"
+                )
+            }
         }
     }
 }
