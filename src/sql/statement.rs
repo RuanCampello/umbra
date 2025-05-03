@@ -89,7 +89,7 @@ pub(in crate::sql) enum Expression {
 }
 
 #[derive(Debug, PartialEq)]
-pub(in crate::sql) enum Value {
+pub(crate) enum Value {
     String(String),
     Timestamp(String),
     Number(i128),

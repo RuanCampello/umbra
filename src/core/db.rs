@@ -1,11 +1,12 @@
 use crate::core::storage::btree::FixedSizeCmp;
 use crate::core::storage::page::PageNumber;
-use crate::sql::statement::Column;
+use crate::sql::analyzer::AnalyzerError;
+use crate::sql::statement::{Column, Value};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
 #[derive(Debug, PartialEq)]
-pub(in crate::core) struct TableMetadata {
+pub(crate) struct TableMetadata {
     root: PageNumber,
     name: String,
     schema: Schema,
@@ -35,12 +36,25 @@ struct Context {
     max_size: usize,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum SqlError {
+    /// Database table isn't found or somewhat corrupted.
+    InvalidTable(String),
+    /// Column isn't found or not usable in the given context.
+    InvalidColumn(String),
+    /// Duplicated UNIQUE or PRIMARY KEY col.
+    DuplicatedKey(Value),
+    /// [Analyzer error](AnalyzerError).
+    Analyzer(AnalyzerError),
+}
+
 type RowId = u64;
 
-type DatabaseError = Box<dyn std::error::Error>;
+/// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
+pub(crate) const ROW_COL_ID: &str = "row_id";
 
-pub(in crate::core) trait Ctx {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
+pub(crate) trait Ctx {
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, SqlError>;
 }
 
 impl Schema {
@@ -75,7 +89,7 @@ impl TableMetadata {
         row_id
     }
 
-    pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
+    pub fn comp(&self) -> Result<FixedSizeCmp, SqlError> {
         FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
             .map_err(|e| format!("Failed to convert data type: {e:#?}").into())
     }
@@ -86,9 +100,15 @@ impl TableMetadata {
 }
 
 impl Ctx for Context {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, SqlError> {
         self.tables
             .get_mut(table)
-            .ok_or_else(|| format!("Table not found: {table}").into())
+            .ok_or_else(|| format!("Table not found: {table:#?}").into())
+    }
+}
+
+impl From<AnalyzerError> for SqlError {
+    fn from(value: AnalyzerError) -> Self {
+        SqlError::Analyzer(value)
     }
 }

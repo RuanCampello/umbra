@@ -9,7 +9,7 @@ use std::hash::Hasher;
 #[derive(Debug, PartialEq, Eq)]
 pub struct Rng(u64);
 
-/// Grants the [`RNG`] safety even on panic.
+/// Grants the [`RNG`] safety even in panic.
 pub struct Restore<'r> {
     rng: &'r Cell<Rng>,
     current: Rng,

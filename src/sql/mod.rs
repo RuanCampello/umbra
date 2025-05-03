@@ -1,4 +1,4 @@
-mod analyzer;
+pub(crate) mod analyzer;
 mod parser;
 pub mod statement;
 mod tokenizer;

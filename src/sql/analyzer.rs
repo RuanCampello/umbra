@@ -1,24 +1,64 @@
-use crate::sql::statement::Statement;
+use crate::core::db::{Ctx, SqlError, ROW_COL_ID};
+use crate::sql::statement::{Constraint, Create, Statement};
+use std::collections::HashSet;
 use std::fmt::Display;
 
 #[derive(Debug, PartialEq)]
-enum AnalyzerError {
+pub(crate) enum AnalyzerError {
     MissingCols,
     DuplicateCols(String),
     MultiplePrimaryKeys,
     AlreadyExists(AlreadyExists),
+    /// Attempt to assign Row Id special column manually.
+    RowIdAssigment,
 }
 
 #[derive(Debug, PartialEq)]
-enum AlreadyExists {
+pub(crate) enum AlreadyExists {
     Table(String),
     Index(String),
 }
 
 // TODO: we'll actually have a database error for this later
-type AnalyzerResult<T> = Result<T, AnalyzerError>;
+type AnalyzerResult<T> = Result<T, SqlError>;
 
-pub(in crate::sql) fn analyze(statement: &Statement) -> AnalyzerResult<()> {
+pub(in crate::sql) fn analyze(statement: &Statement, ctx: &mut impl Ctx) -> AnalyzerResult<()> {
+    match statement {
+        Statement::Create(Create::Table { name, columns }) => {
+            match ctx.metadata(name) {
+                Err(SqlError::InvalidTable(_)) => {}
+                Err(e) => return Err(e),
+                Ok(_) => {
+                    return Err(SqlError::Analyzer(AnalyzerError::AlreadyExists(
+                        AlreadyExists::Table(name.into()),
+                    )))
+                }
+            };
+
+            let mut primary_key = false;
+            let mut duplicates = HashSet::new();
+
+            for col in columns {
+                if !duplicates.insert(&col.name) {
+                    return Err(AnalyzerError::DuplicateCols(col.name.to_string()).into());
+                }
+
+                if col.name.eq(ROW_COL_ID) {
+                    return Err(AnalyzerError::RowIdAssigment.into());
+                }
+
+                if col.constraints.contains(&Constraint::PrimaryKey) {
+                    if primary_key {
+                        return Err(AnalyzerError::MultiplePrimaryKeys.into());
+                    }
+
+                    primary_key = true;
+                }
+            };
+        }
+        _ => {}
+    }
+
     todo!()
 }
 
