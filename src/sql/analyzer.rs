@@ -26,12 +26,12 @@ pub(crate) enum AlreadyExists {
 }
 
 // TODO: we'll actually have a database error for this later
-type AnalyzerResult<T> = Result<T, DatabaseError>;
+type AnalyzerResult<'exp, T> = Result<T, DatabaseError<'exp>>;
 
 pub(in crate::sql) fn analyze<'s>(
-    statement: &Statement,
+    statement: &'s Statement,
     ctx: &'s mut impl Ctx<'s>,
-) -> AnalyzerResult<()> {
+) -> AnalyzerResult<'s, ()> {
     match statement {
         Statement::Create(Create::Table { name, columns }) => {
             match ctx.metadata(name) {
@@ -144,12 +144,12 @@ pub(in crate::sql) fn analyze<'s>(
     todo!()
 }
 
-fn analyze_assignment(
+fn analyze_assignment<'exp>(
     table: &TableMetadata,
     column: &str,
-    value: &Expression,
+    value: &'exp Expression,
     allow_id: bool,
-) -> Result<(), SqlError> {
+) -> Result<(), SqlError<'exp>> {
     if column.eq(ROW_COL_ID) {
         return Err(AnalyzerError::RowIdAssignment.into());
     }
@@ -169,7 +169,7 @@ fn analyze_assignment(
     if expect_type.ne(&evaluate_type) {
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
-            found: value.to_owned(),
+            found: &value,
         }));
     }
 
@@ -184,19 +184,48 @@ fn analyze_assignment(
     Ok(())
 }
 
-fn analyze_expression(
+fn analyze_expression<'exp>(
     schema: &Schema,
     col_type: Option<&Type>,
     expr: &Expression,
-) -> Result<VmType, SqlError> {
-    match expr {
-        Expression::Value(value) => analyze_value(value, col_type),
+) -> Result<VmType, SqlError<'exp>> {
+    Ok(match expr {
+        Expression::Value(value) => analyze_value(value, col_type)?,
+        Expression::Identifier(ident) => {
+            let idx = schema
+                .index_of(ident)
+                .ok_or(SqlError::InvalidColumn(ident.to_string()))?;
+
+            match schema.columns[idx].data_type {
+                Type::Boolean => VmType::Bool,
+                Type::Varchar(_) => VmType::String,
+                Type::Date | Type::DateTime | Type::Time => VmType::Date,
+                _ => VmType::Number,
+            }
+        }
+        Expression::BinaryOperator {
+            operator,
+            left,
+            right,
+        } => {
+            let left_type = analyze_expression(schema, col_type, left)?;
+            let right_type = analyze_expression(schema, col_type, right)?;
+
+            let mis_type = || {
+                SqlError::Type(TypeError::CannotApplyBinary {
+                    left,
+                    right,
+                    operator,
+                })
+            };
+
+            todo!()
+        }
         _ => unimplemented!(),
-    };
-    todo!()
+    })
 }
 
-fn analyze_value(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
+fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError<'exp>> {
     match value {
         Value::Boolean(_) => Ok(VmType::Bool),
         Value::Number(n) => {
@@ -204,11 +233,11 @@ fn analyze_value(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlEr
             Ok(VmType::Number)
         }
         Value::String(s) => analyze_string(s, col_type),
-        _ => unreachable!("We should have already analyzed the date types"),
+        _ => Ok(VmType::Date),
     }
 }
 
-fn analyze_string(s: &str, expected_type: Option<&Type>) -> Result<VmType, SqlError> {
+fn analyze_string<'exp>(s: &str, expected_type: Option<&Type>) -> Result<VmType, SqlError<'exp>> {
     match expected_type {
         Some(Type::Date) => {
             NaiveDate::parse_str(s)?;

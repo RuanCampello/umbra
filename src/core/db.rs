@@ -35,14 +35,14 @@ struct Context<'s> {
     max_size: usize,
 }
 
-pub(crate) enum DatabaseError {
-    Sql(SqlError),
+pub(crate) enum DatabaseError<'exp> {
+    Sql(SqlError<'exp>),
     /// Something went wrong with the underlying storage (db or journal file).
     Corrupted(String),
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum SqlError {
+pub(crate) enum SqlError<'exp> {
     /// Database table isn't found or somewhat corrupted.
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
@@ -51,7 +51,7 @@ pub(crate) enum SqlError {
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
-    Type(TypeError),
+    Type(TypeError<'exp>),
     Other(String),
 }
 
@@ -120,31 +120,31 @@ impl<'s> Ctx<'s> for Context<'s> {
     }
 }
 
-impl From<AnalyzerError> for SqlError {
+impl<'exp> From<AnalyzerError> for SqlError<'exp> {
     fn from(value: AnalyzerError) -> Self {
         SqlError::Analyzer(value)
     }
 }
 
-impl From<TypeError> for SqlError {
-    fn from(value: TypeError) -> Self {
+impl<'exp> From<TypeError<'exp>> for SqlError<'exp> {
+    fn from(value: TypeError<'exp>) -> Self {
         SqlError::Type(value)
     }
 }
 
-impl From<DateParseError> for SqlError {
+impl<'exp> From<DateParseError> for SqlError<'exp> {
     fn from(value: DateParseError) -> Self {
         SqlError::Type(TypeError::InvalidDate(value))
     }
 }
 
-impl From<SqlError> for DatabaseError {
-    fn from(value: SqlError) -> Self {
+impl<'exp> From<SqlError<'exp>> for DatabaseError<'exp> {
+    fn from(value: SqlError<'exp>) -> Self {
         DatabaseError::Sql(value)
     }
 }
 
-impl From<AnalyzerError> for DatabaseError {
+impl<'exp> From<AnalyzerError> for DatabaseError<'exp> {
     fn from(value: AnalyzerError) -> Self {
         DatabaseError::from(SqlError::from(value))
     }

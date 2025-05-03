@@ -10,19 +10,19 @@ pub(crate) enum VmType {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum TypeError {
+pub(crate) enum TypeError<'exp> {
     CannotApplyUnary {
         operator: UnaryOperator,
         value: Value,
     },
     CannotApplyBinary {
-        left: Expression,
-        operator: BinaryOperator,
-        right: Expression,
+        left:&'exp Expression,
+        operator: &'exp BinaryOperator,
+        right: &'exp Expression,
     },
     ExpectedType {
         expected: VmType,
-        found: Expression,
+        found: &'exp Expression,
     },
     InvalidDate(DateParseError),
 }
