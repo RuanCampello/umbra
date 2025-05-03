@@ -71,6 +71,7 @@ impl Display for AnalyzerError {
             AnalyzerError::MultiplePrimaryKeys => {
                 write!(f, "a table can only have one primary key")
             }
+            AnalyzerError::RowIdAssigment => write!(f, "row id column cannot be manually assigned"),
         }
     }
 }
