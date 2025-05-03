@@ -128,3 +128,9 @@ impl From<SqlError> for DatabaseError {
         DatabaseError::Sql(value)
     }
 }
+
+impl From<AnalyzerError> for DatabaseError {
+    fn from(value: AnalyzerError) -> Self {
+        DatabaseError::from(SqlError::from(value))
+    }
+}

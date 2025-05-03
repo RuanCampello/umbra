@@ -1,4 +1,4 @@
-use crate::core::db::{Ctx, SqlError, ROW_COL_ID};
+use crate::core::db::{Ctx, DatabaseError, SqlError, ROW_COL_ID};
 use crate::sql::statement::{Constraint, Create, Statement};
 use std::collections::HashSet;
 use std::fmt::Display;
@@ -20,18 +20,19 @@ pub(crate) enum AlreadyExists {
 }
 
 // TODO: we'll actually have a database error for this later
-type AnalyzerResult<T> = Result<T, SqlError>;
+type AnalyzerResult<T> = Result<T, DatabaseError>;
 
 pub(in crate::sql) fn analyze(statement: &Statement, ctx: &mut impl Ctx) -> AnalyzerResult<()> {
     match statement {
         Statement::Create(Create::Table { name, columns }) => {
             match ctx.metadata(name) {
-                Err(SqlError::InvalidTable(_)) => {}
+                Err(DatabaseError::Sql(SqlError::InvalidTable(_))) => {}
                 Err(e) => return Err(e),
                 Ok(_) => {
                     return Err(SqlError::Analyzer(AnalyzerError::AlreadyExists(
                         AlreadyExists::Table(name.into()),
-                    )))
+                    ))
+                    .into())
                 }
             };
 
@@ -44,17 +45,17 @@ pub(in crate::sql) fn analyze(statement: &Statement, ctx: &mut impl Ctx) -> Anal
                 }
 
                 if col.name.eq(ROW_COL_ID) {
-                    return Err(AnalyzerError::RowIdAssigment.into());
+                    return Err(AnalyzerError::RowIdAssigment.into()).into();
                 }
 
                 if col.constraints.contains(&Constraint::PrimaryKey) {
                     if primary_key {
-                        return Err(AnalyzerError::MultiplePrimaryKeys.into());
+                        return Err(AnalyzerError::MultiplePrimaryKeys.into()).into();
                     }
 
                     primary_key = true;
                 }
-            };
+            }
         }
         _ => {}
     }
