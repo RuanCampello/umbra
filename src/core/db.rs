@@ -10,14 +10,14 @@ pub(crate) struct TableMetadata {
     root: PageNumber,
     name: String,
     schema: Schema,
-    indexes: Vec<IndexMetadata>,
+    pub indexes: Vec<IndexMetadata>,
     row_id: RowId,
 }
 
 #[derive(Debug, PartialEq)]
-struct IndexMetadata {
+pub(crate) struct IndexMetadata {
     root: PageNumber,
-    name: String,
+    pub name: String,
     column: Column,
     schema: Schema,
     unique: bool,
@@ -52,6 +52,7 @@ pub(crate) enum SqlError {
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
+    Other(String),
 }
 
 type RowId = u64;

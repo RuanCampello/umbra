@@ -45,16 +45,33 @@ pub(in crate::sql) fn analyze(statement: &Statement, ctx: &mut impl Ctx) -> Anal
                 }
 
                 if col.name.eq(ROW_COL_ID) {
-                    return Err(AnalyzerError::RowIdAssigment.into()).into();
+                    return Err(AnalyzerError::RowIdAssigment.into());
                 }
 
                 if col.constraints.contains(&Constraint::PrimaryKey) {
                     if primary_key {
-                        return Err(AnalyzerError::MultiplePrimaryKeys.into()).into();
+                        return Err(AnalyzerError::MultiplePrimaryKeys.into());
                     }
 
                     primary_key = true;
                 }
+            }
+        }
+
+        Statement::Create(Create::Index {
+            table,
+            unique,
+            name,
+            ..
+        }) => {
+            if !unique {
+                return Err(SqlError::Other("Non-unique index is not yet supported".into()).into());
+            }
+
+            let metadata = ctx.metadata(table)?;
+
+            if metadata.indexes.iter().any(|idx| idx.name.eq(name)) {
+                return Err(AnalyzerError::AlreadyExists(AlreadyExists::Index(name.into())).into());
             }
         }
         _ => {}
