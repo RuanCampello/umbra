@@ -1,5 +1,8 @@
-use crate::core::db::{Ctx, DatabaseError, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
-use crate::sql::statement::{Constraint, Create, Expression, Statement};
+use crate::core::db::{
+    Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID,
+};
+use crate::sql::statement::{Constraint, Create, Expression, Statement, Type, Value};
+use crate::vm::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 
@@ -12,6 +15,7 @@ pub(crate) enum AnalyzerError {
     /// Attempt to assign Row Id special column manually.
     RowIdAssignment,
     MetadataAssignment,
+    Overflow(Type, usize),
 }
 
 #[derive(Debug, PartialEq)]
@@ -139,10 +143,53 @@ pub(in crate::sql) fn analyze<'s>(
     todo!()
 }
 
-fn analyze_assignment(table: &TableMetadata, column: &str, value: &Expression, allow_id: bool) -> Result<(), SqlError> {
-    todo!()
+fn analyze_assignment(
+    table: &TableMetadata,
+    column: &str,
+    value: &Expression,
+    allow_id: bool,
+) -> Result<(), SqlError> {
+    if column.eq(ROW_COL_ID) {
+        return Err(AnalyzerError::RowIdAssignment.into());
+    }
+
+    let idx = table
+        .schema
+        .index_of(column)
+        .ok_or(SqlError::InvalidColumn(column.into()))?;
+    let data_type = &table.schema.columns[idx].data_type;
+    let expect_type = VmType::from(data_type);
+
+    let evaluate_type = match allow_id {
+        true => analyze_expression(&table.schema, Some(data_type), value)?,
+        false => analyze_expression(&Schema::empty(), Some(data_type), value)?,
+    };
+
+    if expect_type.ne(&evaluate_type) {
+        return Err(SqlError::Type(TypeError::ExpectedType {
+            expected: expect_type,
+            found: value.to_owned(),
+        }));
+    }
+
+    if let Type::Varchar(max) = data_type {
+        if let Expression::Value(Value::String(str)) = value {
+            if &str.chars().count() > max {
+                return Err(AnalyzerError::Overflow(data_type.to_owned(), *max).into());
+            }
+        }
+    }
+
+    Ok(())
 }
 
+fn analyze_expression(
+    schema: &Schema,
+    col_data_type: Option<&Type>,
+    expr: &Expression,
+) -> Result<VmType, SqlError> {
+    todo!()
+}
 impl Display for AnalyzerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -160,6 +207,9 @@ impl Display for AnalyzerError {
                     f,
                     "table {DB_METADATA} is reserved for internal use, it cannot be manually assigned"
                 )
+            }
+            AnalyzerError::Overflow(data_type, max) => {
+                write!(f, "value of type {data_type} is larger than max size {max}")
             }
         }
     }

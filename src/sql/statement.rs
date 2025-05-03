@@ -71,8 +71,8 @@ pub(in crate::sql) enum Drop {
     Database(String),
 }
 
-#[derive(Debug, PartialEq)]
-pub(in crate::sql) enum Expression {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Expression {
     Identifier(String),
     Value(Value),
     Wildcard,
@@ -88,7 +88,7 @@ pub(in crate::sql) enum Expression {
     Nested(Box<Self>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Value {
     String(String),
     // TODO: maybe use our timestamp type?
@@ -103,14 +103,14 @@ pub(in crate::sql) enum Constraint {
     Unique,
 }
 
-#[derive(Debug, PartialEq)]
-pub(in crate::sql) enum UnaryOperator {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum UnaryOperator {
     Plus,
     Minus,
 }
 
-#[derive(Debug, PartialEq)]
-pub(in crate::sql) enum BinaryOperator {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum BinaryOperator {
     Eq,
     Neq,
     Lt,
@@ -126,7 +126,7 @@ pub(in crate::sql) enum BinaryOperator {
 }
 
 /// SQL data types.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Type {
     Integer,
     UnsignedInteger,

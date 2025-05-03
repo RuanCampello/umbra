@@ -2,6 +2,7 @@ use crate::core::storage::btree::FixedSizeCmp;
 use crate::core::storage::page::PageNumber;
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::statement::{Column, Value};
+use crate::vm::TypeError;
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
@@ -49,6 +50,7 @@ pub(crate) enum SqlError {
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
+    Type(TypeError),
     Other(String),
 }
 
@@ -81,6 +83,10 @@ impl<'s> Schema<'s> {
 
     pub fn keys(&self) -> &Column {
         &self.columns[0]
+    }
+
+    pub fn empty() -> Self {
+        Self::new(&[])
     }
 }
 
