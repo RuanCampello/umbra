@@ -36,8 +36,14 @@ struct Context {
     max_size: usize,
 }
 
+pub(crate) enum DatabaseError {
+    Sql(SqlError),
+    /// Something went wrong with the underlying storage (db or journal file).
+    Corrupted(String),
+}
+
 #[derive(Debug, PartialEq)]
-pub enum SqlError {
+pub(crate) enum SqlError {
     /// Database table isn't found or somewhat corrupted.
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
@@ -54,7 +60,7 @@ type RowId = u64;
 pub(crate) const ROW_COL_ID: &str = "row_id";
 
 pub(crate) trait Ctx {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, SqlError>;
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
 }
 
 impl Schema {
@@ -89,9 +95,13 @@ impl TableMetadata {
         row_id
     }
 
-    pub fn comp(&self) -> Result<FixedSizeCmp, SqlError> {
-        FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
-            .map_err(|e| format!("Failed to convert data type: {e:#?}").into())
+    pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
+        FixedSizeCmp::try_from(&self.schema.columns[0].data_type).map_err(|e| {
+            DatabaseError::Corrupted(format!(
+                "Table {} is using a non-int Btree key with type {:#?}",
+                self.name, self.schema.columns[0].data_type
+            ))
+        })
     }
 
     pub fn keys(&self) -> &Column {
@@ -100,15 +110,21 @@ impl TableMetadata {
 }
 
 impl Ctx for Context {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, SqlError> {
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         self.tables
             .get_mut(table)
-            .ok_or_else(|| format!("Table not found: {table:#?}").into())
+            .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
     }
 }
 
 impl From<AnalyzerError> for SqlError {
     fn from(value: AnalyzerError) -> Self {
         SqlError::Analyzer(value)
+    }
+}
+
+impl From<SqlError> for DatabaseError {
+    fn from(value: SqlError) -> Self {
+        DatabaseError::Sql(value)
     }
 }

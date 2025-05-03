@@ -3,7 +3,7 @@
 //! to reach out about statements and/or AST.
 
 use std::cmp::Ordering;
-use std::fmt::{Display, Write};
+use std::fmt::{Display, Formatter, Write};
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -44,7 +44,7 @@ pub(in crate::sql) struct Assignment {
 }
 
 #[derive(Debug, PartialEq)]
-pub(in crate) struct Column {
+pub(crate) struct Column {
     pub name: String,
     pub data_type: Type,
     pub constraints: Vec<Constraint>,
@@ -91,6 +91,7 @@ pub(in crate::sql) enum Expression {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Value {
     String(String),
+    // TODO: maybe use our timestamp type?
     Timestamp(String),
     Number(i128),
     Boolean(bool),
@@ -170,6 +171,7 @@ impl PartialOrd for Value {
             (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
+            (Value::Timestamp(a), Value::Timestamp(b)) => a.partial_cmp(b),
             _ => None,
         }
     }
@@ -192,4 +194,31 @@ pub(crate) fn join<'t, T: Display + 't>(
     }
 
     joined
+}
+
+impl Display for Type {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Boolean => f.write_str("BOOL"),
+            Type::Integer => f.write_str("INT"),
+            Type::UnsignedInteger => f.write_str("UNSIGNED INT"),
+            Type::BigInteger => f.write_str("BIGINT"),
+            Type::UnsignedBigInteger => f.write_str("UNSIGNED BIGINT"),
+            Type::DateTime => f.write_str("TIMESTAMP"),
+            Type::Time => f.write_str("TIME"),
+            Type::Date => f.write_str("DATE"),
+            Type::Varchar(max) => write!(f, "VARCHAR({max})"),
+        }
+    }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Timestamp(timestamp) => write!(f, "\"{timestamp}\""),
+            Value::String(string) => write!(f, "\"{string}\""),
+            Value::Number(number) => write!(f, "{number}"),
+            Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
+        }
+    }
 }
