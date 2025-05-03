@@ -1,3 +1,4 @@
+use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::db::{
     Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID,
 };
@@ -185,11 +186,50 @@ fn analyze_assignment(
 
 fn analyze_expression(
     schema: &Schema,
-    col_data_type: Option<&Type>,
+    col_type: Option<&Type>,
     expr: &Expression,
 ) -> Result<VmType, SqlError> {
+    match expr {
+        Expression::Value(value) => analyze_value(value, col_type),
+        _ => unimplemented!(),
+    };
     todo!()
 }
+
+fn analyze_value(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
+    match value {
+        Value::Boolean(_) => Ok(VmType::Bool),
+        Value::Number(n) => {
+            analyze_number(n, col_type)?;
+            Ok(VmType::Number)
+        }
+        Value::String(s) => analyze_string(s, col_type),
+        _ => unreachable!("We should have already analyzed the date types"),
+    }
+}
+
+fn analyze_string(s: &str, expected_type: Option<&Type>) -> Result<VmType, SqlError> {
+    match expected_type {
+        Some(Type::Date) => {
+            NaiveDate::parse_str(s)?;
+            Ok(VmType::Date)
+        }
+        Some(Type::DateTime) => {
+            NaiveDateTime::parse_str(s)?;
+            Ok(VmType::Date)
+        }
+        Some(Type::Time) => {
+            NaiveTime::parse_str(s)?;
+            Ok(VmType::Date)
+        }
+        _ => Ok(VmType::String),
+    }
+}
+
+fn analyze_number(integer: &i128, data_type: Option<&Type>) -> Result<VmType, AnalyzerError> {
+    todo!()
+}
+
 impl Display for AnalyzerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

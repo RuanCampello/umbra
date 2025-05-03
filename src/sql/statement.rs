@@ -2,8 +2,9 @@
 //! See [this](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 //! to reach out about statements and/or AST.
 
+use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime};
 use std::cmp::Ordering;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Debug, Display, Formatter, Write};
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -91,10 +92,11 @@ pub(crate) enum Expression {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Value {
     String(String),
-    // TODO: maybe use our timestamp type?
-    Timestamp(String),
     Number(i128),
     Boolean(bool),
+    Date(NaiveDate),
+    DateTime(NaiveDateTime),
+    Time(NaiveTime),
 }
 
 #[derive(Debug, PartialEq)]
@@ -171,7 +173,6 @@ impl PartialOrd for Value {
             (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
-            (Value::Timestamp(a), Value::Timestamp(b)) => a.partial_cmp(b),
             _ => None,
         }
     }
@@ -215,10 +216,12 @@ impl Display for Type {
 impl Display for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Timestamp(timestamp) => write!(f, "\"{timestamp}\""),
             Value::String(string) => write!(f, "\"{string}\""),
             Value::Number(number) => write!(f, "{number}"),
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
+            Value::DateTime(datetime) => Display::fmt(datetime, f),
+            Value::Date(date) => Display::fmt(date, f),
+            Value::Time(time) => Display::fmt(time, f),
         }
     }
 }

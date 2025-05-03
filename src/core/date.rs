@@ -36,7 +36,7 @@ use std::num::NonZeroI32;
 /// assert_eq!(dt.to_string(), "2023-01-15 14:30:00");
 /// assert_eq!(dt.timestamp(), 1673793000);
 /// ```
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct NaiveDateTime {
     date: NaiveDate,
     time: NaiveTime,
@@ -52,25 +52,25 @@ pub struct NaiveDateTime {
 ///
 /// Enables efficient storage (four bytes) and operations while avoiding heap allocations.
 /// [`NonZeroI32`] allows [`Option<NaiveDate>`] to be space-optimised.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct NaiveDate {
     yof: NonZeroI32,
 }
 
 /// Packed time representation, stored in exactly three bytes.
 #[repr(transparent)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct NaiveTime {
     hms: u24,
 }
 
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct u24([u8; 3]);
 
 #[allow(clippy::enum_variant_names, dead_code)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum DateParseError {
     InvalidDateTime,
     InvalidDate,

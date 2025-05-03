@@ -1,3 +1,4 @@
+use crate::core::date::DateParseError;
 use crate::core::storage::btree::FixedSizeCmp;
 use crate::core::storage::page::PageNumber;
 use crate::sql::analyzer::AnalyzerError;
@@ -122,6 +123,18 @@ impl<'s> Ctx<'s> for Context<'s> {
 impl From<AnalyzerError> for SqlError {
     fn from(value: AnalyzerError) -> Self {
         SqlError::Analyzer(value)
+    }
+}
+
+impl From<TypeError> for SqlError {
+    fn from(value: TypeError) -> Self {
+        SqlError::Type(value)
+    }
+}
+
+impl From<DateParseError> for SqlError {
+    fn from(value: DateParseError) -> Self {
+        SqlError::Type(TypeError::InvalidDate(value))
     }
 }
 
