@@ -223,7 +223,7 @@ fn analyze_assignment<'exp>(
     if expect_type.ne(&evaluate_type) {
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
-            found: &value,
+            found: value,
         }));
     }
 
@@ -238,8 +238,8 @@ fn analyze_assignment<'exp>(
     Ok(())
 }
 
-fn analyze_expression<'exp>(
-    schema: &'exp Schema<'exp>,
+fn analyze_expression<'exp, 'sch>(
+    schema: &'sch Schema<'sch>,
     col_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError<'exp>> {
