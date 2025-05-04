@@ -3,7 +3,7 @@ use crate::core::db::{
     Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID,
 };
 use crate::sql::statement::{
-    BinaryOperator, Constraint, Create, Expression, Statement, Type, UnaryOperator, Value,
+    BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
 };
 use crate::vm::{TypeError, VmType};
 use std::collections::HashSet;
@@ -161,10 +161,41 @@ pub(in crate::sql) fn analyze<'s>(
             }
         }
 
+        Statement::Delete { from, r#where } => {
+            let metadata = ctx.metadata(from)?;
+
+            if from.eq(DB_METADATA) {
+                return Err(AnalyzerError::MetadataAssignment.into());
+            }
+
+            analyze_where(&metadata.schema, r#where)?;
+        }
+
+        Statement::Update {
+            r#where,
+            table,
+            columns,
+        } => {
+            let metadata = ctx.metadata(table)?;
+            if table.eq(DB_METADATA) {
+                return Err(AnalyzerError::MetadataAssignment.into());
+            }
+
+            for col in columns {
+                analyze_assignment(metadata, &col.identifier, &col.value, true)?;
+            }
+            analyze_where(&metadata.schema, r#where)?;
+        }
+
+        Statement::Drop(Drop::Table(name)) => {
+            ctx.metadata(name)?;
+        }
+
+        Statement::Explain(statement) => analyze(statement, ctx)?,
         _ => {}
     }
-
-    todo!()
+    
+    Ok(())
 }
 
 fn analyze_assignment<'exp>(
