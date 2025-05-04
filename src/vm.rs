@@ -1,5 +1,6 @@
 use crate::core::date::DateParseError;
 use crate::sql::statement::{BinaryOperator, Expression, Type, UnaryOperator, Value};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum VmType {
@@ -16,7 +17,7 @@ pub(crate) enum TypeError<'exp> {
         value: Value,
     },
     CannotApplyBinary {
-        left:&'exp Expression,
+        left: &'exp Expression,
         operator: &'exp BinaryOperator,
         right: &'exp Expression,
     },
@@ -34,6 +35,30 @@ impl From<&Type> for VmType {
             Type::Varchar(_) => VmType::String,
             Type::Time | Type::Date | Type::DateTime => VmType::Date,
             _ => VmType::Number,
+        }
+    }
+}
+
+impl<'exp> Display for TypeError<'exp> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeError::CannotApplyBinary {
+                operator,
+                right,
+                left,
+            } => {
+                write!(
+                    f,
+                    "Cannot apply binary operator {operator:#?} to {left:#?} and {right:#?}"
+                )
+            }
+            TypeError::CannotApplyUnary { operator, value } => {
+                write!(f, "Cannot apply unary operator {operator:#?} to {value:#?}")
+            }
+            TypeError::ExpectedType { expected, found } => {
+                write!(f, "Expected {expected:#?} but found {found:#?}")
+            }
+            TypeError::InvalidDate(err) => err.fmt(f),
         }
     }
 }

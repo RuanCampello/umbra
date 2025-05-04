@@ -27,7 +27,7 @@ use std::num::NonZeroI32;
 /// # Notes
 /// While the raw data requires only 7 bytes, the struct occupies 8 bytes due to:
 /// 1. Rust's memory alignment requirements
-/// 2. The following field (`time: NaiveTime`) being 3 bytes
+/// 2. The following field (`time: NaiveTime`) is 3 bytes
 /// 3. Natural padding added by the compiler for optimal access
 ///
 /// # Example
@@ -239,7 +239,7 @@ impl Parse for NaiveDate {
 }
 
 impl Display for NaiveDate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}-{:02}-{:02}", self.year(), self.month(), self.day())
     }
 }
@@ -308,6 +308,24 @@ impl Display for NaiveTime {
             self.minute(),
             self.second()
         )
+    }
+}
+
+impl Display for DateParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            DateParseError::InvalidDateTime => "invalid date-time format",
+            DateParseError::InvalidDate => "invalid date format",
+            DateParseError::InvalidTime => "invalid time format",
+            DateParseError::InvalidYear => "invalid year value",
+            DateParseError::InvalidMonthDay => "invalid month/day combination",
+            DateParseError::InvalidMonth => "invalid month value (must be 1-12)",
+            DateParseError::InvalidDay => "invalid day value",
+            DateParseError::InvalidHour => "invalid hour value (must be 0-23)",
+            DateParseError::InvalidMinute => "invalid minute value (must be 0-59)",
+            DateParseError::InvalidSecond => "invalid second value (must be 0-59)",
+        };
+        write!(f, "{}", message)
     }
 }
 
