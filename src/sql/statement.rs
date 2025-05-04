@@ -8,7 +8,7 @@ use std::fmt::{Debug, Display, Formatter, Write};
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
-pub(in crate::sql) enum Statement {
+pub(crate) enum Statement {
     Create(Create),
     Select {
         columns: Vec<Expression>,
@@ -44,7 +44,7 @@ pub(in crate::sql) struct Assignment {
     pub value: Expression,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Column {
     pub name: String,
     pub data_type: Type,
@@ -52,7 +52,7 @@ pub(crate) struct Column {
 }
 
 #[derive(Debug, PartialEq)]
-pub(in crate::sql) enum Create {
+pub(crate) enum Create {
     Database(String),
     Table {
         name: String,
@@ -67,7 +67,7 @@ pub(in crate::sql) enum Create {
 }
 
 #[derive(Debug, PartialEq)]
-pub(in crate::sql) enum Drop {
+pub(crate) enum Drop {
     Table(String),
     Database(String),
 }
@@ -99,8 +99,8 @@ pub(crate) enum Value {
     Time(NaiveTime),
 }
 
-#[derive(Debug, PartialEq)]
-pub(in crate::sql) enum Constraint {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Constraint {
     PrimaryKey,
     Unique,
 }

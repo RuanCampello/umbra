@@ -1,5 +1,5 @@
 pub(crate) mod analyzer;
-mod parser;
+pub(crate) mod parser;
 pub mod statement;
 mod tokenizer;
 mod tokens;

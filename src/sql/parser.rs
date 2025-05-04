@@ -17,14 +17,14 @@ use crate::sql::tokenizer::{self, Location, TokenWithLocation, Tokenizer, Tokeni
 use crate::sql::tokens::{Keyword, Token};
 use std::iter::Peekable;
 
-pub(in crate::sql) struct Parser<'input> {
+pub(crate) struct Parser<'input> {
     input: &'input str,
     tokenizer: Peekable<tokenizer::IntoIter<'input>>,
     location: Location,
 }
 
 #[derive(Debug, PartialEq)]
-pub(in crate::sql) struct ParserError {
+pub(crate) struct ParserError {
     kind: ErrorKind,
     location: Location,
     input: String,

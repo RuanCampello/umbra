@@ -2,8 +2,10 @@ use crate::core::date::DateParseError;
 use crate::core::storage::btree::FixedSizeCmp;
 use crate::core::storage::page::PageNumber;
 use crate::sql::analyzer::AnalyzerError;
-use crate::sql::statement::{Column, Value};
+use crate::sql::parser::{Parser, ParserError};
+use crate::sql::statement::{Column, Create, Statement, Type, Value};
 use crate::vm::TypeError;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
@@ -26,16 +28,17 @@ pub(crate) struct IndexMetadata<'s> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Schema<'s> {
-    pub columns: &'s [Column],
-    index: HashMap<&'s str, usize>,
+    pub columns: Vec<Column>,
+    index: OnceCell<HashMap<&'s str, usize>>,
 }
 
 struct Context<'s> {
     tables: HashMap<String, TableMetadata<'s>>,
-    max_size: usize,
+    max_size: Option<usize>,
 }
 
 pub(crate) enum DatabaseError<'exp> {
+    Parser(ParserError),
     Sql(SqlError<'exp>),
     /// Something went wrong with the underlying storage (db or journal file).
     Corrupted(String),
@@ -66,16 +69,47 @@ pub(crate) trait Ctx<'s> {
 }
 
 impl<'s> Schema<'s> {
-    pub fn new(columns: &'s [Column]) -> Self {
+    pub fn new(columns: Vec<Column>) -> Self {
         let mut index = HashMap::new();
         for (i, col) in columns.iter().enumerate() {
             index.insert(col.name.as_str(), i);
         }
-        Self { columns, index }
+        Self {
+            columns,
+            index: OnceCell::new(),
+        }
     }
 
-    pub fn index_of(&self, col: &str) -> Option<usize> {
-        self.index.get(col).copied()
+    pub fn prepend_id(&'s mut self) {
+        debug_assert!(
+            self.columns.first().map_or(true, |c| c.name.eq(ROW_COL_ID)),
+            "schema already has {ROW_COL_ID}: {self:?}"
+        );
+
+        let col = Column::new(ROW_COL_ID, Type::UnsignedBigInteger);
+        self.columns.insert(0, col);
+
+        let mut new_index = HashMap::new();
+        for (i, col) in self.columns.iter().enumerate() {
+            new_index.insert(col.name.as_str(), i);
+        }
+
+        self.index = OnceCell::new();
+        self.index.set(new_index).unwrap();
+    }
+
+    fn ensure_index(&'s self) -> &HashMap<&'s str, usize> {
+        self.index.get_or_init(|| {
+            let mut map = HashMap::new();
+            for (i, col) in self.columns.iter().enumerate() {
+                map.insert(col.name.as_str(), i);
+            }
+            map
+        })
+    }
+
+    pub fn index_of(&'s self, col: &str) -> Option<usize> {
+        self.ensure_index().get(col).copied()
     }
 
     pub fn columns_ids(&self) -> Vec<String> {
@@ -87,7 +121,7 @@ impl<'s> Schema<'s> {
     }
 
     pub fn empty() -> Self {
-        Self::new(&[])
+        Self::new(Vec::new())
     }
 }
 
@@ -112,11 +146,48 @@ impl<'s> TableMetadata<'s> {
     }
 }
 
+impl<'s> Context<'s> {
+    pub fn new() -> Self {
+        Self {
+            tables: HashMap::new(),
+            max_size: None,
+        }
+    }
+}
+
+impl<'s> TryFrom<&[&str]> for Context<'s> {
+    type Error = DatabaseError<'s>;
+
+    fn try_from(statements: &[&str]) -> Result<Self, Self::Error> {
+        let mut ctx = Self::new();
+        let mut root = 1;
+
+        for sql in statements {
+            let statement = Parser::new(sql).parse_statement()?;
+
+            match statement {
+                Statement::Create(Create::Table { name, columns }) => {
+                    let mut schema = Schema::from(&columns);
+                    schema.prepend_id();
+                }
+                _ => {}
+            }
+        }
+        todo!()
+    }
+}
+
 impl<'s> Ctx<'s> for Context<'s> {
     fn metadata(&'s mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         self.tables
             .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
+    }
+}
+
+impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema<'c> {
+    fn from(columns: Col) -> Self {
+        Self::new(Vec::from_iter(columns.into_iter().cloned()))
     }
 }
 
@@ -153,5 +224,11 @@ impl<'exp> From<TypeError<'exp>> for DatabaseError<'exp> {
 impl<'exp> From<AnalyzerError> for DatabaseError<'exp> {
     fn from(value: AnalyzerError) -> Self {
         SqlError::from(value).into()
+    }
+}
+
+impl<'exp> From<ParserError> for DatabaseError<'exp> {
+    fn from(value: ParserError) -> Self {
+        DatabaseError::Parser(value)
     }
 }

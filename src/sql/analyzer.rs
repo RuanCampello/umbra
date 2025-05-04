@@ -194,12 +194,12 @@ pub(in crate::sql) fn analyze<'s>(
         Statement::Explain(statement) => analyze(statement, ctx)?,
         _ => {}
     }
-    
+
     Ok(())
 }
 
 fn analyze_assignment<'exp>(
-    table: &TableMetadata,
+    table: &'exp TableMetadata<'exp>,
     column: &str,
     value: &'exp Expression,
     allow_id: bool,
@@ -239,7 +239,7 @@ fn analyze_assignment<'exp>(
 }
 
 fn analyze_expression<'exp>(
-    schema: &Schema,
+    schema: &'exp Schema<'exp>,
     col_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError<'exp>> {
@@ -343,7 +343,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
 }
 
 fn analyze_where<'exp>(
-    schema: &Schema,
+    schema: &'exp Schema<'exp>,
     r#where: &'exp Option<Expression>,
 ) -> Result<(), DatabaseError<'exp>> {
     let Some(expr) = r#where else { return Ok(()) };
