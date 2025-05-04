@@ -3,7 +3,7 @@ use crate::core::db::{
     Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID,
 };
 use crate::sql::statement::{
-    BinaryOperator, Constraint, Create, Expression, Statement, Type, Value,
+    BinaryOperator, Constraint, Create, Expression, Statement, Type, UnaryOperator, Value,
 };
 use crate::vm::{TypeError, VmType};
 use std::collections::HashSet;
@@ -246,7 +246,26 @@ fn analyze_expression<'exp>(
                 _ => Err(mis_type())?,
             }
         }
-        _ => unimplemented!(),
+        Expression::UnaryOperator { operator, expr } => {
+            if let (Some(data_type), UnaryOperator::Minus, Expression::Value(Value::Number(num))) =
+                (col_type, operator, &**expr)
+            {
+                analyze_number(&-num, Some(data_type))?;
+                return Ok(VmType::Number);
+            }
+
+            match analyze_expression(schema, col_type, expr)? {
+                VmType::Number => VmType::Number,
+                _ => Err(TypeError::ExpectedType {
+                    expected: VmType::Number,
+                    found: expr,
+                })?,
+            }
+        }
+        Expression::Nested(expr) => analyze_expression(schema, col_type, expr)?,
+        Expression::Wildcard => {
+            return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
+        }
     })
 }
 
