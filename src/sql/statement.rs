@@ -197,6 +197,20 @@ pub(crate) fn join<'t, T: Display + 't>(
     joined
 }
 
+impl Type {
+    pub fn is_integer_in_bounds(&self, int: &i128) -> bool {
+        let bound = match self {
+            Self::Integer => i32::MIN as i128..=i32::MAX as i128,
+            Self::UnsignedInteger => 0..=u32::MAX as i128,
+            Self::BigInteger => i64::MIN as i128..=i64::MAX as i128,
+            Self::UnsignedBigInteger => 0..=u64::MAX as i128,
+            other => panic!("bound checking must be used only for integer: {other:#?}"),
+        };
+
+        bound.contains(int)
+    }
+}
+
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -250,7 +250,7 @@ fn analyze_expression<'exp>(
             if let (Some(data_type), UnaryOperator::Minus, Expression::Value(Value::Number(num))) =
                 (col_type, operator, &**expr)
             {
-                analyze_number(&-num, Some(data_type))?;
+                analyze_number(&-num, data_type)?;
                 return Ok(VmType::Number);
             }
 
@@ -270,28 +270,37 @@ fn analyze_expression<'exp>(
 }
 
 fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError<'exp>> {
-    match value {
+    let result: Result<VmType, SqlError<'exp>> = match value {
         Value::Boolean(_) => Ok(VmType::Bool),
         Value::Number(n) => {
-            analyze_number(n, col_type)?;
+            if let Some(col_type) = col_type {
+                analyze_number(n, col_type)?;
+            }
             Ok(VmType::Number)
         }
-        Value::String(s) => analyze_string(s, col_type),
+        Value::String(s) => {
+            if let Some(col_type) = col_type {
+                analyze_string(s, col_type)?;
+            }
+            Ok(VmType::String)
+        }
         _ => Ok(VmType::Date),
-    }
+    };
+
+    Ok(result?)
 }
 
-fn analyze_string<'exp>(s: &str, expected_type: Option<&Type>) -> Result<VmType, SqlError<'exp>> {
+fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError<'exp>> {
     match expected_type {
-        Some(Type::Date) => {
+        Type::Date => {
             NaiveDate::parse_str(s)?;
             Ok(VmType::Date)
         }
-        Some(Type::DateTime) => {
+        Type::DateTime => {
             NaiveDateTime::parse_str(s)?;
             Ok(VmType::Date)
         }
-        Some(Type::Time) => {
+        Type::Time => {
             NaiveTime::parse_str(s)?;
             Ok(VmType::Date)
         }
@@ -299,8 +308,20 @@ fn analyze_string<'exp>(s: &str, expected_type: Option<&Type>) -> Result<VmType,
     }
 }
 
-fn analyze_number(integer: &i128, data_type: Option<&Type>) -> Result<VmType, AnalyzerError> {
-    todo!()
+fn analyze_number(integer: &i128, data_type: &Type) -> Result<(), AnalyzerError> {
+    if let Type::Integer | Type::BigInteger | Type::UnsignedInteger | Type::UnsignedBigInteger =
+        data_type
+    {
+        if !data_type.is_integer_in_bounds(integer) {
+            // TODO: this is a bit hacky, we should probably have a better way to get the max size of the type
+            return Err(AnalyzerError::Overflow(
+                data_type.clone(),
+                *integer as usize,
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 impl Display for AnalyzerError {
