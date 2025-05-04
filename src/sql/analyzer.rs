@@ -140,6 +140,27 @@ pub(in crate::sql) fn analyze<'s>(
                 analyze_assignment(metadata, col, expr, false)?;
             }
         }
+
+        Statement::Select {
+            columns,
+            from,
+            order_by,
+            r#where,
+        } => {
+            let metadata = ctx.metadata(from)?;
+
+            for expr in columns {
+                if expr.eq(&Expression::Wildcard) {
+                    analyze_expression(&metadata.schema, None, expr)?;
+                }
+            }
+
+            analyze_where(&metadata.schema, r#where)?;
+            for expr in order_by {
+                analyze_expression(&metadata.schema, None, expr)?;
+            }
+        }
+
         _ => {}
     }
 
@@ -287,7 +308,24 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         _ => Ok(VmType::Date),
     };
 
-    Ok(result?)
+    result
+}
+
+fn analyze_where<'exp>(
+    schema: &Schema,
+    r#where: &'exp Option<Expression>,
+) -> Result<(), DatabaseError<'exp>> {
+    let Some(expr) = r#where else { return Ok(()) };
+
+    if let VmType::Bool = analyze_expression(schema, None, expr)? {
+        return Ok(());
+    }
+
+    Err(TypeError::ExpectedType {
+        expected: VmType::Bool,
+        found: expr,
+    }
+    .into())
 }
 
 fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError<'exp>> {

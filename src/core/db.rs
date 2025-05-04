@@ -134,7 +134,7 @@ impl<'exp> From<TypeError<'exp>> for SqlError<'exp> {
 
 impl<'exp> From<DateParseError> for SqlError<'exp> {
     fn from(value: DateParseError) -> Self {
-        SqlError::Type(TypeError::InvalidDate(value))
+        TypeError::InvalidDate(value).into()
     }
 }
 
@@ -144,8 +144,14 @@ impl<'exp> From<SqlError<'exp>> for DatabaseError<'exp> {
     }
 }
 
+impl<'exp> From<TypeError<'exp>> for DatabaseError<'exp> {
+    fn from(value: TypeError<'exp>) -> Self {
+        SqlError::from(value).into()
+    }
+}
+
 impl<'exp> From<AnalyzerError> for DatabaseError<'exp> {
     fn from(value: AnalyzerError) -> Self {
-        DatabaseError::from(SqlError::from(value))
+        SqlError::from(value).into()
     }
 }
