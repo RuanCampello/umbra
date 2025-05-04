@@ -2,7 +2,9 @@ use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::db::{
     Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID,
 };
-use crate::sql::statement::{Constraint, Create, Expression, Statement, Type, Value};
+use crate::sql::statement::{
+    BinaryOperator, Constraint, Create, Expression, Statement, Type, Value,
+};
 use crate::vm::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
@@ -187,7 +189,7 @@ fn analyze_assignment<'exp>(
 fn analyze_expression<'exp>(
     schema: &Schema,
     col_type: Option<&Type>,
-    expr: &Expression,
+    expr: &'exp Expression,
 ) -> Result<VmType, SqlError<'exp>> {
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, col_type)?,
@@ -219,7 +221,30 @@ fn analyze_expression<'exp>(
                 })
             };
 
-            todo!()
+            if left_type.ne(&right_type) {
+                return Err(mis_type());
+            }
+
+            match operator {
+                BinaryOperator::Eq
+                | BinaryOperator::Neq
+                | BinaryOperator::Lt
+                | BinaryOperator::LtEq
+                | BinaryOperator::Gt
+                | BinaryOperator::GtEq => VmType::Bool,
+                BinaryOperator::And | BinaryOperator::Or if left_type.eq(&VmType::Bool) => {
+                    VmType::Bool
+                }
+                BinaryOperator::Plus
+                | BinaryOperator::Minus
+                | BinaryOperator::Div
+                | BinaryOperator::Mul
+                    if left_type.eq(&VmType::Number) =>
+                {
+                    VmType::Number
+                }
+                _ => Err(mis_type())?,
+            }
         }
         _ => unimplemented!(),
     })
