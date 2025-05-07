@@ -566,8 +566,10 @@ mod tests {
              TypeError::InvalidDate(DateParseError::InvalidMonth)),
             ("INSERT INTO events (id, happened_at) VALUES (3, '2020-12-32 12:00:00');",
              TypeError::InvalidDate(DateParseError::InvalidDay)),
-            ("INSERT INTO events (id, happened_at) VALUES (8, '2023-04-31 10:00:00');",
+            ("INSERT INTO events (id, happened_at) VALUES (4, '2023-04-31 10:00:00');",
             TypeError::InvalidDate(DateParseError::InvalidMonthDay)),
+            ("INSERT INTO events (id, happened_at) VALUES (5, 'not-a-date');",
+            TypeError::InvalidDate(DateParseError::InvalidDateTime)),
         ];
 
         for (sql, err) in cases {
