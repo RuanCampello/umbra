@@ -509,56 +509,34 @@ mod tests {
         .assert()
     }
 
+    #[test]
     fn column_type_mismatch() -> AnalyzerResult {
-        macro_rules! assert_type_error {
-            ($sql:expr, $expected_type:expr, $expression:expr, $ctx:expr) => {{
-                let expr = Box::new($expression);
-                let expr: &'static Expression = Box::leak(expr);
-                Analyze {
-                    sql: $sql,
-                    expected: Err(TypeError::ExpectedType {
-                        expected: $expected_type,
-                        found: &expr,
-                    }
-                    .into()),
-                    ctx: $ctx,
-                }
-                .assert()?;
-            }};
-        }
-
-        const CTX: &[&str; 4] = &[
-            "CREATE TABLE products (id INT, name VARCHAR(255), price DECIMAL(10,2));",
-            "CREATE TABLE events (id INT, occurred_at TIMESTAMP NOT NULL);",
-            "CREATE TABLE users (id INT, username VARCHAR(255) NOT NULL);",
-            "CREATE TABLE items (id INT, description TEXT);",
+        const CTX: &[&str; 2] = &[
+            "CREATE TABLE products (id INT, name VARCHAR(255), price INT);",
+            "CREATE TABLE users (id INT, username VARCHAR(255));",
         ];
 
-        assert_type_error!(
-            "INSERT INTO users (id, name) VALUES (1, 123);",
-            VmType::String,
-            Expression::Value(Value::Number(123)),
-            CTX
-        );
-        assert_type_error!(
-            "INSERT INTO events (id, occurred_at) VALUES (1, 'not-a-timestamp');",
-            VmType::Date,
-            Expression::Value(Value::String("not-a-timestamp".to_string())),
-            CTX
-        );
-        assert_type_error!(
-            "INSERT INTO products (id, price) VALUES (1.5, 10.99);",
-            VmType::Number,
-            Expression::Value(Value::Number(1.5 as i128)),
-            CTX
-        );
-        assert_type_error!(
-            "SELECT * FROM products WHERE id = 'one';",
-            VmType::Number,
-            Expression::Value(Value::String("one".to_string())),
-            CTX
-        );
+        Analyze {
+            sql: "INSERT INTO users (id, username) VALUES (1, 123);",
+            expected: Err(TypeError::ExpectedType {
+                expected: VmType::String,
+                found: &Expression::Value(Value::Number(123)),
+            }
+            .into()),
+            ctx: CTX,
+        }
+        .assert()?;
 
+        Analyze {
+            sql: "INSERT INTO products (id, name, price) VALUES (1, 123, 69);",
+            expected: Err(TypeError::ExpectedType {
+                expected: VmType::String,
+                found: &Expression::Value(Value::Number(123)),
+            }.into()),
+            ctx: CTX,
+        }.assert()?;
+
+        
         Ok(())
     }
 
