@@ -525,27 +525,61 @@ mod tests {
         "#;
         let ctx = &[CTX];
 
-        let invalid_hour = Analyze {
-            sql: "INSERT INTO logs (log_id, logged_at) VALUES (1, '25:00:00');",
-            ctx,
-            expected: Err(TypeError::InvalidDate(DateParseError::InvalidHour).into()),
-        };
+        #[rustfmt::skip]
+        let cases = [
+            ("INSERT INTO logs (log_id, logged_at) VALUES (1, '25:00:00');",
+             TypeError::InvalidDate(DateParseError::InvalidHour)),
+            ("INSERT INTO logs (log_id, logged_at) VALUES (1, '12:60:00');",
+             TypeError::InvalidDate(DateParseError::InvalidMinute)),
+            ("INSERT INTO logs (log_id, logged_at) VALUES (1, '12:00:60');",
+             TypeError::InvalidDate(DateParseError::InvalidSecond)),
+        ];
 
-        let invalid_minute = Analyze {
-            sql: "INSERT INTO logs (log_id, logged_at) VALUES (1, '12:60:00');",
-            ctx,
-            expected: Err(TypeError::InvalidDate(DateParseError::InvalidMinute).into()),
-        };
+        for (sql, err) in cases {
+            let analyze = Analyze {
+                sql,
+                ctx,
+                expected: Err(SqlError::Type(err).into()),
+            };
 
-        let invalid_seconds = Analyze {
-            sql: "INSERT INTO logs (log_id, logged_at) VALUES (1, '12:00:60');",
-            ctx,
-            expected: Err(TypeError::InvalidDate(DateParseError::InvalidSecond).into()),
-        };
+            analyze.assert()?;
+        }
 
-        invalid_hour.assert()?;
-        invalid_minute.assert()?;
-        invalid_seconds.assert()?;
+        Ok(())
+    }
+
+    #[test]
+    fn insert_invalid_datetime_format() -> AnalyzerResult {
+        const CTX: &str = r#"
+            CREATE TABLE events (
+                id INT,
+                happened_at TIMESTAMP
+            );
+        "#;
+        let ctx = &[CTX];
+
+        #[rustfmt::skip]
+        let cases = [
+            ("INSERT INTO events (id, happened_at) VALUES (1, '2020-13-01 12:00:00');",
+             TypeError::InvalidDate(DateParseError::InvalidMonth)),
+            ("INSERT INTO events (id, happened_at) VALUES (2, '2020-00-01 12:00:00');",
+             TypeError::InvalidDate(DateParseError::InvalidMonth)),
+            ("INSERT INTO events (id, happened_at) VALUES (3, '2020-12-32 12:00:00');",
+             TypeError::InvalidDate(DateParseError::InvalidDay)),
+            ("INSERT INTO events (id, happened_at) VALUES (8, '2023-04-31 10:00:00');",
+            TypeError::InvalidDate(DateParseError::InvalidMonthDay)),
+        ];
+
+        for (sql, err) in cases {
+            let analyze = Analyze {
+                sql,
+                ctx,
+                expected: Err(SqlError::Type(err).into()),
+            };
+
+            analyze.assert()?;
+        }
+
         Ok(())
     }
 }

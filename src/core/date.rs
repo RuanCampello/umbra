@@ -204,12 +204,16 @@ impl Parse for NaiveDate {
         let month = parse_two_digit(&bytes[5..7])?;
         let day = parse_two_digit(&bytes[8..10])?;
 
+        if day == 0 || day > 31 {
+            return Err(DateParseError::InvalidDay);
+        }
+
         if !(1..=12).contains(&month) {
-            return Err(DateParseError::InvalidMonthDay);
+            return Err(DateParseError::InvalidMonth);
         }
 
         if Self::days_in_month(year, month) < day {
-            return Err(DateParseError::InvalidDay);
+            return Err(DateParseError::InvalidMonthDay);
         }
 
         let mut ordinal = CUMULATIVE_DAYS[month as usize] + day;
