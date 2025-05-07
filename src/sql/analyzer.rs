@@ -498,6 +498,25 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    // FIXME: make this be parsable
+    fn insert_without_columns_targeting() -> AnalyzerResult {
+        let expr: &'static Expression =
+            Box::leak(Box::new(Expression::Value(Value::String("1".into()))));
+
+        Analyze {
+            sql: "INSERT INTO users VALUES ('string', 5, 6);",
+            ctx: &["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255), email VARCHAR(255) UNIQUE);"],
+            expected: Err(TypeError::ExpectedType {
+                expected: VmType::Number,
+                found: expr,
+            }
+            .into()),
+        }
+        .assert()
+    }
+
+    #[test]
     fn column_values_mismatch() -> AnalyzerResult {
         Analyze {
             sql: "INSERT INTO employees (id, name, birth_date) VALUES (24, 'Mary Dove');",
@@ -532,11 +551,12 @@ mod tests {
             expected: Err(TypeError::ExpectedType {
                 expected: VmType::String,
                 found: &Expression::Value(Value::Number(123)),
-            }.into()),
+            }
+            .into()),
             ctx: CTX,
-        }.assert()?;
+        }
+        .assert()?;
 
-        
         Ok(())
     }
 
@@ -653,5 +673,28 @@ mod tests {
         };
 
         analyze.assert()
+    }
+
+    #[test]
+    #[ignore]
+    // FIXME: make it pass
+    fn non_boolean_where() -> AnalyzerResult {
+        const CTX: &str = "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));";
+        let found: &'static Expression = Box::leak(Box::new(Expression::BinaryOperator {
+            operator: BinaryOperator::Plus,
+            left: Box::new(Expression::Value(Value::Number(1))),
+            right: Box::new(Expression::Value(Value::Number(1))),
+        }));
+
+        Analyze {
+            ctx: &[CTX],
+            sql: "SELECT * FROM users WHERE 1 + 1;",
+            expected: Err(TypeError::ExpectedType {
+                expected: VmType::Bool,
+                found,
+            }
+            .into()),
+        }
+        .assert()
     }
 }
