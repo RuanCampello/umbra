@@ -34,11 +34,11 @@ pub(crate) enum TypeError<'exp> {
     InvalidDate(DateParseError),
 }
 
-pub(crate) fn resolve_expression<'a>(
+pub(crate) fn resolve_expression<'exp>(
     val: &[Value],
     schema: &Schema,
-    expression: &'a Expression,
-) -> Result<Value, SqlError<'a>> {
+    expression: &'exp Expression,
+) -> Result<Value, SqlError<'exp>> {
     match expression {
         Expression::Value(value) => Ok(value.clone()),
         Expression::Identifier(ident) => match schema.index_of(ident) {
@@ -77,7 +77,7 @@ pub(crate) fn resolve_expression<'a>(
                 };
                 SqlError::Type(err)
             };
-            
+
             if std::mem::discriminant(&left_val) != std::mem::discriminant(&right_val) {
                 return Err(mis_type());
             }
@@ -122,15 +122,10 @@ pub(crate) fn resolve_expression<'a>(
                     };
                     Value::Number(computed)
                 }
-
-                _ => {
-                    todo!()
-                }
             })
         }
-        _ => {
-            todo!()
-        }
+        Expression::Nested(expr) => resolve_expression(val, schema, expr),
+        Expression::Wildcard => unreachable!("Wildcards should have been resolved by now"),
     }
 }
 
