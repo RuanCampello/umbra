@@ -37,15 +37,15 @@ pub(crate) struct Context {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum DatabaseError<'exp> {
+pub(crate) enum DatabaseError {
     Parser(ParserError),
-    Sql(SqlError<'exp>),
+    Sql(SqlError),
     /// Something went wrong with the underlying storage (db or journal file).
     Corrupted(String),
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum SqlError<'exp> {
+pub(crate) enum SqlError {
     /// Database table isn't found or somewhat corrupted.
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
@@ -54,7 +54,7 @@ pub(crate) enum SqlError<'exp> {
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
-    Type(TypeError<'exp>),
+    Type(TypeError),
     Vm(VmError),
     Other(String),
 }
@@ -66,7 +66,7 @@ pub(crate) const ROW_COL_ID: &str = "row_id";
 pub(crate) const DB_METADATA: &str = "limbo_db_meta";
 
 pub(crate) trait Ctx<'s> {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError<'s>>;
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
 }
 
 impl Schema {
@@ -154,8 +154,8 @@ impl Context {
 
 /// Test-only implementation: clones everything for simplicity
 #[cfg(test)]
-impl<'s> TryFrom<&'s [&'s str]> for Context {
-    type Error = DatabaseError<'s>;
+impl TryFrom<&[&str]> for Context {
+    type Error = DatabaseError;
 
     fn try_from(statements: &[&str]) -> Result<Self, Self::Error> {
         let mut context = Self::new();
@@ -224,7 +224,7 @@ impl<'s> TryFrom<&'s [&'s str]> for Context {
 }
 
 impl<'s> Ctx<'s> for Context {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError<'s>> {
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         self.tables
             .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
@@ -236,49 +236,49 @@ impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     }
 }
 
-impl<'exp> From<AnalyzerError> for SqlError<'exp> {
+impl From<AnalyzerError> for SqlError {
     fn from(value: AnalyzerError) -> Self {
         SqlError::Analyzer(value)
     }
 }
 
-impl<'exp> From<VmError> for SqlError<'exp> {
+impl From<VmError> for SqlError {
     fn from(value: VmError) -> Self {
         SqlError::Vm(value)
     }
 }
 
-impl<'exp> From<TypeError<'exp>> for SqlError<'exp> {
-    fn from(value: TypeError<'exp>) -> Self {
+impl From<TypeError> for SqlError {
+    fn from(value: TypeError) -> Self {
         SqlError::Type(value)
     }
 }
 
-impl<'exp> From<DateParseError> for SqlError<'exp> {
+impl From<DateParseError> for SqlError {
     fn from(value: DateParseError) -> Self {
         TypeError::InvalidDate(value).into()
     }
 }
 
-impl<'exp> From<SqlError<'exp>> for DatabaseError<'exp> {
-    fn from(value: SqlError<'exp>) -> Self {
+impl From<SqlError> for DatabaseError {
+    fn from(value: SqlError) -> Self {
         DatabaseError::Sql(value)
     }
 }
 
-impl<'exp> From<TypeError<'exp>> for DatabaseError<'exp> {
-    fn from(value: TypeError<'exp>) -> Self {
+impl From<TypeError> for DatabaseError {
+    fn from(value: TypeError) -> Self {
         SqlError::from(value).into()
     }
 }
 
-impl<'exp> From<AnalyzerError> for DatabaseError<'exp> {
+impl From<AnalyzerError> for DatabaseError {
     fn from(value: AnalyzerError) -> Self {
         SqlError::from(value).into()
     }
 }
 
-impl<'exp> From<ParserError> for DatabaseError<'exp> {
+impl From<ParserError> for DatabaseError {
     fn from(value: ParserError) -> Self {
         DatabaseError::Parser(value)
     }

@@ -4,6 +4,7 @@
 
 use crate::core::db::SqlError;
 use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
+use crate::vm;
 
 pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
     match statement {
@@ -26,15 +27,15 @@ pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
     todo!()
 }
 
-pub(crate) fn simplify<'exp>(expression: &mut Expression) -> Result<(), SqlError<'exp>> {
+pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
     match expression {
-        Expression::UnaryOperator { expr, .. } => {
+        Expression::UnaryOperation { expr, .. } => {
             simplify(expr)?;
             if let Expression::Value(_) = expr.as_ref() {
                 *expression = resolve_expression(expression)?
             }
         }
-        Expression::BinaryOperator {
+        Expression::BinaryOperation {
             left,
             operator,
             right,
@@ -79,8 +80,8 @@ pub(crate) fn simplify<'exp>(expression: &mut Expression) -> Result<(), SqlError
                     BinaryOperator::Minus,
                     Expression::Identifier(_),
                 ) => match std::mem::replace(expression, Expression::Wildcard) {
-                    Expression::BinaryOperator { right, .. } => {
-                        *expression = Expression::UnaryOperator {
+                    Expression::BinaryOperation { right, .. } => {
+                        *expression = Expression::UnaryOperation {
                             operator: UnaryOperator::Minus,
                             expr: right,
                         }
@@ -90,7 +91,7 @@ pub(crate) fn simplify<'exp>(expression: &mut Expression) -> Result<(), SqlError
                 // handle nested addition patterns of the form: (variable + literal1) + literal2
                 // transforms (x + 5) + 3 → x + (5 + 3) → x + 8
                 (
-                    Expression::BinaryOperator {
+                    Expression::BinaryOperation {
                         left: variable,
                         operator: BinaryOperator::Plus,
                         right: center_value,
@@ -139,6 +140,6 @@ pub(crate) fn simplify<'exp>(expression: &mut Expression) -> Result<(), SqlError
     Ok(())
 }
 
-fn resolve_expression<'exp>(expression: &mut Expression) -> Result<Expression, SqlError<'exp>> {
-    todo!()
+fn resolve_expression(expression: &Expression) -> Result<Expression, SqlError> {
+    vm::resolve_only_expression(expression).map(Expression::Value)
 }

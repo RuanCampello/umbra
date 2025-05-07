@@ -17,19 +17,19 @@ pub(crate) enum VmError {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum TypeError<'exp> {
+pub(crate) enum TypeError {
     CannotApplyUnary {
         operator: UnaryOperator,
         value: Value,
     },
     CannotApplyBinary {
-        left: &'exp Expression,
-        operator: &'exp BinaryOperator,
-        right: &'exp Expression,
+        left: Expression,
+        operator: BinaryOperator,
+        right: Expression,
     },
     ExpectedType {
         expected: VmType,
-        found: &'exp Expression,
+        found: Expression,
     },
     InvalidDate(DateParseError),
 }
@@ -38,14 +38,14 @@ pub(crate) fn resolve_expression<'exp>(
     val: &[Value],
     schema: &Schema,
     expression: &'exp Expression,
-) -> Result<Value, SqlError<'exp>> {
+) -> Result<Value, SqlError> {
     match expression {
         Expression::Value(value) => Ok(value.clone()),
         Expression::Identifier(ident) => match schema.index_of(ident) {
             Some(idx) => Ok(val[idx].clone()),
             None => Err(SqlError::InvalidColumn(ident.clone())),
         },
-        Expression::UnaryOperator { operator, expr } => {
+        Expression::UnaryOperation { operator, expr } => {
             match resolve_expression(val, schema, expr)? {
                 Value::Number(mut num) => {
                     if let UnaryOperator::Minus = operator {
@@ -61,7 +61,7 @@ pub(crate) fn resolve_expression<'exp>(
                 })),
             }
         }
-        Expression::BinaryOperator {
+        Expression::BinaryOperation {
             operator,
             left,
             right,
@@ -69,17 +69,17 @@ pub(crate) fn resolve_expression<'exp>(
             let left_val = resolve_expression(val, schema, left)?;
             let right_val = resolve_expression(val, schema, right)?;
 
-            let mis_type = || {
+            let miss_type = || {
                 let err = TypeError::CannotApplyBinary {
-                    left: left.as_ref(),
-                    operator,
-                    right: right.as_ref(),
+                    left: left.as_ref().clone(),
+                    operator: *operator,
+                    right: right.as_ref().clone(),
                 };
                 SqlError::Type(err)
             };
 
             if std::mem::discriminant(&left_val) != std::mem::discriminant(&right_val) {
-                return Err(mis_type());
+                return Err(miss_type());
             }
 
             Ok(match operator {
@@ -92,7 +92,10 @@ pub(crate) fn resolve_expression<'exp>(
                 logical @ (BinaryOperator::And | BinaryOperator::Or) => {
                     let (a, b) = match (&left_val, &right_val) {
                         (Value::Boolean(a), Value::Boolean(b)) => (a, b),
-                        _ => return Err(mis_type()),
+                        _ => {
+                            let miss_type = miss_type();
+                            return Err(miss_type);
+                        }
                     };
                     match logical {
                         BinaryOperator::And => Value::Boolean(*a && *b),
@@ -106,7 +109,10 @@ pub(crate) fn resolve_expression<'exp>(
                 | BinaryOperator::Div) => {
                     let (n1, n2) = match (&left_val, &right_val) {
                         (Value::Number(n1), Value::Number(n2)) => (n1, n2),
-                        _ => return Err(mis_type()),
+                        _ => {
+                            let miss_type = miss_type();
+                            return Err(miss_type);
+                        }
                     };
 
                     if arithmetic == &BinaryOperator::Div && *n2 == 0 {
@@ -129,6 +135,10 @@ pub(crate) fn resolve_expression<'exp>(
     }
 }
 
+pub(crate) fn resolve_only_expression(expr: &Expression) -> Result<Value, SqlError> {
+    resolve_expression(&[], &Schema::empty(), expr)
+}
+
 impl From<&Type> for VmType {
     fn from(value: &Type) -> Self {
         match value {
@@ -140,7 +150,7 @@ impl From<&Type> for VmType {
     }
 }
 
-impl<'exp> Display for TypeError<'exp> {
+impl Display for TypeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TypeError::CannotApplyBinary {

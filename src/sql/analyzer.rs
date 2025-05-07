@@ -28,7 +28,7 @@ pub(crate) enum AlreadyExists {
 }
 
 // TODO: we'll actually have a database error for this later
-type AnalyzerResult<'exp, T> = Result<T, DatabaseError<'exp>>;
+type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
 pub(in crate::sql) fn analyze<'s>(
     statement: &'s Statement,
@@ -204,7 +204,7 @@ fn analyze_assignment<'exp, 'id>(
     column: &str,
     value: &'exp Expression,
     allow_id: bool,
-) -> Result<(), SqlError<'exp>> {
+) -> Result<(), SqlError> {
     if column.eq(ROW_COL_ID) {
         return Err(AnalyzerError::RowIdAssignment.into());
     }
@@ -224,7 +224,7 @@ fn analyze_assignment<'exp, 'id>(
     if expect_type.ne(&evaluate_type) {
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
-            found: value,
+            found: value.clone(),
         }));
     }
 
@@ -243,7 +243,7 @@ fn analyze_expression<'exp, 'sch>(
     schema: &'sch Schema,
     col_type: Option<&Type>,
     expr: &'exp Expression,
-) -> Result<VmType, SqlError<'exp>> {
+) -> Result<VmType, SqlError> {
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, col_type)?,
         Expression::Identifier(ident) => {
@@ -258,7 +258,7 @@ fn analyze_expression<'exp, 'sch>(
                 _ => VmType::Number,
             }
         }
-        Expression::BinaryOperator {
+        Expression::BinaryOperation {
             operator,
             left,
             right,
@@ -268,9 +268,9 @@ fn analyze_expression<'exp, 'sch>(
 
             let mis_type = || {
                 SqlError::Type(TypeError::CannotApplyBinary {
-                    left,
-                    right,
-                    operator,
+                    left: *left.clone(),
+                    right: *right.clone(),
+                    operator: *operator,
                 })
             };
 
@@ -299,7 +299,7 @@ fn analyze_expression<'exp, 'sch>(
                 _ => Err(mis_type())?,
             }
         }
-        Expression::UnaryOperator { operator, expr } => {
+        Expression::UnaryOperation { operator, expr } => {
             if let (Some(data_type), UnaryOperator::Minus, Expression::Value(Value::Number(num))) =
                 (col_type, operator, &**expr)
             {
@@ -311,7 +311,7 @@ fn analyze_expression<'exp, 'sch>(
                 VmType::Number => VmType::Number,
                 _ => Err(TypeError::ExpectedType {
                     expected: VmType::Number,
-                    found: expr,
+                    found: *expr.clone(),
                 })?,
             }
         }
@@ -322,8 +322,8 @@ fn analyze_expression<'exp, 'sch>(
     })
 }
 
-fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError<'exp>> {
-    let result: Result<VmType, SqlError<'exp>> = match value {
+fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
+    let result: Result<VmType, SqlError> = match value {
         Value::Boolean(_) => Ok(VmType::Bool),
         Value::Number(n) => {
             if let Some(col_type) = col_type {
@@ -350,7 +350,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
 fn analyze_where<'exp>(
     schema: &'exp Schema,
     r#where: &'exp Option<Expression>,
-) -> Result<(), DatabaseError<'exp>> {
+) -> Result<(), DatabaseError> {
     let Some(expr) = r#where else { return Ok(()) };
 
     if let VmType::Bool = analyze_expression(schema, None, expr)? {
@@ -359,12 +359,12 @@ fn analyze_where<'exp>(
 
     Err(TypeError::ExpectedType {
         expected: VmType::Bool,
-        found: expr,
+        found: expr.clone(),
     }
     .into())
 }
 
-fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError<'exp>> {
+fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
     match expected_type {
         Type::Date => {
             NaiveDate::parse_str(s)?;
@@ -441,11 +441,11 @@ mod tests {
     struct Analyze<'sql> {
         sql: &'sql str,
         ctx: &'sql [&'sql str],
-        expected: Result<(), DatabaseError<'sql>>,
+        expected: Result<(), DatabaseError>,
     }
 
     impl<'sql> Analyze<'sql> {
-        fn assert(&self) -> Result<(), DatabaseError<'sql>> {
+        fn assert(&self) -> Result<(), DatabaseError> {
             let statement = Parser::new(self.sql).parse_statement()?;
             let mut ctx = Context::try_from(self.ctx)?;
 
@@ -454,7 +454,7 @@ mod tests {
         }
     }
 
-    type AnalyzerResult = Result<(), DatabaseError<'static>>;
+    type AnalyzerResult = Result<(), DatabaseError>;
 
     #[test]
     fn select_from_invalid_table() -> AnalyzerResult {
@@ -501,15 +501,12 @@ mod tests {
     #[ignore]
     // FIXME: make this be parsable
     fn insert_without_columns_targeting() -> AnalyzerResult {
-        let expr: &'static Expression =
-            Box::leak(Box::new(Expression::Value(Value::String("1".into()))));
-
         Analyze {
             sql: "INSERT INTO users VALUES ('string', 5, 6);",
             ctx: &["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255), email VARCHAR(255) UNIQUE);"],
             expected: Err(TypeError::ExpectedType {
                 expected: VmType::Number,
-                found: expr,
+                found: Expression::Value(Value::String("1".into())),
             }
             .into()),
         }
@@ -539,7 +536,7 @@ mod tests {
             sql: "INSERT INTO users (id, username) VALUES (1, 123);",
             expected: Err(TypeError::ExpectedType {
                 expected: VmType::String,
-                found: &Expression::Value(Value::Number(123)),
+                found: Expression::Value(Value::Number(123)),
             }
             .into()),
             ctx: CTX,
@@ -550,7 +547,7 @@ mod tests {
             sql: "INSERT INTO products (id, name, price) VALUES (1, 123, 69);",
             expected: Err(TypeError::ExpectedType {
                 expected: VmType::String,
-                found: &Expression::Value(Value::Number(123)),
+                found: Expression::Value(Value::Number(123)),
             }
             .into()),
             ctx: CTX,
@@ -678,11 +675,11 @@ mod tests {
     #[test]
     fn non_boolean_where() -> AnalyzerResult {
         const CTX: &str = "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));";
-        let found: &'static Expression = Box::leak(Box::new(Expression::BinaryOperator {
+        let found = Expression::BinaryOperation {
             operator: BinaryOperator::Plus,
             left: Box::new(Expression::Value(Value::Number(1))),
             right: Box::new(Expression::Value(Value::Number(1))),
-        }));
+        };
 
         Analyze {
             ctx: &[CTX],

@@ -240,7 +240,7 @@ impl<'input> Parser<'input> {
         };
 
         let right = Box::new(self.parse_expr(Some(precedence))?);
-        Ok(Expression::BinaryOperator {
+        Ok(Expression::BinaryOperation {
             operator: op,
             left: Box::new(left),
             right,
@@ -278,7 +278,7 @@ impl<'input> Parser<'input> {
                 };
 
                 let expr = Box::new(self.parse_expr(Some(UNARY_ARITHMETIC_OPERATOR))?);
-                Ok(Expression::UnaryOperator { operator: op, expr })
+                Ok(Expression::UnaryOperation { operator: op, expr })
             }
             token => Err(self.error(ErrorKind::ExpectedOneOf {
                 expected: vec![
@@ -633,7 +633,7 @@ mod tests {
                     Expression::Identifier("author".to_string())
                 ],
                 from: "books".to_string(),
-                r#where: Some(Expression::BinaryOperator {
+                r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Eq,
                     left: Box::new(Expression::Identifier("author".to_string())),
                     right: Box::new(Expression::Value(Value::String(
@@ -725,7 +725,7 @@ mod tests {
                 columns: vec![
                     Assignment {
                         identifier: "salary".to_string(),
-                        value: Expression::BinaryOperator {
+                        value: Expression::BinaryOperation {
                             operator: BinaryOperator::Mul,
                             left: Box::new(Expression::Identifier("salary".to_string())),
                             right: Box::new(Expression::Value(Value::Number(2))),
@@ -736,31 +736,31 @@ mod tests {
                         value: Expression::Value(Value::Number(2000)),
                     },
                 ],
-                r#where: Some(Expression::BinaryOperator {
+                r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::And,
-                    left: Box::new(Expression::BinaryOperator {
+                    left: Box::new(Expression::BinaryOperation {
                         operator: BinaryOperator::And,
-                        left: Box::new(Expression::BinaryOperator {
+                        left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
                             left: Box::new(Expression::Identifier("department".to_string())),
                             right: Box::new(Expression::Value(Value::String(
                                 "engineering".to_string(),
                             ))),
                         }),
-                        right: Box::new(Expression::BinaryOperator {
+                        right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::GtEq,
                             left: Box::new(Expression::Identifier("performance_score".to_string())),
                             right: Box::new(Expression::Value(Value::Number(80))),
                         }),
                     }),
-                    right: Box::new(Expression::Nested(Box::new(Expression::BinaryOperator {
+                    right: Box::new(Expression::Nested(Box::new(Expression::BinaryOperation {
                         operator: BinaryOperator::Or,
-                        left: Box::new(Expression::BinaryOperator {
+                        left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Gt,
                             left: Box::new(Expression::Identifier("years_of_service".to_string())),
                             right: Box::new(Expression::Value(Value::Number(3))),
                         }),
-                        right: Box::new(Expression::BinaryOperator {
+                        right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
                             left: Box::new(Expression::Identifier("is_team_lead".to_string())),
                             right: Box::new(Expression::Value(Value::Boolean(true))),
@@ -862,7 +862,7 @@ mod tests {
             Ok(Statement::Select {
                 columns: vec![Expression::Wildcard],
                 from: "schedule".to_string(),
-                r#where: Some(Expression::BinaryOperator {
+                r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Lt,
                     left: Box::new(Expression::Identifier("start_time".to_string())),
                     right: Box::new(Expression::Value(Value::String("12:00:00".into()))),

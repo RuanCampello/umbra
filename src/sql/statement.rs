@@ -77,11 +77,11 @@ pub(crate) enum Expression {
     Identifier(String),
     Value(Value),
     Wildcard,
-    UnaryOperator {
+    UnaryOperation {
         operator: UnaryOperator,
         expr: Box<Self>,
     },
-    BinaryOperator {
+    BinaryOperation {
         operator: BinaryOperator,
         left: Box<Self>,
         right: Box<Self>,
@@ -164,6 +164,12 @@ impl Column {
             data_type,
             constraints: vec![Constraint::Unique],
         }
+    }
+}
+
+impl Default for Expression {
+    fn default() -> Self {
+        Expression::Wildcard
     }
 }
 
