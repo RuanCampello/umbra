@@ -43,7 +43,7 @@ pub(in crate::sql) fn analyze<'s>(
                     return Err(SqlError::Analyzer(AnalyzerError::AlreadyExists(
                         AlreadyExists::Table(name.into()),
                     ))
-                        .into())
+                    .into())
                 }
             };
 
@@ -70,11 +70,11 @@ pub(in crate::sql) fn analyze<'s>(
         }
 
         Statement::Create(Create::Index {
-                              table,
-                              unique,
-                              name,
-                              ..
-                          }) => {
+            table,
+            unique,
+            name,
+            ..
+        }) => {
             if !unique {
                 return Err(SqlError::Other("Non-unique index is not yet supported".into()).into());
             }
@@ -292,10 +292,10 @@ fn analyze_expression<'exp, 'sch>(
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                if left_type.eq(&VmType::Number) =>
-                    {
-                        VmType::Number
-                    }
+                    if left_type.eq(&VmType::Number) =>
+                {
+                    VmType::Number
+                }
                 _ => Err(mis_type())?,
             }
         }
@@ -361,7 +361,7 @@ fn analyze_where<'exp>(
         expected: VmType::Bool,
         found: expr,
     }
-        .into())
+    .into())
 }
 
 fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError<'exp>> {
@@ -464,7 +464,7 @@ mod tests {
             ctx: &[],
             expected: Err(SqlError::InvalidTable("users".into()).into()),
         }
-            .assert()
+        .assert()
     }
 
     #[test]
@@ -474,7 +474,7 @@ mod tests {
             ctx: &["CREATE TABLE customer (id INT PRIMARY KEY, first_name VARCHAR(69));"],
             expected: Err(SqlError::InvalidColumn("last_name".into()).into()),
         }
-            .assert()
+        .assert()
     }
 
     #[test]
@@ -484,7 +484,7 @@ mod tests {
             ctx: &["CREATE TABLE users (id INT PRIMARY KEY);"],
             expected: Ok(()),
         }
-            .assert()
+        .assert()
     }
 
     #[test]
@@ -498,13 +498,25 @@ mod tests {
     }
 
     #[test]
+    fn column_values_mismatch() -> AnalyzerResult {
+        Analyze {
+            sql: "INSERT INTO employees (id, name, birth_date) VALUES (24, 'Mary Dove');",
+            ctx: &[
+                "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(255), birth_date DATE);",
+            ],
+            expected: Err(AnalyzerError::MissingCols.into()),
+        }
+        .assert()
+    }
+
+    #[test]
     fn insert_date() -> AnalyzerResult {
         Analyze {
             ctx: &["CREATE TABLE employees (name VARCHAR(255), birth_date DATE);"],
             sql: "INSERT INTO employees (name, birth_date) VALUES ('John Doe', '2004-06-27');",
             expected: Ok(()),
         }
-            .assert()
+        .assert()
     }
 
     #[test]
