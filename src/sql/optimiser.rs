@@ -175,8 +175,10 @@ mod tests {
         optimised: &'op str,
     }
 
+    type OptimiserResult = Result<(), DatabaseError>;
+
     impl<'op> Optimiser<'op> {
-        fn assert(&self) -> Result<(), DatabaseError> {
+        fn assert(&self) -> OptimiserResult {
             let mut statement = Parser::new(self.sql).parse_statement()?;
             optimise(&mut statement)?;
 
@@ -184,7 +186,7 @@ mod tests {
             Ok(())
         }
 
-        fn assert_expression(&self) -> Result<(), DatabaseError> {
+        fn assert_expression(&self) -> OptimiserResult {
             let mut expression = Parser::new(self.sql).parse_expr(None)?;
             simplify(&mut expression)?;
 
@@ -194,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_add() -> Result<(), DatabaseError> {
+    fn test_simplify_add() -> OptimiserResult {
         Optimiser {
             optimised: "x + 13",
             sql: "x + 4 + 7 + 2",
@@ -206,10 +208,41 @@ mod tests {
             sql: "2 + 4 + 1 + x",
         }
         .assert_expression()?;
-        
+
         Optimiser {
             optimised: "x + 24",
             sql: "4 + 2 + x + 6 + 12",
-        }.assert_expression()
+        }
+        .assert_expression()
+    }
+
+    #[test]
+    fn test_simplify_mul() -> OptimiserResult {
+        Optimiser {
+            optimised: "x",
+            sql: "x * (3 - 2)",
+        }
+        .assert_expression()?;
+
+        Optimiser {
+            optimised: "x",
+            sql: "(2 - 1) * x",
+        }
+        .assert_expression()
+    }
+
+    #[test]
+    fn test_simplify_div() -> OptimiserResult {
+        Optimiser {
+            optimised: "x",
+            sql: "x / (3 - 2)",
+        }
+        .assert_expression()?;
+
+        Optimiser {
+            optimised: "x",
+            sql: "x / (10 - 9)",
+        }
+        .assert_expression()
     }
 }
