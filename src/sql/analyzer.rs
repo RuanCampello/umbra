@@ -43,7 +43,7 @@ pub(in crate::sql) fn analyze<'s>(
                     return Err(SqlError::Analyzer(AnalyzerError::AlreadyExists(
                         AlreadyExists::Table(name.into()),
                     ))
-                    .into())
+                        .into())
                 }
             };
 
@@ -70,11 +70,11 @@ pub(in crate::sql) fn analyze<'s>(
         }
 
         Statement::Create(Create::Index {
-            table,
-            unique,
-            name,
-            ..
-        }) => {
+                              table,
+                              unique,
+                              name,
+                              ..
+                          }) => {
             if !unique {
                 return Err(SqlError::Other("Non-unique index is not yet supported".into()).into());
             }
@@ -292,10 +292,10 @@ fn analyze_expression<'exp, 'sch>(
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                    if left_type.eq(&VmType::Number) =>
-                {
-                    VmType::Number
-                }
+                if left_type.eq(&VmType::Number) =>
+                    {
+                        VmType::Number
+                    }
                 _ => Err(mis_type())?,
             }
         }
@@ -361,7 +361,7 @@ fn analyze_where<'exp>(
         expected: VmType::Bool,
         found: expr,
     }
-    .into())
+        .into())
 }
 
 fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError<'exp>> {
@@ -459,35 +459,52 @@ mod tests {
     #[test]
     fn select_from_invalid_table() -> AnalyzerResult {
         // we cannot select from a table not created yet
-        let analyze = Analyze {
+        Analyze {
             sql: "SELECT * FROM users;",
             ctx: &[],
             expected: Err(SqlError::InvalidTable("users".into()).into()),
-        };
+        }
+            .assert()
+    }
 
-        analyze.assert()
+    #[test]
+    fn select_from_invalid_column() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT last_name FROM customer;",
+            ctx: &["CREATE TABLE customer (id INT PRIMARY KEY, first_name VARCHAR(69));"],
+            expected: Err(SqlError::InvalidColumn("last_name".into()).into()),
+        }
+            .assert()
     }
 
     #[test]
     fn select_from_valid_table() -> AnalyzerResult {
-        let analyze = Analyze {
+        Analyze {
             sql: "SELECT * FROM users;",
             ctx: &["CREATE TABLE users (id INT PRIMARY KEY);"],
             expected: Ok(()),
-        };
+        }
+            .assert()
+    }
 
-        analyze.assert()
+    #[test]
+    fn select_from_valid_column() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT last_name FROM customer;",
+            ctx: &["CREATE TABLE customer (id INT PRIMARY KEY, first_name VARCHAR(69), last_name VARCHAR(69));"],
+            expected: Ok(()),
+        }
+            .assert()
     }
 
     #[test]
     fn insert_date() -> AnalyzerResult {
-        let analyze = Analyze {
+        Analyze {
             ctx: &["CREATE TABLE employees (name VARCHAR(255), birth_date DATE);"],
             sql: "INSERT INTO employees (name, birth_date) VALUES ('John Doe', '2004-06-27');",
             expected: Ok(()),
-        };
-
-        analyze.assert()
+        }
+            .assert()
     }
 
     #[test]
@@ -511,8 +528,7 @@ mod tests {
             expected: Ok(()),
         };
 
-        analyze.assert()?;
-        Ok(())
+        analyze.assert()
     }
 
     #[test]
@@ -583,5 +599,16 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn multiple_primary_keys() -> AnalyzerResult {
+        let analyze = Analyze {
+            sql: "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255) PRIMARY KEY);",
+            ctx: &[],
+            expected: Err(AnalyzerError::MultiplePrimaryKeys.into()),
+        };
+
+        analyze.assert()
     }
 }
