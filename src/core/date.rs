@@ -97,8 +97,14 @@ pub trait Parse: Sized {
 
 impl Parse for NaiveDateTime {
     fn parse_str(date: &str) -> DateError<Self> {
-        if date.len() != 19 || date.as_bytes()[10] != b'T' {
+        if date.len() != 19 {
             return Err(DateParseError::InvalidDateTime);
+        }
+
+        // check that byte 10 is either 'T' or ' '
+        match date.as_bytes()[10] {
+            b'T' | b' ' => { /* ok */ }
+            _ => return Err(DateParseError::InvalidDateTime),
         }
 
         let time = NaiveTime::parse_str(&date[11..])?;
