@@ -523,14 +523,29 @@ mod tests {
                 logged_at TIME
             );
         "#;
+        let ctx = &[CTX];
 
         let invalid_hour = Analyze {
             sql: "INSERT INTO logs (log_id, logged_at) VALUES (1, '25:00:00');",
-            ctx: &[CTX],
+            ctx,
             expected: Err(TypeError::InvalidDate(DateParseError::InvalidHour).into()),
         };
 
+        let invalid_minute = Analyze {
+            sql: "INSERT INTO logs (log_id, logged_at) VALUES (1, '12:60:00');",
+            ctx,
+            expected: Err(TypeError::InvalidDate(DateParseError::InvalidMinute).into()),
+        };
+
+        let invalid_seconds = Analyze {
+            sql: "INSERT INTO logs (log_id, logged_at) VALUES (1, '12:00:60');",
+            ctx,
+            expected: Err(TypeError::InvalidDate(DateParseError::InvalidSecond).into()),
+        };
+
         invalid_hour.assert()?;
+        invalid_minute.assert()?;
+        invalid_seconds.assert()?;
         Ok(())
     }
 }
