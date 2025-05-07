@@ -264,7 +264,12 @@ mod tests {
             optimised: "z",
             input: "z + z * (2 - 2)",
         }
-        .assert_expression()
+        .assert_expression()?;
+        
+        Optimiser {
+            optimised: "-x",
+            input: "(2-2) - x",
+        }.assert_expression()
     }
 
     #[test]
