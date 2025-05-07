@@ -74,10 +74,7 @@ impl Schema {
         for (i, col) in columns.iter().enumerate() {
             index.insert(col.name.to_string(), i);
         }
-        Self {
-            columns,
-            index,
-        }
+        Self { columns, index }
     }
 
     pub fn prepend_id(&mut self) {

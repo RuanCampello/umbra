@@ -331,12 +331,16 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
             }
             Ok(VmType::Number)
         }
-        Value::String(s) => {
-            if let Some(col_type) = col_type {
-                analyze_string(s, col_type)?;
-            }
-            Ok(VmType::String)
-        }
+        Value::String(s) => match col_type {
+            // if the column has a type, delegate to analyze_string,
+            // which will return VmType::Date for valid dates,
+            // or VmType::String otherwise.
+            Some(ty) => analyze_string(s, ty),
+
+            // if we don’t know the target type, we can only
+            // treat it as a plain string.
+            None => Ok(VmType::String),
+        },
         _ => Ok(VmType::Date),
     };
 
@@ -478,7 +482,7 @@ mod tests {
     fn insert_datetime() -> AnalyzerResult {
         let analyze = Analyze {
             ctx: &["CREATE TABLE employees (name VARCHAR(255), birth_date DATE);"],
-            sql: "INSERT INTO employees (name, birth_date) VALUES ('John Doe', '2020-01-01');",
+            sql: "INSERT INTO employees (name, birth_date) VALUES ('John Doe', '2004-06-27');",
             expected: Ok(()),
         };
 
