@@ -64,7 +64,7 @@ pub(crate) const ROW_COL_ID: &str = "row_id";
 pub(crate) const DB_METADATA: &str = "limbo_db_meta";
 
 pub(crate) trait Ctx<'s> {
-    fn metadata(&'s mut self, table: &str) -> Result<&'s mut TableMetadata, DatabaseError<'s>>;
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError<'s>>;
 }
 
 impl Schema {
@@ -199,8 +199,24 @@ impl<'s> TryFrom<&'s [&'s str]> for Context {
 
                     context.insert(metadata);
                 }
+                Statement::Create(Create::Index { name, column, unique, .. }) if unique => {
+                    let table = context.metadata(&name)?;
+                    let index_col = &table.schema.columns[table.schema.index_of(&column).unwrap()];
 
-                _ => {}
+                    table.indexes.push(IndexMetadata {
+                        column: index_col.clone(),
+                        schema: Schema::new(vec![index_col.clone(), table.schema.columns[0].clone()]),
+                        name,
+                        root,
+                        unique,
+                    });
+
+                    root += 1;
+                }
+
+                statement => {
+                    return Err(SqlError::Other(format!("Only create unique index and create table should be called by test context, but found {statement:#?}")).into())
+                }
             }
         }
 
@@ -209,13 +225,12 @@ impl<'s> TryFrom<&'s [&'s str]> for Context {
 }
 
 impl<'s> Ctx<'s> for Context {
-    fn metadata(&'s mut self, table: &str) -> Result<&'s mut TableMetadata, DatabaseError<'s>> {
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError<'s>> {
         self.tables
             .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
     }
 }
-
 impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     fn from(columns: Col) -> Self {
         Self::new(Vec::from_iter(columns.into_iter().cloned()))
