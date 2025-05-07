@@ -434,6 +434,7 @@ impl Display for AlreadyExists {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::date::DateParseError;
     use crate::core::db::*;
     use crate::sql::parser::*;
 
@@ -490,8 +491,8 @@ mod tests {
     }
 
     #[test]
-    fn insert_date_time() {
-        let events_ctx = r#"
+    fn insert_date_time() -> AnalyzerResult {
+        const CTX: &str = r#"
             CREATE TABLE events (
                 event_id    INTEGER PRIMARY KEY,
                 title       VARCHAR(200),
@@ -506,10 +507,30 @@ mod tests {
 
         let analyze = Analyze {
             sql,
-            ctx: &[events_ctx],
+            ctx: &[CTX],
             expected: Ok(()),
         };
 
-        analyze.assert().unwrap();
+        analyze.assert()?;
+        Ok(())
+    }
+
+    #[test]
+    fn insert_invalid_time_format() -> AnalyzerResult {
+        const CTX: &str = r#"
+            CREATE TABLE logs (
+                log_id INT PRIMARY KEY,
+                logged_at TIME
+            );
+        "#;
+
+        let invalid_hour = Analyze {
+            sql: "INSERT INTO logs (log_id, logged_at) VALUES (1, '25:00:00');",
+            ctx: &[CTX],
+            expected: Err(TypeError::InvalidDate(DateParseError::InvalidHour).into()),
+        };
+
+        invalid_hour.assert()?;
+        Ok(())
     }
 }
