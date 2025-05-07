@@ -198,8 +198,8 @@ pub(in crate::sql) fn analyze<'s>(
     Ok(())
 }
 
-fn analyze_assignment<'exp>(
-    table: &'exp TableMetadata<'exp>,
+fn analyze_assignment<'exp, 'id>(
+    table: &'exp TableMetadata,
     column: &str,
     value: &'exp Expression,
     allow_id: bool,
@@ -239,7 +239,7 @@ fn analyze_assignment<'exp>(
 }
 
 fn analyze_expression<'exp, 'sch>(
-    schema: &'sch Schema<'sch>,
+    schema: &'sch Schema,
     col_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError<'exp>> {
@@ -343,7 +343,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
 }
 
 fn analyze_where<'exp>(
-    schema: &'exp Schema<'exp>,
+    schema: &'exp Schema,
     r#where: &'exp Option<Expression>,
 ) -> Result<(), DatabaseError<'exp>> {
     let Some(expr) = r#where else { return Ok(()) };
@@ -422,6 +422,27 @@ impl Display for AlreadyExists {
         match self {
             AlreadyExists::Table(table_name) => write!(f, "table {table_name} already exists"),
             AlreadyExists::Index(index_name) => write!(f, "index {index_name} already exists"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::db::*;
+    use crate::sql::parser::*;
+
+    struct Analyze<'sql> {
+        sql: &'sql str,
+        ctx: &'sql [&'sql str],
+        expected: Result<(), DatabaseError<'sql>>,
+    }
+
+    impl<'sql> Analyze<'sql> {
+        fn assert(&self) -> Result<(), DatabaseError<'sql>> {
+            let statement = Parser::new(self.sql).parse_statement()?;
+            // let mut ctx = Context::from(self.ctx)?;
+            todo!()
         }
     }
 }

@@ -3,37 +3,36 @@ use crate::core::storage::btree::FixedSizeCmp;
 use crate::core::storage::page::PageNumber;
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
-use crate::sql::statement::{Column, Create, Statement, Type, Value};
+use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
 use crate::vm::TypeError;
-use std::cell::OnceCell;
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct TableMetadata<'s> {
+pub(crate) struct TableMetadata {
     root: PageNumber,
     name: String,
-    pub schema: Schema<'s>,
-    pub indexes: Vec<IndexMetadata<'s>>,
+    pub schema: Schema,
+    pub indexes: Vec<IndexMetadata>,
     row_id: RowId,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct IndexMetadata<'s> {
+pub(crate) struct IndexMetadata {
     root: PageNumber,
     pub name: String,
     column: Column,
-    schema: Schema<'s>,
+    schema: Schema,
     unique: bool,
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct Schema<'s> {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Schema {
     pub columns: Vec<Column>,
-    index: OnceCell<HashMap<&'s str, usize>>,
+    index: HashMap<String, usize>,
 }
 
-struct Context<'s> {
-    tables: HashMap<String, TableMetadata<'s>>,
+struct Context {
+    tables: HashMap<String, TableMetadata>,
     max_size: Option<usize>,
 }
 
@@ -65,10 +64,10 @@ pub(crate) const ROW_COL_ID: &str = "row_id";
 pub(crate) const DB_METADATA: &str = "limbo_db_meta";
 
 pub(crate) trait Ctx<'s> {
-    fn metadata(&'s mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
+    fn metadata(&'s mut self, table: &str) -> Result<&'s mut TableMetadata, DatabaseError<'s>>;
 }
 
-impl<'s> Schema<'s> {
+impl Schema {
     pub fn new(columns: Vec<Column>) -> Self {
         let mut index = HashMap::new();
         for (i, col) in columns.iter().enumerate() {
@@ -76,40 +75,30 @@ impl<'s> Schema<'s> {
         }
         Self {
             columns,
-            index: OnceCell::new(),
+            index: HashMap::new(),
         }
     }
 
-    pub fn prepend_id(&'s mut self) {
+    pub fn prepend_id(&mut self) {
         debug_assert!(
             self.columns.first().map_or(true, |c| c.name.eq(ROW_COL_ID)),
             "schema already has {ROW_COL_ID}: {self:?}"
         );
 
         let col = Column::new(ROW_COL_ID, Type::UnsignedBigInteger);
-        self.columns.insert(0, col);
 
         let mut new_index = HashMap::new();
         for (i, col) in self.columns.iter().enumerate() {
             new_index.insert(col.name.as_str(), i);
         }
 
-        self.index = OnceCell::new();
-        self.index.set(new_index).unwrap();
+        self.columns.insert(0, col);
+        self.index.values_mut().for_each(|idx| *idx += 1);
+        self.index.insert(ROW_COL_ID.to_string(), 0);
     }
 
-    fn ensure_index(&'s self) -> &HashMap<&'s str, usize> {
-        self.index.get_or_init(|| {
-            let mut map = HashMap::new();
-            for (i, col) in self.columns.iter().enumerate() {
-                map.insert(col.name.as_str(), i);
-            }
-            map
-        })
-    }
-
-    pub fn index_of(&'s self, col: &str) -> Option<usize> {
-        self.ensure_index().get(col).copied()
+    pub fn index_of(&self, col: &str) -> Option<usize> {
+        self.index.get(col).copied()
     }
 
     pub fn columns_ids(&self) -> Vec<String> {
@@ -125,7 +114,7 @@ impl<'s> Schema<'s> {
     }
 }
 
-impl<'s> TableMetadata<'s> {
+impl TableMetadata {
     pub fn next_id(&mut self) -> RowId {
         let row_id = self.row_id;
         self.row_id += 1;
@@ -146,46 +135,88 @@ impl<'s> TableMetadata<'s> {
     }
 }
 
-impl<'s> Context<'s> {
+impl Context {
     pub fn new() -> Self {
         Self {
             tables: HashMap::new(),
             max_size: None,
         }
     }
+
+    pub fn insert(&mut self, metadata: TableMetadata) {
+        if self.max_size.is_some_and(|size| self.tables.len() >= size) {
+            let evict = self.tables.keys().next().unwrap().clone();
+            self.tables.remove(&evict);
+        }
+
+        self.tables.insert(metadata.name.to_string(), metadata);
+    }
 }
 
-impl<'s> TryFrom<&[&str]> for Context<'s> {
+/// Test-only implementation: clones everything for simplicity
+#[cfg(test)]
+impl<'s> TryFrom<&'s [&'s str]> for Context {
     type Error = DatabaseError<'s>;
 
     fn try_from(statements: &[&str]) -> Result<Self, Self::Error> {
-        let mut ctx = Self::new();
+        let mut context = Self::new();
         let mut root = 1;
 
         for sql in statements {
             let statement = Parser::new(sql).parse_statement()?;
-
             match statement {
                 Statement::Create(Create::Table { name, columns }) => {
                     let mut schema = Schema::from(&columns);
                     schema.prepend_id();
+
+                    let mut metadata = TableMetadata {
+                        root,
+                        name: name.clone(),
+                        row_id: 1,
+                        schema,
+                        indexes: vec![],
+                    };
+                    root += 1;
+
+                    columns.iter().for_each(|col| {
+                        col.constraints.iter().for_each(|constraint| {
+                            let index = match constraint {
+                                Constraint::Unique => format!("{}_uq_index", col.name),
+                                Constraint::PrimaryKey => format!("{}_pk_index", col.name),
+                            };
+
+                            metadata.indexes.push(IndexMetadata {
+                                column: col.clone(),
+                                schema: Schema::new(vec![col.clone(), columns[0].clone()]),
+                                name: index,
+                                root,
+                                unique: true,
+                            });
+
+                            root += 1;
+                        })
+                    });
+
+                    context.insert(metadata);
                 }
+
                 _ => {}
             }
         }
-        todo!()
+
+        Ok(context)
     }
 }
 
-impl<'s> Ctx<'s> for Context<'s> {
-    fn metadata(&'s mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
+impl<'s> Ctx<'s> for Context {
+    fn metadata(&'s mut self, table: &str) -> Result<&'s mut TableMetadata, DatabaseError<'s>> {
         self.tables
             .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
     }
 }
 
-impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema<'c> {
+impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     fn from(columns: Col) -> Self {
         Self::new(Vec::from_iter(columns.into_iter().cloned()))
     }
