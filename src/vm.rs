@@ -69,13 +69,17 @@ pub(crate) fn resolve_expression<'a>(
             let left_val = resolve_expression(val, schema, left)?;
             let right_val = resolve_expression(val, schema, right)?;
 
-            if std::mem::discriminant(&left_val) != std::mem::discriminant(&right_val) {
+            let mis_type = || {
                 let err = TypeError::CannotApplyBinary {
                     left: left.as_ref(),
                     operator,
                     right: right.as_ref(),
                 };
-                return Err(SqlError::Type(err));
+                SqlError::Type(err)
+            };
+            
+            if std::mem::discriminant(&left_val) != std::mem::discriminant(&right_val) {
+                return Err(mis_type());
             }
 
             Ok(match operator {
@@ -88,7 +92,7 @@ pub(crate) fn resolve_expression<'a>(
                 logical @ (BinaryOperator::And | BinaryOperator::Or) => {
                     let (a, b) = match (&left_val, &right_val) {
                         (Value::Boolean(a), Value::Boolean(b)) => (a, b),
-                        _ => todo!(),
+                        _ => return Err(mis_type()),
                     };
                     match logical {
                         BinaryOperator::And => Value::Boolean(*a && *b),
@@ -102,7 +106,7 @@ pub(crate) fn resolve_expression<'a>(
                 | BinaryOperator::Div) => {
                     let (n1, n2) = match (&left_val, &right_val) {
                         (Value::Number(n1), Value::Number(n2)) => (n1, n2),
-                        _ => todo!(),
+                        _ => return Err(mis_type()),
                     };
 
                     if arithmetic == &BinaryOperator::Div && *n2 == 0 {
