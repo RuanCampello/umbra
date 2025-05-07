@@ -4,7 +4,7 @@ use crate::core::storage::page::PageNumber;
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
-use crate::vm::TypeError;
+use crate::vm::{TypeError, VmError};
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
@@ -55,6 +55,7 @@ pub(crate) enum SqlError<'exp> {
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
     Type(TypeError<'exp>),
+    Vm(VmError),
     Other(String),
 }
 
@@ -238,6 +239,12 @@ impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
 impl<'exp> From<AnalyzerError> for SqlError<'exp> {
     fn from(value: AnalyzerError) -> Self {
         SqlError::Analyzer(value)
+    }
+}
+
+impl<'exp> From<VmError> for SqlError<'exp> {
+    fn from(value: VmError) -> Self {
+        SqlError::Vm(value)
     }
 }
 

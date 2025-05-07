@@ -72,7 +72,7 @@ pub(crate) enum Drop {
     Database(String),
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub(crate) enum Expression {
     Identifier(String),
     Value(Value),
@@ -105,13 +105,13 @@ pub(crate) enum Constraint {
     Unique,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 pub(crate) enum UnaryOperator {
     Plus,
     Minus,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 pub(crate) enum BinaryOperator {
     Eq,
     Neq,
