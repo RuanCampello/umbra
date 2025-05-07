@@ -12,19 +12,29 @@ pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
             from,
             columns,
             r#where,
+            order_by,
             ..
         } => {
-            todo!()
+            simplify_iter(columns.iter_mut())?;
+            simplify_where(r#where)?;
+            simplify_iter(order_by.iter_mut())?;
         }
-        Statement::Update { columns, .. } => {
-            todo!()
+        Statement::Update {
+            columns, r#where, ..
+        } => {
+            simplify_where(r#where)?;
+            simplify_iter(columns.iter_mut().map(|col| &mut col.value))?;
         }
-        Statement::Insert { columns, .. } => {
-            todo!()
+        Statement::Delete { r#where, .. } => simplify_where(r#where)?,
+        Statement::Explain(inner) => optimise(inner)?,
+        Statement::Insert { values, .. } => {
+            let expr_iter = values.iter_mut().flat_map(|row| row.iter_mut());
+            simplify_iter(expr_iter)?;
         }
         _ => {}
     };
-    todo!()
+
+    Ok(())
 }
 
 pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
@@ -138,6 +148,16 @@ pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
     }
 
     Ok(())
+}
+
+fn simplify_iter<'exp>(
+    mut expression: impl Iterator<Item = &'exp mut Expression>,
+) -> Result<(), SqlError> {
+    expression.try_for_each(simplify)
+}
+
+fn simplify_where(r#where: &mut Option<Expression>) -> Result<(), SqlError> {
+    r#where.as_mut().map(simplify).unwrap_or(Ok(()))
 }
 
 fn resolve_expression(expression: &Expression) -> Result<Expression, SqlError> {
