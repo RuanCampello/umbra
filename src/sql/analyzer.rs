@@ -493,7 +493,7 @@ mod tests {
     fn insert_date_time() {
         let events_ctx = r#"
             CREATE TABLE events (
-                event_id    INT PRIMARY KEY,
+                event_id    INTEGER PRIMARY KEY,
                 title       VARCHAR(200),
                 occurred_at TIMESTAMP
             );

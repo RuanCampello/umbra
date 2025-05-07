@@ -162,7 +162,7 @@ impl<'input> Tokenizer<'input> {
             "PRIMARY" => Keyword::Primary,
             "KEY" => Keyword::Key,
             "UNIQUE" => Keyword::Unique,
-            "INT" => Keyword::Int,
+            "INT" | "INTEGER" => Keyword::Int,
             "BIGINT" => Keyword::BigInt,
             "BY" => Keyword::By,
             "DATABASE" => Keyword::Database,
