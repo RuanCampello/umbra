@@ -479,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_datetime() -> AnalyzerResult {
+    fn insert_date() -> AnalyzerResult {
         let analyze = Analyze {
             ctx: &["CREATE TABLE employees (name VARCHAR(255), birth_date DATE);"],
             sql: "INSERT INTO employees (name, birth_date) VALUES ('John Doe', '2004-06-27');",
@@ -487,5 +487,29 @@ mod tests {
         };
 
         analyze.assert()
+    }
+
+    #[test]
+    fn insert_date_time() {
+        let events_ctx = r#"
+            CREATE TABLE events (
+                event_id    INT PRIMARY KEY,
+                title       VARCHAR(200),
+                occurred_at TIMESTAMP
+            );
+        "#;
+
+        let sql = r#"
+            INSERT INTO events (event_id, title, occurred_at)
+            VALUES (420, 'Meeting', '2021-01-01 12:00:00');
+        "#;
+
+        let analyze = Analyze {
+            sql,
+            ctx: &[events_ctx],
+            expected: Ok(()),
+        };
+
+        analyze.assert().unwrap();
     }
 }
