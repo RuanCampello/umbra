@@ -552,6 +552,12 @@ mod tests {
             Expression::Value(Value::Number(1.5 as i128)),
             CTX
         );
+        assert_type_error!(
+            "SELECT * FROM products WHERE id = 'one';",
+            VmType::Number,
+            Expression::Value(Value::String("one".to_string())),
+            CTX
+        );
 
         Ok(())
     }
