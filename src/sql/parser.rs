@@ -125,12 +125,26 @@ impl<'input> Parser<'input> {
                 }?;
 
                 self.expect_keyword(Keyword::Values)?;
-                let values = self.parse_separated_tokens(|parser| parser.parse_expr(None), true)?;
+
+                let mut rows = Vec::new();
+                loop {
+                    // each row is ( expr, expr, ... )
+                    self.expect_token(Token::LeftParen)?;
+                    let row = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
+                    self.expect_token(Token::RightParen)?;
+                    rows.push(row);
+
+                    // comma? if so, more rows; otherwise break
+                    match self.consume_optional(Token::Comma) {
+                        true => continue,
+                        false => break,
+                    }
+                }
 
                 Statement::Insert {
                     into,
                     columns,
-                    values,
+                    values: rows,
                 }
             }
             Keyword::Update => {
@@ -783,10 +797,11 @@ mod tests {
             Ok(Statement::Insert {
                 into: "departments".to_string(),
                 columns: vec!["id".to_string(), "name".to_string()],
-                values: vec![
+                values: vec![vec![
+                    // outer vec = rows, inner vec = expressions in that row
                     Expression::Value(Value::Number(1)),
-                    Expression::Value(Value::String("HR".to_string())),
-                ],
+                    Expression::Value(Value::String("HR".to_string()))
+                ],],
             })
         )
     }

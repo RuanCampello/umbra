@@ -88,7 +88,7 @@ pub(in crate::sql) fn analyze<'s>(
 
         Statement::Insert {
             into,
-            values,
+            values: rows,
             columns,
         } => {
             let metadata = ctx.metadata(into)?;
@@ -108,36 +108,36 @@ pub(in crate::sql) fn analyze<'s>(
                 }
             }
 
-            if columns.len() != values.len() {
-                return Err(AnalyzerError::MissingCols.into());
-            }
-
-            let mut duplicates = HashSet::new();
-            for col in columns {
-                if metadata.schema.index_of(col).is_none() {
-                    return Err(SqlError::InvalidColumn(col.into()).into());
+            for row in rows {
+                if row.len() != columns.len() {
+                    return Err(AnalyzerError::MissingCols.into());
                 }
 
-                if !duplicates.insert(col) {
-                    return Err(AnalyzerError::DuplicateCols(col.into()).into());
+                let mut seen = HashSet::new();
+                for col in columns {
+                    if metadata.schema.index_of(col).is_none() {
+                        return Err(SqlError::InvalidColumn(col.into()).into());
+                    }
+                    if !seen.insert(col) {
+                        return Err(AnalyzerError::DuplicateCols(col.into()).into());
+                    }
+                    if col.eq(ROW_COL_ID) {
+                        return Err(AnalyzerError::MetadataAssignment.into());
+                    }
                 }
 
-                if col.eq(ROW_COL_ID) {
-                    return Err(AnalyzerError::MetadataAssignment.into());
+                let schema_len = if metadata.schema.columns[0].name.eq(ROW_COL_ID) {
+                    metadata.schema.columns.len() - 1
+                } else {
+                    metadata.schema.columns.len()
+                };
+                if schema_len != columns.len() {
+                    return Err(AnalyzerError::MissingCols.into());
                 }
-            }
 
-            let schema_len = match metadata.schema.columns[0].name.eq(ROW_COL_ID) {
-                true => &metadata.schema.columns.len() - 1,
-                false => metadata.schema.columns.len(),
-            };
-
-            if schema_len != columns.len() {
-                return Err(AnalyzerError::MissingCols.into());
-            }
-
-            for (expr, col) in values.iter().zip(columns) {
-                analyze_assignment(metadata, col, expr, false)?;
+                for (expr, col) in row.iter().zip(columns) {
+                    analyze_assignment(metadata, col, expr, false)?;
+                }
             }
         }
 
@@ -501,7 +501,7 @@ mod tests {
 
         let sql = r#"
             INSERT INTO events (event_id, title, occurred_at)
-            VALUES (420, 'Meeting', '2021-01-01 12:00:00');
+            VALUES (420, 'Meeting', '2021-01-01 12:00:00'), (69, 'Data backup', '2025-05-07 23:59:59');
         "#;
 
         let analyze = Analyze {

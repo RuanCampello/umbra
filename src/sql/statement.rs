@@ -25,7 +25,7 @@ pub(crate) enum Statement {
     Insert {
         into: String,
         columns: Vec<String>,
-        values: Vec<Expression>,
+        values: Vec<Vec<Expression>>,
     },
     Delete {
         from: String,
