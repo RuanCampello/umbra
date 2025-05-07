@@ -171,7 +171,7 @@ mod tests {
     use crate::sql::parser::*;
 
     struct Optimiser<'op> {
-        sql: &'op str,
+        input: &'op str,
         optimised: &'op str,
     }
 
@@ -179,7 +179,7 @@ mod tests {
 
     impl<'op> Optimiser<'op> {
         fn assert(&self) -> OptimiserResult {
-            let mut statement = Parser::new(self.sql).parse_statement()?;
+            let mut statement = Parser::new(self.input).parse_statement()?;
             optimise(&mut statement)?;
 
             assert_eq!(Parser::new(self.optimised).parse_statement()?, statement);
@@ -187,7 +187,7 @@ mod tests {
         }
 
         fn assert_expression(&self) -> OptimiserResult {
-            let mut expression = Parser::new(self.sql).parse_expr(None)?;
+            let mut expression = Parser::new(self.input).parse_expr(None)?;
             simplify(&mut expression)?;
 
             assert_eq!(Parser::new(self.optimised).parse_expr(None)?, expression);
@@ -199,19 +199,19 @@ mod tests {
     fn test_simplify_add() -> OptimiserResult {
         Optimiser {
             optimised: "x + 13",
-            sql: "x + 4 + 7 + 2",
+            input: "x + 4 + 7 + 2",
         }
         .assert_expression()?;
 
         Optimiser {
             optimised: "x + 7",
-            sql: "2 + 4 + 1 + x",
+            input: "2 + 4 + 1 + x",
         }
         .assert_expression()?;
 
         Optimiser {
             optimised: "x + 24",
-            sql: "4 + 2 + x + 6 + 12",
+            input: "4 + 2 + x + 6 + 12",
         }
         .assert_expression()
     }
@@ -220,13 +220,13 @@ mod tests {
     fn test_simplify_mul() -> OptimiserResult {
         Optimiser {
             optimised: "x",
-            sql: "x * (3 - 2)",
+            input: "x * (3 - 2)",
         }
         .assert_expression()?;
 
         Optimiser {
             optimised: "x",
-            sql: "(2 - 1) * x",
+            input: "(2 - 1) * x",
         }
         .assert_expression()
     }
@@ -235,13 +235,43 @@ mod tests {
     fn test_simplify_div() -> OptimiserResult {
         Optimiser {
             optimised: "x",
-            sql: "x / (3 - 2)",
+            input: "x / (3 - 2)",
         }
         .assert_expression()?;
 
         Optimiser {
             optimised: "x",
-            sql: "x / (10 - 9)",
+            input: "x / (10 - 9)",
+        }
+        .assert_expression()
+    }
+
+    #[test]
+    fn test_simplify_zero_op() -> OptimiserResult {
+        Optimiser {
+            optimised: "y",
+            input: "(10 - 10) + y",
+        }
+        .assert_expression()?;
+
+        Optimiser {
+            optimised: "y",
+            input: "y - ((6 - 4) - 2)",
+        }
+        .assert_expression()?;
+
+        Optimiser {
+            optimised: "z",
+            input: "z + z * (2 - 2)",
+        }
+        .assert_expression()
+    }
+
+    #[test]
+    fn test_cant_simplify() -> OptimiserResult {
+        Optimiser {
+            optimised: "x * 2 + 6",
+            input: "x * 2 + 6",
         }
         .assert_expression()
     }
