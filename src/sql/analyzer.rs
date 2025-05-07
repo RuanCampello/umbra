@@ -449,8 +449,10 @@ mod tests {
         }
     }
 
+    type AnalyzerResult = Result<(), DatabaseError<'static>>;
+
     #[test]
-    fn select_from_invalid_table() -> Result<(), DatabaseError<'static>> {
+    fn select_from_invalid_table() -> AnalyzerResult {
         // we cannot select from a table not created yet
         let analyze = Analyze {
             sql: "SELECT * FROM users;",
@@ -462,10 +464,21 @@ mod tests {
     }
 
     #[test]
-    fn select_from_valid_table() -> Result<(), DatabaseError<'static>> {
+    fn select_from_valid_table() -> AnalyzerResult {
         let analyze = Analyze {
             sql: "SELECT * FROM users;",
             ctx: &["CREATE TABLE users (id INT PRIMARY KEY);"],
+            expected: Ok(()),
+        };
+
+        analyze.assert()
+    }
+
+    #[test]
+    fn insert_datetime() -> AnalyzerResult {
+        let analyze = Analyze {
+            ctx: &["CREATE TABLE employees (name VARCHAR(255), birth_date DATE);"],
+            sql: "INSERT INTO employees (name, birth_date) VALUES ('John Doe', '2020-01-01');",
             expected: Ok(()),
         };
 

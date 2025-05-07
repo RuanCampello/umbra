@@ -72,11 +72,11 @@ impl Schema {
     pub fn new(columns: Vec<Column>) -> Self {
         let mut index = HashMap::new();
         for (i, col) in columns.iter().enumerate() {
-            index.insert(col.name.as_str(), i);
+            index.insert(col.name.to_string(), i);
         }
         Self {
             columns,
-            index: HashMap::new(),
+            index,
         }
     }
 
