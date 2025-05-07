@@ -676,8 +676,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    // FIXME: make it pass
     fn non_boolean_where() -> AnalyzerResult {
         const CTX: &str = "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));";
         let found: &'static Expression = Box::leak(Box::new(Expression::BinaryOperator {
