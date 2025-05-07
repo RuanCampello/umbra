@@ -111,14 +111,31 @@ pub(crate) fn simplify<'exp>(expression: &mut Expression) -> Result<(), SqlError
                 ) => {
                     std::mem::swap(variable, literal);
                 }
-
+                // simplify multiplication/division with zero: 0 * x, x * 0, or 0 / x → 0
+                (
+                    zero @ Expression::Value(Value::Number(0)),
+                    BinaryOperator::Mul | BinaryOperator::Div,
+                    Expression::Identifier(_),
+                )
+                | (
+                    Expression::Identifier(_),
+                    BinaryOperator::Mul,
+                    zero @ Expression::Value(Value::Number(0)),
+                ) => {
+                    *expression = std::mem::replace(zero, Expression::Wildcard);
+                }
                 _ => {}
             };
+        }
 
-            todo!()
+        //FIXME: that's going to be a pain in the ass
+        Expression::Nested(nested) => {
+            simplify(nested.as_mut())?;
+            *expression = std::mem::replace(nested.as_mut(), Expression::Wildcard);
         }
         _ => {}
     }
+
     Ok(())
 }
 
