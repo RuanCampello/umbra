@@ -163,3 +163,53 @@ fn simplify_where(r#where: &mut Option<Expression>) -> Result<(), SqlError> {
 fn resolve_expression(expression: &Expression) -> Result<Expression, SqlError> {
     vm::resolve_only_expression(expression).map(Expression::Value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::db::DatabaseError;
+    use crate::sql::parser::*;
+
+    struct Optimiser<'op> {
+        sql: &'op str,
+        optimised: &'op str,
+    }
+
+    impl<'op> Optimiser<'op> {
+        fn assert(&self) -> Result<(), DatabaseError> {
+            let mut statement = Parser::new(self.sql).parse_statement()?;
+            optimise(&mut statement)?;
+
+            assert_eq!(Parser::new(self.optimised).parse_statement()?, statement);
+            Ok(())
+        }
+
+        fn assert_expression(&self) -> Result<(), DatabaseError> {
+            let mut expression = Parser::new(self.sql).parse_expr(None)?;
+            simplify(&mut expression)?;
+
+            assert_eq!(Parser::new(self.optimised).parse_expr(None)?, expression);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_simplify_add() -> Result<(), DatabaseError> {
+        Optimiser {
+            optimised: "x + 13",
+            sql: "x + 4 + 7 + 2",
+        }
+        .assert_expression()?;
+
+        Optimiser {
+            optimised: "x + 7",
+            sql: "2 + 4 + 1 + x",
+        }
+        .assert_expression()?;
+        
+        Optimiser {
+            optimised: "x + 24",
+            sql: "4 + 2 + x + 6 + 12",
+        }.assert_expression()
+    }
+}
