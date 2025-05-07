@@ -265,11 +265,12 @@ mod tests {
             input: "z + z * (2 - 2)",
         }
         .assert_expression()?;
-        
+
         Optimiser {
             optimised: "-x",
             input: "(2-2) - x",
-        }.assert_expression()
+        }
+        .assert_expression()
     }
 
     #[test]
@@ -279,5 +280,33 @@ mod tests {
             input: "x * 2 + 6",
         }
         .assert_expression()
+    }
+
+    #[test]
+    #[ignore]
+    // FIXME: parse order to make this pass
+    fn test_optimise_select() -> OptimiserResult {
+        Optimiser {
+            input: "SELECT x * 1, 2 + (2 + 2), y FROM some_table WHERE x < 5 -(-5) ORDER BY x + (y * (9-8));",
+            optimised: "SELECT x, 6, y FROM some_table WHERE x < 10 ORDER BY x + y;",
+        }.assert()
+    }
+
+    #[test]
+    fn test_optimise_insert() -> OptimiserResult {
+        Optimiser {
+            input: "INSERT INTO some_table (a,b,c) VALUES (2+2, 2*(2*10), -(-5)-5);",
+            optimised: "INSERT INTO some_table (a,b,c) VALUES (4, 40, 0);",
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_optimise_delete() -> OptimiserResult {
+        Optimiser {
+            input: "DELETE FROM t WHERE x >= y * (2 - 2) AND x != (10+10);",
+            optimised: "DELETE FROM t WHERE x >= 0 AND x != 20;",
+        }
+        .assert()
     }
 }
