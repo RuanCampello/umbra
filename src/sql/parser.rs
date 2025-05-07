@@ -70,6 +70,7 @@ impl<'input> Parser<'input> {
                 let cols = self.parse_separated_tokens(|parser| parser.parse_expr(None), false)?;
                 self.expect_keyword(Keyword::From)?;
                 let (from, r#where) = self.parse_from_and_where()?;
+
                 // TODO: parse order by
                 Statement::Select {
                     columns: cols,
@@ -539,15 +540,15 @@ impl<'input> Parser<'input> {
 
     fn supported_statements() -> Vec<Keyword> {
         vec![
+            Keyword::Select,
             Keyword::Create,
             Keyword::Update,
             Keyword::Insert,
             Keyword::Delete,
-            Keyword::Select,
             Keyword::Drop,
             Keyword::Start,
-            Keyword::Commit,
             Keyword::Rollback,
+            Keyword::Commit,
             Keyword::Explain,
         ]
     }

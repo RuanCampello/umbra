@@ -150,12 +150,13 @@ pub(in crate::sql) fn analyze<'s>(
             let metadata = ctx.metadata(from)?;
 
             for expr in columns {
-                if expr.eq(&Expression::Wildcard) {
+                if expr.ne(&Expression::Wildcard) {
                     analyze_expression(&metadata.schema, None, expr)?;
                 }
             }
 
             analyze_where(&metadata.schema, r#where)?;
+
             for expr in order_by {
                 analyze_expression(&metadata.schema, None, expr)?;
             }
@@ -441,8 +442,33 @@ mod tests {
     impl<'sql> Analyze<'sql> {
         fn assert(&self) -> Result<(), DatabaseError<'sql>> {
             let statement = Parser::new(self.sql).parse_statement()?;
-            // let mut ctx = Context::from(self.ctx)?;
-            todo!()
+            let mut ctx = Context::try_from(self.ctx)?;
+
+            assert_eq!(analyze(&statement, &mut ctx), self.expected);
+            Ok(())
         }
+    }
+
+    #[test]
+    fn select_from_invalid_table() -> Result<(), DatabaseError<'static>> {
+        // we cannot select from a table not created yet
+        let analyze = Analyze {
+            sql: "SELECT * FROM users;",
+            ctx: &[],
+            expected: Err(SqlError::InvalidTable("users".into()).into()),
+        };
+
+        analyze.assert()
+    }
+
+    #[test]
+    fn select_from_valid_table() -> Result<(), DatabaseError<'static>> {
+        let analyze = Analyze {
+            sql: "SELECT * FROM users;",
+            ctx: &["CREATE TABLE users (id INT PRIMARY KEY);"],
+            expected: Ok(()),
+        };
+
+        analyze.assert()
     }
 }

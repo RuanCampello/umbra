@@ -31,11 +31,12 @@ pub(crate) struct Schema {
     index: HashMap<String, usize>,
 }
 
-struct Context {
+pub(crate) struct Context {
     tables: HashMap<String, TableMetadata>,
     max_size: Option<usize>,
 }
 
+#[derive(Debug, PartialEq)]
 pub(crate) enum DatabaseError<'exp> {
     Parser(ParserError),
     Sql(SqlError<'exp>),
@@ -81,7 +82,7 @@ impl Schema {
 
     pub fn prepend_id(&mut self) {
         debug_assert!(
-            self.columns.first().map_or(true, |c| c.name.eq(ROW_COL_ID)),
+            self.columns.first().map_or(true, |c| c.name.ne(ROW_COL_ID)),
             "schema already has {ROW_COL_ID}: {self:?}"
         );
 
