@@ -71,12 +71,13 @@ impl<'input> Parser<'input> {
                 self.expect_keyword(Keyword::From)?;
                 let (from, r#where) = self.parse_from_and_where()?;
 
-                // TODO: parse order by
+                let order_by = self.parse_order_by()?;
+
                 Statement::Select {
                     columns: cols,
                     from,
                     r#where,
-                    order_by: vec![],
+                    order_by,
                 }
             }
             Keyword::Create => {
@@ -218,6 +219,16 @@ impl<'input> Parser<'input> {
         }
 
         Ok(expr)
+    }
+
+    fn parse_order_by(&mut self) -> ParserResult<Vec<Expression>> {
+        match self.consume_optional(Token::Keyword(Keyword::Order)) {
+            true => {
+                self.expect_keyword(Keyword::By)?;
+                self.parse_separated_tokens(|p| p.parse_expr(None), false)
+            }
+            false => Ok(vec![]),
+        }
     }
 
     fn parse_infix(&mut self, left: Expression, precedence: u8) -> ParserResult<Expression> {

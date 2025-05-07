@@ -283,8 +283,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    // FIXME: parse order to make this pass
     fn test_optimise_select() -> OptimiserResult {
         Optimiser {
             input: "SELECT x * 1, 2 + (2 + 2), y FROM some_table WHERE x < 5 -(-5) ORDER BY x + (y * (9-8));",
