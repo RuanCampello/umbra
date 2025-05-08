@@ -97,7 +97,7 @@ pub(in crate::core) enum MemoryPage {
 
 /// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore, can be indexed with two bytes.
 pub(in crate::core) type SlotId = u16;
-pub(in crate::core) type PageNumber = u32;
+pub(crate) type PageNumber = u32;
 
 pub(in crate::core::storage) const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
 pub(in crate::core::storage) const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
