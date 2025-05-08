@@ -1,7 +1,7 @@
 //! Plan trees implementation to execute the actual queries.
 
 use crate::core::db::{DatabaseError, IndexMetadata, Relation, Schema, SqlError, TableMetadata};
-use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
+use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use super::expression::resolve_only_expression;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Planner<File> {
     /// Scans all rows from a table in sequential order.
     /// This is most basic operation that reads every row without any filtering.
@@ -30,7 +30,7 @@ pub(crate) enum Planner<File> {
     Values(Values),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct SeqScan<File> {
     pub table: TableMetadata,
     pager: Rc<RefCell<Pager<File>>>,
@@ -64,13 +64,27 @@ struct RangeScan<File> {
 }
 
 #[derive(Debug, PartialEq)]
+struct KeyScan<File> {
+    comparator: FixedSizeCmp,
+    table: TableMetadata,
+    pager: Rc<RefCell<Pager<File>>>,
+    source: Box<Planner<File>>,
+}
+
+#[derive(Debug, PartialEq)]
 struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
 
 type Tuple = Vec<Value>;
 
-impl<File: Seek + Read + Write + FileOperations> SeqScan<File> {
+pub trait PlanExecutor: Seek + Read + Write + FileOperations {}
+pub trait Execute {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError>;
+}
+impl<File: Seek + Read + Write + FileOperations> PlanExecutor for File {}
+
+impl<File: PlanExecutor> Execute for SeqScan<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         let mut pager = self.pager.borrow_mut();
 
@@ -85,7 +99,7 @@ impl<File: Seek + Read + Write + FileOperations> SeqScan<File> {
     }
 }
 
-impl<File: Seek + Read + Write + FileOperations> ExactMatch<File> {
+impl<File: PlanExecutor> Execute for ExactMatch<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         if self.done {
             return Ok(None);
@@ -111,7 +125,7 @@ impl<File: Seek + Read + Write + FileOperations> ExactMatch<File> {
     }
 }
 
-impl<File: Seek + Read + Write + FileOperations> RangeScan<File> {
+impl<File: PlanExecutor> RangeScan<File> {
     fn init(&mut self) -> std::io::Result<()> {
         let mut pager = self.pager.borrow_mut();
 
@@ -144,7 +158,9 @@ impl<File: Seek + Read + Write + FileOperations> RangeScan<File> {
 
         Ok(())
     }
+}
 
+impl<File: PlanExecutor> Execute for RangeScan<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         if self.done {
             return Ok(None);
@@ -188,7 +204,13 @@ impl<File: Seek + Read + Write + FileOperations> RangeScan<File> {
     }
 }
 
-impl Values {
+impl<File: PlanExecutor> Execute for KeyScan<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        todo!()
+    }
+}
+
+impl Execute for Values {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         let Some(mut values) = self.values.pop_front() else {
             return Ok(None);

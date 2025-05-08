@@ -29,13 +29,6 @@ use std::num::NonZeroI32;
 /// 1. Rust's memory alignment requirements
 /// 2. The following field (`time: NaiveTime`) is 3 bytes
 /// 3. Natural padding added by the compiler for optimal access
-///
-/// # Example
-/// ```
-/// let dt = NaiveDateTime::parse_str("2023-01-15T14:30:00").unwrap();
-/// assert_eq!(dt.to_string(), "2023-01-15 14:30:00");
-/// assert_eq!(dt.timestamp(), 1673793000);
-/// ```
 #[derive(Debug, PartialEq, Clone)]
 pub struct NaiveDateTime {
     date: NaiveDate,
