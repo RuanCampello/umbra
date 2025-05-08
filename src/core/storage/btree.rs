@@ -594,7 +594,58 @@ impl Cursor {
         &mut self,
         pager: &mut Pager<File>,
     ) -> IOResult<Option<(PageNumber, SlotId)>> {
-        todo!()
+        // what did you expect?
+        if self.done {
+            return Ok(None);
+        }
+
+        if !self.init {
+            self.move_leftmost(pager)?;
+            self.init = true;
+        }
+
+        let node = pager.get(self.page)?;
+        if node.len() == 0 && node.is_leaf() {
+            self.done = true;
+            return Ok(None);
+        }
+
+        let position = Ok(Some((self.page, self.slot)));
+        if node.is_leaf() && self.slot + 1 < node.len() {
+            self.slot += 1;
+            return position;
+        }
+
+        if !node.is_leaf() && self.slot < node.len() {
+            self.descent.push(self.page);
+            self.page = node.children(self.slot + 1);
+            self.move_leftmost(pager)?;
+
+            return position;
+        }
+
+        let mut found_branch = false;
+        while !self.descent.is_empty() && !found_branch {
+            let parent_page = self.descent.pop().unwrap();
+            let parent_node = pager.get(parent_page)?;
+
+            let idx = parent_node
+                .iter_children()
+                .position(|p| p == self.page)
+                .unwrap() as u16;
+            self.page = parent_page;
+
+            if idx < parent_node.len() {
+                self.slot = idx;
+                found_branch = true;
+            }
+        }
+
+        if self.descent.is_empty() && !found_branch {
+            self.done = true;
+        }
+
+        position
     }
 
     fn move_leftmost<File: Seek + Read + Write + FileOperations>(
