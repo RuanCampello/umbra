@@ -1,13 +1,14 @@
 //! Plan trees implementation to execute the actual queries.
 
 use crate::core::db::{DatabaseError, IndexMetadata, Relation, Schema, TableMetadata};
-use crate::core::storage::btree::{BTree, BTreeKeyCmp, Cursor};
+use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::sql::statement::{Expression, Value};
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::io::{Read, Seek, Write};
 use std::ops::{Bound, RangeBounds};
 use std::rc::Rc;
@@ -47,6 +48,7 @@ struct RangeScan<File> {
     expr: Expression,
     cursor: Cursor,
     init: bool,
+    done: bool,
     pub emit_only_key: bool,
 }
 
@@ -125,5 +127,47 @@ impl<File: Seek + Read + Write + FileOperations> RangeScan<File> {
         }
 
         Ok(())
+    }
+
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if self.done {
+            return Ok(None);
+        }
+
+        if !self.init {
+            self.init()?;
+            self.init = true;
+        }
+
+        let mut pager = self.pager.borrow_mut();
+        let Some((page, slot)) = self.cursor.try_next(&mut pager)? else {
+            self.done = true;
+            return Ok(None);
+        };
+
+        let entry = reassemble_content(&mut pager, page, slot)?;
+        let bound = self.range.end_bound();
+
+        if let Bound::Excluded(key) | Bound::Included(key) = bound {
+            let ordering = self.comparator.cmp(entry.as_ref(), key);
+
+            if let Ordering::Equal | Ordering::Greater = ordering {
+                self.done = true;
+
+                if matches!(bound, Bound::Excluded(_))
+                    || matches!(bound, Bound::Included(_)) && ordering.eq(&Ordering::Greater)
+                {
+                    return Ok(None);
+                }
+            }
+        }
+
+        let mut tuple = tuple::deserialize(entry.as_ref(), &self.schema);
+        if self.emit_only_key {
+            tuple.drain(self.index + 1..);
+            tuple.drain(..self.index);
+        }
+
+        Ok(Some(tuple))
     }
 }

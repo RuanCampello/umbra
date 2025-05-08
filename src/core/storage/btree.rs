@@ -100,7 +100,7 @@ const DEFAULT_MIN_KEYS: usize = 4;
 
 /// Key comparator to [`BTree`].
 /// Compares two keys to determine their [`Ordering`].
-pub(in crate::core) trait BytesCmp {
+pub(crate) trait BytesCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
 }
 
