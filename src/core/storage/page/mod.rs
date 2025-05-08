@@ -31,7 +31,7 @@ use std::{self, alloc, iter, ptr};
 /// ```
 ///
 #[derive(Clone)]
-pub(in crate::core) struct Page {
+pub(crate) struct Page {
     /// In-memory buffer containing data read from disk, including a header.
     buffer: BufferWithHeader<PageHeader>,
     /// Map storing overflow cells, keyed by their slot IDs.

@@ -9,6 +9,7 @@ use crate::core::storage::tuple::{self, deserialize};
 use crate::sql::statement::{Expression, Value};
 use std::cell::RefCell;
 use std::io::{Read, Seek, Write};
+use std::ops::{Bound, RangeBounds};
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -32,6 +33,21 @@ struct ExactMatch<File> {
     pager: Rc<RefCell<Pager<File>>>,
     done: bool,
     emit_only_key: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct RangeScan<File> {
+    index: usize,
+    relation: Relation,
+    root: PageNumber,
+    schema: Schema,
+    pager: Rc<RefCell<Pager<File>>>,
+    range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
+    comparator: BTreeKeyCmp,
+    expr: Expression,
+    cursor: Cursor,
+    init: bool,
+    pub emit_only_key: bool,
 }
 
 type Tuple = Vec<Value>;
@@ -74,5 +90,40 @@ impl<File: Seek + Read + Write + FileOperations> ExactMatch<File> {
         }
 
         Ok(Some(tuple))
+    }
+}
+
+impl<File: Seek + Read + Write + FileOperations> RangeScan<File> {
+    fn init(&mut self) -> std::io::Result<()> {
+        let mut pager = self.pager.borrow_mut();
+
+        let key = match self.range.start_bound() {
+            Bound::Excluded(key) => key,
+            Bound::Included(key) => key,
+            Bound::Unbounded => return Ok(()),
+        };
+
+        let mut descent = Vec::new();
+        let mut btree = BTree::new(&mut pager, self.root, self.comparator.clone());
+        let search = btree.search(self.root, key, &mut descent)?;
+
+        match search.index {
+            Ok(slot) => {
+                self.cursor = Cursor::initialized(search.page, slot, descent);
+
+                if let Bound::Excluded(_) = self.range.start_bound() {
+                    self.cursor.try_next(&mut pager)?;
+                }
+            }
+            Err(slot) => match slot >= pager.get(search.page)?.len() {
+                true => {
+                    self.cursor = Cursor::initialized(search.page, slot.saturating_sub(1), descent);
+                    self.cursor.try_next(&mut pager)?;
+                }
+                false => self.cursor = Cursor::initialized(search.page, slot, descent),
+            },
+        }
+
+        Ok(())
     }
 }

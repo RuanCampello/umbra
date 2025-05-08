@@ -43,12 +43,12 @@ struct Sibling {
 
 /// Result of a search in [`Btree].
 #[derive(Debug)]
-struct Search {
-    page: PageNumber,
+pub struct Search {
+    pub page: PageNumber,
 
     /// Stores the searched element index on [`Ok`] or
     /// the index where it should be on [`Err`]
-    index: Result<u16, u16>,
+    pub index: Result<u16, u16>,
 }
 
 /// The result of a [remove](BTree::remove) operation in the BTree.
@@ -61,14 +61,15 @@ struct Removal {
 /// Compares the `self.0` using a `memcmp`.
 /// If the integer keys at the beginning of a buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
-#[derive(Debug, Default)]
+#[derive(Debug, PartialEq, Default, Clone)]
 pub(crate) struct FixedSizeCmp(pub usize);
 
 /// Compares UTF-8 strings.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct StringCmp(pub usize);
 
 /// No allocations comparing to [`Box`].
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum BTreeKeyCmp {
     MemCmp(FixedSizeCmp),
     StrCmp(StringCmp),
@@ -209,7 +210,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         }))
     }
 
-    fn search(
+    pub fn search(
         &mut self,
         page: PageNumber,
         entry: &[u8],
