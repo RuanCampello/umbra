@@ -1,11 +1,11 @@
 //! Plan trees implementation to execute the actual queries.
 
-use crate::core::db::{DatabaseError, IndexMetadata, Schema, TableMetadata};
-use crate::core::storage::btree::{BTreeKeyCmp, Cursor};
+use crate::core::db::{DatabaseError, IndexMetadata, Relation, Schema, TableMetadata};
+use crate::core::storage::btree::{BTree, BTreeKeyCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
-use crate::core::storage::tuple::deserialize;
+use crate::core::storage::tuple::{self, deserialize};
 use crate::sql::statement::{Expression, Value};
 use std::cell::RefCell;
 use std::io::{Read, Seek, Write};
@@ -52,7 +52,27 @@ impl<File: Seek + Read + Write + FileOperations> SeqScan<File> {
 }
 
 impl<File: Seek + Read + Write + FileOperations> ExactMatch<File> {
-    fn try_next() -> Result<Option<Tuple>, DatabaseError> {
-        todo!()
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if self.done {
+            return Ok(None);
+        }
+
+        self.done = true;
+
+        let mut pager = self.pager.borrow_mut();
+        let mut btree = BTree::new(&mut pager, self.relation.root(), self.relation.comp());
+
+        let Some(entry) = btree.get(&self.key)? else {
+            return Ok(None);
+        };
+
+        let mut tuple = tuple::deserialize(entry.as_ref(), self.relation.schema());
+        if self.emit_only_key {
+            let table_idx = self.relation.index();
+            tuple.drain(table_idx + 1..);
+            tuple.drain(..table_idx);
+        }
+
+        Ok(Some(tuple))
     }
 }

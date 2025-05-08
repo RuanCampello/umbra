@@ -182,6 +182,27 @@ impl Relation {
             Self::Table(table) => &table.schema,
         }
     }
+
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Index(_) => "index",
+            Self::Table(_) => "table",
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Index(idx) => &idx.name,
+            Self::Table(table) => &table.name,
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            Self::Index(_) => 1,
+            Self::Table(_) => 0,
+        }
+    }
 }
 
 /// Test-only implementation: clones everything for simplicity

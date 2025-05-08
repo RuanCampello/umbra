@@ -14,7 +14,7 @@ use std::mem;
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
 /// Checkout [here](https://www.cs.usfca.edu/~galles/visualization/BPlusTree.html) to see a visualiser of this data structure.
-pub(in crate::core::storage) struct BTree<'p, File, Cmp> {
+pub(crate) struct BTree<'p, File, Cmp> {
     root: PageNumber,
     min_keys: usize,
     balanced_siblings: usize,
