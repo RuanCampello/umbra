@@ -18,9 +18,15 @@ use super::expression::resolve_only_expression;
 
 #[derive(Debug)]
 pub(crate) enum Planner<File> {
+    /// Scans all rows from a table in sequential order.
+    /// This is most basic operation that reads every row without any filtering.
     SeqScan(SeqScan<File>),
+    /// Optimised scan that finds rows where column exactly matches a specific value.
+    /// Used for queries like `SELECT * FROM table WHERE primary_key = value`.
     ExactMatch(ExactMatch<File>),
+    /// Scans rows within a specific key range, either from a table or an index.
     RangeScan(RangeScan<File>),
+    /// Handles literal values from INSERT statements.
     Values(Values),
 }
 
