@@ -1149,4 +1149,25 @@ mod tests {
         let mut btree = BTree::default().with_keys(pager, keys.clone())?;
         traversal_matches(&mut btree, keys)
     }
+
+    #[test]
+    fn test_deep_cursor() -> IOResult<()> {
+        let pager = &mut Pager::from_order(6);
+
+        let keys = 1..=400;
+        let mut btree = BTree::default().with_keys(pager, keys.clone())?;
+
+        traversal_matches(&mut btree, keys)
+    }
+
+    #[test]
+    fn test_cursor_on_empty_root() -> IOResult<()> {
+        let pager = &mut Pager::default();
+
+        let btree = BTree::default().pager(pager);
+        let mut cursor = Cursor::new(btree.root, 0);
+
+        assert!(cursor.next(btree.pager).is_none());
+        Ok(())
+    }
 }
