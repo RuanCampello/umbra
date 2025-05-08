@@ -24,6 +24,14 @@ pub(in crate::core::storage) struct BTree<'p, File, Cmp> {
     comparator: Cmp,
 }
 
+struct Cursor {
+    page: PageNumber,
+    slot: SlotId,
+    descent: Vec<PageNumber>,
+    init: bool,
+    done: bool,
+}
+
 #[derive(Debug)]
 struct Sibling {
     page: PageNumber,
@@ -548,6 +556,62 @@ impl<'p, File, Cmp: BytesCmp> BTree<'p, File, Cmp> {
             balanced_siblings: DEFAULT_BALANCED_SIBLINGS,
             min_keys: DEFAULT_MIN_KEYS,
         }
+    }
+}
+
+impl Cursor {
+    pub fn new(page: PageNumber, slot: SlotId) -> Self {
+        Self {
+            page,
+            slot,
+            descent: vec![],
+            init: false,
+            done: false,
+        }
+    }
+
+    pub fn initialized(page: PageNumber, slot: SlotId, descent: Vec<PageNumber>) -> Self {
+        Self {
+            page,
+            slot,
+            descent,
+            init: true,
+            done: false,
+        }
+    }
+
+    pub fn done() -> Self {
+        Self {
+            page: 0,
+            slot: 0,
+            descent: vec![],
+            init: true,
+            done: true,
+        }
+    }
+
+    pub fn try_next<File: Seek + Read + Write + FileOperations>(
+        &mut self,
+        pager: &mut Pager<File>,
+    ) -> IOResult<Option<(PageNumber, SlotId)>> {
+        todo!()
+    }
+
+    fn move_leftmost<File: Seek + Read + Write + FileOperations>(
+        &mut self,
+        pager: &mut Pager<File>,
+    ) -> IOResult<()> {
+        let mut node = pager.get(self.page)?;
+
+        while !node.is_leaf() {
+            self.descent.push(self.page);
+            self.page = node.children(0);
+            node = pager.get(self.page)?;
+        }
+
+        self.page = 0;
+
+        Ok(())
     }
 }
 

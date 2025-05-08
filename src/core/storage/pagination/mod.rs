@@ -5,4 +5,4 @@
 
 mod cache;
 pub(in crate::core::storage) mod io;
-pub(in crate::core::storage) mod pager;
+pub(crate) mod pager;

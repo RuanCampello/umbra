@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 /// Inspired by [SQLite 2.8.1 pager].
 /// It manages IO over a "block" in disk to storage the database.
-pub(in crate::core::storage) struct Pager<File> {
+pub(crate) struct Pager<File> {
     file: BlockIo<File>,
     cache: Cache,
     /// Block size to read/write a buffer.
