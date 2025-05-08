@@ -1,7 +1,7 @@
 //! Plan trees implementation to execute the actual queries.
 
-use crate::core::db::{DatabaseError, IndexMetadata, TableMetadata};
-use crate::core::storage::btree::Cursor;
+use crate::core::db::{DatabaseError, IndexMetadata, Schema, TableMetadata};
+use crate::core::storage::btree::{BTreeKeyCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
@@ -65,6 +65,23 @@ impl<File: Seek + Read + Write + FileOperations> ExactMatch<File> {
 
 impl Relation {
     pub fn root(&self) -> PageNumber {
-        todo!()
+        match self {
+            Self::Index(idx) => idx.root,
+            Self::Table(table) => table.root,
+        }
+    }
+
+    pub fn comp(&self) -> BTreeKeyCmp {
+        match self {
+            Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
+            Self::Table(table) => BTreeKeyCmp::from(&table.schema.columns[0].data_type),
+        }
+    }
+
+    pub fn schema(&self) -> &Schema {
+        match self {
+            Self::Index(idx) => &idx.schema,
+            Self::Table(table) => &table.schema,
+        }
     }
 }

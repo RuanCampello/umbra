@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct TableMetadata {
-    root: PageNumber,
+    pub root: PageNumber,
     name: String,
     pub schema: Schema,
     pub indexes: Vec<IndexMetadata>,
@@ -18,10 +18,10 @@ pub(crate) struct TableMetadata {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct IndexMetadata {
-    root: PageNumber,
+    pub root: PageNumber,
     pub name: String,
-    column: Column,
-    schema: Schema,
+    pub column: Column,
+    pub schema: Schema,
     unique: bool,
 }
 

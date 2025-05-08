@@ -62,14 +62,14 @@ struct Removal {
 /// If the integer keys at the beginning of a buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
 #[derive(Debug, Default)]
-pub(in crate::core) struct FixedSizeCmp(pub usize);
+pub(crate) struct FixedSizeCmp(pub usize);
 
 /// Compares UTF-8 strings.
 #[derive(Debug, PartialEq)]
-pub(in crate::core::storage::btree) struct StringCmp(pub usize);
+pub(crate) struct StringCmp(pub usize);
 
 /// No allocations comparing to [`Box`].
-pub(in crate::core::storage::btree) enum BTreeKeyCmp {
+pub(crate) enum BTreeKeyCmp {
     MemCmp(FixedSizeCmp),
     StrCmp(StringCmp),
 }
