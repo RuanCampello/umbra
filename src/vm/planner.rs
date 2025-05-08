@@ -3,7 +3,8 @@
 use crate::core::db::{DatabaseError, TableMetadata};
 use crate::core::storage::btree::Cursor;
 use crate::core::storage::pagination::io::FileOperations;
-use crate::core::storage::pagination::pager::Pager;
+use crate::core::storage::pagination::pager::{reassemble_content, Pager};
+use crate::core::storage::tuple::deserialize;
 use crate::sql::statement::Value;
 use std::cell::RefCell;
 use std::io::{Read, Seek, Write};
@@ -31,6 +32,9 @@ impl<File: Seek + Read + Write + FileOperations> SeqScan<File> {
             return Ok(None);
         };
 
-        todo!()
+        Ok(Some(deserialize(
+            reassemble_content(&mut pager, page, slot)?.as_ref(),
+            &self.table.schema,
+        )))
     }
 }

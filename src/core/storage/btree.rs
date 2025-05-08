@@ -75,7 +75,7 @@ pub(in crate::core::storage::btree) enum BTreeKeyCmp {
 }
 
 /// Represents the result of reading content from the [`BTree`].
-pub(in crate::core::storage) enum Content<'a> {
+pub(crate) enum Content<'a> {
     /// Content was found within a single page and can be accessed directly as a slice.
     PageRef(&'a [u8]),
     /// The content spans multiple pages and has been reassembled into a contiguous buffer.

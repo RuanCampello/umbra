@@ -29,7 +29,7 @@ pub(in crate::core::storage) fn utf_8_length_bytes(max_size: usize) -> usize {
 }
 
 pub(crate) fn deserialize(buff: &[u8], schema: &Schema) -> Vec<Value> {
-    todo!()
+    read_from(&mut io::Cursor::new(buff), schema).unwrap()
 }
 
 fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {

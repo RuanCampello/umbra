@@ -489,7 +489,7 @@ impl<File: FileOperations> Journal<File> {
 }
 
 /// Joins a given page [content](Content) into a contiguous memory space.
-pub(in crate::core) fn reassemble_content<File: Seek + Write + Read + FileOperations>(
+pub(crate) fn reassemble_content<File: Seek + Write + Read + FileOperations>(
     pager: &mut Pager<File>,
     page_number: PageNumber,
     slot_id: SlotId,

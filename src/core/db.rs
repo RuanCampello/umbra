@@ -36,10 +36,11 @@ pub(crate) struct Context {
     max_size: Option<usize>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum DatabaseError {
     Parser(ParserError),
     Sql(SqlError),
+    Io(std::io::Error),
     /// Something went wrong with the underlying storage (db or journal file).
     Corrupted(String),
 }
@@ -275,6 +276,12 @@ impl From<TypeError> for DatabaseError {
 impl From<AnalyzerError> for DatabaseError {
     fn from(value: AnalyzerError) -> Self {
         SqlError::from(value).into()
+    }
+}
+
+impl From<std::io::Error> for DatabaseError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
     }
 }
 
