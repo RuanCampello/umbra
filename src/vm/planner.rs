@@ -1,6 +1,6 @@
 //! Plan trees implementation to execute the actual queries.
 
-use crate::core::db::{DatabaseError, IndexMetadata, Relation, Schema, TableMetadata};
+use crate::core::db::{DatabaseError, IndexMetadata, Relation, Schema, SqlError, TableMetadata};
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
@@ -9,14 +9,19 @@ use crate::core::storage::tuple::{self, deserialize};
 use crate::sql::statement::{Expression, Value};
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 use std::io::{Read, Seek, Write};
 use std::ops::{Bound, RangeBounds};
 use std::rc::Rc;
+
+use super::expression::resolve_only_expression;
 
 #[derive(Debug)]
 pub(crate) enum Planner<File> {
     SeqScan(SeqScan<File>),
     ExactMatch(ExactMatch<File>),
+    RangeScan(RangeScan<File>),
+    Values(Values),
 }
 
 #[derive(Debug)]
@@ -50,6 +55,11 @@ struct RangeScan<File> {
     init: bool,
     done: bool,
     pub emit_only_key: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct Values {
+    pub values: VecDeque<Vec<Expression>>,
 }
 
 type Tuple = Vec<Value>;
@@ -169,5 +179,20 @@ impl<File: Seek + Read + Write + FileOperations> RangeScan<File> {
         }
 
         Ok(Some(tuple))
+    }
+}
+
+impl Values {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(mut values) = self.values.pop_front() else {
+            return Ok(None);
+        };
+
+        Ok(Some(
+            values
+                .drain(..)
+                .map(|expr| resolve_only_expression(&expr))
+                .collect::<Result<Vec<Value>, SqlError>>()?,
+        ))
     }
 }
