@@ -2,8 +2,8 @@
 
 use crate::core::db::TableMetadata;
 use crate::core::storage::pagination::pager::Pager;
+use crate::core::storage::btree::Cursor;
 use std::cell::RefCell;
-use std::io::Cursor;
 use std::rc::Rc;
 
 #[derive(Debug)]

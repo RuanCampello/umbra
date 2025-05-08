@@ -24,7 +24,8 @@ pub(in crate::core::storage) struct BTree<'p, File, Cmp> {
     comparator: Cmp,
 }
 
-struct Cursor {
+#[derive(Debug, PartialEq)]
+pub(crate) struct Cursor {
     page: PageNumber,
     slot: SlotId,
     descent: Vec<PageNumber>,
@@ -98,7 +99,7 @@ const DEFAULT_MIN_KEYS: usize = 4;
 
 /// Key comparator to [`BTree`].
 /// Compares two keys to determine their [`Ordering`].
-pub(crate) trait BytesCmp {
+pub(in crate::core) trait BytesCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
 }
 
@@ -590,6 +591,13 @@ impl Cursor {
         }
     }
 
+    pub fn next<File: Seek + Read + Write + FileOperations>(
+        &mut self,
+        pager: &mut Pager<File>,
+    ) -> Option<IOResult<(PageNumber, SlotId)>> {
+        self.try_next(pager).transpose()
+    }
+
     pub fn try_next<File: Seek + Read + Write + FileOperations>(
         &mut self,
         pager: &mut Pager<File>,
@@ -660,7 +668,7 @@ impl Cursor {
             node = pager.get(self.page)?;
         }
 
-        self.page = 0;
+        self.slot = 0;
 
         Ok(())
     }
@@ -790,7 +798,11 @@ mod tests {
 
     impl Pager<MemoryBuffer> {
         fn for_test() -> Self {
-            let size = Pager::optimal_page_size(4);
+            Pager::from_order(4)
+        }
+
+        fn from_order(order: usize) -> Self {
+            let size = Pager::optimal_page_size(order);
             let mut pager = Pager::default().page_size(size);
             pager
                 .init()
@@ -868,10 +880,6 @@ mod tests {
         fn into_node(&mut self, root: PageNumber) -> IOResult<Node> {
             let page = self.pager.get(root)?;
 
-            let deserialize = |content: &[u8]| {
-                u64::from_be_bytes(content[..size_of::<u64>()].try_into().unwrap())
-            };
-
             let mut node = Node {
                 keys: (0..page.len())
                     .map(|idx| deserialize(&page.cell(idx).content))
@@ -909,8 +917,35 @@ mod tests {
         method_builder!(pager, &'p mut Pager<MemoryBuffer>);
     }
 
+    fn traversal_matches(
+        btree: &mut BTree<'_, MemoryBuffer, FixedSizeCmp>,
+        keys: impl Iterator<Item = Key>,
+    ) -> IOResult<()> {
+        let mut cursor = Cursor::new(btree.root, 0);
+
+        for expected_key in keys {
+            let (page, slot) = cursor.next(btree.pager).unwrap_or_else(|| {
+                panic!("Cursor should not be done but it is. Expected key: {expected_key}")
+            })?;
+
+            let key = deserialize(&btree.pager.get(page)?.cell(slot).content);
+
+            assert_eq!(
+                key, expected_key,
+                "Cursor at {page} should have returned key {expected_key} but got {key}"
+            );
+        }
+
+        assert!(cursor.next(btree.pager).is_none());
+        Ok(())
+    }
+
     fn serialize(key: Key) -> [u8; size_of::<Key>()] {
         key.to_be_bytes()
+    }
+
+    fn deserialize(content: &[u8]) -> Key {
+        u64::from_be_bytes(content[..size_of::<u64>()].try_into().unwrap())
     }
 
     #[test]
@@ -1104,5 +1139,14 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_basic_cursor() -> IOResult<()> {
+        let pager = &mut Pager::from_order(3);
+
+        let keys = 1..=30;
+        let mut btree = BTree::default().with_keys(pager, keys.clone())?;
+        traversal_matches(&mut btree, keys)
     }
 }
