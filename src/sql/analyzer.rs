@@ -5,7 +5,7 @@ use crate::core::db::{
 use crate::sql::statement::{
     BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
 };
-use crate::vm::{TypeError, VmType};
+use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 

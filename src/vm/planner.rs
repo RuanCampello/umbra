@@ -1,8 +1,8 @@
 //! Plan trees implementation to execute the actual queries.
 
 use crate::core::db::TableMetadata;
-use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::btree::Cursor;
+use crate::core::storage::pagination::pager::Pager;
 use std::cell::RefCell;
 use std::rc::Rc;
 

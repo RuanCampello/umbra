@@ -4,7 +4,7 @@
 
 use crate::core::db::SqlError;
 use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
-use crate::vm;
+use crate::vm::expression::resolve_only_expression;
 
 pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
     match statement {
@@ -161,7 +161,7 @@ fn simplify_where(r#where: &mut Option<Expression>) -> Result<(), SqlError> {
 }
 
 fn resolve_expression(expression: &Expression) -> Result<Expression, SqlError> {
-    vm::resolve_only_expression(expression).map(Expression::Value)
+    resolve_only_expression(expression).map(Expression::Value)
 }
 
 #[cfg(test)]

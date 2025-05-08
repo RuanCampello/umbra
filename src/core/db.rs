@@ -4,7 +4,7 @@ use crate::core::storage::page::PageNumber;
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
-use crate::vm::{TypeError, VmError};
+use crate::vm::expression::{TypeError, VmError};
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
