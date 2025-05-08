@@ -34,12 +34,6 @@ struct ExactMatch<File> {
     emit_only_key: bool,
 }
 
-#[derive(Debug, PartialEq)]
-enum Relation {
-    Index(IndexMetadata),
-    Table(TableMetadata),
-}
-
 type Tuple = Vec<Value>;
 
 impl<File: Seek + Read + Write + FileOperations> SeqScan<File> {
@@ -60,28 +54,5 @@ impl<File: Seek + Read + Write + FileOperations> SeqScan<File> {
 impl<File: Seek + Read + Write + FileOperations> ExactMatch<File> {
     fn try_next() -> Result<Option<Tuple>, DatabaseError> {
         todo!()
-    }
-}
-
-impl Relation {
-    pub fn root(&self) -> PageNumber {
-        match self {
-            Self::Index(idx) => idx.root,
-            Self::Table(table) => table.root,
-        }
-    }
-
-    pub fn comp(&self) -> BTreeKeyCmp {
-        match self {
-            Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
-            Self::Table(table) => BTreeKeyCmp::from(&table.schema.columns[0].data_type),
-        }
-    }
-
-    pub fn schema(&self) -> &Schema {
-        match self {
-            Self::Index(idx) => &idx.schema,
-            Self::Table(table) => &table.schema,
-        }
     }
 }

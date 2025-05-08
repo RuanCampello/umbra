@@ -7,6 +7,8 @@ use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
 use crate::vm::expression::{TypeError, VmError};
 use std::collections::HashMap;
 
+use super::storage::btree::BTreeKeyCmp;
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct TableMetadata {
     pub root: PageNumber,
@@ -58,6 +60,12 @@ pub(crate) enum SqlError {
     Type(TypeError),
     Vm(VmError),
     Other(String),
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum Relation {
+    Index(IndexMetadata),
+    Table(TableMetadata),
 }
 
 type RowId = u64;
@@ -150,6 +158,29 @@ impl Context {
         }
 
         self.tables.insert(metadata.name.to_string(), metadata);
+    }
+}
+
+impl Relation {
+    pub fn root(&self) -> PageNumber {
+        match self {
+            Self::Index(idx) => idx.root,
+            Self::Table(table) => table.root,
+        }
+    }
+
+    pub fn comp(&self) -> BTreeKeyCmp {
+        match self {
+            Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
+            Self::Table(table) => BTreeKeyCmp::from(&table.schema.columns[0].data_type),
+        }
+    }
+
+    pub fn schema(&self) -> &Schema {
+        match self {
+            Self::Index(idx) => &idx.schema,
+            Self::Table(table) => &table.schema,
+        }
     }
 }
 
