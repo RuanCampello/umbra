@@ -7,6 +7,7 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{self, reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::sql::statement::{Expression, Value};
+use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -26,7 +27,14 @@ pub(crate) enum Planner<File> {
     ExactMatch(ExactMatch<File>),
     /// Scans rows within a specific key range, either from a table or an index.
     RangeScan(RangeScan<File>),
+    /// Efficiently retrieves specific ket rows using known primary keys or row id.
+    /// Often used after index lookup to fetch actual row data.
     KeyScan(KeyScan<File>),
+    /// Combines multiple scans using OR operations.
+    LogicalScan(LogicalScan<File>),
+    /// Filters rows based on `ẀHERE` clauses conditions.
+    /// Evaluates each row against the filter expression and keep the matching rows.
+    Filter(Filter<File>),
     /// Handles literal values from INSERT statements.
     Values(Values),
 }
@@ -73,6 +81,18 @@ struct KeyScan<File> {
 }
 
 #[derive(Debug, PartialEq)]
+struct LogicalScan<File> {
+    scans: VecDeque<Planner<File>>,
+}
+
+#[derive(Debug, PartialEq)]
+struct Filter<File> {
+    source: Box<Planner<File>>,
+    schema: Schema,
+    filter: Expression,
+}
+
+#[derive(Debug, PartialEq)]
 struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
@@ -92,6 +112,8 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::ExactMatch(exact_match) => exact_match.try_next(),
             Self::RangeScan(range) => range.try_next(),
             Self::KeyScan(key) => key.try_next(),
+            Self::LogicalScan(logical) => logical.try_next(),
+            Self::Filter(filter) => filter.try_next(),
             Self::Values(values) => values.try_next(),
         }
     }
@@ -244,6 +266,39 @@ impl<File: PlanExecutor> Execute for KeyScan<File> {
             })?;
 
         Ok(Some(tuple::deserialize(entry.as_ref(), &self.table.schema)))
+    }
+}
+
+impl<File: PlanExecutor> Execute for LogicalScan<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(mut scan) = self.scans.front_mut() else {
+            return Ok(None);
+        };
+
+        let mut tuple = scan.try_next()?;
+        while tuple.is_none() {
+            self.scans.pop_front();
+            let Some(next) = self.scans.front_mut() else {
+                return Ok(None);
+            };
+
+            scan = next;
+            tuple = scan.try_next()?;
+        }
+
+        Ok(Some(tuple.unwrap()))
+    }
+}
+
+impl<File: PlanExecutor> Execute for Filter<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        while let Some(tuple) = self.source.try_next()? {
+            if evaluate_where(&self.schema, &tuple, &self.filter)? {
+                return Ok(Some(tuple));
+            }
+        }
+
+        Ok(None)
     }
 }
 

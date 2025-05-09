@@ -1,5 +1,6 @@
 use crate::core::date::DateParseError;
 use crate::core::db::{Schema, SqlError};
+use crate::core::storage::tuple;
 use crate::sql::statement::{BinaryOperator, Expression, Type, UnaryOperator, Value};
 use std::fmt::{Display, Formatter};
 
@@ -137,6 +138,21 @@ pub(crate) fn resolve_expression<'exp>(
 
 pub(crate) fn resolve_only_expression(expr: &Expression) -> Result<Value, SqlError> {
     resolve_expression(&[], &Schema::empty(), expr)
+}
+
+pub(crate) fn evaluate_where(
+    schema: &Schema,
+    tuple: &Vec<Value>,
+    expr: &Expression,
+) -> Result<bool, SqlError> {
+    match resolve_expression(tuple, schema, expr)? {
+        Value::Boolean(boolean) => Ok(boolean),
+
+        other => Err(SqlError::Type(TypeError::ExpectedType {
+            expected: VmType::Bool,
+            found: Expression::Value(other),
+        })),
+    }
 }
 
 impl From<&Type> for VmType {
