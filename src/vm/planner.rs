@@ -4,7 +4,7 @@ use crate::core::db::{DatabaseError, IndexMetadata, Relation, Schema, SqlError, 
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
-use crate::core::storage::pagination::pager::{reassemble_content, Pager};
+use crate::core::storage::pagination::pager::{self, reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::sql::statement::{Expression, Value};
 use std::cell::RefCell;
@@ -223,7 +223,27 @@ impl<File: PlanExecutor> Execute for KeyScan<File> {
             return Ok(None);
         };
 
-        todo!()
+        debug_assert!(
+            key.len().eq(&1),
+            "KeyScan received a tuple with more than one value {key:#?}"
+        );
+
+        let mut pager = self.pager.borrow_mut();
+        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator.clone());
+
+        let entry = btree
+            .get(&tuple::serialize(
+                &self.table.schema.columns[0].data_type,
+                &key[0],
+            ))?
+            .ok_or_else(|| {
+                DatabaseError::Corrupted(format!(
+                    "KeyScan received key {key:#?} that doesn't exist on table {} at {}",
+                    self.table.name, self.table.root
+                ))
+            })?;
+
+        Ok(Some(tuple::deserialize(entry.as_ref(), &self.table.schema)))
     }
 }
 

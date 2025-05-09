@@ -32,6 +32,39 @@ pub(crate) fn deserialize(buff: &[u8], schema: &Schema) -> Vec<Value> {
     read_from(&mut io::Cursor::new(buff), schema).unwrap()
 }
 
+pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
+    let mut buff = Vec::new();
+
+    match (r#type, value) {
+        (Type::Varchar(max), Value::String(string)) => {
+            if string.as_bytes().len() > u32::MAX as usize {
+                todo!("Strings too long are not supported {}", u32::MAX);
+            }
+
+            let b_len = string.as_bytes().len().to_le_bytes();
+            let len_prefix = utf_8_length_bytes(*max);
+
+            buff.extend_from_slice(&b_len[..len_prefix]);
+            buff.extend_from_slice(string.as_bytes());
+        }
+        (Type::Boolean, Value::Boolean(bool)) => buff.push(u8::from(*bool)),
+        (
+            int @ (Type::Integer
+            | Type::BigInteger
+            | Type::UnsignedInteger
+            | Type::UnsignedBigInteger),
+            Value::Number(num),
+        ) => {
+            let b_len = byte_len_of_type(int);
+            let endian_b = num.to_be_bytes();
+            buff.extend_from_slice(&endian_b[endian_b.len() - b_len..]);
+        }
+        _ => unimplemented!("Tried to call serialize from {value} into {type}"),
+    }
+
+    buff
+}
+
 fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
     let values = schema.columns.iter().map(|col| match &col.data_type {
         Type::Varchar(size) => {

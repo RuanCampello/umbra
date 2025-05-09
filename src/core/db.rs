@@ -12,7 +12,7 @@ use super::storage::btree::BTreeKeyCmp;
 #[derive(Debug, PartialEq)]
 pub(crate) struct TableMetadata {
     pub root: PageNumber,
-    name: String,
+    pub name: String,
     pub schema: Schema,
     pub indexes: Vec<IndexMetadata>,
     row_id: RowId,
