@@ -30,7 +30,7 @@ macro_rules! rng_int {
         /// Panic at the streets of London if the range is empty.
         #[allow(unused)]
         #[inline]
-        pub fn $t(&mut self, range: impl RangeBounds<$t>) -> $t {
+        pub fn $t(&mut self, range: impl std::ops::RangeBounds<$t>) -> $t {
             let panic_empty_range = || {
                 panic!(
                     "empty range: {:?}..{:?}",

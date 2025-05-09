@@ -1,19 +1,21 @@
 //! Plan trees implementation to execute the actual queries.
 
 use crate::core::db::{DatabaseError, IndexMetadata, Relation, Schema, SqlError, TableMetadata};
+use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp};
-use crate::core::storage::page::PageNumber;
+use crate::core::storage::page::{self, PageNumber};
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{self, reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::sql::statement::{Expression, Value};
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
-use std::cmp::Ordering;
+use std::cmp::{self, Ordering};
 use std::collections::VecDeque;
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, Write};
+use std::iter;
 use std::ops::{Bound, RangeBounds};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use super::expression::resolve_only_expression;
@@ -94,7 +96,8 @@ struct Filter<File> {
 }
 
 #[derive(Debug, PartialEq)]
-struct Sort<File> {
+struct Sort<File: FileOperations> {
+    collection: Collect<File>,
     comparator: TupleComparator,
     sorted: bool,
     page_size: usize,
@@ -105,6 +108,18 @@ struct Sort<File> {
     output_file: Option<File>,
     input_file_path: PathBuf,
     output_file_path: PathBuf,
+}
+
+#[derive(Debug)]
+struct Collect<File> {
+    source: Box<Planner<File>>,
+    schema: Schema,
+    mem_buff: TupleBuffer,
+    file: Option<File>,
+    file_path: PathBuf,
+    reader: Option<BufReader<File>>,
+    work_dir: PathBuf,
+    collected: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -120,6 +135,19 @@ struct TupleBuffer {
     packed: bool,
     schema: Schema,
     tuples: VecDeque<Tuple>,
+}
+
+#[derive(Debug, PartialEq)]
+struct FileFifo<File: FileOperations> {
+    page_size: usize,
+    input_buffer: VecDeque<u32>,
+    output_buffer: VecDeque<u32>,
+    work_dir: PathBuf,
+    read_page: usize,
+    written_pages: usize,
+    file: Option<File>,
+    file_path: PathBuf,
+    len: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -343,12 +371,146 @@ impl<File: PlanExecutor> Execute for Sort<File> {
 }
 
 impl<File: PlanExecutor> Sort<File> {
+    fn sort(&mut self) -> Result<(), DatabaseError> {
+        if self.collection.reader.is_some() {
+            self.output_buffer =
+                std::mem::replace(&mut self.collection.mem_buff, TupleBuffer::empty());
+            self.output_buffer
+                .sort_by(|tuple, other| self.comparator.cmp(tuple, other));
+
+            return Ok(());
+        }
+
+        let (input_path, input_file) = temp_file::<File>(&self.work_dir, "umbra.sort.input")?;
+        self.input_file = Some(input_file);
+        self.input_file_path = input_path;
+
+        let (output_path, output_file) = temp_file::<File>(&self.work_dir, "umbra.sort.output")?;
+        self.output_file = Some(output_file);
+        self.output_file_path = output_path;
+
+        self.page_size = cmp::max(
+            TupleBuffer::page_size_for(self.collection.mem_buff.largest_size),
+            self.page_size,
+        );
+
+        let mut input_buffers = Vec::from_iter(
+            iter::repeat_with(|| {
+                TupleBuffer::new(self.page_size, self.comparator.sort_schema.clone(), false)
+            })
+            .take(self.input_buffers),
+        );
+
+        self.output_buffer =
+            TupleBuffer::new(self.page_size, self.comparator.sort_schema.clone(), false);
+
+        let mut runs = FileFifo::<File>::new(self.page_size, &self.work_dir);
+        let mut input_pages = 0;
+
+        while let Some(tuple) = self.collection.try_next()? {
+            if let Some(available_idx) = input_buffers.iter().position(|buff| buff.fits(&tuple)) {
+                input_buffers[available_idx].push(tuple);
+
+                continue;
+            }
+
+            let run = self.sorted_run(&mut input_buffers)?;
+            input_pages += run;
+            runs.push_back(run)?;
+
+            input_buffers[0].push(tuple);
+        }
+
+        todo!()
+    }
+
+    fn sorted_run(&mut self, input_buffers: &mut [TupleBuffer]) -> io::Result<usize> {
+        todo!()
+    }
+
     fn write_output(&mut self) -> io::Result<()> {
         self.output_buffer
             .write_to(self.output_file.as_mut().unwrap())?;
         self.output_buffer.clear();
 
         Ok(())
+    }
+}
+
+impl<File: FileOperations> Sort<File> {
+    fn drop_files(&mut self) -> io::Result<()> {
+        if let Some(input) = self.input_file.take() {
+            drop(input);
+            File::delete(&self.input_file_path)?;
+        }
+
+        if let Some(output) = self.output_file.take() {
+            drop(output);
+            File::delete(&self.output_file_path)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<File: FileOperations> Drop for Sort<File> {
+    fn drop(&mut self) {
+        let _ = self.drop_files();
+    }
+}
+
+impl<File: PlanExecutor> Collect<File> {
+    fn collect(&mut self) -> Result<(), DatabaseError> {
+        while let Some(tuple) = self.source.try_next()? {
+            if !self.mem_buff.fits(&tuple) {
+                if self.file.is_none() {
+                    let (file_path, file) = temp_file::<File>(&self.work_dir, "umbra.query")?;
+                    self.file_path = file_path;
+                    self.file = Some(file);
+                }
+                self.mem_buff.write_to(self.file.as_mut().unwrap())?;
+                self.mem_buff.clear();
+            }
+
+            self.mem_buff.push(tuple);
+        }
+
+        if let Some(mut file) = self.file.take() {
+            file.rewind()?;
+            self.reader = Some(BufReader::with_capacity(self.mem_buff.page_size, file));
+        }
+
+        Ok(())
+    }
+
+    fn drop_file(&mut self) -> io::Result<()> {
+        drop(self.file.take());
+        drop(self.reader.take());
+        File::delete(&self.file_path)
+    }
+}
+
+impl<File: PlanExecutor> Execute for Collect<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if !self.collected {
+            self.collect()?;
+            self.collected = true;
+        }
+
+        if let Some(reader) = self.reader.as_mut() {
+            let has_data_left = {
+                let buff = reader.fill_buf()?;
+                !buff.is_empty()
+            };
+
+            if has_data_left {
+                return Ok(Some(tuple::read_from(reader, &self.schema)?));
+            }
+
+            self.drop_file()?;
+        }
+
+        Ok(self.mem_buff.pop_front())
     }
 }
 
@@ -368,6 +530,32 @@ impl Execute for Values {
 }
 
 impl TupleBuffer {
+    fn new(page_size: usize, schema: Schema, packed: bool) -> Self {
+        Self {
+            page_size,
+            schema,
+            packed,
+            current_size: if packed { 0 } else { TUPLE_HEADER_SIZE },
+            largest_size: 0,
+            tuples: VecDeque::new(),
+        }
+    }
+
+    fn empty() -> Self {
+        Self {
+            page_size: 0,
+            current_size: 0,
+            largest_size: 0,
+            schema: Schema::empty(),
+            packed: false,
+            tuples: VecDeque::new(),
+        }
+    }
+
+    fn sort_by(&mut self, cmp: impl FnMut(&Tuple, &Tuple) -> Ordering) {
+        self.tuples.make_contiguous().sort_by(cmp)
+    }
+
     fn write_to<File: Write>(&self, file: &mut File) -> io::Result<()> {
         file.write_all(&self.serialize())
     }
@@ -391,12 +579,76 @@ impl TupleBuffer {
         buff
     }
 
+    fn push(&mut self, tuple: Tuple) {
+        let size = tuple::size_of(&tuple, &self.schema);
+
+        if size > self.largest_size {
+            self.largest_size = size;
+        }
+
+        self.current_size += size;
+        self.tuples.push_back(tuple);
+    }
+
+    fn pop_front(&mut self) -> Option<Tuple> {
+        self.tuples
+            .pop_front()
+            .inspect(|tuple| self.current_size -= tuple::size_of(tuple, &self.schema))
+    }
+
+    fn page_size_for(size: usize) -> usize {
+        let mut page = std::mem::size_of::<u32>() * 2 + size;
+        page -= 1;
+        page |= page >> 1;
+        page |= page >> 2;
+        page |= page >> 4;
+        page |= page >> 8;
+        page |= page >> 16;
+
+        page
+    }
+
     fn clear(&mut self) {
         self.tuples.clear();
         self.current_size = match self.packed {
             true => 0,
             false => TUPLE_HEADER_SIZE,
         };
+    }
+
+    fn fits(&self, tuple: &Tuple) -> bool {
+        self.current_size + tuple::size_of(tuple, &self.schema) <= self.page_size
+    }
+}
+
+impl<File: FileOperations> FileFifo<File> {
+    fn new(page_size: usize, work_dir: &Path) -> Self {
+        debug_assert!(
+            page_size % std::mem::size_of::<u32>() == 0,
+            "Page size must be a multiple of 4: {page_size}"
+        );
+
+        Self {
+            page_size,
+            input_buffer: VecDeque::with_capacity(page_size),
+            output_buffer: VecDeque::with_capacity(page_size),
+            work_dir: work_dir.to_path_buf(),
+            file: None,
+            file_path: PathBuf::new(),
+            read_page: 0,
+            written_pages: 0,
+            len: 0,
+        }
+    }
+
+    fn push_back(&mut self, run: usize) -> io::Result<()> {
+        todo!()
+    }
+}
+
+impl<File: FileOperations> Drop for FileFifo<File> {
+    fn drop(&mut self) {
+        todo!()
     }
 }
 
@@ -425,4 +677,23 @@ impl TupleComparator {
                 _ => None,
             }).unwrap_or(Ordering::Equal)
     }
+}
+
+impl<File: PartialEq> PartialEq for Collect<File> {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source && self.schema == other.schema
+    }
+}
+
+fn temp_file<File: FileOperations>(
+    work_dir: &Path,
+    extension: &str,
+) -> io::Result<(PathBuf, File)> {
+    let mut rand = Rng::new();
+
+    let filename = rand.i64(i64::MIN..=i64::MAX);
+    let path = work_dir.join(format!("umbra.temp/{filename:x}.{extension}"));
+    let file = File::create(&path)?;
+
+    Ok((path, file))
 }

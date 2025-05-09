@@ -89,7 +89,30 @@ pub(crate) fn serialize_tuple<'value>(
     todo!()
 }
 
-fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
+pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
+    schema
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(idx, col)| match col.data_type.clone() {
+            Type::Boolean => 1,
+            Type::Varchar(max) => {
+                let Value::String(string) = &tuple[idx] else {
+                    panic!(
+                        "Expected data type {} but found {}",
+                        Type::Varchar(max),
+                        tuple[idx]
+                    );
+                };
+
+                utf_8_length_bytes(max) + string.as_bytes().len()
+            }
+            other => byte_len_of_type(&other),
+        })
+        .sum()
+}
+
+pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
     let values = schema.columns.iter().map(|col| match &col.data_type {
         Type::Varchar(size) => {
             let mut len = [0; mem::size_of::<usize>()];
