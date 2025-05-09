@@ -120,6 +120,10 @@ impl Schema {
     pub fn empty() -> Self {
         Self::new(Vec::new())
     }
+
+    pub fn len(&self) -> usize {
+        self.columns.len()
+    }
 }
 
 impl TableMetadata {

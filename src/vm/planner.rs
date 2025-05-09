@@ -11,8 +11,9 @@ use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::io::{Read, Seek, Write};
+use std::io::{self, Read, Seek, Write};
 use std::ops::{Bound, RangeBounds};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use super::expression::resolve_only_expression;
@@ -93,11 +94,44 @@ struct Filter<File> {
 }
 
 #[derive(Debug, PartialEq)]
+struct Sort<File> {
+    comparator: TupleComparator,
+    sorted: bool,
+    page_size: usize,
+    input_buffers: usize,
+    output_buffer: TupleBuffer,
+    work_dir: PathBuf,
+    input_file: Option<File>,
+    output_file: Option<File>,
+    input_file_path: PathBuf,
+    output_file_path: PathBuf,
+}
+
+#[derive(Debug, PartialEq)]
 struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
 
+#[derive(Debug, PartialEq)]
+struct TupleBuffer {
+    page_size: usize,
+    current_size: usize,
+    largest_size: usize,
+    packed: bool,
+    schema: Schema,
+    tuples: VecDeque<Tuple>,
+}
+
+#[derive(Debug, PartialEq)]
+struct TupleComparator {
+    schema: Schema,
+    sort_schema: Schema,
+    sort_indexes: Vec<usize>,
+}
+
 type Tuple = Vec<Value>;
+
+const TUPLE_HEADER_SIZE: usize = std::mem::size_of::<u32>();
 
 pub trait PlanExecutor: Seek + Read + Write + FileOperations {}
 pub trait Execute {
@@ -302,6 +336,22 @@ impl<File: PlanExecutor> Execute for Filter<File> {
     }
 }
 
+impl<File: PlanExecutor> Execute for Sort<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        todo!()
+    }
+}
+
+impl<File: PlanExecutor> Sort<File> {
+    fn write_output(&mut self) -> io::Result<()> {
+        self.output_buffer
+            .write_to(self.output_file.as_mut().unwrap())?;
+        self.output_buffer.clear();
+
+        Ok(())
+    }
+}
+
 impl Execute for Values {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         let Some(mut values) = self.values.pop_front() else {
@@ -314,5 +364,65 @@ impl Execute for Values {
                 .map(|expr| resolve_only_expression(&expr))
                 .collect::<Result<Vec<Value>, SqlError>>()?,
         ))
+    }
+}
+
+impl TupleBuffer {
+    fn write_to<File: Write>(&self, file: &mut File) -> io::Result<()> {
+        file.write_all(&self.serialize())
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut buff = Vec::with_capacity(self.page_size);
+
+        if !self.packed {
+            buff.extend_from_slice(&(self.tuples.len() as u32).to_le_bytes());
+        }
+
+        &self
+            .tuples
+            .iter()
+            .for_each(|tuple| buff.extend_from_slice(&tuple::serialize_tuple(&self.schema, tuple)));
+
+        if !self.packed {
+            buff.resize(self.page_size, 0); // little padding
+        }
+
+        buff
+    }
+
+    fn clear(&mut self) {
+        self.tuples.clear();
+        self.current_size = match self.packed {
+            true => 0,
+            false => TUPLE_HEADER_SIZE,
+        };
+    }
+}
+
+impl TupleComparator {
+    fn cmp(&self, tuple: &[Value], other_tuple: &[Value]) -> Ordering {
+        debug_assert!(
+            tuple.len().eq(&other_tuple.len()),
+            "Comp called for mismatch size tuples"
+        );
+        debug_assert!(
+            tuple.len().eq(&self.schema.len()),
+            "Comp called for mismatch tuple with schema"
+        );
+
+        self.sort_indexes
+            .iter().copied()
+            .map(|idx| (tuple[idx].partial_cmp(&other_tuple[idx]), &tuple[idx], &other_tuple[idx]))
+            .find_map(|(cmp, v1, v2)| match cmp {
+                Some(ordering) if ordering != Ordering::Equal => Some(ordering),
+                None => {
+                    if std::mem::discriminant(v1).ne(&std::mem::discriminant(v2)) {
+                        unreachable!("This should be impossible, but type {v1} in memory is different from {v2}");
+                    }
+
+                    None                }
+                _ => None,
+            }).unwrap_or(Ordering::Equal)
     }
 }

@@ -34,7 +34,12 @@ pub(crate) fn deserialize(buff: &[u8], schema: &Schema) -> Vec<Value> {
 
 pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
     let mut buff = Vec::new();
+    serialize_into(&mut buff, r#type, value);
 
+    buff
+}
+
+fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
     match (r#type, value) {
         (Type::Varchar(max), Value::String(string)) => {
             if string.as_bytes().len() > u32::MAX as usize {
@@ -61,8 +66,27 @@ pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
         }
         _ => unimplemented!("Tried to call serialize from {value} into {type}"),
     }
+}
 
-    buff
+pub(crate) fn serialize_tuple<'value>(
+    schema: &Schema,
+    values: impl IntoIterator<Item = &'value Value> + Copy,
+) -> Vec<u8> {
+    let mut buff = Vec::new();
+
+    debug_assert_eq!(
+        schema.len(),
+        values.into_iter().count(),
+        "Lenght of schema and values length mismatch"
+    );
+
+    schema
+        .columns
+        .iter()
+        .zip(values.into_iter())
+        .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
+
+    todo!()
 }
 
 fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
