@@ -431,6 +431,34 @@ impl<File: PlanExecutor> Sort<File> {
     }
 
     fn sorted_run(&mut self, input_buffers: &mut [TupleBuffer]) -> io::Result<usize> {
+        let mut run = 0;
+
+        input_buffers
+            .into_iter()
+            .for_each(|buffer| buffer.sort_by(|t1, t2| self.comparator.cmp(t1, t2)));
+
+        while input_buffers.iter().any(|buffer| !buffer.is_empty()) {
+            let min = self.find_min_index(input_buffers);
+            let next = input_buffers[min].pop_front().unwrap();
+
+            if !self.output_buffer.fits(&next) {
+                self.write_output()?;
+
+                run += 1;
+            }
+
+            self.output_buffer.push(next);
+        }
+
+        if !self.output_buffer.is_empty() {
+            self.write_output()?;
+            run += 1;
+        }
+
+        Ok(run)
+    }
+
+    fn find_min_index(&self, input_buffers: &[TupleBuffer]) -> usize {
         todo!()
     }
 
