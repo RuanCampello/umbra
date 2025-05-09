@@ -436,13 +436,69 @@ impl<File: PlanExecutor> Sort<File> {
             let mut output_pages = 0;
             let mut segment = 0;
 
-            todo!()
-            //            while segment < input_pages {
-            //              cursor[0] = segment;
-            //            limits[0] = cmp::min(segment + runs.pop_front()?, v2)
-            //      }
+            while segment < input_pages {
+                cursor[0] = segment;
+                limits[0] = cmp::min(segment + runs.pop_front()?.unwrap_or(0), input_pages);
+
+                (1..self.input_buffers).try_for_each(|idx| -> io::Result<()> {
+                    cursor[idx] = limits[idx - 1];
+                    limits[idx] = match cursor[idx] < input_pages {
+                        true => cmp::min(cursor[idx] + runs.pop_front()?.unwrap_or(0), input_pages),
+                        false => input_pages,
+                    };
+
+                    Ok(())
+                })?;
+
+                (0..self.input_buffers).try_for_each(|idx| -> Result<(), DatabaseError> {
+                    if cursor[idx] < limits[idx] {
+                        input_buffers[idx]
+                            .read_page(self.input_file.as_mut().unwrap(), cursor[idx])?;
+                        cursor[idx] += 1;
+                    }
+
+                    Ok(())
+                })?;
+
+                let mut run = 0;
+                while input_buffers.iter().any(|buffer| !buffer.is_empty()) {
+                    let min = self.find_min_index(&input_buffers);
+                    let tuple = input_buffers[min].pop_front().unwrap();
+
+                    if input_buffers[min].is_empty() && cursor[min] < limits[min] {
+                        input_buffers[min]
+                            .read_page(self.input_file.as_mut().unwrap(), cursor[min])?;
+                        cursor[min] += 1;
+                    }
+
+                    if !self.output_buffer.fits(&tuple) {
+                        self.write_output()?;
+                        run += 1;
+                    }
+
+                    self.output_buffer.push(tuple);
+                }
+
+                if !self.output_buffer.is_empty() {
+                    self.write_output()?;
+                    run += 1;
+                }
+
+                output_pages += run;
+                runs.push_back(run)?;
+
+                segment = limits[self.input_buffers - 1];
+            }
+
+            self.swap()?;
+            input_pages = output_pages;
         }
-        todo!()
+
+        self.input_file.as_mut().unwrap().rewind()?;
+        drop(self.output_file.take());
+        File::delete(&self.output_file_path)?;
+
+        Ok(())
     }
 
     fn swap(&mut self) -> io::Result<()> {
@@ -611,6 +667,40 @@ impl TupleBuffer {
 
     fn write_to<File: Write>(&self, file: &mut File) -> io::Result<()> {
         file.write_all(&self.serialize())
+    }
+
+    fn read_page(
+        &mut self,
+        file: &mut (impl Seek + Read),
+        page: usize,
+    ) -> Result<(), DatabaseError> {
+        file.seek(io::SeekFrom::Start((self.page_size * page) as u64))?;
+        self.read_from(file)
+    }
+
+    fn read_from(&mut self, file: &mut impl Read) -> Result<(), DatabaseError> {
+        debug_assert!(
+            self.is_empty() && !self.packed,
+            "read_from() only works for fixed size buffers"
+        );
+
+        let mut buff = vec![0; self.page_size];
+        file.read_exact(&mut buff)?;
+
+        let num_of_tuples = u32::from_le_bytes(
+            buff[..TUPLE_HEADER_SIZE]
+                .try_into()
+                .map_err(|err| DatabaseError::Other(format!("Error reading buffer: {err}")))?,
+        );
+
+        let mut cursor = TUPLE_HEADER_SIZE;
+        (0..num_of_tuples).for_each(|_| {
+            let tuple = tuple::deserialize(&buff[cursor..], &self.schema);
+            cursor += tuple::size_of(&tuple, &self.schema);
+            self.push(tuple);
+        });
+
+        Ok(())
     }
 
     fn serialize(&self) -> Vec<u8> {

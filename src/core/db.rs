@@ -45,6 +45,7 @@ pub(crate) enum DatabaseError {
     Io(std::io::Error),
     /// Something went wrong with the underlying storage (db or journal file).
     Corrupted(String),
+    Other(String),
 }
 
 #[derive(Debug, PartialEq)]
