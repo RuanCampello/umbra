@@ -13,10 +13,10 @@ use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
-use std::iter;
 use std::ops::{Bound, RangeBounds};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::{iter, ptr, slice};
 
 use super::expression::resolve_only_expression;
 
@@ -421,6 +421,12 @@ impl<File: PlanExecutor> Sort<File> {
             input_buffers[0].push(tuple);
         }
 
+        if input_buffers.iter().any(|buff| !buff.is_empty()) {
+            let run = self.sorted_run(&mut input_buffers)?;
+            input_pages += run;
+            runs.push_back(run);
+        }
+
         todo!()
     }
 
@@ -619,9 +625,13 @@ impl TupleBuffer {
     fn fits(&self, tuple: &Tuple) -> bool {
         self.current_size + tuple::size_of(tuple, &self.schema) <= self.page_size
     }
+
+    fn is_empty(&self) -> bool {
+        self.tuples.is_empty()
+    }
 }
 
-impl<File: FileOperations> FileFifo<File> {
+impl<File: PlanExecutor> FileFifo<File> {
     fn new(page_size: usize, work_dir: &Path) -> Self {
         debug_assert!(
             page_size % std::mem::size_of::<u32>() == 0,
@@ -642,7 +652,39 @@ impl<File: FileOperations> FileFifo<File> {
     }
 
     fn push_back(&mut self, run: usize) -> io::Result<()> {
-        todo!()
+        let run = u32::try_from(run).expect("Page run is greater than u32::MAX");
+
+        self.len += 1;
+
+        if self.input_buffer.len() + 1 <= self.page_size / std::mem::size_of::<u32>() {
+            self.input_buffer.push_back(run);
+
+            return Ok(());
+        }
+
+        if self.file.is_none() {
+            let (path, file) = temp_file(&self.work_dir, "umbra.sort.runs")?;
+
+            self.file_path = path;
+            self.file = Some(file);
+        }
+
+        let slice = unsafe {
+            slice::from_raw_parts(
+                ptr::from_ref(&self.input_buffer.make_contiguous()[0]).cast(),
+                self.input_buffer.len() * std::mem::size_of::<u32>(),
+            )
+        };
+
+        let file = self.file.as_mut().unwrap();
+        file.seek(io::SeekFrom::End(0))?;
+        file.write_all(slice)?;
+        self.written_pages += 1;
+
+        self.input_buffer.clear();
+        self.input_buffer.push_back(run);
+
+        Ok(())
     }
 }
 
