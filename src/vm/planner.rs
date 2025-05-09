@@ -26,6 +26,7 @@ pub(crate) enum Planner<File> {
     ExactMatch(ExactMatch<File>),
     /// Scans rows within a specific key range, either from a table or an index.
     RangeScan(RangeScan<File>),
+    KeyScan(KeyScan<File>),
     /// Handles literal values from INSERT statements.
     Values(Values),
 }
@@ -83,6 +84,18 @@ pub trait Execute {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError>;
 }
 impl<File: Seek + Read + Write + FileOperations> PlanExecutor for File {}
+
+impl<File: PlanExecutor> Execute for Planner<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        match self {
+            Self::SeqScan(seq) => seq.try_next(),
+            Self::ExactMatch(exact_match) => exact_match.try_next(),
+            Self::RangeScan(range) => range.try_next(),
+            Self::KeyScan(key) => key.try_next(),
+            Self::Values(values) => values.try_next(),
+        }
+    }
+}
 
 impl<File: PlanExecutor> Execute for SeqScan<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
@@ -206,6 +219,10 @@ impl<File: PlanExecutor> Execute for RangeScan<File> {
 
 impl<File: PlanExecutor> Execute for KeyScan<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(key) = self.source.try_next()? else {
+            return Ok(None);
+        };
+
         todo!()
     }
 }
