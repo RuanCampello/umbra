@@ -424,9 +424,28 @@ impl<File: PlanExecutor> Sort<File> {
         if input_buffers.iter().any(|buff| !buff.is_empty()) {
             let run = self.sorted_run(&mut input_buffers)?;
             input_pages += run;
-            runs.push_back(run);
+            runs.push_back(run)?;
         }
 
+        self.swap()?;
+
+        let mut cursor = vec![0; input_buffers.len()];
+        let mut limits = vec![0; input_buffers.len()];
+
+        while runs.len > 1 {
+            let mut output_pages = 0;
+            let mut segment = 0;
+
+            todo!()
+            //            while segment < input_pages {
+            //              cursor[0] = segment;
+            //            limits[0] = cmp::min(segment + runs.pop_front()?, v2)
+            //      }
+        }
+        todo!()
+    }
+
+    fn swap(&mut self) -> io::Result<()> {
         todo!()
     }
 
@@ -434,7 +453,7 @@ impl<File: PlanExecutor> Sort<File> {
         let mut run = 0;
 
         input_buffers
-            .into_iter()
+            .iter_mut()
             .for_each(|buffer| buffer.sort_by(|t1, t2| self.comparator.cmp(t1, t2)));
 
         while input_buffers.iter().any(|buffer| !buffer.is_empty()) {
@@ -713,6 +732,44 @@ impl<File: PlanExecutor> FileFifo<File> {
         self.input_buffer.push_back(run);
 
         Ok(())
+    }
+
+    fn pop_front(&mut self) -> io::Result<Option<usize>> {
+        self.len = self.len.saturating_sub(1);
+
+        if let Some(run) = self.output_buffer.pop_front() {
+            return Ok(Some(run as usize));
+        }
+
+        if self.written_pages.eq(&0) {
+            return Ok(self.input_buffer.pop_front().map(|run| run as usize));
+        }
+
+        self.output_buffer
+            .resize(self.page_size / std::mem::size_of::<u32>(), 0);
+
+        let slice = unsafe {
+            slice::from_raw_parts_mut(
+                ptr::from_mut(&mut self.output_buffer.make_contiguous()[0]).cast(),
+                self.page_size,
+            )
+        };
+
+        let file = self.file.as_mut().unwrap();
+        file.seek(io::SeekFrom::Start(
+            (self.page_size * self.read_page) as u64,
+        ))?;
+        self.read_page += 1;
+
+        if file.read(slice)? > 0 {
+            return Ok(self.output_buffer.pop_front().map(|run| run as usize));
+        }
+
+        self.output_buffer.clear();
+        self.read_page = 0;
+        self.written_pages = 0;
+
+        todo!()
     }
 }
 
