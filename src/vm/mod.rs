@@ -1,2 +1,2 @@
 pub(crate) mod expression;
-mod planner;
+pub(crate) mod planner;

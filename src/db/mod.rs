@@ -8,17 +8,19 @@ pub(crate) use schema::Schema;
 
 use self::metadata::IndexMetadata;
 use crate::core::date::DateParseError;
+use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{self, Pager};
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::statement::{Column, Constraint, Create, Statement, Value};
 use crate::vm::expression::{TypeError, VmError};
+use crate::vm::planner::Planner;
 use std::cell::{Ref, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::fs::File;
-use std::io;
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -34,11 +36,29 @@ pub(crate) struct Context {
     max_size: Option<usize>,
 }
 
+struct PreparedStatement<'db, File: FileOperations> {
+    db: &'db mut Database<File>,
+    exec: Option<Exec<File>>,
+    autocommit: bool,
+}
+
+pub(crate) struct QuerySet {
+    tuples: Vec<Vec<Value>>,
+    schema: Schema,
+}
+
 #[derive(Debug, PartialEq)]
 enum TransactionState {
     Active,
     Aborted,
     Terminated,
+}
+
+#[derive(Debug, PartialEq)]
+enum Exec<File: FileOperations> {
+    Statement(Statement),
+    Plan(Planner<File>),
+    Explain(VecDeque<String>),
 }
 
 #[derive(Debug)]
@@ -121,6 +141,19 @@ impl Database<File> {
         pager.init()?;
 
         Ok(Database::new(Rc::new(RefCell::new(pager)), work_dir))
+    }
+}
+
+impl<File: Seek + Read + Write + FileOperations> Database<File> {
+    fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
+        todo!()
+    }
+
+    fn prepare(
+        &mut self,
+        sql: &str,
+    ) -> Result<(Schema, PreparedStatement<'_, File>), DatabaseError> {
+        todo!()
     }
 }
 

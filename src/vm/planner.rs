@@ -1,5 +1,6 @@
 //! Plan trees implementation to execute the actual queries.
 
+use super::expression::resolve_only_expression;
 use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
@@ -17,8 +18,6 @@ use std::ops::{Bound, Index, RangeBounds};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::{iter, ptr, slice};
-
-use super::expression::resolve_only_expression;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Planner<File: FileOperations> {
