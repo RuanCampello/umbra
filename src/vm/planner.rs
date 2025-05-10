@@ -21,7 +21,7 @@ use std::{iter, ptr, slice};
 use super::expression::resolve_only_expression;
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Planner<File> {
+pub(crate) enum Planner<File: FileOperations> {
     /// Scans all rows from a table in sequential order.
     /// This is most basic operation that reads every row without any filtering.
     SeqScan(SeqScan<File>),
@@ -38,6 +38,7 @@ pub(crate) enum Planner<File> {
     /// Filters rows based on `ẀHERE` clauses conditions.
     /// Evaluates each row against the filter expression and keep the matching rows.
     Filter(Filter<File>),
+    Sort(Sort<File>),
     /// Handles literal values from INSERT statements.
     Values(Values),
 }
@@ -76,7 +77,7 @@ struct RangeScan<File> {
 }
 
 #[derive(Debug, PartialEq)]
-struct KeyScan<File> {
+struct KeyScan<File: FileOperations> {
     comparator: FixedSizeCmp,
     table: TableMetadata,
     pager: Rc<RefCell<Pager<File>>>,
@@ -84,12 +85,12 @@ struct KeyScan<File> {
 }
 
 #[derive(Debug, PartialEq)]
-struct LogicalScan<File> {
+struct LogicalScan<File: FileOperations> {
     scans: VecDeque<Planner<File>>,
 }
 
 #[derive(Debug, PartialEq)]
-struct Filter<File> {
+struct Filter<File: FileOperations> {
     source: Box<Planner<File>>,
     schema: Schema,
     filter: Expression,
@@ -111,7 +112,7 @@ struct Sort<File: FileOperations> {
 }
 
 #[derive(Debug)]
-struct Collect<File> {
+struct Collect<File: FileOperations> {
     source: Box<Planner<File>>,
     schema: Schema,
     mem_buff: TupleBuffer,
@@ -176,6 +177,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::KeyScan(key) => key.try_next(),
             Self::LogicalScan(logical) => logical.try_next(),
             Self::Filter(filter) => filter.try_next(),
+            Self::Sort(sort) => sort.try_next(),
             Self::Values(values) => values.try_next(),
         }
     }
@@ -961,7 +963,7 @@ impl TupleComparator {
     }
 }
 
-impl<File: PartialEq> PartialEq for Collect<File> {
+impl<File: FileOperations + PartialEq> PartialEq for Collect<File> {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source && self.schema == other.schema
     }
