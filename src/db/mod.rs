@@ -8,15 +8,37 @@ pub(crate) use schema::Schema;
 
 use self::metadata::IndexMetadata;
 use crate::core::date::DateParseError;
+use crate::core::storage::pagination::pager::{self, Pager};
+use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::statement::{Column, Constraint, Create, Statement, Value};
 use crate::vm::expression::{TypeError, VmError};
+use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::fs::File;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+struct Database<File> {
+    pager: Rc<RefCell<Pager<File>>>,
+    context: Context,
+    work_dir: PathBuf,
+    transaction_state: TransactionState,
+}
 
 pub(crate) struct Context {
     tables: HashMap<String, TableMetadata>,
     max_size: Option<usize>,
+}
+
+#[derive(Debug, PartialEq)]
+enum TransactionState {
+    Active,
+    Aborted,
+    Terminated,
 }
 
 #[derive(Debug)]
@@ -49,9 +71,57 @@ type RowId = u64;
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
 pub(crate) const DB_METADATA: &str = "limbo_db_meta";
+const DEFAULT_CACHE_SIZE: usize = 512;
 
 pub(crate) trait Ctx<'s> {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
+}
+
+impl Database<File> {
+    fn new(pager: Rc<RefCell<Pager<File>>>, work_dir: PathBuf) -> Self {
+        Self {
+            pager,
+            work_dir,
+            context: Context::with_size(DEFAULT_CACHE_SIZE),
+            transaction_state: TransactionState::Terminated,
+        }
+    }
+
+    fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
+        let file = os::Fs::options()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .sync_on_write(false)
+            .lock(true)
+            .bypass_cache(true)
+            .open(&path)?;
+
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "This is not a file").into());
+        }
+
+        let block_size = os::Fs::block_size(&path)?;
+        let db_path = path.as_ref().canonicalize()?;
+        let work_dir = db_path.parent().unwrap().to_path_buf();
+
+        let mut ext = db_path
+            .extension()
+            .unwrap_or(&OsString::new())
+            .to_os_string();
+        ext.push(".journal");
+
+        let journal_path = db_path.with_extension(ext);
+
+        let mut pager = Pager::<File>::new(file)
+            .block_size(block_size)
+            .journal_path_file(journal_path);
+        pager.init()?;
+
+        Ok(Database::new(Rc::new(RefCell::new(pager)), work_dir))
+    }
 }
 
 impl Context {
@@ -59,6 +129,13 @@ impl Context {
         Self {
             tables: HashMap::new(),
             max_size: None,
+        }
+    }
+
+    pub fn with_size(size: usize) -> Self {
+        Self {
+            tables: HashMap::with_capacity(size),
+            max_size: Some(size),
         }
     }
 
