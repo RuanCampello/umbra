@@ -3,10 +3,8 @@ use std::{
     mem,
 };
 
-use crate::{
-    core::db::Schema,
-    sql::statement::{Type, Value},
-};
+use crate::db::Schema;
+use crate::sql::statement::{Type, Value};
 
 /// Returns the byte length of a given SQL [`Type`].
 pub(in crate::core::storage) fn byte_len_of_type(data_type: &Type) -> usize {

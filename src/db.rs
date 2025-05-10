@@ -7,7 +7,7 @@ use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
 use crate::vm::expression::{TypeError, VmError};
 use std::collections::HashMap;
 
-use super::storage::btree::BTreeKeyCmp;
+use crate::core::storage::btree::BTreeKeyCmp;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct TableMetadata {

@@ -2,7 +2,7 @@
 //!
 //! Here, we try to minimise the operations of a given statement.
 
-use crate::core::db::SqlError;
+use crate::db::SqlError;
 use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
 use crate::vm::expression::resolve_only_expression;
 
@@ -167,7 +167,7 @@ fn resolve_expression(expression: &Expression) -> Result<Expression, SqlError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::db::DatabaseError;
+    use crate::db::DatabaseError;
     use crate::sql::parser::*;
 
     struct Optimiser<'op> {

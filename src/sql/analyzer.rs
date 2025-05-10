@@ -1,7 +1,5 @@
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
-use crate::core::db::{
-    Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID,
-};
+use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{
     BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
 };
@@ -435,7 +433,7 @@ impl Display for AlreadyExists {
 mod tests {
     use super::*;
     use crate::core::date::DateParseError;
-    use crate::core::db::*;
+    use crate::db::*;
     use crate::sql::parser::*;
 
     struct Analyze<'sql> {

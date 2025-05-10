@@ -1,12 +1,12 @@
 //! Plan trees implementation to execute the actual queries.
 
-use crate::core::db::{DatabaseError, IndexMetadata, Relation, Schema, SqlError, TableMetadata};
 use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp};
-use crate::core::storage::page::{self, PageNumber};
+use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
-use crate::core::storage::pagination::pager::{self, reassemble_content, Pager};
+use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
+use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{Expression, Value};
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
@@ -23,9 +23,9 @@ use super::expression::resolve_only_expression;
 #[derive(Debug, PartialEq)]
 pub(crate) enum Planner<File: FileOperations> {
     /// Scans all rows from a table in sequential order.
-    /// This is most basic operation that reads every row without any filtering.
+    /// This is the most basic operation that reads every row without any filtering.
     SeqScan(SeqScan<File>),
-    /// Optimised scan that finds rows where column exactly matches a specific value.
+    /// Optimised scan that finds rows where the column exactly matches a specific value.
     /// Used for queries like `SELECT * FROM table WHERE primary_key = value`.
     ExactMatch(ExactMatch<File>),
     /// Scans rows within a specific key range, either from a table or an index.
@@ -35,7 +35,7 @@ pub(crate) enum Planner<File: FileOperations> {
     KeyScan(KeyScan<File>),
     /// Combines multiple scans using OR operations.
     LogicalScan(LogicalScan<File>),
-    /// Filters rows based on `ẀHERE` clauses conditions.
+    /// Filters rows based on `ẀHERE` clause conditions.
     /// Evaluates each row against the filter expression and keep the matching rows.
     Filter(Filter<File>),
     Sort(Sort<File>),
