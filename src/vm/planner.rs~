@@ -366,28 +366,7 @@ impl<File: PlanExecutor> Execute for Filter<File> {
 
 impl<File: PlanExecutor> Execute for Sort<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        if !self.sorted {
-            self.collection.collect()?;
-            self.sort()?;
-
-            self.sorted = true;
-        }
-
-        if self.output_buffer.is_empty() {
-            if let Some(input_file) = self.input_file.as_mut() {
-                if let Err(DatabaseError::Io(err)) = self.output_buffer.read_from(input_file) {
-                    match err.kind() {
-                        io::ErrorKind::UnexpectedEof => self.drop_files()?,
-                        _ => return Err(err.into()),
-                    }
-                }
-            }
-        }
-
-        Ok(self.output_buffer.pop_front().map(|mut tuple| {
-            tuple.drain(self.comparator.schema.len()..);
-            tuple
-        }))
+        todo!()
     }
 }
 
@@ -523,15 +502,7 @@ impl<File: PlanExecutor> Sort<File> {
     }
 
     fn swap(&mut self) -> io::Result<()> {
-        let mut input_file = self.input_file.take().unwrap();
-        let output_file = self.output_file.take().unwrap();
-
-        input_file.truncate()?;
-
-        self.input_file = Some(input_file);
-        self.output_file = Some(output_file);
-
-        Ok(())
+        todo!()
     }
 
     fn sorted_run(&mut self, input_buffers: &mut [TupleBuffer]) -> io::Result<usize> {
@@ -572,8 +543,7 @@ impl<File: PlanExecutor> Sort<File> {
             .zip(&input_buffers[min + 1..])
             .filter(|(_, buffer)| !buffer.is_empty())
             .for_each(|(idx, buffer)| {
-                let comp = self.comparator.cmp(&buffer[idx], &buffer[min]);
-
+                let comp = self.comparator.cmp(&buffer[idx][0], &buffer[min][0]);
                 if comp.eq(&Ordering::Less) {
                     min = idx
                 }
@@ -815,10 +785,6 @@ impl TupleBuffer {
 
 impl Index<usize> for TupleBuffer {
     type Output = Tuple;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.tuples[index]
-    }
 }
 
 impl<File: PlanExecutor> FileFifo<File> {
@@ -911,26 +877,14 @@ impl<File: PlanExecutor> FileFifo<File> {
         self.output_buffer.clear();
         self.read_page = 0;
         self.written_pages = 0;
-        file.truncate()?;
 
-        Ok(self.input_buffer.pop_front().map(|run| run as usize))
-    }
-}
-
-impl<File: FileOperations> FileFifo<File> {
-    fn drop_file(&mut self) -> io::Result<()> {
-        if let Some(file) = self.file.take() {
-            drop(file);
-            File::delete(&self.file_path)?;
-        };
-
-        Ok(())
+        todo!()
     }
 }
 
 impl<File: FileOperations> Drop for FileFifo<File> {
     fn drop(&mut self) {
-        let _ = self.drop_file();
+        todo!()
     }
 }
 

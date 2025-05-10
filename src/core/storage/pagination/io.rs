@@ -26,6 +26,8 @@ pub(crate) trait FileOperations {
     where
         Self: Sized;
 
+    fn truncate(&mut self) -> io::Result<()>;
+
     fn delete(path: impl AsRef<Path>) -> io::Result<()>;
 
     /// Tries to store the data on disk to its respective [`Path`].
@@ -56,6 +58,10 @@ impl FileOperations for File {
         File::options().read(true).write(false).open(path)
     }
 
+    fn truncate(&mut self) -> io::Result<()> {
+        self.set_len(0)
+    }
+
     fn delete(path: impl AsRef<Path>) -> io::Result<()> {
         fs::remove_file(path)
     }
@@ -81,6 +87,12 @@ impl FileOperations for Cursor<Vec<u8>> {
         Self: Sized,
     {
         Ok(Cursor::new(Vec::new()))
+    }
+    fn truncate(&mut self) -> io::Result<()> {
+        self.set_position(0);
+        self.get_mut().clear();
+
+        Ok(())
     }
     fn save(&self) -> io::Result<()> {
         Ok(())
