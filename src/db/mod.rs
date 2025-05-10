@@ -1,37 +1,18 @@
+#![allow(unused_imports)]
+
+mod metadata;
+mod schema;
+
+pub(crate) use metadata::{Relation, TableMetadata};
+pub(crate) use schema::Schema;
+
+use self::metadata::IndexMetadata;
 use crate::core::date::DateParseError;
-use crate::core::storage::btree::FixedSizeCmp;
-use crate::core::storage::page::PageNumber;
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
-use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
+use crate::sql::statement::{Column, Constraint, Create, Statement, Value};
 use crate::vm::expression::{TypeError, VmError};
 use std::collections::HashMap;
-
-use crate::core::storage::btree::BTreeKeyCmp;
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct TableMetadata {
-    pub root: PageNumber,
-    pub name: String,
-    pub schema: Schema,
-    pub indexes: Vec<IndexMetadata>,
-    row_id: RowId,
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct IndexMetadata {
-    pub root: PageNumber,
-    pub name: String,
-    pub column: Column,
-    pub schema: Schema,
-    unique: bool,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Schema {
-    pub columns: Vec<Column>,
-    index: HashMap<String, usize>,
-}
 
 pub(crate) struct Context {
     tables: HashMap<String, TableMetadata>,
@@ -63,12 +44,6 @@ pub(crate) enum SqlError {
     Other(String),
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) enum Relation {
-    Index(IndexMetadata),
-    Table(TableMetadata),
-}
-
 type RowId = u64;
 
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
@@ -77,75 +52,6 @@ pub(crate) const DB_METADATA: &str = "limbo_db_meta";
 
 pub(crate) trait Ctx<'s> {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
-}
-
-impl Schema {
-    pub fn new(columns: Vec<Column>) -> Self {
-        let mut index = HashMap::new();
-        for (i, col) in columns.iter().enumerate() {
-            index.insert(col.name.to_string(), i);
-        }
-        Self { columns, index }
-    }
-
-    pub fn prepend_id(&mut self) {
-        debug_assert!(
-            self.columns.first().map_or(true, |c| c.name.ne(ROW_COL_ID)),
-            "schema already has {ROW_COL_ID}: {self:?}"
-        );
-
-        let col = Column::new(ROW_COL_ID, Type::UnsignedBigInteger);
-
-        let mut new_index = HashMap::new();
-        for (i, col) in self.columns.iter().enumerate() {
-            new_index.insert(col.name.as_str(), i);
-        }
-
-        self.columns.insert(0, col);
-        self.index.values_mut().for_each(|idx| *idx += 1);
-        self.index.insert(ROW_COL_ID.to_string(), 0);
-    }
-
-    pub fn index_of(&self, col: &str) -> Option<usize> {
-        self.index.get(col).copied()
-    }
-
-    pub fn columns_ids(&self) -> Vec<String> {
-        self.columns.iter().map(|c| c.name.to_string()).collect()
-    }
-
-    pub fn keys(&self) -> &Column {
-        &self.columns[0]
-    }
-
-    pub fn empty() -> Self {
-        Self::new(Vec::new())
-    }
-
-    pub fn len(&self) -> usize {
-        self.columns.len()
-    }
-}
-
-impl TableMetadata {
-    pub fn next_id(&mut self) -> RowId {
-        let row_id = self.row_id;
-        self.row_id += 1;
-        row_id
-    }
-
-    pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
-        FixedSizeCmp::try_from(&self.schema.columns[0].data_type).map_err(|e| {
-            DatabaseError::Corrupted(format!(
-                "Table {} is using a non-int Btree key with type {:#?}",
-                self.name, self.schema.columns[0].data_type
-            ))
-        })
-    }
-
-    pub fn keys(&self) -> &Column {
-        self.schema.keys()
-    }
 }
 
 impl Context {
@@ -163,50 +69,6 @@ impl Context {
         }
 
         self.tables.insert(metadata.name.to_string(), metadata);
-    }
-}
-
-impl Relation {
-    pub fn root(&self) -> PageNumber {
-        match self {
-            Self::Index(idx) => idx.root,
-            Self::Table(table) => table.root,
-        }
-    }
-
-    pub fn comp(&self) -> BTreeKeyCmp {
-        match self {
-            Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
-            Self::Table(table) => BTreeKeyCmp::from(&table.schema.columns[0].data_type),
-        }
-    }
-
-    pub fn schema(&self) -> &Schema {
-        match self {
-            Self::Index(idx) => &idx.schema,
-            Self::Table(table) => &table.schema,
-        }
-    }
-
-    pub fn kind(&self) -> &str {
-        match self {
-            Self::Index(_) => "index",
-            Self::Table(_) => "table",
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Index(idx) => &idx.name,
-            Self::Table(table) => &table.name,
-        }
-    }
-
-    pub fn index(&self) -> usize {
-        match self {
-            Self::Index(_) => 1,
-            Self::Table(_) => 0,
-        }
     }
 }
 
