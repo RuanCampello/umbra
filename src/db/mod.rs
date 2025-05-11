@@ -10,12 +10,13 @@ use self::metadata::IndexMetadata;
 use crate::core::date::DateParseError;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{self, Pager};
+use crate::core::storage::tuple;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::statement::{Column, Constraint, Create, Statement, Value};
 use crate::vm::expression::{TypeError, VmError};
-use crate::vm::planner::Planner;
+use crate::vm::planner::{Planner, Tuple};
 use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -69,6 +70,7 @@ pub(crate) enum DatabaseError {
     /// Something went wrong with the underlying storage (db or journal file).
     Corrupted(String),
     Other(String),
+    NoMemory,
 }
 
 #[derive(Debug, PartialEq)]
@@ -90,7 +92,7 @@ type RowId = u64;
 
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
-pub(crate) const DB_METADATA: &str = "limbo_db_meta";
+pub(crate) const DB_METADATA: &str = "umbra_db_meta";
 const DEFAULT_CACHE_SIZE: usize = 512;
 
 pub(crate) trait Ctx<'s> {
@@ -98,15 +100,6 @@ pub(crate) trait Ctx<'s> {
 }
 
 impl Database<File> {
-    fn new(pager: Rc<RefCell<Pager<File>>>, work_dir: PathBuf) -> Self {
-        Self {
-            pager,
-            work_dir,
-            context: Context::with_size(DEFAULT_CACHE_SIZE),
-            transaction_state: TransactionState::Terminated,
-        }
-    }
-
     fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let file = os::Fs::options()
             .create(true)
@@ -146,7 +139,22 @@ impl Database<File> {
 
 impl<File: Seek + Read + Write + FileOperations> Database<File> {
     fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
-        todo!()
+        let (schema, mut prepared) = self.prepare(input)?;
+        let mut query_set = QuerySet::new(schema, vec![]);
+        let mut total_size = 0;
+
+        while let Some(tuple) = prepared.try_next()? {
+            total_size += tuple::size_of(&tuple, &query_set.schema);
+
+            if total_size > 1 << 30 {
+                self.rollback()?;
+                return Err(DatabaseError::NoMemory);
+            }
+
+            query_set.tuples.push(tuple)
+        }
+
+        Ok(query_set)
     }
 
     fn prepare(
@@ -154,6 +162,36 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         sql: &str,
     ) -> Result<(Schema, PreparedStatement<'_, File>), DatabaseError> {
         todo!()
+    }
+
+    fn rollback(&mut self) -> Result<usize, DatabaseError> {
+        todo!()
+    }
+}
+
+impl<File> Database<File> {
+    fn new(pager: Rc<RefCell<Pager<File>>>, work_dir: PathBuf) -> Self {
+        Self {
+            pager,
+            work_dir,
+            context: Context::with_size(DEFAULT_CACHE_SIZE),
+            transaction_state: TransactionState::Terminated,
+        }
+    }
+
+    fn start_transaction(&mut self) {
+        self.transaction_state = TransactionState::Active
+    }
+
+    fn active_transaction(&self) -> bool {
+        matches!(
+            self.transaction_state,
+            TransactionState::Active | TransactionState::Aborted
+        )
+    }
+
+    fn aborted_transaction(&self) -> bool {
+        self.transaction_state.eq(&TransactionState::Aborted)
     }
 }
 
@@ -258,6 +296,18 @@ impl<'s> Ctx<'s> for Context {
         self.tables
             .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
+    }
+}
+
+impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        todo!()
+    }
+}
+
+impl QuerySet {
+    fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
+        Self { schema, tuples }
     }
 }
 impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {

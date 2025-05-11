@@ -157,7 +157,7 @@ struct TupleComparator {
     sort_indexes: Vec<usize>,
 }
 
-type Tuple = Vec<Value>;
+pub(crate) type Tuple = Vec<Value>;
 
 const TUPLE_HEADER_SIZE: usize = std::mem::size_of::<u32>();
 
