@@ -3,7 +3,7 @@ use std::{
     mem,
 };
 
-use crate::db::Schema;
+use crate::db::{RowId, Schema};
 use crate::sql::statement::{Type, Value};
 
 /// Returns the byte length of a given SQL [`Type`].
@@ -64,6 +64,10 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         }
         _ => unimplemented!("Tried to call serialize from {value} into {type}"),
     }
+}
+
+pub(crate) fn deserialize_row_id<'value>(buff: &[u8]) -> RowId {
+    RowId::from_le_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
 }
 
 pub(crate) fn serialize_tuple<'value>(

@@ -346,6 +346,19 @@ impl<File: Seek + Write + FileOperations> Pager<File> {
 
         Ok(())
     }
+
+    pub fn commit(&mut self) -> io::Result<()> {
+        if self.journal_pages.is_empty() {
+            return Ok(());
+        }
+
+        self.write_dirty_pages()?;
+        self.file.flush()?;
+        self.file.save()?;
+        self.journal_pages.clear();
+
+        self.journal.invalidate()
+    }
 }
 
 impl<File: Seek + Write> Pager<File> {
@@ -441,6 +454,16 @@ impl<File: Write + FileOperations> Journal<File> {
         Ok(())
     }
 
+    pub fn invalidate(&mut self) -> io::Result<()> {
+        self.clear_buff();
+
+        if let Some(file) = self.file.take() {
+            drop(file);
+            File::delete(&self.path)?;
+        }
+
+        Ok(())
+    }
     /// Passes the in-memory buffer to the journal file then clears it.
     fn write(&mut self) -> io::Result<()> {
         if self.buffer.len() <= JOURNAL_HEADER_SIZE {

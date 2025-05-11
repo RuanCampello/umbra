@@ -1,7 +1,13 @@
+use std::io::{Read, Seek, Write};
+
 use crate::core::storage::btree::{BTreeKeyCmp, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
+use crate::core::storage::pagination::io::FileOperations;
 use crate::db::{DatabaseError, RowId, Schema};
-use crate::sql::statement::Column;
+use crate::sql::statement::{Column, Value};
+
+use super::schema::umbra_schema;
+use super::Database;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct TableMetadata {
@@ -92,3 +98,11 @@ impl Relation {
     }
 }
 
+pub(crate) fn insert_metadata<File: Seek + Read + Write + FileOperations>(
+    db: &mut Database<File>,
+    values: Vec<Value>,
+) -> Result<(), DatabaseError> {
+    let mut schema = umbra_schema();
+    schema.prepend_id();
+    todo!()
+}

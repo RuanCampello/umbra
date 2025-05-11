@@ -24,8 +24,11 @@ use std::fs::File;
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use crate::core::storage::btree::{BTree, FixedSizeCmp};
+use crate::core::storage::page::PageNumber;
+use crate::db::schema::umbra_schema;
 
-struct Database<File> {
+pub(crate) struct Database<File> {
     pager: Rc<RefCell<Pager<File>>>,
     context: Context,
     work_dir: PathBuf,
@@ -88,7 +91,7 @@ pub(crate) enum SqlError {
     Other(String),
 }
 
-type RowId = u64;
+pub(crate) type RowId = u64;
 
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
@@ -164,7 +167,47 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         todo!()
     }
 
+    fn commit(&mut self) -> io::Result<()> {
+        self.transaction_state = TransactionState::Terminated;
+        self.pager.borrow_mut().commit()
+    }
+
     fn rollback(&mut self) -> Result<usize, DatabaseError> {
+        todo!()
+    }
+
+    fn load_metadata(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
+        if table == DB_METADATA {
+            let mut schema = umbra_schema();
+            schema.prepend_id();
+
+            return Ok(TableMetadata{
+                root: 0,
+                name: String::from(table),
+                row_id: self.load_next_row_id(0)?,
+                indexes: vec![],
+                schema,
+            })
+        } 
+        
+        todo!()
+    }
+
+    fn load_next_row_id(&mut self, root: PageNumber) -> Result<RowId, DatabaseError> {
+        let mut pager = self.pager.borrow_mut();
+        let mut btree = BTree::new(&mut pager, root, FixedSizeCmp::new::<RowId>());
+
+        let row_id = match btree.max()? {
+            Some(max) => tuple::deserialize_row_id(max.as_ref()) + 1,
+            None => 1,
+        };
+
+        Ok(row_id)
+    }
+}
+
+impl <File: Seek + Read + Write + FileOperations> Ctx<'_> for Database<File> {
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         todo!()
     }
 }
@@ -301,6 +344,61 @@ impl<'s> Ctx<'s> for Context {
 
 impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(exec) = self.exec.as_mut() else {
+            return Ok(None);
+        };
+
+        if self.db.aborted_transaction()
+            && !matches!(
+                exec,
+                Exec::Statement(Statement::Commit) | Exec::Statement(Statement::Rollback)
+            )
+        {
+            return Err(DatabaseError::Other(
+                "Current transaction is aborted due to previous errors".into(),
+            ));
+        }
+
+        if let Exec::Statement(Statement::StartTransaction) = exec {
+            if self.db.active_transaction() {
+                return Err(DatabaseError::Other(
+                    "Cannot start a transaction while there's one in progress".into(),
+                ));
+            }
+
+            self.db.start_transaction();
+            return Ok(None);
+        }
+
+        if !self.db.active_transaction() {
+            self.db.start_transaction();
+            self.autocommit = true;
+        }
+        todo!()
+    }
+
+    fn exec_statement(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(Exec::Statement(statement)) = self.exec.take() else {
+            unreachable!()
+        };
+
+        match statement {
+            Statement::Commit => {
+                if self.db.transaction_state.eq(&TransactionState::Aborted) {
+                    self.db.rollback()?;
+                } else {
+                    self.db.commit()?;
+                }
+            }
+            Statement::Rollback => {
+                self.db.rollback()?;
+            }
+            Statement::Drop(_) | Statement::Create(_) => {
+                todo!()
+            }
+            _ => unreachable!(),
+        }
+
         todo!()
     }
 }

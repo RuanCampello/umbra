@@ -55,3 +55,12 @@ impl Schema {
         self.columns.len()
     }
 }
+
+pub(in crate::db) fn umbra_schema() -> Schema {
+    Schema::from(&[
+        Column::new("type", Type::Varchar(255)),
+        Column::new("name", Type::Varchar(255)),
+        Column::new("root", Type::UnsignedInteger),
+        Column::new("sql", Type::Varchar(65535)),
+    ])
+}

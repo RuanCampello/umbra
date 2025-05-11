@@ -4,7 +4,7 @@
 
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime};
 use std::cmp::Ordering;
-use std::fmt::{Debug, Display, Formatter, Write};
+use std::fmt::{self, Debug, Display, Formatter, Write};
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -33,6 +33,7 @@ pub(crate) enum Statement {
     },
     Drop(Drop),
     Commit,
+    StartTransaction,
     Rollback,
     Explain(Box<Self>),
 }
@@ -167,6 +168,109 @@ impl Column {
     }
 }
 
+impl Display for Statement {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Statement::Create(create) => match create {
+                Create::Table { name, columns } => {
+                    write!(f, "CREATE TABLE {name} ({})", join(columns, ", "))?;
+                }
+
+                Create::Database(name) => {
+                    write!(f, "CREATE DATABASE {name}")?;
+                }
+
+                Create::Index {
+                    name,
+                    table,
+                    column,
+                    unique,
+                } => {
+                    let unique = if *unique { "UNIQUE" } else { "" };
+                    write!(f, "CREATE {unique} INDEX {name} ON {table}({column})")?;
+                }
+            },
+
+            Statement::Select {
+                columns,
+                from,
+                r#where,
+                order_by,
+            } => {
+                write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
+                if let Some(expr) = r#where {
+                    write!(f, " WHERE {expr}")?;
+                }
+                if !order_by.is_empty() {
+                    write!(f, " ORDER BY {}", join(order_by, ", "))?;
+                }
+            }
+
+            Statement::Delete { from, r#where } => {
+                write!(f, "DELETE FROM {from}")?;
+                if let Some(expr) = r#where {
+                    write!(f, " WHERE {expr}")?;
+                }
+            }
+
+            Statement::Update {
+                table,
+                columns,
+                r#where,
+            } => {
+                write!(f, "UPDATE {table} SET {}", join(columns, ", "))?;
+                if let Some(expr) = r#where {
+                    write!(f, " WHERE {expr}")?;
+                }
+            }
+
+            Statement::Insert {
+                into,
+                columns,
+                values,
+            } => {
+                let columns = match columns.is_empty() {
+                    true => String::from(" "),
+                    false => format!(" ({}) ", join(columns, ", ")),
+                };
+
+                let values = join(
+                    &values
+                        .iter()
+                        .map(|row| format!("({})", join(row, ", ")))
+                        .collect::<Vec<_>>(),
+                    ", ",
+                );
+
+                write!(f, "INSERT INTO {into}{columns}VALUES ({})", values)?;
+            }
+
+            Statement::Drop(drop) => {
+                match drop {
+                    Drop::Table(name) => write!(f, "DROP TABLE {name}")?,
+                    Drop::Database(name) => write!(f, "DROP DATABASE {name}")?,
+                };
+            }
+
+            Statement::StartTransaction => {
+                f.write_str("START TRANSACTION")?;
+            }
+
+            Statement::Commit => {
+                f.write_str("COMMIT")?;
+            }
+
+            Statement::Rollback => {
+                f.write_str("ROLLBACK")?;
+            }
+
+            Statement::Explain(statement) => write!(f, "EXPLAIN {statement}")?,
+        };
+
+        f.write_char(';')
+    }
+}
+
 impl Default for Expression {
     fn default() -> Self {
         Expression::Wildcard
@@ -184,25 +288,6 @@ impl PartialOrd for Value {
     }
 }
 
-pub(crate) fn join<'t, T: Display + 't>(
-    values: impl IntoIterator<Item = &'t T>,
-    separator: &str,
-) -> String {
-    let mut joined = String::new();
-    let mut iter = values.into_iter();
-
-    if let Some(value) = iter.next() {
-        write!(joined, "{}", &value).unwrap();
-    }
-
-    for value in iter {
-        joined.push_str(separator);
-        write!(joined, "{value}").unwrap();
-    }
-
-    joined
-}
-
 impl Type {
     pub fn is_integer_in_bounds(&self, int: &i128) -> bool {
         let bound = match self {
@@ -214,6 +299,77 @@ impl Type {
         };
 
         bound.contains(int)
+    }
+}
+
+impl Display for Column {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.name, self.data_type)?;
+
+        for constraint in &self.constraints {
+            f.write_char(' ')?;
+            f.write_str(match constraint {
+                Constraint::PrimaryKey => "PRIMARY KEY",
+                Constraint::Unique => "UNIQUE",
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Display for Expression {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Identifier(ident) => f.write_str(ident),
+            Self::Value(value) => write!(f, "{value}"),
+            Self::Wildcard => f.write_char('*'),
+            Self::BinaryOperation {
+                operator,
+                left,
+                right,
+            } => {
+                write!(f, "{left} {operator} {right}")
+            }
+            Self::UnaryOperation { operator, expr } => {
+                write!(f, "{operator}{expr}")
+            }
+            Self::Nested(expr) => write!(f, "({expr})"),
+        }
+    }
+}
+
+impl Display for BinaryOperator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Plus => "+",
+            Self::Minus => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Eq => "=",
+            Self::Neq => "!=",
+            Self::Gt => ">",
+            Self::GtEq => ">=",
+            Self::Lt => "<",
+            Self::LtEq => "<=",
+            Self::And => "AND",
+            Self::Or => "OR",
+        })
+    }
+}
+
+impl Display for UnaryOperator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_char(match self {
+            Self::Minus => '-',
+            Self::Plus => '+',
+        })
+    }
+}
+
+impl Display for Assignment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{} = {}", self.identifier, self.value)
     }
 }
 
@@ -244,4 +400,23 @@ impl Display for Value {
             Value::Time(time) => Display::fmt(time, f),
         }
     }
+}
+
+pub(crate) fn join<'t, T: Display + 't>(
+    values: impl IntoIterator<Item = &'t T>,
+    separator: &str,
+) -> String {
+    let mut joined = String::new();
+    let mut iter = values.into_iter();
+
+    if let Some(value) = iter.next() {
+        write!(joined, "{}", &value).unwrap();
+    }
+
+    for value in iter {
+        joined.push_str(separator);
+        write!(joined, "{value}").unwrap();
+    }
+
+    joined
 }

@@ -479,6 +479,16 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         Ok(siblings)
     }
 
+    pub(crate) fn max(&mut self) -> IOResult<Option<Content>> {
+        let (page, slot) = self.search_leaf_key(self.root, &mut Vec::new(), LeafKeySearch::Max)?;
+
+        if self.pager.get(page)?.len() == 0 {
+            return Ok(None);
+        };
+
+        reassemble_content(self.pager, page, slot).map(Some)
+    }
+
     fn search_leaf_key(
         &mut self,
         page_number: PageNumber,
