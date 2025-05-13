@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::vm::planner::{Collect, TupleComparator, DEFAULT_SORT_BUFFER_SIZE};
+use crate::vm::planner::{Collect, Project, TupleComparator, DEFAULT_SORT_BUFFER_SIZE};
 use crate::{
     core::storage::pagination::io::FileOperations,
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
@@ -125,7 +125,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     return Ok(source);
                 }
 
-                todo!()
+                Planner::Project(Project {
+                    output: output_schema,
+                    source: Box::new(source),
+                    projection: columns,
+                    input: table.schema.clone(),
+                });
             }
             todo!()
         }

@@ -1,6 +1,6 @@
 //! Plan trees implementation to execute the actual queries.
 
-use super::expression::resolve_only_expression;
+use super::expression::{resolve_expression, resolve_only_expression};
 use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
@@ -41,6 +41,7 @@ pub(crate) enum Planner<File: FileOperations> {
     Sort(Sort<File>),
     Insert(Insert<File>),
     SortKeys(SortKeys<File>),
+    Project(Project<File>),
     /// Handles literal values from INSERT statements.
     Values(Values),
 }
@@ -141,6 +142,14 @@ pub(crate) struct Collect<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct Project<File: FileOperations> {
+    pub source: Box<Planner<File>>,
+    pub input: Schema,
+    pub output: Schema,
+    pub projection: Vec<Expression>,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
@@ -198,6 +207,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Sort(sort) => sort.try_next(),
             Self::Insert(insert) => insert.try_next(),
             Self::SortKeys(keys) => keys.try_next(),
+            Self::Project(projection) => projection.try_next(),
             Self::Values(values) => values.try_next(),
         }
     }
@@ -803,6 +813,21 @@ impl<File: FileOperations> Collect<File> {
             file: None,
             reader: None,
         }
+    }
+}
+
+impl<File: PlanExecutor> Execute for Project<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(tuple) = self.source.try_next()? else {
+            return Ok(None);
+        };
+
+        Ok(Some(
+            self.projection
+                .iter()
+                .map(|expr| resolve_expression(&tuple, &self.input, expr))
+                .collect::<Result<Tuple, _>>()?,
+        ))
     }
 }
 

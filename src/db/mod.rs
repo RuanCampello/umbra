@@ -180,10 +180,13 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 | Statement::Update { .. }
                 | Statement::Delete { .. } => {
                     schema = Schema::new(vec![Column::new("Query Plan", Type::Varchar(255))]);
-                    let planner = query::
+                    //let planner = query::
                     todo!()
                 }
             },
+            _ => {
+                todo!()
+            }
         };
 
         todo!()
