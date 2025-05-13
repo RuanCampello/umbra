@@ -8,9 +8,12 @@ pub(crate) use schema::Schema;
 
 use self::metadata::IndexMetadata;
 use crate::core::date::DateParseError;
+use crate::core::storage::btree::{BTree, FixedSizeCmp};
+use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{self, Pager};
 use crate::core::storage::tuple;
+use crate::db::schema::umbra_schema;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
@@ -24,9 +27,6 @@ use std::fs::File;
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use crate::core::storage::btree::{BTree, FixedSizeCmp};
-use crate::core::storage::page::PageNumber;
-use crate::db::schema::umbra_schema;
 
 pub(crate) struct Database<File> {
     pager: Rc<RefCell<Pager<File>>>,
@@ -98,7 +98,7 @@ pub(crate) const ROW_COL_ID: &str = "row_id";
 pub(crate) const DB_METADATA: &str = "umbra_db_meta";
 const DEFAULT_CACHE_SIZE: usize = 512;
 
-pub(crate) trait Ctx<'s> {
+pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
 }
 
@@ -181,15 +181,15 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             let mut schema = umbra_schema();
             schema.prepend_id();
 
-            return Ok(TableMetadata{
+            return Ok(TableMetadata {
                 root: 0,
                 name: String::from(table),
                 row_id: self.load_next_row_id(0)?,
                 indexes: vec![],
                 schema,
-            })
-        } 
-        
+            });
+        }
+
         todo!()
     }
 
@@ -206,7 +206,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
     }
 }
 
-impl <File: Seek + Read + Write + FileOperations> Ctx<'_> for Database<File> {
+impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         todo!()
     }
@@ -334,7 +334,7 @@ impl TryFrom<&[&str]> for Context {
     }
 }
 
-impl<'s> Ctx<'s> for Context {
+impl Ctx for Context {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         self.tables
             .get_mut(table)

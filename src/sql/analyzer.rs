@@ -30,7 +30,7 @@ type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
 pub(in crate::sql) fn analyze<'s>(
     statement: &'s Statement,
-    ctx: &'s mut impl Ctx<'s>,
+    ctx: &'s mut impl Ctx,
 ) -> AnalyzerResult<'s, ()> {
     match statement {
         Statement::Create(Create::Table { name, columns }) => {
