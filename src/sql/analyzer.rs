@@ -237,7 +237,7 @@ fn analyze_assignment<'exp, 'id>(
     Ok(())
 }
 
-fn analyze_expression<'exp, 'sch>(
+pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
     schema: &'sch Schema,
     col_type: Option<&Type>,
     expr: &'exp Expression,

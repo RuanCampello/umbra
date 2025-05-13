@@ -140,6 +140,21 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
         self.balance(search.page, &mut parents)
     }
+    pub fn try_insert(&mut self, entry: Vec<u8>) -> IOResult<Result<(), Search>> {
+        let mut parents = Vec::new();
+        let search = self.search(self.root, &entry, &mut parents)?;
+
+        let Err(index) = search.index else {
+            return Ok(Err(search));
+        };
+
+        let cell = self.allocate_cell(entry)?;
+        self.pager.get_mut(search.page)?.insert(index, cell);
+
+        self.balance(search.page, &mut parents)?;
+
+        Ok(Ok(()))
+    }
 
     pub fn remove(&mut self, entry: &[u8]) -> IOResult<Option<Box<Cell>>> {
         let mut parents = Vec::new();

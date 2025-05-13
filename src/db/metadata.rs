@@ -9,7 +9,7 @@ use crate::sql::statement::{Column, Value};
 use super::schema::umbra_schema;
 use super::Database;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TableMetadata {
     pub root: PageNumber,
     pub name: String,
@@ -18,7 +18,7 @@ pub(crate) struct TableMetadata {
     pub(in crate::db) row_id: RowId,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct IndexMetadata {
     pub root: PageNumber,
     pub name: String,

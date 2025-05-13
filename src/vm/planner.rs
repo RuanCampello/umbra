@@ -9,6 +9,7 @@ use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{Expression, Value};
+use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
@@ -38,12 +39,14 @@ pub(crate) enum Planner<File: FileOperations> {
     /// Evaluates each row against the filter expression and keep the matching rows.
     Filter(Filter<File>),
     Sort(Sort<File>),
+    Insert(Insert<File>),
+    SortKeys(SortKeys<File>),
     /// Handles literal values from INSERT statements.
     Values(Values),
 }
 
 #[derive(Debug, PartialEq)]
-struct SeqScan<File> {
+pub(crate) struct SeqScan<File> {
     pub table: TableMetadata,
     pager: Rc<RefCell<Pager<File>>>,
     cursor: Cursor,
@@ -96,7 +99,7 @@ struct Filter<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
-struct Sort<File: FileOperations> {
+pub(crate) struct Sort<File: FileOperations> {
     collection: Collect<File>,
     comparator: TupleComparator,
     sorted: bool,
@@ -110,8 +113,23 @@ struct Sort<File: FileOperations> {
     output_file_path: PathBuf,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) struct Insert<File: FileOperations> {
+    pub pager: Rc<RefCell<Pager<File>>>,
+    pub source: Box<Planner<File>>,
+    pub table: TableMetadata,
+    pub comparator: FixedSizeCmp,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct SortKeys<File: FileOperations> {
+    pub source: Box<Planner<File>>,
+    pub schema: Schema,
+    pub expressions: Vec<Expression>,
+}
+
 #[derive(Debug)]
-struct Collect<File: FileOperations> {
+pub(crate) struct Collect<File: FileOperations> {
     source: Box<Planner<File>>,
     schema: Schema,
     mem_buff: TupleBuffer,
@@ -123,7 +141,7 @@ struct Collect<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
-struct Values {
+pub(crate) struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
 
@@ -151,7 +169,7 @@ struct FileFifo<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
-struct TupleComparator {
+pub(crate) struct TupleComparator {
     schema: Schema,
     sort_schema: Schema,
     sort_indexes: Vec<usize>,
@@ -159,7 +177,8 @@ struct TupleComparator {
 
 pub(crate) type Tuple = Vec<Value>;
 
-const TUPLE_HEADER_SIZE: usize = std::mem::size_of::<u32>();
+pub(crate) const DEFAULT_SORT_BUFFER_SIZE: usize = 4;
+const TUPLE_HEADER_SIZE: usize = size_of::<u32>();
 
 pub trait PlanExecutor: Seek + Read + Write + FileOperations {}
 pub trait Execute {
@@ -177,6 +196,8 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::LogicalScan(logical) => logical.try_next(),
             Self::Filter(filter) => filter.try_next(),
             Self::Sort(sort) => sort.try_next(),
+            Self::Insert(insert) => insert.try_next(),
+            Self::SortKeys(keys) => keys.try_next(),
             Self::Values(values) => values.try_next(),
         }
     }
@@ -194,6 +215,16 @@ impl<File: PlanExecutor> Execute for SeqScan<File> {
             reassemble_content(&mut pager, page, slot)?.as_ref(),
             &self.table.schema,
         )))
+    }
+}
+
+impl<File: PlanExecutor> SeqScan<File> {
+    fn to_plan(metadata: &TableMetadata, pager: Rc<RefCell<Pager<File>>>) -> Planner<File> {
+        Planner::SeqScan(SeqScan {
+            table: metadata.clone(),
+            pager,
+            cursor: Cursor::new(metadata.root, 0),
+        })
     }
 }
 
@@ -593,6 +624,28 @@ impl<File: PlanExecutor> Sort<File> {
 }
 
 impl<File: FileOperations> Sort<File> {
+    pub(crate) fn new(
+        page_size: usize,
+        work_dir: PathBuf,
+        collection: Collect<File>,
+        comparator: TupleComparator,
+        input_buffers: usize,
+    ) -> Self {
+        Self {
+            page_size,
+            work_dir,
+            collection,
+            comparator,
+            input_buffers,
+            sorted: false,
+            input_file: None,
+            output_file: None,
+            output_buffer: TupleBuffer::empty(),
+            input_file_path: PathBuf::new(),
+            output_file_path: PathBuf::new(),
+        }
+    }
+
     fn drop_files(&mut self) -> io::Result<()> {
         if let Some(input) = self.input_file.take() {
             drop(input);
@@ -611,6 +664,70 @@ impl<File: FileOperations> Sort<File> {
 impl<File: FileOperations> Drop for Sort<File> {
     fn drop(&mut self) {
         let _ = self.drop_files();
+    }
+}
+
+impl<File: PlanExecutor> Execute for Insert<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(mut tuple) = self.source.try_next()? else {
+            return Ok(None);
+        };
+
+        let mut pager = self.pager.borrow_mut();
+
+        BTree::new(&mut pager, self.table.root, self.comparator.clone())
+            .try_insert(tuple::serialize_tuple(&self.table.schema, &tuple))?
+            .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(0)))?;
+
+        (self.table.indexes)
+            .iter()
+            .try_for_each(|index| -> Result<(), DatabaseError> {
+                let col = self.table.schema.index_of(&index.column.name).ok_or(
+                    DatabaseError::Corrupted(format!(
+                        "Index column {} not found on table {} with schema {:#?}",
+                        index.column.name, self.table.name, self.table.schema
+                    )),
+                )?;
+
+                let comparator = BTreeKeyCmp::from(&index.column.data_type);
+
+                BTree::new(&mut pager, index.root, comparator)
+                    .try_insert(tuple::serialize_tuple(
+                        &index.schema,
+                        [&tuple[col], &tuple[0]],
+                    ))?
+                    .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(col)))?;
+
+                Ok(())
+            })?;
+
+        Ok(Some(vec![]))
+    }
+}
+
+impl<File: PlanExecutor> Execute for SortKeys<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(mut tuple) = self.source.try_next()? else {
+            return Ok(None);
+        };
+
+        self.expressions
+            .iter()
+            .try_for_each(|expr| -> Result<(), DatabaseError> {
+                debug_assert!(
+                    !matches!(expr, Expression::Identifier(_)),
+                    "Identifiers should not get into SortKeys"
+                );
+
+                tuple.push(vm::expression::resolve_expression(
+                    &tuple,
+                    &self.schema,
+                    expr,
+                )?);
+                Ok(())
+            })?;
+
+        Ok(Some(tuple))
     }
 }
 
@@ -666,6 +783,26 @@ impl<File: PlanExecutor> Execute for Collect<File> {
         }
 
         Ok(self.mem_buff.pop_front())
+    }
+}
+
+impl<File: FileOperations> Collect<File> {
+    pub(crate) fn new(
+        source: Box<Planner<File>>,
+        schema: Schema,
+        work_dir: PathBuf,
+        mem_buff_size: usize,
+    ) -> Self {
+        Self {
+            source,
+            mem_buff: TupleBuffer::new(mem_buff_size, schema.clone(), true),
+            schema,
+            work_dir,
+            file_path: PathBuf::new(),
+            collected: false,
+            file: None,
+            reader: None,
+        }
     }
 }
 
@@ -936,6 +1073,14 @@ impl<File: FileOperations> Drop for FileFifo<File> {
 }
 
 impl TupleComparator {
+    pub(crate) fn new(schema: Schema, sort_schema: Schema, sort_indexes: Vec<usize>) -> Self {
+        Self {
+            schema,
+            sort_schema,
+            sort_indexes,
+        }
+    }
+
     fn cmp(&self, tuple: &[Value], other_tuple: &[Value]) -> Ordering {
         debug_assert!(
             tuple.len().eq(&other_tuple.len()),

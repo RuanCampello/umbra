@@ -6,6 +6,8 @@ use crate::db::{Ctx, DatabaseError};
 pub(crate) mod analyzer;
 pub(crate) mod optimiser;
 pub(crate) mod parser;
+pub(crate) mod query;
+
 mod prepare;
 pub mod statement;
 mod tokenizer;
@@ -16,6 +18,7 @@ pub(crate) fn pipeline(input: &str, db: &mut impl Ctx) -> Result<Statement, Data
 
     analyzer::analyze(&statement, db)?;
     optimiser::optimise(&mut statement)?;
+    prepare::prepare(&mut statement, db)?;
 
     Ok(statement)
 }

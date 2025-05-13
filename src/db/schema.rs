@@ -35,6 +35,11 @@ impl Schema {
         self.index.insert(ROW_COL_ID.to_string(), 0);
     }
 
+    pub fn push(&mut self, col: Column) {
+        self.index.insert(col.name.to_string(), self.len());
+        self.columns.push(col);
+    }
+
     pub fn index_of(&self, col: &str) -> Option<usize> {
         self.index.get(col).copied()
     }

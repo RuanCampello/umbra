@@ -17,7 +17,8 @@ use crate::db::schema::umbra_schema;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
-use crate::sql::statement::{Column, Constraint, Create, Statement, Value};
+use crate::sql::query;
+use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
 use crate::vm::expression::{TypeError, VmError};
 use crate::vm::planner::{Planner, Tuple};
 use std::cell::{Ref, RefCell};
@@ -29,9 +30,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 pub(crate) struct Database<File> {
-    pager: Rc<RefCell<Pager<File>>>,
+    pub(crate) pager: Rc<RefCell<Pager<File>>>,
     context: Context,
-    work_dir: PathBuf,
+    pub(crate) work_dir: PathBuf,
     transaction_state: TransactionState,
 }
 
@@ -59,7 +60,7 @@ enum TransactionState {
 }
 
 #[derive(Debug, PartialEq)]
-enum Exec<File: FileOperations> {
+pub(crate) enum Exec<File: FileOperations> {
     Statement(Statement),
     Plan(Planner<File>),
     Explain(VecDeque<String>),
@@ -164,9 +165,29 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         &mut self,
         sql: &str,
     ) -> Result<(Schema, PreparedStatement<'_, File>), DatabaseError> {
+        let statement = crate::sql::pipeline(sql, self)?;
+        let mut schema = Schema::empty();
+
+        let exec = match statement {
+            Statement::Create(_)
+            | Statement::Drop(_)
+            | Statement::StartTransaction
+            | Statement::Commit
+            | Statement::Rollback => Exec::Statement(statement),
+            Statement::Explain(inner) => match &*inner {
+                Statement::Select { .. }
+                | Statement::Insert { .. }
+                | Statement::Update { .. }
+                | Statement::Delete { .. } => {
+                    schema = Schema::new(vec![Column::new("Query Plan", Type::Varchar(255))]);
+                    let planner = query::
+                    todo!()
+                }
+            },
+        };
+
         todo!()
     }
-
     fn commit(&mut self) -> io::Result<()> {
         self.transaction_state = TransactionState::Terminated;
         self.pager.borrow_mut().commit()
