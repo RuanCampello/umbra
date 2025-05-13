@@ -8,12 +8,13 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Exec, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{Assignment, Expression, Value};
+use crate::sql::statement::{join, Assignment, Expression, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Display;
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use std::ops::{Bound, Index, RangeBounds};
 use std::path::{Path, PathBuf};
@@ -217,11 +218,49 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Filter(filter) => filter.try_next(),
             Self::Sort(sort) => sort.try_next(),
             Self::Insert(insert) => insert.try_next(),
+            Self::Update(update) => update.try_next(),
             Self::SortKeys(keys) => keys.try_next(),
             Self::Project(projection) => projection.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
+    }
+}
+
+impl<File: FileOperations> Planner<File> {
+    pub fn child(&self) -> Option<&Self> {
+        Some(match self {
+            Self::KeyScan(key) => &key.source,
+            Self::Filter(filter) => &filter.source,
+            Self::Sort(sort) => &sort.collection.source,
+            Self::Insert(insert) => &insert.source,
+            Self::Update(update) => &update.source,
+            Self::SortKeys(keys) => &keys.source,
+            Self::Collect(collection) => &collection.source,
+            _ => return None,
+        })
+    }
+
+    fn display(&self) -> String {
+        let prefix = "->";
+
+        let display = match self {
+            Self::SeqScan(seq) => format!("{seq}"),
+            Self::ExactMatch(exac_match) => format!("{exac_match}"),
+            Self::RangeScan(range) => format!("{range}"),
+            Self::KeyScan(key) => format!("{key}"),
+            Self::LogicalScan(logical) => format!("{logical}"),
+            Self::Filter(filter) => format!("{filter}"),
+            Self::Sort(sort) => format!("{sort}"),
+            Self::Insert(insert) => format!("{insert}"),
+            Self::Update(update) => format!("{update}"),
+            Self::SortKeys(keys) => format!("{keys}"),
+            Self::Project(projection) => format!("{projection}"),
+            Self::Collect(collection) => format!("{collection}"),
+            Self::Values(values) => format!("{values}"),
+        };
+
+        format!("{prefix}{display}")
     }
 }
 
@@ -1233,4 +1272,138 @@ fn temp_file<File: FileOperations>(
     let file = File::create(&path)?;
 
     Ok((path, file))
+}
+
+impl<File: FileOperations> Display for Planner<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut planners = vec![self.display()];
+        let mut node = self;
+
+        while let Some(child) = node.child() {
+            planners.push(child.display());
+            node = child;
+        }
+
+        writeln!(f, "{}", planners.pop().unwrap())?;
+        while let Some(plan) = planners.pop() {
+            writeln!(f, "{plan}")?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<File> Display for SeqScan<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SeqScan on table {}", self.table.name)
+    }
+}
+
+impl<File> Display for ExactMatch<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ExactMatch {} on {} {}",
+            self.expr,
+            self.relation.kind(),
+            self.relation.name()
+        )
+    }
+}
+
+impl<File> Display for RangeScan<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RangeScan {} on {} {}",
+            self.expr,
+            self.relation.kind(),
+            self.relation.name()
+        )
+    }
+}
+
+impl<File: FileOperations> Display for KeyScan<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "KeyScan {} on table {}",
+            self.table.schema.columns[0].name, self.table.name
+        )
+    }
+}
+
+impl<File: FileOperations> Display for LogicalScan<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LogicalScan")?;
+
+        for scan in &self.scans {
+            write!(f, "\n {}", scan.display())?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<File: FileOperations> Display for Sort<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let col_names = self
+            .comparator
+            .sort_indexes
+            .iter()
+            .map(|idx| &self.comparator.sort_schema.columns[*idx].name);
+
+        write!(f, "Sort {}", join(col_names, ", "))
+    }
+}
+
+impl<File: FileOperations> Display for Filter<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Filter {}", self.filter)
+    }
+}
+
+impl<File: FileOperations> Display for Project<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Project {}", join(&self.projection, ", "))
+    }
+}
+
+impl<File: FileOperations> Display for SortKeys<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SortKeys {}", join(&self.expressions, ", "))
+    }
+}
+
+impl<File: FileOperations> Display for Insert<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Insert on table {}", self.table.name)
+    }
+}
+
+impl<File: FileOperations> Display for Update<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Update {} on table {}",
+            join(&self.assigments, ", "),
+            self.table.name
+        )
+    }
+}
+
+impl<File: FileOperations> Display for Collect<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Collect {}",
+            join(self.schema.columns.iter().map(|col| &col.name), ", ")
+        )
+    }
+}
+
+impl Display for Values {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Values {}", join(&self.values[0], ", "))
+    }
 }

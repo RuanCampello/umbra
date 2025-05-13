@@ -180,9 +180,11 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 | Statement::Update { .. }
                 | Statement::Delete { .. } => {
                     schema = Schema::new(vec![Column::new("Query Plan", Type::Varchar(255))]);
-                    //let planner = query::
-                    todo!()
+                    let planner = query::planner::generate_plan(*inner, self)?;
+                    Exec::Explain(format!("{planner}").lines().map(String::from).collect())
                 }
+
+                _ => return Err(DatabaseError::Other(String::from("EXPLAIN is meant to work only with SELECT, INSERT, UPDATE and DELETE statements")))
             },
             _ => {
                 todo!()

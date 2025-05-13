@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::VecDeque,
     io::{Read, Seek, Write},
     rc::Rc,
@@ -26,11 +25,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     let statement = match statement {
-        Statement::Insert {
-            into,
-            columns,
-            values,
-        } => {
+        Statement::Insert { into, values, .. } => {
             let values = VecDeque::from(values);
             let source = Box::new(Planner::Values(Values { values }));
             let table = db.metadata(&into)?;
@@ -167,7 +162,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         }
     };
 
-    todo!()
+    Ok(statement)
 }
 
 fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
