@@ -187,11 +187,22 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 _ => return Err(DatabaseError::Other(String::from("EXPLAIN is meant to work only with SELECT, INSERT, UPDATE and DELETE statements")))
             },
             _ => {
-                todo!()
+                let planner = query::planner::generate_plan(statement, self)?;
+                if let Some(planner_schema) = planner.schema() {
+                    schema = planner_schema;
+                }
+
+                Exec::Plan(planner)
             }
         };
 
-        todo!()
+        let prepared_statement = PreparedStatement {
+            db: self,
+            autocommit: false,
+            exec: Some(exec),
+        };
+
+        Ok((schema, prepared_statement))
     }
     fn commit(&mut self) -> io::Result<()> {
         self.transaction_state = TransactionState::Terminated;

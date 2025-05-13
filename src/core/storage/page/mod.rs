@@ -68,7 +68,7 @@ pub(in crate::core) struct PageHeader {
 /// It works with the BTree to rearrange entries during overflow or underflow situations.
 /// This uses a DST (Dynamically Sized Type), which is complex, but improves efficiency when working with references and ownership.
 #[derive(Debug, PartialEq)]
-pub(in crate::core) struct Cell {
+pub(crate) struct Cell {
     pub(in crate::core) header: CellHeader,
 
     /// When `header.is_overflow` is true, those last four bytes are going to point to an overflow page.
