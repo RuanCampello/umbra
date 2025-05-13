@@ -7,13 +7,13 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{Expression, Value};
+use crate::db::{DatabaseError, Exec, Relation, Schema, SqlError, TableMetadata};
+use crate::sql::statement::{Assignment, Expression, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use std::ops::{Bound, Index, RangeBounds};
 use std::path::{Path, PathBuf};
@@ -40,8 +40,10 @@ pub(crate) enum Planner<File: FileOperations> {
     Filter(Filter<File>),
     Sort(Sort<File>),
     Insert(Insert<File>),
+    Update(Update<File>),
     SortKeys(SortKeys<File>),
     Project(Project<File>),
+    Collect(Collect<File>),
     /// Handles literal values from INSERT statements.
     Values(Values),
 }
@@ -94,7 +96,7 @@ struct LogicalScan<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 struct Filter<File: FileOperations> {
-    source: Box<Planner<File>>,
+    pub(crate) source: Box<Planner<File>>,
     schema: Schema,
     filter: Expression,
 }
@@ -119,6 +121,15 @@ pub(crate) struct Insert<File: FileOperations> {
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
     pub table: TableMetadata,
+    pub comparator: FixedSizeCmp,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Update<File: FileOperations> {
+    pub table: TableMetadata,
+    pub assigments: Vec<Assignment>,
+    pub pager: Rc<RefCell<Pager<File>>>,
+    pub source: Box<Planner<File>>,
     pub comparator: FixedSizeCmp,
 }
 
@@ -208,6 +219,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Insert(insert) => insert.try_next(),
             Self::SortKeys(keys) => keys.try_next(),
             Self::Project(projection) => projection.try_next(),
+            Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
     }
@@ -710,6 +722,78 @@ impl<File: PlanExecutor> Execute for Insert<File> {
 
                 Ok(())
             })?;
+
+        Ok(Some(vec![]))
+    }
+}
+
+impl<File: PlanExecutor> Execute for Update<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(mut tuple) = self.source.try_next()? else {
+            return Ok(None);
+        };
+
+        let mut updated_cols = HashMap::new();
+
+        for assignment in &self.assigments {
+            let col = self.table.schema.index_of(&assignment.identifier).ok_or(
+                DatabaseError::Corrupted(format!(
+                    "Column {} not found in table schema {:?}",
+                    assignment.identifier, self.table
+                )),
+            )?;
+
+            let new_value = resolve_expression(&tuple, &self.table.schema, &assignment.value)?;
+
+            if new_value.ne(&tuple[col]) {
+                let old_value = std::mem::replace(&mut tuple[col], new_value);
+                updated_cols.insert(assignment.identifier.clone(), (old_value, col));
+            }
+        }
+
+        let mut pager = self.pager.borrow_mut();
+        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator.clone());
+
+        let updated_entry = tuple::serialize_tuple(&self.table.schema, &tuple);
+
+        match updated_cols.get(&self.table.schema.columns[0].name) {
+            Some((old, _)) => {
+                btree
+                    .try_insert(updated_entry)?
+                    .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(0)))?;
+                btree.remove(&tuple::serialize(
+                    &self.table.schema.columns[0].data_type,
+                    old,
+                ))?;
+            }
+            None => btree.insert(updated_entry)?,
+        }
+
+        for index in &self.table.indexes {
+            let mut btree = BTree::new(
+                &mut pager,
+                index.root,
+                BTreeKeyCmp::from(&index.column.data_type),
+            );
+
+            if let Some((old, new)) = updated_cols.get(&index.column.name) {
+                btree
+                    .try_insert(tuple::serialize_tuple(
+                        &index.schema,
+                        [&tuple[*new], &tuple[0]],
+                    ))
+                    .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(*new)))?;
+
+                btree.remove(&tuple::serialize(&index.column.data_type, old))?;
+            } else if updated_cols.contains_key(&self.table.schema.columns[0].name) {
+                let index_col = self.table.schema.index_of(&index.column.name).unwrap();
+
+                btree.insert(tuple::serialize_tuple(
+                    &index.schema,
+                    [&tuple[index_col], &tuple[0]],
+                ))?;
+            }
+        }
 
         Ok(Some(vec![]))
     }

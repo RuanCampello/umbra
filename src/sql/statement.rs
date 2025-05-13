@@ -40,7 +40,7 @@ pub(crate) enum Statement {
 
 /// The `UPDATE` assignment instruction.
 #[derive(Debug, PartialEq)]
-pub(in crate::sql) struct Assignment {
+pub(crate) struct Assignment {
     pub identifier: String,
     pub value: Expression,
 }

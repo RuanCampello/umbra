@@ -1,10 +1,11 @@
 use std::{
+    cell::RefCell,
     collections::VecDeque,
     io::{Read, Seek, Write},
     rc::Rc,
 };
 
-use crate::vm::planner::{Collect, Project, TupleComparator, DEFAULT_SORT_BUFFER_SIZE};
+use crate::vm::planner::{Collect, Project, TupleComparator, Update, DEFAULT_SORT_BUFFER_SIZE};
 use crate::{
     core::storage::pagination::io::FileOperations,
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
@@ -104,38 +105,65 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     comparator,
                     DEFAULT_SORT_BUFFER_SIZE,
                 ));
+            }
 
-                let mut output_schema = Schema::empty();
+            let mut output_schema = Schema::empty();
 
-                for expr in &columns {
-                    match expr {
-                        Expression::Identifier(ident) => output_schema.push(
-                            table.schema.columns[table.schema.index_of(ident).unwrap()].clone(),
-                        ),
-                        _ => {
-                            output_schema.push(Column::new(
-                                expr.to_string().as_str(),
-                                resolve_type(&table.schema, expr)?,
-                            ));
-                        }
+            for expr in &columns {
+                match expr {
+                    Expression::Identifier(ident) => output_schema
+                        .push(table.schema.columns[table.schema.index_of(ident).unwrap()].clone()),
+                    _ => {
+                        output_schema.push(Column::new(
+                            expr.to_string().as_str(),
+                            resolve_type(&table.schema, expr)?,
+                        ));
                     }
                 }
-
-                if table.schema.eq(&output_schema) {
-                    return Ok(source);
-                }
-
-                Planner::Project(Project {
-                    output: output_schema,
-                    source: Box::new(source),
-                    projection: columns,
-                    input: table.schema.clone(),
-                });
             }
-            todo!()
+
+            if table.schema.eq(&output_schema) {
+                return Ok(source);
+            }
+
+            Planner::Project(Project {
+                output: output_schema,
+                source: Box::new(source),
+                projection: columns,
+                input: table.schema.clone(),
+            })
         }
-        _ => {
-            todo!()
+        Statement::Update {
+            table,
+            columns,
+            r#where,
+        } => {
+            let mut source = optimiser::generate_seq_plan(&table, r#where, db)?;
+            let work_dir = db.work_dir.clone();
+            let page_size = db.pager.borrow().page_size;
+            let metadata = db.metadata(&table)?;
+
+            if needs_collection(&source) {
+                source = Planner::Collect(Collect::new(
+                    Box::new(source),
+                    metadata.schema.clone(),
+                    work_dir,
+                    page_size,
+                ));
+            }
+
+            Planner::Update(Update {
+                comparator: metadata.comp()?,
+                table: metadata.clone(),
+                assigments: columns,
+                pager: Rc::clone(&db.pager),
+                source: Box::new(source),
+            })
+        }
+        other => {
+            return Err(DatabaseError::Other(format!(
+                "Statement {other} not implemented or supported for this"
+            )))
         }
     };
 
@@ -155,4 +183,13 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             VmType::Date => Type::DateTime,
         },
     })
+}
+
+fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
+    match planner {
+        Planner::Filter(filter) => needs_collection(&filter.source),
+        Planner::KeyScan(_) | Planner::ExactMatch(_) => false,
+        Planner::SeqScan(_) | Planner::LogicalScan(_) | Planner::RangeScan(_) => true,
+        _ => unreachable!("needs_collection() must be called only for a scan planner"),
+    }
 }
