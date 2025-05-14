@@ -61,7 +61,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             Expression::Identifier(col) => table.schema.index_of(col).unwrap(),
                             _ => {
                                 let index = sorted_indexes.len();
-                                let r#type = resolve_type(&schema, &expr)?;
+                                let r#type = resolve_type(&schema, expr)?;
                                 let col = Column::new(&format!("{expr}"), r#type);
                                 schema.push(col);
 

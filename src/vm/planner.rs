@@ -7,7 +7,7 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, Exec, Relation, Schema, SqlError, TableMetadata};
+use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{join, Assignment, Expression, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
@@ -52,18 +52,18 @@ pub(crate) enum Planner<File: FileOperations> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct SeqScan<File> {
     pub table: TableMetadata,
-    pager: Rc<RefCell<Pager<File>>>,
-    cursor: Cursor,
+    pub pager: Rc<RefCell<Pager<File>>>,
+    pub cursor: Cursor,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct ExactMatch<File> {
-    relation: Relation,
-    key: Vec<u8>,
-    expr: Expression,
-    pager: Rc<RefCell<Pager<File>>>,
-    done: bool,
-    emit_only_key: bool,
+    pub relation: Relation,
+    pub key: Vec<u8>,
+    pub expr: Expression,
+    pub pager: Rc<RefCell<Pager<File>>>,
+    pub done: bool,
+    pub emit_only_key: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -84,22 +84,22 @@ pub(crate) struct RangeScan<File> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct KeyScan<File: FileOperations> {
-    comparator: FixedSizeCmp,
-    table: TableMetadata,
-    pager: Rc<RefCell<Pager<File>>>,
-    source: Box<Planner<File>>,
+    pub comparator: FixedSizeCmp,
+    pub table: TableMetadata,
+    pub pager: Rc<RefCell<Pager<File>>>,
+    pub source: Box<Planner<File>>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct LogicalScan<File: FileOperations> {
-    scans: VecDeque<Planner<File>>,
+    pub(crate) scans: VecDeque<Planner<File>>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Filter<File: FileOperations> {
-    pub(crate) source: Box<Planner<File>>,
-    schema: Schema,
-    filter: Expression,
+    pub source: Box<Planner<File>>,
+    pub schema: Schema,
+    pub filter: Expression,
 }
 
 #[derive(Debug, PartialEq)]
@@ -333,6 +333,28 @@ impl<File: PlanExecutor> Execute for ExactMatch<File> {
 }
 
 impl<File: PlanExecutor> RangeScan<File> {
+    pub(crate) fn new(
+        range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
+        relation: Relation,
+        emit_only_key: bool,
+        expr: Expression,
+        pager: Rc<RefCell<Pager<File>>>,
+    ) -> Self {
+        Self {
+            schema: relation.schema().clone(),
+            comparator: relation.comp(),
+            root: relation.root(),
+            cursor: Cursor::new(relation.root(), 0),
+            index: relation.index(),
+            done: false,
+            init: false,
+            emit_only_key,
+            expr,
+            pager,
+            range,
+            relation,
+        }
+    }
     fn init(&mut self) -> std::io::Result<()> {
         let mut pager = self.pager.borrow_mut();
 
@@ -837,7 +859,7 @@ impl<File: PlanExecutor> Execute for Update<File> {
                     .try_insert(tuple::serialize_tuple(
                         &index.schema,
                         [&tuple[*new], &tuple[0]],
-                    ))
+                    ))?
                     .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(*new)))?;
 
                 btree.remove(&tuple::serialize(&index.column.data_type, old))?;

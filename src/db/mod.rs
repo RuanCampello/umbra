@@ -3,10 +3,9 @@
 mod metadata;
 mod schema;
 
-pub(crate) use metadata::{Relation, TableMetadata};
+pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::Schema;
 
-use self::metadata::IndexMetadata;
 use crate::core::date::DateParseError;
 use crate::core::storage::btree::{BTree, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;

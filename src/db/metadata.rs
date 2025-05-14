@@ -27,7 +27,7 @@ pub(crate) struct IndexMetadata {
     pub(in crate::db) unique: bool,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Relation {
     Index(IndexMetadata),
     Table(TableMetadata),
@@ -51,6 +51,10 @@ impl TableMetadata {
 
     pub fn keys(&self) -> &Column {
         self.schema.keys()
+    }
+
+    pub fn key_only_schema(&self) -> Schema {
+        Schema::new(vec![self.schema.columns[0].clone()])
     }
 }
 
