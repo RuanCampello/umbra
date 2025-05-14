@@ -306,12 +306,62 @@ fn find_index_paths<'exp>(
 
                         left_paths
                     }
-                    _ => {}
+                    BinaryOperator::Or => {
+                        if left_paths.is_empty() || right_paths.is_empty() {
+                            return HashMap::new();
+                        }
+
+                        let mut merged: HashMap<&str, VecDeque<IndexBounds>> = HashMap::new();
+
+                        for (col, mut left_bounds) in left_paths.into_iter() {
+                            let Some(mut right_bounds) = right_paths.remove(col) else {
+                                merged.insert(col, left_bounds);
+                                continue;
+                            };
+
+                            let mut sorted_bounds = VecDeque::new();
+                            while !left_bounds.is_empty() && !right_bounds.is_empty() {
+                                sorted_bounds.push_back(
+                                    match cmp_ranges(&left_bounds[0], &right_bounds[0])
+                                        .ne(&Ordering::Greater)
+                                    {
+                                        true => left_bounds.pop_front().unwrap(),
+                                        false => right_bounds.pop_front().unwrap(),
+                                    },
+                                );
+                            }
+
+                            sorted_bounds.append(&mut left_bounds);
+                            sorted_bounds.append(&mut right_bounds);
+
+                            let mut bounds_union = VecDeque::new();
+                            for range in sorted_bounds {
+                                match bounds_union.back_mut() {
+                                    Some(previous) => match range_union(*previous, range) {
+                                        Some(union) => *previous = union,
+                                        None => bounds_union.push_back(range),
+                                    },
+                                    None => bounds_union.push_back(range),
+                                }
+                            }
+
+                            if bounds_union[0].ne(&(Bound::Unbounded, Bound::Unbounded)) {
+                                merged.insert(col, bounds_union);
+                            }
+                        }
+                        merged.extend(right_paths);
+
+                        merged
+                    }
+
+                    _ => unreachable!(),
                 }
             }
+            _ => HashMap::new(),
         },
+        Expression::Nested(inner) => find_index_paths(k_col, indexes, inner, cancel),
+        _ => HashMap::new(),
     }
-    todo!()
 }
 
 fn determine_bounds(expr: &Expression) -> (Bound<&Value>, Bound<&Value>) {
@@ -378,6 +428,27 @@ fn range_intersection<'value>(
     Some((intersection_start, intersection_end))
 }
 
+fn range_union<'value>(
+    (start_one, end_one): (Bound<&'value Value>, Bound<&'value Value>),
+    (start_two, end_two): (Bound<&'value Value>, Bound<&'value Value>),
+) -> Option<(Bound<&'value Value>, Bound<&'value Value>)> {
+    debug_assert!(
+        cmp_start_bounds(&start_one, &start_two).ne(&Ordering::Greater),
+        "Ranges should be sorted at this point {:?} {:?}",
+        (start_one, end_one),
+        (start_two, end_two)
+    );
+
+    if cmp_start_to_end(&start_two, &end_one).eq(&Ordering::Greater) {
+        return None;
+    }
+
+    let union_start = std::cmp::min_by(start_one, start_two, cmp_start_bounds);
+    let union_end = std::cmp::max_by(end_one, end_two, cmp_end_bounds);
+
+    Some((union_start, union_end))
+}
+
 fn range_to_expr(col: &str, (start, end): (Bound<&Value>, Bound<&Value>)) -> Expression {
     let expr = match (start, end) {
         (Bound::Unbounded, Bound::Excluded(v)) => format!("{col} < {v}"),
@@ -439,6 +510,18 @@ fn cmp_start_to_end(start: &Bound<&Value>, end: &Bound<&Value>) -> Ordering {
     }
 
     cmp_end_bounds(start, end)
+}
+
+fn cmp_ranges(
+    (start_one, end_one): &(Bound<&Value>, Bound<&Value>),
+    (start_two, end_two): &(Bound<&Value>, Bound<&Value>),
+) -> Ordering {
+    let start_ordering = cmp_start_bounds(start_one, start_two);
+
+    match cmp_start_bounds(start_one, start_two).ne(&Ordering::Equal) {
+        true => start_ordering,
+        false => cmp_end_bounds(end_one, end_two),
+    }
 }
 
 fn is_exact_match(range: IndexBounds) -> bool {
