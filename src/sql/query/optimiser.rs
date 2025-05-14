@@ -1,5 +1,6 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    cmp::Ordering,
+    collections::{HashMap, HashSet, VecDeque},
     ops::{Bound, RangeBounds},
     rc::Rc,
 };
@@ -187,6 +188,196 @@ fn generate_seq_scan_plan<File: PlanExecutor>(
     }))
 }
 
+fn find_index_paths<'exp>(
+    k_col: &str,
+    indexes: &HashSet<&str>,
+    expr: &'exp Expression,
+    cancel: &mut HashSet<&'exp str>,
+) -> HashMap<&'exp str, VecDeque<IndexBounds<'exp>>> {
+    match expr {
+        Expression::BinaryOperation {
+            operator,
+            left,
+            right,
+        } => match (&**left, &**right) {
+            (Expression::Identifier(col), Expression::Value(_))
+            | (Expression::Value(_), Expression::Identifier(col))
+                if (indexes.contains(col.as_str()) || col == k_col)
+                    && matches!(
+                        operator,
+                        BinaryOperator::Eq
+                            | BinaryOperator::Lt
+                            | BinaryOperator::LtEq
+                            | BinaryOperator::Gt
+                            | BinaryOperator::GtEq
+                    ) =>
+            {
+                HashMap::from([(col.as_str(), VecDeque::from([determine_bounds(expr)]))])
+            }
+            (left, right) if matches!(operator, BinaryOperator::And | BinaryOperator::Or) => {
+                let mut left_paths = find_index_paths(k_col, indexes, left, cancel);
+                let mut right_paths = find_index_paths(k_col, indexes, right, cancel);
+
+                match operator {
+                    BinaryOperator::And => {
+                        if left_paths.is_empty() && right_paths.is_empty() {
+                            return left_paths;
+                        }
+
+                        'intersection: {
+                            if left_paths.len() > 1 && right_paths.len() > 1 {
+                                break 'intersection;
+                            };
+
+                            let (col, other) = {
+                                let left_col = left_paths.iter().next();
+                                let right_col = right_paths.iter().next();
+
+                                if let Some((col, _)) = left_col {
+                                    (*col, &right_paths)
+                                } else {
+                                    (*right_col.unwrap().0, &left_paths)
+                                }
+                            };
+
+                            if cancel.contains(col) && (other.is_empty() || other.contains_key(col))
+                            {
+                                return HashMap::new();
+                            }
+
+                            if !other.contains_key(col) {
+                                break 'intersection;
+                            }
+
+                            let (_, left_bounds) = left_paths.iter_mut().next().unwrap();
+                            let (_, right_bounds) = right_paths.iter_mut().next().unwrap();
+
+                            if left_bounds.len() > 1 && right_bounds.len() > 1 {
+                                break 'intersection;
+                            }
+
+                            let factor = match left_bounds.len().eq(&1) {
+                                true => left_bounds.pop_front().unwrap(),
+                                false => right_bounds.pop_front().unwrap(),
+                            };
+
+                            let mut intersections = VecDeque::new();
+                            for range in left_bounds.drain(..).chain(right_bounds.drain(..)) {
+                                if let Some(intersection) = range_intersection(factor, range) {
+                                    intersections.push_back(intersection);
+                                }
+                            }
+
+                            if intersections.is_empty() {
+                                cancel.insert(col);
+                                return HashMap::new();
+                            }
+
+                            *left_bounds = intersections;
+
+                            return left_paths;
+                        };
+
+                        if right_paths.is_empty()
+                            || !left_paths.is_empty() && left_paths.len() < right_paths.len()
+                        {
+                            return left_paths;
+                        }
+
+                        if left_paths.is_empty()
+                            || !right_paths.is_empty() && right_paths.len() < left_paths.len()
+                        {
+                            return right_paths;
+                        }
+
+                        let left_is_exact_match = left_paths
+                            .iter()
+                            .all(|(_, bounds)| bounds.iter().copied().all(is_exact_match));
+
+                        let right_is_exact_math = right_paths
+                            .iter()
+                            .all(|(_, bounds)| bounds.iter().copied().all(is_exact_match));
+
+                        let right_contains_key = right_paths.contains_key(k_col);
+
+                        if right_is_exact_math && (!left_is_exact_match || right_contains_key) {
+                            return right_paths;
+                        }
+
+                        left_paths
+                    }
+                    _ => {}
+                }
+            }
+        },
+    }
+    todo!()
+}
+
+fn determine_bounds(expr: &Expression) -> (Bound<&Value>, Bound<&Value>) {
+    let Expression::BinaryOperation {
+        left,
+        operator,
+        right,
+    } = expr
+    else {
+        unreachable!("determine_bounds() called with non-binary expression: {expr}");
+    };
+
+    match (&**left, operator, &**right) {
+        // SELECT * FROM t WHERE x = 13;
+        // SELECT * FROM t WHERE 13 = x;
+        (Expression::Identifier(_col), BinaryOperator::Eq, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Eq, Expression::Identifier(_col)) => {
+            (Bound::Included(value), Bound::Included(value))
+        }
+
+        // SELECT * FROM t WHERE x > 13;
+        // SELECT * FROM t WHERE 13 < x;
+        (Expression::Identifier(_col), BinaryOperator::Gt, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Lt, Expression::Identifier(_col)) => {
+            (Bound::Excluded(value), Bound::Unbounded)
+        }
+
+        // SELECT * FROM t WHERE x < 13;
+        // SELECT * FROM t WHERE 13 > x;
+        (Expression::Identifier(_col), BinaryOperator::Lt, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Gt, Expression::Identifier(_col)) => {
+            (Bound::Unbounded, Bound::Excluded(value))
+        }
+
+        // SELECT * FROM t WHERE x >= 13;
+        // SELECT * FROM t WHERE 13 <= x;
+        (Expression::Identifier(_col), BinaryOperator::GtEq, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::LtEq, Expression::Identifier(_col)) => {
+            (Bound::Included(value), Bound::Unbounded)
+        }
+
+        // SELECT * FROM t WHERE x <= 13;
+        // SELECT * FROM t WHERE 13 >= x;
+        (Expression::Identifier(_col), BinaryOperator::LtEq, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::GtEq, Expression::Identifier(_col)) => {
+            (Bound::Unbounded, Bound::Included(value))
+        }
+
+        _ => unreachable!("determine_bounds() called with unsupported operator: {expr}"),
+    }
+}
+
+fn range_intersection<'value>(
+    (start_one, end_one): (Bound<&'value Value>, Bound<&'value Value>),
+    (start_two, end_two): (Bound<&'value Value>, Bound<&'value Value>),
+) -> Option<(Bound<&'value Value>, Bound<&'value Value>)> {
+    let intersection_start = std::cmp::max_by(start_one, start_two, cmp_start_bounds);
+    let intersection_end = std::cmp::min_by(end_one, end_two, cmp_start_bounds);
+
+    if cmp_start_to_end(&intersection_start, &intersection_end).eq(&Ordering::Greater) {
+        return None;
+    }
+
+    Some((intersection_start, intersection_end))
+}
+
 fn range_to_expr(col: &str, (start, end): (Bound<&Value>, Bound<&Value>)) -> Expression {
     let expr = match (start, end) {
         (Bound::Unbounded, Bound::Excluded(v)) => format!("{col} < {v}"),
@@ -204,6 +395,50 @@ fn range_to_expr(col: &str, (start, end): (Bound<&Value>, Bound<&Value>)) -> Exp
     };
 
     Parser::new(&expr).parse_expr(None).unwrap()
+}
+
+fn cmp_start_bounds(bound1: &Bound<&Value>, bound2: &Bound<&Value>) -> Ordering {
+    match (bound1, bound2) {
+        (Bound::Unbounded, Bound::Unbounded) => Ordering::Equal,
+        (Bound::Unbounded, _) => Ordering::Less,
+        (_, Bound::Unbounded) => Ordering::Greater,
+        (
+            Bound::Excluded(value1) | Bound::Included(value1),
+            Bound::Excluded(value2) | Bound::Included(value2),
+        ) => {
+            let ordering = value1.partial_cmp(value2).unwrap_or_else(|| {
+                panic!("Type errors at this point should be impossible: cmp {value1} to {value2}")
+            });
+
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+
+            match (bound1, bound2) {
+                (Bound::Included(_), Bound::Excluded(_)) => Ordering::Less,
+                (Bound::Excluded(_), Bound::Included(_)) => Ordering::Greater,
+                _ => Ordering::Equal,
+            }
+        }
+    }
+}
+
+fn cmp_end_bounds(end_one: &Bound<&Value>, end_two: &Bound<&Value>) -> Ordering {
+    let ordering = cmp_start_bounds(end_one, end_two);
+
+    if let (Bound::Unbounded, _) | (_, Bound::Unbounded) = (end_one, end_two) {
+        return ordering.reverse();
+    }
+
+    ordering
+}
+
+fn cmp_start_to_end(start: &Bound<&Value>, end: &Bound<&Value>) -> Ordering {
+    if start.eq(&Bound::Unbounded) {
+        return Ordering::Less;
+    }
+
+    cmp_end_bounds(start, end)
 }
 
 fn is_exact_match(range: IndexBounds) -> bool {
