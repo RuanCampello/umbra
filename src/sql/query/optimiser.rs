@@ -567,3 +567,41 @@ fn skip_col_conditions(col: &str, expr: &mut Expression) {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct IndexPath<'idx> {
+        pk: &'idx str,
+        indexes: &'idx [&'idx str],
+        expr: &'idx str,
+        expected: HashMap<&'idx str, VecDeque<IndexBounds<'idx>>>,
+    }
+
+    impl<'idx> IndexPath<'idx> {
+        fn assert(&self) {
+            let expr = Parser::new(self.expr).parse_expr(None).unwrap();
+            let indexes = HashSet::from_iter(self.indexes.iter().copied());
+
+            assert_eq!(
+                find_index_paths(self.pk, &indexes, &expr, &mut HashSet::new()),
+                self.expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_simple_find_index() {
+        IndexPath {
+            pk: "id",
+            indexes: &[],
+            expr: "id < 5",
+            expected: HashMap::from([(
+                "id",
+                VecDeque::from([(Bound::Unbounded, Bound::Excluded(&Value::Number(5)))]),
+            )]),
+        }
+        .assert();
+    }
+}
