@@ -419,7 +419,7 @@ fn range_intersection<'value>(
     (start_two, end_two): (Bound<&'value Value>, Bound<&'value Value>),
 ) -> Option<(Bound<&'value Value>, Bound<&'value Value>)> {
     let intersection_start = std::cmp::max_by(start_one, start_two, cmp_start_bounds);
-    let intersection_end = std::cmp::min_by(end_one, end_two, cmp_start_bounds);
+    let intersection_end = std::cmp::min_by(end_one, end_two, cmp_end_bounds);
 
     if cmp_start_to_end(&intersection_start, &intersection_end).eq(&Ordering::Greater) {
         return None;
@@ -600,6 +600,23 @@ mod tests {
             expected: HashMap::from([(
                 "id",
                 VecDeque::from([(Bound::Unbounded, Bound::Excluded(&Value::Number(5)))]),
+            )]),
+        }
+        .assert();
+    }
+
+    #[test]
+    fn test_simple_intersection() {
+        IndexPath {
+            pk: "id",
+            indexes: &[],
+            expr: "id > 10 AND id < 20",
+            expected: HashMap::from([(
+                "id",
+                VecDeque::from([(
+                    Bound::Excluded(&Value::Number(10)),
+                    Bound::Excluded(&Value::Number(20)),
+                )]),
             )]),
         }
         .assert();
