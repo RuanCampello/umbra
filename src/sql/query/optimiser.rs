@@ -621,4 +621,60 @@ mod tests {
         }
         .assert();
     }
+
+    #[test]
+    fn test_simple_merge() {
+        IndexPath {
+            pk: "id",
+            indexes: &[],
+            expr: "id < 10 OR id > 20",
+            expected: HashMap::from([(
+                "id",
+                VecDeque::from([
+                    (Bound::Unbounded, Bound::Excluded(&Value::Number(10))),
+                    (Bound::Excluded(&Value::Number(20)), Bound::Unbounded),
+                ]),
+            )]),
+        }
+        .assert();
+    }
+
+    #[test]
+    fn test_never_evaluates_true() {
+        IndexPath {
+            pk: "id",
+            indexes: &[],
+            expr: "id < 5 AND id > 10",
+            expected: HashMap::new(),
+        }
+        .assert();
+    }
+
+    #[test]
+    fn test_always_evalutates_true() {
+        IndexPath {
+            pk: "id",
+            indexes: &[],
+            expr: "id > 10 OR id < 15",
+            expected: HashMap::new(),
+        }
+        .assert();
+    }
+
+    #[test]
+    fn test_multiple_intersection() {
+        IndexPath {
+            pk: "id",
+            indexes: &[],
+            expr: "(id > 5 AND id < 30) AND (id > 10 AND id < 40)",
+            expected: HashMap::from([(
+                "id",
+                VecDeque::from([(
+                    Bound::Excluded(&Value::Number(10)),
+                    Bound::Excluded(&Value::Number(30)),
+                )]),
+            )]),
+        }
+        .assert();
+    }
 }
