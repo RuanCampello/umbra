@@ -18,8 +18,9 @@ use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::query;
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
+use crate::vm;
 use crate::vm::expression::{TypeError, VmError};
-use crate::vm::planner::{Planner, Tuple};
+use crate::vm::planner::{Execute, Planner, Tuple};
 use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -497,7 +498,37 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
             self.db.start_transaction();
             self.autocommit = true;
         }
-        todo!("implement try_next")
+
+        let tuple = match exec {
+            Exec::Statement(_) => self.exec_statement()?,
+            Exec::Plan(planner) => match planner.try_next() {
+                Ok(tuple) => tuple,
+                Err(e) => {
+                    self.exec.take();
+                    self.abort_transaction()?;
+                    return Err(e);
+                }
+            },
+            Exec::Explain(lines) => {
+                let lines = lines.pop_front().map(|line| vec![Value::String(line)]);
+
+                if lines.is_none() {
+                    self.exec.take();
+                }
+
+                lines
+            }
+        };
+
+        if tuple.is_none() || self.exec.is_none() {
+            self.exec.take();
+
+            if self.autocommit {
+                self.db.commit()?;
+            }
+        }
+
+        Ok(tuple)
     }
 
     fn exec_statement(&mut self) -> Result<Option<Tuple>, DatabaseError> {
@@ -505,6 +536,7 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
             unreachable!()
         };
 
+        let mut affected_rows = 0;
         match statement {
             Statement::Commit => {
                 if self.db.transaction_state.eq(&TransactionState::Aborted) {
@@ -517,12 +549,29 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                 self.db.rollback()?;
             }
             Statement::Drop(_) | Statement::Create(_) => {
-                todo!()
+                match vm::statement::exec(statement, self.db) {
+                    Ok(rows) => affected_rows = rows,
+                    Err(e) => {
+                        self.abort_transaction()?;
+                        return Err(e);
+                    }
+                }
             }
             _ => unreachable!(),
-        }
+        };
 
-        todo!()
+        Ok(Some(vec![Value::Number(affected_rows as i128)]))
+    }
+
+    fn abort_transaction(&mut self) -> Result<(), DatabaseError> {
+        match self.autocommit {
+            true => {
+                self.db.rollback()?;
+            }
+            false => self.db.transaction_state = TransactionState::Aborted,
+        };
+
+        Ok(())
     }
 }
 
