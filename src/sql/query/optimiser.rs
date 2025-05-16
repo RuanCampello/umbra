@@ -677,4 +677,58 @@ mod tests {
         }
         .assert();
     }
+
+    #[test]
+    fn test_multiple_merge() {
+        IndexPath {
+            pk: "id",
+            indexes: &[],
+            expr: "(id < 7 OR id > 30) OR (id > 10 OR id < 5)",
+            expected: HashMap::from([(
+                "id",
+                VecDeque::from([
+                    (Bound::Unbounded, Bound::Excluded(&Value::Number(7))),
+                    (Bound::Excluded(&Value::Number(10)), Bound::Unbounded),
+                ]),
+            )]),
+        }
+        .assert();
+    }
+
+    #[test]
+    fn test_intersection_with_range() {
+        IndexPath {
+            pk: "id",
+            indexes: &[],
+            expr: "id < 30 AND (id < 10 or id > 15)",
+            expected: HashMap::from([(
+                "id",
+                VecDeque::from([
+                    (Bound::Unbounded, Bound::Excluded(&Value::Number(10))),
+                    (
+                        Bound::Excluded(&Value::Number(15)),
+                        Bound::Excluded(&Value::Number(30)),
+                    ),
+                ]),
+            )]),
+        }
+        .assert();
+    }
+
+    #[test]
+    fn test_simple_index() {
+        IndexPath {
+            pk: "id",
+            indexes: &["email"],
+            expr: "email > 'johndoe@email.com'",
+            expected: HashMap::from([(
+                "email",
+                VecDeque::from([(
+                    Bound::Excluded(&Value::String("johndoe@email.com".into())),
+                    Bound::Unbounded,
+                )]),
+            )]),
+        }
+        .assert();
+    }
 }
