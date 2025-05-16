@@ -152,7 +152,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         let page_size = header.page_size as usize;
 
         if identifier == DATABASE_IDENTIFIER {
-            &self.update_pages_size(page_size);
+            self.update_pages_size(page_size);
 
             return Ok(());
         }

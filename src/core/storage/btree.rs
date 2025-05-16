@@ -104,6 +104,8 @@ pub(crate) trait BytesCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
 }
 
+pub(crate) type MemoryBuffer = std::io::Cursor<Vec<u8>>;
+
 /// [`BTree`] common keys iterator
 trait Keys: IntoIterator<Item = u64> {}
 impl<Type> Keys for Type where Type: IntoIterator<Item = u64> {}
@@ -803,7 +805,6 @@ mod tests {
     use std::alloc::Layout;
     use std::fmt::Debug;
 
-    type MemoryBuffer = std::io::Cursor<Vec<u8>>;
     type Key = u64;
 
     #[derive(Debug, PartialEq)]

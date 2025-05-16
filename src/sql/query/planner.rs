@@ -188,3 +188,91 @@ fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
         _ => unreachable!("needs_collection() must be called only for a scan planner"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, collections::HashMap, path::PathBuf};
+
+    use super::*;
+    use crate::{
+        core::storage::{btree::Cursor, pagination::pager::Pager, MemoryBuffer},
+        db::{Ctx as DbCtx, IndexMetadata, TableMetadata},
+        sql::{self, parser::Parser, statement::Create},
+        vm::planner::SeqScan,
+    };
+
+    struct Ctx {
+        db: Database<MemoryBuffer>,
+        tables: HashMap<String, TableMetadata>,
+        indexes: HashMap<String, IndexMetadata>,
+    }
+
+    impl Ctx {
+        fn generate_plan(&mut self, query: &str) -> Result<Planner<MemoryBuffer>, DatabaseError> {
+            let statement = sql::pipeline(query, &mut self.db)?;
+            super::generate_plan(statement, &mut self.db)
+        }
+
+        fn pager(&self) -> Rc<RefCell<Pager<MemoryBuffer>>> {
+            self.db.pager.clone()
+        }
+    }
+
+    fn new_db(ctx: &[&str]) -> Result<Ctx, DatabaseError> {
+        let mut pager = Pager::default();
+        pager.init()?;
+
+        let mut db = Database::new(Rc::new(RefCell::new(pager)), PathBuf::new());
+        let mut tables = HashMap::new();
+        let mut indexes = HashMap::new();
+        let mut fetch_tables = Vec::new();
+
+        for sql in ctx {
+            if let Statement::Create(Create::Table { name, .. }) =
+                Parser::new(sql).parse_statement()?
+            {
+                fetch_tables.push(name);
+            }
+
+            db.exec(sql)?;
+        }
+
+        for table_name in fetch_tables {
+            let table = db.metadata(&table_name)?;
+            for idx in &table.indexes {
+                indexes.insert(idx.name.to_owned(), idx.to_owned());
+            }
+
+            tables.insert(table_name, table.to_owned());
+        }
+
+        Ok(Ctx {
+            db,
+            indexes,
+            tables,
+        })
+    }
+
+    fn parse_expr(expr: &str) -> Expression {
+        let mut expr = Parser::new(expr).parse_expr(None).unwrap();
+        sql::optimiser::simplify(&mut expr).unwrap();
+
+        expr
+    }
+
+    #[test]
+    fn test_simple_sequential_plan() -> Result<(), DatabaseError> {
+        let mut db = new_db(&["CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255));"])?;
+
+        assert_eq!(
+            db.generate_plan("SELECT * FROM users;")?,
+            Planner::SeqScan(SeqScan {
+                pager: db.pager(),
+                cursor: Cursor::new(db.tables["users"].root, 0),
+                table: db.tables["users"].clone()
+            })
+        );
+
+        Ok(())
+    }
+}
