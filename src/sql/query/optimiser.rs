@@ -731,4 +731,37 @@ mod tests {
         }
         .assert();
     }
+
+    #[test]
+    fn test_multiple_indexes() {
+        IndexPath {
+            pk: "id",
+            indexes: &["email", "uuid"],
+            expr: "id = 5 OR email = 'johndoe@email.com' OR uuid <= 'something'",
+            expected: HashMap::from([
+                (
+                    "id",
+                    VecDeque::from([(
+                        Bound::Included(&Value::Number(5)),
+                        Bound::Included(&Value::Number(5)),
+                    )]),
+                ),
+                (
+                    "email",
+                    VecDeque::from([(
+                        Bound::Included(&Value::String("johndoe@email.com".into())),
+                        Bound::Included(&Value::String("johndoe@email.com".into())),
+                    )]),
+                ),
+                (
+                    "uuid",
+                    VecDeque::from([(
+                        Bound::Unbounded,
+                        Bound::Included(&Value::String("something".into())),
+                    )]),
+                ),
+            ]),
+        }
+        .assert();
+    }
 }
