@@ -1,5 +1,5 @@
 use crate::db::ROW_COL_ID;
-use crate::sql::statement::{Column, Type};
+use crate::sql::statement::{Column, Constraint, Type};
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -50,6 +50,13 @@ impl Schema {
 
     pub fn keys(&self) -> &Column {
         &self.columns[0]
+    }
+
+    pub fn has_btree_key(&self) -> bool {
+        self.columns[0]
+            .constraints
+            .contains(&Constraint::PrimaryKey)
+            && !matches!(self.columns[0].data_type, Type::Varchar(_) | Type::Boolean)
     }
 
     pub fn empty() -> Self {

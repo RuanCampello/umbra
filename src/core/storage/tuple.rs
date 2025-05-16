@@ -88,7 +88,7 @@ pub(crate) fn serialize_tuple<'value>(
         .zip(values.into_iter())
         .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
 
-    todo!()
+    todo!("serialize tuple")
 }
 
 pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {

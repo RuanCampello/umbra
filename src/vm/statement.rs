@@ -11,5 +11,5 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
     db: &mut Database<File>,
 ) -> Result<usize, DatabaseError> {
     let sql = statement.to_string();
-    todo!()
+    todo!("implement statement exec")
 }

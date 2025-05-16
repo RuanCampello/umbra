@@ -226,7 +226,85 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             });
         }
 
-        todo!()
+        let mut metadata = TableMetadata {
+            root: 1,
+            row_id: 1,
+            name: String::from(table),
+            schema: Schema::empty(),
+            indexes: Vec::new(),
+        };
+
+        let mut found_table_def = false;
+
+        let (schema, mut results) = self.prepare(&format!(
+            "SELECT root, sql FROM {DB_METADATA} WHERE name = '{table}';"
+        ))?;
+
+        let corrupted_err = || {
+            DatabaseError::Corrupted(format!(
+                "{DB_METADATA} table is corrupted or contains wrong data"
+            ))
+        };
+
+        while let Some(tuple) = results.try_next()? {
+            let Value::Number(root) = &tuple[schema.index_of("root").ok_or(corrupted_err())?]
+            else {
+                return Err(corrupted_err());
+            };
+
+            match &tuple[schema.index_of("sql").ok_or(corrupted_err())?] {
+                Value::String(sql) => match Parser::new(sql).parse_statement()? {
+                    Statement::Create(Create::Table { columns, .. }) => {
+                        assert!(!found_table_def, "Multiple definitions of table {table}");
+
+                        metadata.root = *root as PageNumber;
+                        metadata.schema = Schema::new(columns);
+
+                        if !metadata.schema.has_btree_key() {
+                            metadata.schema.prepend_id();
+                        }
+
+                        found_table_def = true;
+                    }
+                    Statement::Create(Create::Index {
+                        name,
+                        column,
+                        unique,
+                        ..
+                    }) => {
+                        let col_idx =
+                            metadata
+                                .schema
+                                .index_of(&column)
+                                .ok_or(SqlError::Other(format!(
+                                    "Couldn't find index column {column} in table {table}"
+                                )))?;
+
+                        let idx_col = metadata.schema.columns[col_idx].clone();
+
+                        metadata.indexes.push(IndexMetadata {
+                            root: *root as PageNumber,
+                            name,
+                            column: idx_col.clone(),
+                            schema: Schema::new(vec![idx_col, metadata.schema.columns[0].clone()]),
+                            unique,
+                        });
+                    }
+                    _ => return Err(corrupted_err()),
+                },
+                _ => return Err(corrupted_err()),
+            }
+        }
+
+        if !found_table_def {
+            return Err(DatabaseError::Sql(SqlError::InvalidColumn(table.into())));
+        }
+
+        if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {
+            metadata.row_id = self.load_next_row_id(metadata.root)?;
+        }
+
+        Ok(metadata)
     }
 
     fn load_next_row_id(&mut self, root: PageNumber) -> Result<RowId, DatabaseError> {
@@ -244,7 +322,12 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
 impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
-        todo!()
+        if !self.context.contains(table) {
+            let metadata = self.load_metadata(table)?;
+            self.context.insert(metadata);
+        }
+
+        self.context.metadata(table)
     }
 }
 
@@ -296,6 +379,10 @@ impl Context {
         }
 
         self.tables.insert(metadata.name.to_string(), metadata);
+    }
+
+    fn contains(&self, table: &str) -> bool {
+        self.tables.contains_key(table)
     }
 }
 
@@ -410,7 +497,7 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
             self.db.start_transaction();
             self.autocommit = true;
         }
-        todo!()
+        todo!("implement try_next")
     }
 
     fn exec_statement(&mut self) -> Result<Option<Tuple>, DatabaseError> {

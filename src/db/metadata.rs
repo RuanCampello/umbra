@@ -108,5 +108,5 @@ pub(crate) fn insert_metadata<File: Seek + Read + Write + FileOperations>(
 ) -> Result<(), DatabaseError> {
     let mut schema = umbra_schema();
     schema.prepend_id();
-    todo!()
+    todo!("metadata insert")
 }
