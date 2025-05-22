@@ -190,7 +190,7 @@ fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::HashMap, path::PathBuf};
+    use std::{cell::RefCell, collections::HashMap, ops::Bound, path::PathBuf};
 
     use super::*;
     use crate::{
@@ -206,7 +206,7 @@ mod tests {
             parser::Parser,
             statement::{Create, Value},
         },
-        vm::planner::{ExactMatch, Filter, KeyScan, SeqScan},
+        vm::planner::{ExactMatch, Filter, KeyScan, RangeScan, SeqScan},
     };
 
     struct Ctx {
@@ -411,6 +411,84 @@ mod tests {
             })
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_range_idx() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(120), salary INT);",
+        ])?;
+
+        let expected_range = (
+            Bound::Excluded(serialize(&Type::Integer, &Value::Number(10))),
+            Bound::Excluded(serialize(&Type::Integer, &Value::Number(20))),
+        );
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM employees WHERE id > 10 AND id < 20;")?,
+            Planner::RangeScan(RangeScan::new(
+                expected_range,
+                Relation::Table(db.tables["employees"].to_owned()),
+                false,
+                parse_expr("id > 10 AND id < 20"),
+                db.pager(),
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_range_external_idx() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(120), email VARCHAR(135) UNIQUE);",
+        ])?;
+
+        let keys = db.tables["employees"].key_only_schema();
+        let page_size = db.db.pager.borrow().page_size;
+        let work_dir = db.db.work_dir.clone();
+
+        let range = (
+            Bound::Unbounded,
+            Bound::Included(serialize(
+                &Type::Varchar(135),
+                &Value::String("johndoe@email.com".into()),
+            )),
+        );
+        let range_scan = Planner::RangeScan(RangeScan::new(
+            range,
+            Relation::Index(db.indexes["employees_email_uq_index"].to_owned()),
+            true,
+            parse_expr("email <= 'johndoe@email.com'"),
+            db.pager(),
+        ));
+        let collection = Collect::new(
+            Box::new(range_scan),
+            keys.clone(),
+            work_dir.clone(),
+            page_size,
+        );
+        let comparator = TupleComparator::new(keys.clone(), keys, vec![0]);
+
+        let source = Box::new(Planner::Sort(Sort::new(
+            page_size,
+            work_dir,
+            collection,
+            comparator,
+            DEFAULT_SORT_BUFFER_SIZE,
+        )));
+        let comparator = FixedSizeCmp(byte_len_of_type(&Type::Integer));
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM employees WHERE email <= 'johndoe@email.com';")?,
+            Planner::KeyScan(KeyScan {
+                source,
+                comparator,
+                pager: db.pager(),
+                table: db.tables["employees"].to_owned(),
+            })
+        );
         Ok(())
     }
 }
