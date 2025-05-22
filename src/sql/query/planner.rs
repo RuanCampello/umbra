@@ -197,7 +197,7 @@ mod tests {
         core::storage::{btree::Cursor, pagination::pager::Pager, MemoryBuffer},
         db::{Ctx as DbCtx, IndexMetadata, TableMetadata},
         sql::{self, parser::Parser, statement::Create},
-        vm::planner::SeqScan,
+        vm::planner::{Filter, SeqScan},
     };
 
     struct Ctx {
@@ -253,6 +253,8 @@ mod tests {
         })
     }
 
+    type PlannerResult = Result<(), DatabaseError>;
+
     fn parse_expr(expr: &str) -> Expression {
         let mut expr = Parser::new(expr).parse_expr(None).unwrap();
         sql::optimiser::simplify(&mut expr).unwrap();
@@ -261,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_sequential_plan() -> Result<(), DatabaseError> {
+    fn test_simple_sequential_plan() -> PlannerResult {
         let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));"])?;
 
         assert_eq!(
@@ -270,6 +272,54 @@ mod tests {
                 pager: db.pager(),
                 cursor: Cursor::new(db.tables["users"].root, 0),
                 table: db.tables["users"].clone()
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_sequential_with_filter() -> PlannerResult {
+        let mut db =
+            new_db(&["CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255), age INT);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM users WHERE age >= 20;")?,
+            Planner::Filter(Filter {
+                filter: parse_expr("age >= 20"),
+                schema: db.tables["users"].schema.to_owned(),
+                source: Box::new(Planner::SeqScan(SeqScan {
+                    pager: db.pager(),
+                    table: db.tables["users"].to_owned(),
+                    cursor: Cursor::new(db.tables["users"].root, 0),
+                }))
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sequential_scan_with_projection() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE users (id INT, name VARCHAR(255));"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM users;")?,
+            Planner::Project(Project {
+                input: db.tables["users"].schema.to_owned(),
+                output: Schema::new(vec![
+                    Column::new("id", Type::Integer),
+                    Column::new("name", Type::Varchar(255)),
+                ]),
+                projection: vec![
+                    Expression::Identifier("id".into()),
+                    Expression::Identifier("name".into()),
+                ],
+                source: Box::new(Planner::SeqScan(SeqScan {
+                    pager: db.pager(),
+                    table: db.tables["users"].to_owned(),
+                    cursor: Cursor::new(db.tables["users"].root, 0)
+                }))
             })
         );
 
