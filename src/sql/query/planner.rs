@@ -391,13 +391,8 @@ mod tests {
             "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(35), email VARCHAR(135) UNIQUE);",
         ])?;
 
-        let generated_plan =
-            db.gen_plan("SELECT * FROM employees WHERE email = 'johndoe@email.com';")?;
-        println!("indexes {:#?} tables {:#?}", db.indexes, db.tables);
-
-        println!("generated plan {generated_plan}");
         assert_eq!(
-            generated_plan,
+            db.gen_plan("SELECT * FROM employees WHERE email = 'johndoe@email.com';")?,
             Planner::KeyScan(KeyScan {
                 pager: db.pager(),
                 table: db.tables["employees"].to_owned(),

@@ -24,7 +24,7 @@ pub(crate) struct IndexMetadata {
     pub name: String,
     pub column: Column,
     pub schema: Schema,
-    pub(in crate::db) unique: bool,
+    pub(crate) unique: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]

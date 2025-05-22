@@ -1,14 +1,21 @@
-use std::io::{Read, Seek, Write};
+use std::{
+    io::{Read, Seek, Write},
+    rc::Rc,
+};
 
 use crate::{
     core::storage::{
-        btree::{BTree, FixedSizeCmp},
+        btree::{BTree, BytesCmp, Cursor, FixedSizeCmp},
         page::{Page, PageNumber},
         pagination::io::FileOperations,
-        tuple,
+        tuple::{self, serialize_tuple},
     },
-    db::{has_btree_key, umbra_schema, Ctx, Database, DatabaseError, RowId, DB_METADATA},
+    db::{
+        has_btree_key, umbra_schema, Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
+        SqlError, DB_METADATA,
+    },
     sql::statement::{Constraint, Create, Statement, Value},
+    vm::planner::{Execute, Planner, SeqScan},
 };
 
 pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
@@ -45,9 +52,10 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 .flat_map(|col| {
                     let table = name.clone();
                     col.constraints.into_iter().map(move |constraint| {
+                        println!("index on {table} for {constraint:#?}");
                         let name = match constraint {
                             Constraint::PrimaryKey => format!("{table}_pk_index"),
-                            Constraint::Unique => format!("{table}_uq_index"),
+                            Constraint::Unique => format!("{table}_{}_uq_index", &col.name),
                         };
 
                         Create::Index {
@@ -63,7 +71,70 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 exec(Statement::Create(index), db)?;
             }
         }
-        _ => {}
+        Statement::Create(Create::Index {
+            name,
+            table,
+            column,
+            unique,
+        }) => {
+            if !unique {
+                return Err(DatabaseError::Sql(SqlError::Other(
+                    "Non-unique indexes are not supported yet".into(),
+                )));
+            }
+
+            let root = allocate_root(db)?;
+            insert_into_metadata(
+                db,
+                vec![
+                    Value::String("index".into()),
+                    Value::String(name.clone()),
+                    Value::Number(root.into()),
+                    Value::String(table.clone()),
+                    Value::String(sql),
+                ],
+            )?;
+
+            let metadata = db.metadata(&table)?;
+            let col = metadata
+                .schema
+                .index_of(&column)
+                .ok_or(SqlError::InvalidColumn(column))?;
+
+            let index = IndexMetadata {
+                root,
+                name,
+                unique,
+                column: metadata.schema.columns[col].clone(),
+                schema: Schema::new(vec![
+                    metadata.schema.columns[col].clone(),
+                    metadata.schema.columns[0].clone(),
+                ]),
+            };
+
+            let mut scan = Planner::SeqScan(SeqScan {
+                table: metadata.to_owned(),
+                cursor: Cursor::new(metadata.root, 0),
+                pager: Rc::clone(&db.pager),
+            });
+
+            let comp = Box::<dyn BytesCmp>::from(&index.column.data_type);
+            while let Some(mut tuple) = scan.try_next()? {
+                let mut pager = db.pager.borrow_mut();
+                let mut btree = BTree::new(&mut pager, index.root, &comp);
+
+                let index_key = tuple.swap_remove(col);
+                let primary_key = tuple.swap_remove(0);
+
+                let entry = serialize_tuple(&index.schema.clone(), [&index_key, &primary_key]);
+                btree
+                    .try_insert(entry)?
+                    .map_err(|_| SqlError::DuplicatedKey(index_key))?;
+            }
+
+            db.context.invalidate(&table);
+        }
+        _ => todo!("exec unimplemented for {statement}"),
     }
 
     Ok(affected_rows)

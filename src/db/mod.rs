@@ -31,7 +31,7 @@ use std::rc::Rc;
 #[derive(Debug)]
 pub(crate) struct Database<File> {
     pub(crate) pager: Rc<RefCell<Pager<File>>>,
-    context: Context,
+    pub(crate) context: Context,
     pub(crate) work_dir: PathBuf,
     transaction_state: TransactionState,
 }
@@ -392,6 +392,10 @@ impl Context {
     fn contains(&self, table: &str) -> bool {
         self.tables.contains_key(table)
     }
+
+    pub fn invalidate(&mut self, table: &str) {
+        self.tables.remove(table);
+    }
 }
 
 /// Test-only implementation: clones everything for simplicity
@@ -422,8 +426,8 @@ impl TryFrom<&[&str]> for Context {
                     columns.iter().for_each(|col| {
                         col.constraints.iter().for_each(|constraint| {
                             let index = match constraint {
-                                Constraint::Unique => format!("{}_uq_index", col.name),
-                                Constraint::PrimaryKey => format!("{}_pk_index", col.name),
+                                Constraint::Unique => format!("{name}_{}_uq_index", col.name),
+                                Constraint::PrimaryKey => format!("{name}_pk_index"),
                             };
 
                             metadata.indexes.push(IndexMetadata {
