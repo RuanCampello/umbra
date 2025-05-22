@@ -24,10 +24,13 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
     statement: Statement,
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
-    let statement = match statement {
+    Ok(match statement {
         Statement::Insert { into, values, .. } => {
+            println!("insert into {into} values {values:#?}");
             let values = VecDeque::from(values);
+            println!("values {values:#?}");
             let source = Box::new(Planner::Values(Values { values }));
+            println!("source {source}");
             let table = db.metadata(&into)?;
 
             Planner::Insert(Insert {
@@ -43,37 +46,36 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             r#where,
             order_by,
         } => {
+            println!("from {from} where {:#?}", r#where);
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
+            println!("select source {source}");
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from)?;
 
             if !order_by.is_empty()
-                && order_by.ne(&[Expression::Identifier(table.schema.columns[0].name.clone())])
+                && order_by != [Expression::Identifier(table.schema.columns[0].name.clone())]
             {
-                let mut schema = table.schema.clone();
+                let mut sorted_schema = table.schema.clone();
                 let mut sorted_indexes = Vec::with_capacity(order_by.len());
 
-                order_by
-                    .iter()
-                    .try_for_each(|expr| -> Result<(), DatabaseError> {
-                        let index = match expr {
-                            Expression::Identifier(col) => table.schema.index_of(col).unwrap(),
-                            _ => {
-                                let index = sorted_indexes.len();
-                                let r#type = resolve_type(&schema, expr)?;
-                                let col = Column::new(&format!("{expr}"), r#type);
-                                schema.push(col);
+                for expr in &order_by {
+                    let index = match expr {
+                        Expression::Identifier(col) => table.schema.index_of(col).unwrap(),
+                        _ => {
+                            let index = sorted_schema.len();
+                            let r#type = resolve_type(&table.schema, expr)?;
+                            let col = Column::new(&format!("{expr}"), r#type);
+                            sorted_schema.push(col);
 
-                                index
-                            }
-                        };
+                            index
+                        }
+                    };
 
-                        sorted_indexes.push(index);
-                        Ok(())
-                    })?;
+                    sorted_indexes.push(index)
+                }
 
-                let collect_source = match schema.len() > table.schema.len() {
+                let collect_source = match sorted_schema.len() > table.schema.len() {
                     true => Planner::SortKeys(SortKeys {
                         expressions: order_by
                             .into_iter()
@@ -87,11 +89,15 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 let collection = Collect::new(
                     Box::new(collect_source),
-                    schema.clone(),
+                    sorted_schema.clone(),
                     work_dir.clone(),
                     page_size,
                 );
-                let comparator = TupleComparator::new(table.schema.clone(), schema, sorted_indexes);
+                let comparator = TupleComparator::new(
+                    table.schema.clone(),
+                    sorted_schema.clone(),
+                    sorted_indexes,
+                );
 
                 source = Planner::Sort(Sort::new(
                     page_size,
@@ -102,14 +108,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 ));
             }
 
-            let mut output_schema = Schema::empty();
+            let mut output = Schema::empty();
 
             for expr in &columns {
                 match expr {
-                    Expression::Identifier(ident) => output_schema
+                    Expression::Identifier(ident) => output
                         .push(table.schema.columns[table.schema.index_of(ident).unwrap()].clone()),
                     _ => {
-                        output_schema.push(Column::new(
+                        output.push(Column::new(
                             expr.to_string().as_str(),
                             resolve_type(&table.schema, expr)?,
                         ));
@@ -117,12 +123,15 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }
             }
 
-            if table.schema.eq(&output_schema) {
+            println!("table schema {:?}", table.schema);
+            println!("output schema {:?}", output);
+            if table.schema == output {
+                println!("schemas matching, skipping...");
                 return Ok(source);
             }
 
             Planner::Project(Project {
-                output: output_schema,
+                output,
                 source: Box::new(source),
                 projection: columns,
                 input: table.schema.clone(),
@@ -134,6 +143,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             r#where,
         } => {
             let mut source = optimiser::generate_seq_plan(&table, r#where, db)?;
+            println!("update source {source}");
             let work_dir = db.work_dir.clone();
             let page_size = db.pager.borrow().page_size;
             let metadata = db.metadata(&table)?;
@@ -160,9 +170,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 "Statement {other} not implemented or supported for this"
             )))
         }
-    };
-
-    Ok(statement)
+    })
 }
 
 fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
@@ -208,9 +216,12 @@ mod tests {
     }
 
     impl Ctx {
-        fn generate_plan(&mut self, query: &str) -> Result<Planner<MemoryBuffer>, DatabaseError> {
+        fn gen_plan(&mut self, query: &str) -> Result<Planner<MemoryBuffer>, DatabaseError> {
+            println!("query {query}");
             let statement = sql::pipeline(query, &mut self.db)?;
-            super::generate_plan(statement, &mut self.db)
+            let plan = generate_plan(statement, &mut self.db)?;
+            println!("plan {plan:#?}");
+            Ok(plan)
         }
 
         fn pager(&self) -> Rc<RefCell<Pager<MemoryBuffer>>> {
@@ -219,8 +230,9 @@ mod tests {
     }
 
     fn new_db(ctx: &[&str]) -> Result<Ctx, DatabaseError> {
-        let mut pager = Pager::default();
+        let mut pager = Pager::default().block_size(4096);
         pager.init()?;
+        println!("pager {pager:#?}");
 
         let mut db = Database::new(Rc::new(RefCell::new(pager)), PathBuf::new());
         let mut tables = HashMap::new();
@@ -231,13 +243,16 @@ mod tests {
             if let Statement::Create(Create::Table { name, .. }) =
                 Parser::new(sql).parse_statement()?
             {
+                println!("table {name}");
                 fetch_tables.push(name);
             }
 
+            println!("sql: {}", sql);
             db.exec(sql)?;
         }
 
         for table_name in fetch_tables {
+            println!("called here");
             let table = db.metadata(&table_name)?;
             for idx in &table.indexes {
                 indexes.insert(idx.name.to_owned(), idx.to_owned());
@@ -262,10 +277,10 @@ mod tests {
 
     #[test]
     fn test_simple_sequential_plan() -> Result<(), DatabaseError> {
-        let mut db = new_db(&["CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255));"])?;
+        let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));"])?;
 
         assert_eq!(
-            db.generate_plan("SELECT * FROM users;")?,
+            db.gen_plan("SELECT * FROM users;")?,
             Planner::SeqScan(SeqScan {
                 pager: db.pager(),
                 cursor: Cursor::new(db.tables["users"].root, 0),

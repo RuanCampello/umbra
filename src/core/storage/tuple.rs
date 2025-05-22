@@ -67,7 +67,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
 }
 
 pub(crate) fn deserialize_row_id<'value>(buff: &[u8]) -> RowId {
-    RowId::from_le_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
+    RowId::from_be_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
 }
 
 pub(crate) fn serialize_tuple<'value>(
@@ -85,7 +85,7 @@ pub(crate) fn serialize_tuple<'value>(
     schema
         .columns
         .iter()
-        .zip(values.into_iter())
+        .zip(values)
         .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
 
     todo!("serialize tuple")

@@ -16,6 +16,7 @@ mod tokens;
 pub(crate) fn pipeline(input: &str, db: &mut impl Ctx) -> Result<Statement, DatabaseError> {
     let mut statement = Parser::new(input).parse_statement()?;
 
+    println!("pipelining...");
     analyzer::analyze(&statement, db)?;
     optimiser::optimise(&mut statement)?;
     prepare::prepare(&mut statement, db)?;

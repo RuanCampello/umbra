@@ -246,7 +246,7 @@ impl<File: FileOperations> Planner<File> {
 
         let display = match self {
             Self::SeqScan(seq) => format!("{seq}"),
-            Self::ExactMatch(exac_match) => format!("{exac_match}"),
+            Self::ExactMatch(exact_match) => format!("{exact_match}"),
             Self::RangeScan(range) => format!("{range}"),
             Self::KeyScan(key) => format!("{key}"),
             Self::LogicalScan(logical) => format!("{logical}"),
@@ -269,11 +269,11 @@ impl<File: FileOperations> Planner<File> {
             Self::ExactMatch(exact_match) => exact_match.relation.schema(),
             Self::RangeScan(range) => &range.schema,
             Self::KeyScan(key) => &key.table.schema,
-            Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
-            Self::Filter(filter) => return filter.source.schema(),
             Self::Sort(sort) => &sort.collection.schema,
             Self::Collect(collection) => &collection.schema,
             Self::Project(project) => &project.output,
+            Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
+            Self::Filter(filter) => return filter.source.schema(),
             _ => return None,
         };
 
@@ -1080,10 +1080,9 @@ impl TupleBuffer {
             buff.extend_from_slice(&(self.tuples.len() as u32).to_le_bytes());
         }
 
-        &self
-            .tuples
-            .iter()
-            .for_each(|tuple| buff.extend_from_slice(&tuple::serialize_tuple(&self.schema, tuple)));
+        for tuple in &self.tuples {
+            buff.extend_from_slice(&tuple::serialize_tuple(&self.schema, tuple));
+        }
 
         if !self.packed {
             buff.resize(self.page_size, 0); // little padding

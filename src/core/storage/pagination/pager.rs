@@ -411,6 +411,7 @@ impl<File> Debug for Pager<File> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Pager")
             .field("page_size", &self.page_size)
+            .field("block_size", &self.block_size)
             .field("cache_size", &self.cache.max_size)
             .field("journal_buffer_size", &self.journal.max_pages)
             .finish()

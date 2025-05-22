@@ -10,25 +10,22 @@ pub(crate) struct Schema {
 
 impl Schema {
     pub fn new(columns: Vec<Column>) -> Self {
-        let mut index = HashMap::new();
-        for (i, col) in columns.iter().enumerate() {
-            index.insert(col.name.to_string(), i);
-        }
+        let index = columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| (col.name.clone(), i))
+            .collect();
+
         Self { columns, index }
     }
 
     pub fn prepend_id(&mut self) {
         debug_assert!(
-            self.columns.first().map_or(true, |c| c.name.ne(ROW_COL_ID)),
+            self.columns[0].name != ROW_COL_ID,
             "schema already has {ROW_COL_ID}: {self:?}"
         );
 
         let col = Column::new(ROW_COL_ID, Type::UnsignedBigInteger);
-
-        let mut new_index = HashMap::new();
-        for (i, col) in self.columns.iter().enumerate() {
-            new_index.insert(col.name.as_str(), i);
-        }
 
         self.columns.insert(0, col);
         self.index.values_mut().for_each(|idx| *idx += 1);
@@ -73,6 +70,7 @@ pub(in crate::db) fn umbra_schema() -> Schema {
         Column::new("type", Type::Varchar(255)),
         Column::new("name", Type::Varchar(255)),
         Column::new("root", Type::UnsignedInteger),
+        Column::new("table_name", Type::Varchar(255)),
         Column::new("sql", Type::Varchar(65535)),
     ])
 }

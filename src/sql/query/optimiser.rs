@@ -26,14 +26,22 @@ pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     let source = match generate_optimised_seq_plan(table, db, &mut filter)? {
-        Some(plan) => plan,
-        None => generate_seq_scan_plan(table, db)?,
+        Some(plan) => {
+            println!("on generate optimised seq plan: {plan}");
+            plan
+        }
+        None => {
+            println!("doesn't have filter");
+            generate_seq_scan_plan(table, db)?
+        }
     };
 
     let Some(expr) = filter else {
+        println!("returning source");
         return Ok(source);
     };
 
+    println!("on generate seq plan: {expr}");
     Ok(Planner::Filter(Filter {
         source: Box::new(source),
         schema: db.metadata(table)?.schema.clone(),
@@ -46,11 +54,22 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
     db: &mut Database<File>,
     filter: &mut Option<Expression>,
 ) -> Result<Option<Planner<File>>, DatabaseError> {
+    println!("generating optimized scan {table}");
     let Some(expr) = filter else {
+        println!("returned none");
         return Ok(None);
     };
+
     let table = db.metadata(table)?.clone();
-    let paths: HashMap<&str, VecDeque<IndexBounds>> = HashMap::new();
+    println!("searching paths for {}", table.name);
+    let paths = find_index_paths(
+        &table.schema.columns[0].name,
+        &HashSet::from_iter(table.indexes.iter().map(|index| index.column.name.as_str())),
+        expr,
+        &mut HashSet::new(),
+    );
+
+    println!("on generate optimised seq plan: {paths:#?}");
 
     if paths.is_empty() {
         return Ok(None);
