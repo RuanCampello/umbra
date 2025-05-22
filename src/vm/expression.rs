@@ -2,6 +2,7 @@ use crate::core::date::DateParseError;
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{BinaryOperator, Expression, Type, UnaryOperator, Value};
 use std::fmt::{Display, Formatter};
+use std::mem;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum VmType {
@@ -62,24 +63,23 @@ pub(crate) fn resolve_expression<'exp>(
             }
         }
         Expression::BinaryOperation {
-            operator,
             left,
+            operator,
             right,
         } => {
-            let left_val = resolve_expression(val, schema, left)?;
-            let right_val = resolve_expression(val, schema, right)?;
+            let left = resolve_expression(val, schema, left)?;
+            let right = resolve_expression(val, schema, right)?;
 
-            let miss_type = || {
-                let err = TypeError::CannotApplyBinary {
-                    left: left.as_ref().clone(),
+            let mismatched_types = || {
+                SqlError::Type(TypeError::CannotApplyBinary {
+                    left: Expression::Value(left.clone()),
                     operator: *operator,
-                    right: right.as_ref().clone(),
-                };
-                SqlError::Type(err)
+                    right: Expression::Value(right.clone()),
+                })
             };
 
-            if std::mem::discriminant(&left_val) != std::mem::discriminant(&right_val) {
-                return Err(miss_type());
+            if mem::discriminant(&left) != mem::discriminant(&right) {
+                return Err(mismatched_types());
             }
 
             Ok(match operator {
@@ -89,44 +89,35 @@ pub(crate) fn resolve_expression<'exp>(
                 BinaryOperator::LtEq => Value::Boolean(left <= right),
                 BinaryOperator::Gt => Value::Boolean(left > right),
                 BinaryOperator::GtEq => Value::Boolean(left >= right),
+
                 logical @ (BinaryOperator::And | BinaryOperator::Or) => {
-                    let (a, b) = match (&left_val, &right_val) {
-                        (Value::Boolean(a), Value::Boolean(b)) => (a, b),
-                        _ => {
-                            let miss_type = miss_type();
-                            return Err(miss_type);
-                        }
+                    let (Value::Boolean(left), Value::Boolean(right)) = (&left, &right) else {
+                        return Err(mismatched_types());
                     };
+
                     match logical {
-                        BinaryOperator::And => Value::Boolean(*a && *b),
-                        BinaryOperator::Or => Value::Boolean(*a || *b),
+                        BinaryOperator::And => Value::Boolean(*left && *right),
+                        BinaryOperator::Or => Value::Boolean(*left || *right),
                         _ => unreachable!(),
                     }
                 }
-                arithmetic @ (BinaryOperator::Plus
-                | BinaryOperator::Minus
-                | BinaryOperator::Mul
-                | BinaryOperator::Div) => {
-                    let (n1, n2) = match (&left_val, &right_val) {
-                        (Value::Number(n1), Value::Number(n2)) => (n1, n2),
-                        _ => {
-                            let miss_type = miss_type();
-                            return Err(miss_type);
-                        }
+
+                arithmetic => {
+                    let (Value::Number(left), Value::Number(right)) = (&left, &right) else {
+                        return Err(mismatched_types());
                     };
 
-                    if arithmetic == &BinaryOperator::Div && *n2 == 0 {
-                        return Err(VmError::DivisionByZero(*n1, *n2).into());
+                    if arithmetic == &BinaryOperator::Div && *right == 0 {
+                        return Err(VmError::DivisionByZero(*left, *right).into());
                     }
 
-                    let computed = match arithmetic {
-                        BinaryOperator::Plus => n1 + n2,
-                        BinaryOperator::Minus => n1 - n2,
-                        BinaryOperator::Mul => n1 * n2,
-                        BinaryOperator::Div => n1 / n2,
-                        _ => unreachable!("unhandled arithmetic operator: {arithmetic:#?}"),
-                    };
-                    Value::Number(computed)
+                    Value::Number(match arithmetic {
+                        BinaryOperator::Plus => left + right,
+                        BinaryOperator::Minus => left - right,
+                        BinaryOperator::Mul => left * right,
+                        BinaryOperator::Div => left / right,
+                        _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
+                    })
                 }
             })
         }

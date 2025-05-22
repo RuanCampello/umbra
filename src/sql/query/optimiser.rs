@@ -1,10 +1,8 @@
-use std::{
-    cmp::Ordering,
-    collections::{HashMap, HashSet, VecDeque},
-    ops::{Bound, RangeBounds},
-    rc::Rc,
+use crate::core::storage::pagination::io::FileOperations;
+use crate::vm::planner::{
+    CollectConfig, LogicalOrScan, Plan, RangeScanConfig, SortConfig, TuplesComparator,
+    DEFAULT_SORT_INPUT_BUFFERS,
 };
-
 use crate::{
     core::storage::{btree::Cursor, tuple},
     db::{Ctx, Database, DatabaseError, IndexMetadata, Relation},
@@ -12,19 +10,23 @@ use crate::{
         parser::Parser,
         statement::{BinaryOperator, Expression, Value},
     },
-    vm::planner::{
-        Collect, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner, RangeScan,
-        SeqScan, Sort, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
-    },
+    vm::planner::{Collect, ExactMatch, Filter, KeyScan, RangeScan, SeqScan, Sort},
+};
+use std::io::{Read, Seek, Write};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet, VecDeque},
+    ops::{Bound, RangeBounds},
+    rc::Rc,
 };
 
 type IndexBounds<'value> = (Bound<&'value Value>, Bound<&'value Value>);
 
-pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
+pub(in crate::sql::query) fn generate_seq_plan<File: Seek + Read + Write + FileOperations>(
     table: &str,
     mut filter: Option<Expression>,
     db: &mut Database<File>,
-) -> Result<Planner<File>, DatabaseError> {
+) -> Result<Plan<File>, DatabaseError> {
     let source = match generate_optimised_seq_plan(table, db, &mut filter)? {
         Some(plan) => {
             println!("on generate optimised seq plan: {plan}");
@@ -42,18 +44,18 @@ pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
     };
 
     println!("on generate seq plan: {expr}");
-    Ok(Planner::Filter(Filter {
+    Ok(Plan::Filter(Filter {
         source: Box::new(source),
         schema: db.metadata(table)?.schema.clone(),
         filter: expr,
     }))
 }
 
-fn generate_optimised_seq_plan<File: PlanExecutor>(
+fn generate_optimised_seq_plan<File: Seek + Write + Read + FileOperations>(
     table: &str,
     db: &mut Database<File>,
     filter: &mut Option<Expression>,
-) -> Result<Option<Planner<File>>, DatabaseError> {
+) -> Result<Option<Plan<File>>, DatabaseError> {
     println!("generating optimized scan {table}");
     let Some(expr) = filter else {
         println!("returned none");
@@ -82,7 +84,7 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
         .map(|idx| (idx.column.name.as_str(), idx))
         .collect();
 
-    let mut index_scans: Vec<(&str, VecDeque<Planner<File>>)> = paths
+    let mut index_scans: Vec<(&str, VecDeque<Plan<File>>)> = paths
         .into_iter()
         .map(|(col, ranges)| {
             let relation = match indexes.get(col) {
@@ -109,17 +111,22 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
                     let Bound::Included(key) = left else {
                         unreachable!();
                     };
-
-                    Planner::ExactMatch(ExactMatch {
+                    Plan::ExactMatch(ExactMatch {
                         key,
                         relation,
                         expr,
                         pager,
-                        emit_only_key: true,
+                        emit_table_key_only: true,
                         done: false,
                     })
                 } else {
-                    Planner::RangeScan(RangeScan::new((left, right), relation, true, expr, pager))
+                    Plan::RangeScan(RangeScan::from(RangeScanConfig {
+                        range: (left, right),
+                        relation,
+                        expr,
+                        pager,
+                        emit_table_key_only: true,
+                    }))
                 }
             });
 
@@ -140,20 +147,20 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
         .as_ref()
         .is_some_and(|col| col.eq(&table.schema.columns[0].name));
 
-    let mut planners: VecDeque<Planner<File>> =
+    let mut planners: VecDeque<Plan<File>> =
         index_scans.into_iter().flat_map(|(_, scan)| scan).collect();
 
     if is_only_scan {
         planners.iter_mut().for_each(|planner| match planner {
-            Planner::RangeScan(range_scan) => range_scan.emit_only_key = false,
-            Planner::ExactMatch(exact_match) => exact_match.emit_only_key = false,
+            Plan::RangeScan(range_scan) => range_scan.emit_table_key_only = false,
+            Plan::ExactMatch(exact_match) => exact_match.emit_table_key_only = false,
             _ => unreachable!(),
         });
     }
 
     let mut source = match planners.len().eq(&1) {
         true => planners.pop_front().unwrap(),
-        false => Planner::LogicalScan(LogicalScan { scans: planners }),
+        false => Plan::LogicalOrScan(LogicalOrScan { scans: planners }),
     };
 
     if let Some(col) = scan_only_one_index {
@@ -168,25 +175,28 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
         return Ok(Some(source));
     }
 
-    if let Planner::RangeScan(_) | Planner::LogicalScan(_) = source {
-        let collection = Collect::new(
-            Box::new(source),
-            table.key_only_schema(),
-            db.work_dir.clone(),
-            db.pager.borrow().page_size,
-        );
-        let comparator =
-            TupleComparator::new(table.key_only_schema(), table.key_only_schema(), vec![0]);
-        source = Planner::Sort(Sort::new(
-            db.pager.borrow().page_size,
-            db.work_dir.clone(),
-            collection,
-            comparator,
-            DEFAULT_SORT_BUFFER_SIZE,
-        ));
-    }
+    let page_size = db.pager.borrow().page_size;
+    let work_dir = db.work_dir.clone();
+    if let Plan::RangeScan(_) | Plan::LogicalOrScan(_) = source {
+        source = Plan::Sort(Sort::from(SortConfig {
+            page_size,
+            work_dir: work_dir.clone(),
+            collection: Collect::from(CollectConfig {
+                source: Box::new(source),
+                work_dir,
+                schema: table.key_only_schema(),
+                mem_buf_size: page_size,
+            }),
+            comparator: TuplesComparator {
+                schema: table.key_only_schema(),
+                sort_schema: table.key_only_schema(),
+                sort_keys_indexes: vec![0],
+            },
+            input_buffers: DEFAULT_SORT_INPUT_BUFFERS,
+        }));
+    };
 
-    Ok(Some(Planner::KeyScan(KeyScan {
+    Ok(Some(Plan::KeyScan(KeyScan {
         comparator: table.comp()?,
         pager: Rc::clone(&db.pager),
         source: Box::new(source),
@@ -194,13 +204,13 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
     })))
 }
 
-fn generate_seq_scan_plan<File: PlanExecutor>(
+fn generate_seq_scan_plan<File: Seek + Write + Read + FileOperations>(
     table: &str,
     db: &mut Database<File>,
-) -> Result<Planner<File>, DatabaseError> {
+) -> Result<Plan<File>, DatabaseError> {
     let metadata = db.metadata(table)?;
 
-    Ok(Planner::SeqScan(SeqScan {
+    Ok(Plan::SeqScan(SeqScan {
         cursor: Cursor::new(metadata.root, 0),
         table: metadata.clone(),
         pager: Rc::clone(&db.pager),

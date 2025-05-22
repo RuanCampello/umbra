@@ -4,7 +4,7 @@ mod metadata;
 mod schema;
 
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
-pub(crate) use schema::Schema;
+pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
 
 use crate::core::date::DateParseError;
 use crate::core::storage::btree::{BTree, FixedSizeCmp};
@@ -12,7 +12,6 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
-use crate::db::schema::umbra_schema;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
@@ -20,7 +19,7 @@ use crate::sql::query;
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
 use crate::vm;
 use crate::vm::expression::{TypeError, VmError};
-use crate::vm::planner::{Execute, Planner, Tuple};
+use crate::vm::planner::{Plan, Tuple};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -64,7 +63,7 @@ enum TransactionState {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Exec<File: FileOperations> {
     Statement(Statement),
-    Plan(Planner<File>),
+    Plan(Plan<File>),
     Explain(VecDeque<String>),
 }
 
@@ -145,7 +144,7 @@ impl Database<File> {
 
 impl<File: Seek + Read + Write + FileOperations> Database<File> {
     pub(crate) fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
-        println!("executing database...");
+        println!("calling prepare from exec...");
         let (schema, mut prepared) = self.prepare(input)?;
         let mut query_set = QuerySet::new(schema, vec![]);
         let mut total_size = 0;
@@ -254,6 +253,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         let mut found_table_def = false;
 
+        println!("calling prepare from load_table_metadata");
         let (schema, mut results) = self.prepare(&format!(
             "SELECT root, sql FROM {DB_METADATA} WHERE table_name = '{table}';"
         ))?;
@@ -316,7 +316,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         if !found_table_def {
             println!("Table {table} not found in {DB_METADATA} table");
-            return Err(DatabaseError::Sql(SqlError::InvalidColumn(table.into())));
+            return Err(DatabaseError::Sql(SqlError::InvalidTable(table.into())));
         }
 
         if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {

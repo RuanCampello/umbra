@@ -65,7 +65,12 @@ impl Schema {
     }
 }
 
-pub(in crate::db) fn umbra_schema() -> Schema {
+pub(crate) fn has_btree_key(columns: &[Column]) -> bool {
+    columns[0].constraints.contains(&Constraint::PrimaryKey)
+        && !matches!(columns[0].data_type, Type::Varchar(_) | Type::Boolean)
+}
+
+pub(crate) fn umbra_schema() -> Schema {
     Schema::from(&[
         Column::new("type", Type::Varchar(255)),
         Column::new("name", Type::Varchar(255)),

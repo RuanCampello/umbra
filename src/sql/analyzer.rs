@@ -36,14 +36,20 @@ pub(in crate::sql) fn analyze<'s>(
         Statement::Create(Create::Table { name, columns }) => {
             println!("calling create on anaylyzer {name} {columns:#?}...");
             match ctx.metadata(name) {
-                Err(DatabaseError::Sql(SqlError::InvalidTable(_))) => {}
+                Err(DatabaseError::Sql(SqlError::InvalidTable(_))) => {
+                    println!("table does not exist");
+                }
                 Ok(_) => {
+                    println!("table exists");
                     return Err(SqlError::Analyzer(AnalyzerError::AlreadyExists(
                         AlreadyExists::Table(name.into()),
                     ))
-                    .into())
+                    .into());
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    eprintln!("another error {e:#?}");
+                    return Err(e);
+                }
             };
 
             // we should get here but we are going to error
