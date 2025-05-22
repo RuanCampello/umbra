@@ -196,6 +196,23 @@ pub(crate) struct TupleComparator {
     sort_indexes: Vec<usize>,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) struct SortBuilder<File: FileOperations> {
+    pub page_size: usize,
+    pub work_dir: PathBuf,
+    pub collection: Collect<File>,
+    pub comparator: TupleComparator,
+    pub input_buffers: usize,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct CollectBuilder<File: FileOperations> {
+    pub source: Box<Planner<File>>,
+    pub schema: Schema,
+    pub work_dir: PathBuf,
+    pub mem_buff_size: usize,
+}
+
 pub(crate) type Tuple = Vec<Value>;
 
 pub(crate) const DEFAULT_SORT_BUFFER_SIZE: usize = 4;
@@ -723,18 +740,19 @@ impl<File: PlanExecutor> Sort<File> {
     }
 }
 
-impl<File: FileOperations> Sort<File> {
-    pub(crate) fn new(
-        page_size: usize,
-        work_dir: PathBuf,
-        collection: Collect<File>,
-        comparator: TupleComparator,
-        input_buffers: usize,
-    ) -> Self {
-        Self {
+impl<File: FileOperations> From<SortBuilder<File>> for Sort<File> {
+    fn from(value: SortBuilder<File>) -> Self {
+        let SortBuilder {
             page_size,
             work_dir,
+            comparator,
             collection,
+            input_buffers,
+        } = value;
+        Sort {
+            collection,
+            page_size,
+            work_dir,
             comparator,
             input_buffers,
             sorted: false,
@@ -745,7 +763,9 @@ impl<File: FileOperations> Sort<File> {
             output_file_path: PathBuf::new(),
         }
     }
+}
 
+impl<File: FileOperations> Sort<File> {
     fn drop_files(&mut self) -> io::Result<()> {
         if let Some(input) = self.input_file.take() {
             drop(input);
@@ -958,22 +978,23 @@ impl<File: PlanExecutor> Execute for Collect<File> {
     }
 }
 
-impl<File: FileOperations> Collect<File> {
-    pub(crate) fn new(
-        source: Box<Planner<File>>,
-        schema: Schema,
-        work_dir: PathBuf,
-        mem_buff_size: usize,
-    ) -> Self {
+impl<File: FileOperations> From<CollectBuilder<File>> for Collect<File> {
+    fn from(value: CollectBuilder<File>) -> Self {
+        let CollectBuilder {
+            mem_buff_size,
+            schema,
+            source,
+            work_dir,
+        } = value;
         Self {
             source,
             mem_buff: TupleBuffer::new(mem_buff_size, schema.clone(), true),
             schema,
             work_dir,
             file_path: PathBuf::new(),
-            collected: false,
             file: None,
             reader: None,
+            collected: false,
         }
     }
 }

@@ -13,8 +13,8 @@ use crate::{
         statement::{BinaryOperator, Expression, Value},
     },
     vm::planner::{
-        Collect, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner, RangeScan,
-        SeqScan, Sort, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
+        Collect, CollectBuilder, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner,
+        RangeScan, SeqScan, Sort, SortBuilder, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
     },
 };
 
@@ -156,21 +156,23 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
     }
 
     if let Planner::RangeScan(_) | Planner::LogicalScan(_) = source {
-        let collection = Collect::new(
-            Box::new(source),
-            table.key_only_schema(),
-            db.work_dir.clone(),
-            db.pager.borrow().page_size,
-        );
+        let page_size = db.pager.borrow().page_size;
+        let work_dir = db.work_dir.clone();
+
         let comparator =
             TupleComparator::new(table.key_only_schema(), table.key_only_schema(), vec![0]);
-        source = Planner::Sort(Sort::new(
-            db.pager.borrow().page_size,
-            db.work_dir.clone(),
-            collection,
+        source = Planner::Sort(Sort::from(SortBuilder {
+            page_size,
             comparator,
-            DEFAULT_SORT_BUFFER_SIZE,
-        ));
+            work_dir: work_dir.clone(),
+            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+            collection: Collect::from(CollectBuilder {
+                work_dir,
+                source: Box::new(source),
+                schema: table.key_only_schema(),
+                mem_buff_size: page_size,
+            }),
+        }));
     }
 
     Ok(Some(Planner::KeyScan(KeyScan {
@@ -771,4 +773,3 @@ mod tests {
         .assert();
     }
 }
-

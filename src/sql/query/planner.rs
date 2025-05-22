@@ -4,7 +4,13 @@ use std::{
     rc::Rc,
 };
 
-use crate::vm::planner::{Collect, Project, TupleComparator, Update, DEFAULT_SORT_BUFFER_SIZE};
+use crate::{
+    core::storage::page,
+    vm::planner::{
+        Collect, CollectBuilder, Project, SortBuilder, TupleComparator, Update,
+        DEFAULT_SORT_BUFFER_SIZE,
+    },
+};
 use crate::{
     core::storage::pagination::io::FileOperations,
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
@@ -82,25 +88,22 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     false => source,
                 };
 
-                let collection = Collect::new(
-                    Box::new(collect_source),
-                    sorted_schema.clone(),
-                    work_dir.clone(),
+                source = Planner::Sort(Sort::from(SortBuilder {
                     page_size,
-                );
-                let comparator = TupleComparator::new(
-                    table.schema.clone(),
-                    sorted_schema.clone(),
-                    sorted_indexes,
-                );
-
-                source = Planner::Sort(Sort::new(
-                    page_size,
-                    work_dir,
-                    collection,
-                    comparator,
-                    DEFAULT_SORT_BUFFER_SIZE,
-                ));
+                    work_dir: work_dir.clone(),
+                    input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                    collection: Collect::from(CollectBuilder {
+                        source: Box::new(collect_source),
+                        schema: sorted_schema.clone(),
+                        work_dir,
+                        mem_buff_size: page_size,
+                    }),
+                    comparator: TupleComparator::new(
+                        table.schema.clone(),
+                        sorted_schema,
+                        sorted_indexes,
+                    ),
+                }));
             }
 
             let mut output = Schema::empty();
@@ -140,12 +143,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let metadata = db.metadata(&table)?;
 
             if needs_collection(&source) {
-                source = Planner::Collect(Collect::new(
-                    Box::new(source),
-                    metadata.schema.clone(),
+                source = Planner::Collect(Collect::from(CollectBuilder {
+                    source: Box::new(source),
+                    schema: metadata.schema.clone(),
                     work_dir,
-                    page_size,
-                ));
+                    mem_buff_size: page_size,
+                }));
             }
 
             Planner::Update(Update {
@@ -206,7 +209,9 @@ mod tests {
             parser::Parser,
             statement::{Create, Value},
         },
-        vm::planner::{ExactMatch, Filter, KeyScan, RangeScan, SeqScan},
+        vm::planner::{
+            CollectBuilder, ExactMatch, Filter, KeyScan, RangeScan, SeqScan, SortBuilder,
+        },
     };
 
     struct Ctx {
@@ -463,30 +468,25 @@ mod tests {
             parse_expr("email <= 'johndoe@email.com'"),
             db.pager(),
         ));
-        let collection = Collect::new(
-            Box::new(range_scan),
-            keys.clone(),
-            work_dir.clone(),
-            page_size,
-        );
-        let comparator = TupleComparator::new(keys.clone(), keys, vec![0]);
-
-        let source = Box::new(Planner::Sort(Sort::new(
-            page_size,
-            work_dir,
-            collection,
-            comparator,
-            DEFAULT_SORT_BUFFER_SIZE,
-        )));
-        let comparator = FixedSizeCmp(byte_len_of_type(&Type::Integer));
 
         assert_eq!(
             db.gen_plan("SELECT * FROM employees WHERE email <= 'johndoe@email.com';")?,
             Planner::KeyScan(KeyScan {
-                source,
-                comparator,
+                comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
                 pager: db.pager(),
                 table: db.tables["employees"].to_owned(),
+                source: Box::new(Planner::Sort(Sort::from(SortBuilder {
+                    page_size,
+                    work_dir: work_dir.clone(),
+                    input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                    comparator: TupleComparator::new(keys.clone(), keys.clone(), vec![0]),
+                    collection: Collect::from(CollectBuilder {
+                        mem_buff_size: page_size,
+                        schema: keys,
+                        work_dir,
+                        source: Box::new(range_scan)
+                    })
+                }))),
             })
         );
         Ok(())
