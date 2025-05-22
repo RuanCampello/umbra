@@ -194,10 +194,19 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::storage::{btree::Cursor, pagination::pager::Pager, MemoryBuffer},
-        db::{Ctx as DbCtx, IndexMetadata, TableMetadata},
-        sql::{self, parser::Parser, statement::Create},
-        vm::planner::{Filter, SeqScan},
+        core::storage::{
+            btree::{Cursor, FixedSizeCmp},
+            pagination::pager::Pager,
+            tuple::{self, byte_len_of_type, serialize},
+            MemoryBuffer,
+        },
+        db::{Ctx as DbCtx, IndexMetadata, Relation, TableMetadata},
+        sql::{
+            self,
+            parser::Parser,
+            statement::{Create, Value},
+        },
+        vm::planner::{ExactMatch, Filter, KeyScan, SeqScan},
     };
 
     struct Ctx {
@@ -349,6 +358,61 @@ mod tests {
                     Expression::Identifier("email".into()),
                     Expression::Identifier("id".into())
                 ]
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_match_with_id() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE products (id INT PRIMARY KEY, name VARCHAR(100), stock_quant INT);",
+        ])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM products WHERE id = 69;")?,
+            Planner::ExactMatch(ExactMatch {
+                done: false,
+                emit_only_key: false,
+                pager: db.pager(),
+                expr: parse_expr("id = 69"),
+                key: serialize(&Type::Integer, &Value::Number(69)),
+                relation: Relation::Table(db.tables["products"].to_owned())
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_match_with_external_id() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(35), email VARCHAR(135) UNIQUE);",
+        ])?;
+
+        let generated_plan =
+            db.gen_plan("SELECT * FROM employees WHERE email = 'johndoe@email.com';")?;
+        println!("indexes {:#?} tables {:#?}", db.indexes, db.tables);
+
+        println!("generated plan {generated_plan}");
+        assert_eq!(
+            generated_plan,
+            Planner::KeyScan(KeyScan {
+                pager: db.pager(),
+                table: db.tables["employees"].to_owned(),
+                comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                source: Box::new(Planner::ExactMatch(ExactMatch {
+                    done: false,
+                    emit_only_key: true,
+                    pager: db.pager(),
+                    expr: parse_expr("email = 'johndoe@email.com'"),
+                    key: serialize(
+                        &Type::Varchar(135),
+                        &Value::String("johndoe@email.com".into())
+                    ),
+                    relation: Relation::Index(db.indexes["employees_email_uq_index"].to_owned())
+                }))
             })
         );
 

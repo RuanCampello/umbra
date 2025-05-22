@@ -7,7 +7,7 @@ use crate::db::{RowId, Schema};
 use crate::sql::statement::{Type, Value};
 
 /// Returns the byte length of a given SQL [`Type`].
-pub(in crate::core::storage) fn byte_len_of_type(data_type: &Type) -> usize {
+pub(crate) fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
         Type::BigInteger | Type::UnsignedBigInteger | Type::DateTime => 8,
         Type::Integer | Type::UnsignedInteger | Type::Date => 4,
