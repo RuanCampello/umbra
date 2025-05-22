@@ -19,7 +19,7 @@ use crate::sql::query;
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
 use crate::vm;
 use crate::vm::expression::{TypeError, VmError};
-use crate::vm::planner::{Plan, Tuple};
+use crate::vm::planner::{Execute, Planner, Tuple};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -63,7 +63,7 @@ enum TransactionState {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Exec<File: FileOperations> {
     Statement(Statement),
-    Plan(Plan<File>),
+    Plan(Planner<File>),
     Explain(VecDeque<String>),
 }
 
@@ -144,13 +144,11 @@ impl Database<File> {
 
 impl<File: Seek + Read + Write + FileOperations> Database<File> {
     pub(crate) fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
-        println!("calling prepare from exec...");
         let (schema, mut prepared) = self.prepare(input)?;
         let mut query_set = QuerySet::new(schema, vec![]);
         let mut total_size = 0;
 
         while let Some(tuple) = prepared.try_next()? {
-            println!("tuple in exec {tuple:#?}");
             total_size += tuple::size_of(&tuple, &query_set.schema);
 
             if total_size > 1 << 30 {
@@ -169,8 +167,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         sql: &str,
     ) -> Result<(Schema, PreparedStatement<'_, File>), DatabaseError> {
         let statement = crate::sql::pipeline(sql, self)?;
-        println!("statement after pipeline {statement:#?}");
-        // CHECKOUT
         let mut schema = Schema::empty();
 
         let exec = match statement {
@@ -197,9 +193,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 }
             },
             _ => {
-                println!("statement in exec {statement:#?}");
                 let planner = query::planner::generate_plan(statement, self)?;
-                println!("planner in exec {planner}");
                 if let Some(planner_schema) = planner.schema() {
                     schema = planner_schema;
                 }
@@ -228,12 +222,9 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
     fn load_metadata(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
         if table == DB_METADATA {
             let mut schema = umbra_schema();
-            println!("schema {schema:#?}");
             schema.prepend_id();
 
-            println!("schema prepared {schema:#?}");
             let row_id = self.load_next_row_id(0)?;
-            println!("next_row_id = {row_id:#?}");
             return Ok(TableMetadata {
                 root: 0,
                 name: String::from(table),
@@ -253,7 +244,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         let mut found_table_def = false;
 
-        println!("calling prepare from load_table_metadata");
         let (schema, mut results) = self.prepare(&format!(
             "SELECT root, sql FROM {DB_METADATA} WHERE table_name = '{table}';"
         ))?;
@@ -315,7 +305,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         if !found_table_def {
-            println!("Table {table} not found in {DB_METADATA} table");
             return Err(DatabaseError::Sql(SqlError::InvalidTable(table.into())));
         }
 
@@ -342,7 +331,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         if !self.context.contains(table) {
-            println!("database context {:#?}", self.context);
             let metadata = self.load_metadata(table)?;
             self.context.insert(metadata);
         }
@@ -479,7 +467,6 @@ impl TryFrom<&[&str]> for Context {
 
 impl Ctx for Context {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
-        println!("metadata for table {table} in context {self:#?}");
         self.tables
             .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
@@ -522,11 +509,8 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
         let tuple = match exec {
             Exec::Statement(_) => {
                 let Some(Exec::Statement(statement)) = self.exec.take() else {
-                    println!("trying to take statement from None");
                     unreachable!()
                 };
-
-                println!("passed unreachable");
 
                 let mut affected_rows = 0;
                 match statement {
@@ -541,7 +525,6 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                         self.db.rollback()?;
                     }
                     Statement::Drop(_) | Statement::Create(_) => {
-                        println!("trying create statement {statement:#?}");
                         match vm::statement::exec(statement, self.db) {
                             Ok(rows) => affected_rows = rows,
                             Err(e) => {
@@ -554,20 +537,14 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                 };
                 Some(vec![Value::Number(affected_rows as i128)])
             }
-            Exec::Plan(planner) => {
-                println!("planner {planner}");
-                match planner.try_next() {
-                    Ok(tuple) => {
-                        println!("on tuple {tuple:#?}");
-                        tuple
-                    }
-                    Err(e) => {
-                        self.exec.take();
-                        self.abort_transaction()?;
-                        return Err(e);
-                    }
+            Exec::Plan(planner) => match planner.try_next() {
+                Ok(tuple) => tuple,
+                Err(e) => {
+                    self.exec.take();
+                    self.abort_transaction()?;
+                    return Err(e);
                 }
-            }
+            },
             Exec::Explain(lines) => {
                 let lines = lines.pop_front().map(|line| vec![Value::String(line)]);
 
@@ -580,10 +557,6 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
         };
 
         if tuple.is_none() || self.exec.is_none() {
-            println!(
-                "tuple is none or exec is none {} {:#?}",
-                self.autocommit, self.db.context
-            );
             self.exec.take();
 
             if self.autocommit {

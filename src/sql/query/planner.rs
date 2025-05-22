@@ -4,47 +4,39 @@ use std::{
     rc::Rc,
 };
 
-use super::optimiser;
-use crate::db::{Schema, SqlError};
-use crate::sql::analyzer;
-use crate::sql::statement::Type;
-use crate::vm::expression::VmType;
-use crate::vm::planner::{
-    Collect, CollectConfig, Delete, Project, Sort, TuplesComparator, Update,
-    DEFAULT_SORT_INPUT_BUFFERS,
-};
+use crate::vm::planner::{Collect, Project, TupleComparator, Update, DEFAULT_SORT_BUFFER_SIZE};
 use crate::{
     core::storage::pagination::io::FileOperations,
-    db::{Ctx, Database, DatabaseError},
-    sql::statement::{Column, Expression, Statement},
-    vm::planner::{Insert, Plan, SortConfig, SortKeysGen, Values},
+    db::{Ctx, Database, DatabaseError, Schema, SqlError},
+    sql::{
+        analyzer,
+        query::optimiser,
+        statement::{Column, Expression, Type},
+        Statement,
+    },
+    vm::{
+        expression::VmType,
+        planner::{Insert, Planner, Sort, SortKeys, Values},
+    },
 };
 
-/// Generates a query plan that's ready to execute by the VM.
-pub(crate) fn generate_plan<F: Seek + Read + Write + FileOperations>(
+pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
     statement: Statement,
-    db: &mut Database<F>,
-) -> Result<Plan<F>, DatabaseError> {
+    db: &mut Database<File>,
+) -> Result<Planner<File>, DatabaseError> {
     Ok(match statement {
-        Statement::Insert {
-            into,
-            columns,
-            values,
-        } => {
-            let source = Box::new(Plan::Values(Values {
-                values: VecDeque::from(values),
-            }));
+        Statement::Insert { into, values, .. } => {
+            let values = VecDeque::from(values);
+            let source = Box::new(Planner::Values(Values { values }));
+            let table = db.metadata(&into)?;
 
-            let table = db.metadata(&into)?.clone();
-
-            Plan::Insert(Insert {
+            Planner::Insert(Insert {
                 source,
                 comparator: table.comp()?,
                 table: db.metadata(&into)?.clone(),
                 pager: Rc::clone(&db.pager),
             })
         }
-
         Statement::Select {
             columns,
             from,
@@ -52,102 +44,91 @@ pub(crate) fn generate_plan<F: Seek + Read + Write + FileOperations>(
             order_by,
         } => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
-
             let page_size = db.pager.borrow().page_size;
-
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from)?;
 
             if !order_by.is_empty()
                 && order_by != [Expression::Identifier(table.schema.columns[0].name.clone())]
             {
-                let mut sort_schema = table.schema.clone();
-                let mut sort_keys_indexes = Vec::with_capacity(order_by.len());
+                let mut sorted_schema = table.schema.clone();
+                let mut sorted_indexes = Vec::with_capacity(order_by.len());
 
-                // Precompute all the sort keys indexes so that the sorter
-                // doesn't waste time figuring out where the columns are.
                 for expr in &order_by {
                     let index = match expr {
                         Expression::Identifier(col) => table.schema.index_of(col).unwrap(),
-
                         _ => {
-                            let index = sort_schema.len();
-                            let data_type = resolve_unknown_type(&table.schema, expr)?;
-                            let col = Column::new(&format!("{expr}"), data_type);
-                            sort_schema.push(col);
+                            let index = sorted_schema.len();
+                            let r#type = resolve_type(&table.schema, expr)?;
+                            let col = Column::new(&format!("{expr}"), r#type);
+                            sorted_schema.push(col);
 
                             index
                         }
                     };
 
-                    sort_keys_indexes.push(index);
+                    sorted_indexes.push(index)
                 }
 
-                // If there are no expressions that need to be evaluated for
-                // sorting then just skip the sort key generation completely,
-                // we already have all the sort keys we need.
-                let collect_source = if sort_schema.len() > table.schema.len() {
-                    Plan::SortKeysGen(SortKeysGen {
-                        source: Box::new(source),
-                        schema: table.schema.clone(),
-                        gen_exprs: order_by
+                let collect_source = match sorted_schema.len() > table.schema.len() {
+                    true => Planner::SortKeys(SortKeys {
+                        expressions: order_by
                             .into_iter()
                             .filter(|expr| !matches!(expr, Expression::Identifier(_)))
                             .collect(),
-                    })
-                } else {
-                    source
+                        schema: table.schema.clone(),
+                        source: Box::new(source),
+                    }),
+                    false => source,
                 };
 
-                source = Plan::Sort(Sort::from(SortConfig {
+                let collection = Collect::new(
+                    Box::new(collect_source),
+                    sorted_schema.clone(),
+                    work_dir.clone(),
                     page_size,
-                    work_dir: work_dir.clone(),
-                    collection: Collect::from(CollectConfig {
-                        source: Box::new(collect_source),
-                        work_dir,
-                        schema: sort_schema.clone(),
-                        mem_buf_size: page_size,
-                    }),
-                    comparator: TuplesComparator {
-                        schema: table.schema.clone(),
-                        sort_schema,
-                        sort_keys_indexes,
-                    },
-                    input_buffers: DEFAULT_SORT_INPUT_BUFFERS,
-                }));
+                );
+                let comparator = TupleComparator::new(
+                    table.schema.clone(),
+                    sorted_schema.clone(),
+                    sorted_indexes,
+                );
+
+                source = Planner::Sort(Sort::new(
+                    page_size,
+                    work_dir,
+                    collection,
+                    comparator,
+                    DEFAULT_SORT_BUFFER_SIZE,
+                ));
             }
 
-            let mut output_schema = Schema::empty();
+            let mut output = Schema::empty();
 
             for expr in &columns {
                 match expr {
-                    Expression::Identifier(ident) => output_schema
+                    Expression::Identifier(ident) => output
                         .push(table.schema.columns[table.schema.index_of(ident).unwrap()].clone()),
-
                     _ => {
-                        output_schema.push(Column {
-                            name: expr.to_string(), // TODO: AS alias
-                            data_type: resolve_unknown_type(&table.schema, expr)?,
-                            constraints: vec![],
-                        });
+                        output.push(Column::new(
+                            expr.to_string().as_str(),
+                            resolve_type(&table.schema, expr)?,
+                        ));
                     }
                 }
             }
 
-            // No need to project if the output schema is the exact same as the
-            // table schema.
-            if table.schema == output_schema {
+            if table.schema == output {
                 return Ok(source);
             }
 
-            Plan::Project(Project {
-                input_schema: table.schema.clone(),
-                output_schema,
-                projection: columns,
+            Planner::Project(Project {
+                output,
                 source: Box::new(source),
+                projection: columns,
+                input: table.schema.clone(),
             })
         }
-
         Statement::Update {
             table,
             columns,
@@ -159,82 +140,54 @@ pub(crate) fn generate_plan<F: Seek + Read + Write + FileOperations>(
             let metadata = db.metadata(&table)?;
 
             if needs_collection(&source) {
-                source = Plan::Collect(Collect::from(CollectConfig {
-                    source: Box::new(source),
+                source = Planner::Collect(Collect::new(
+                    Box::new(source),
+                    metadata.schema.clone(),
                     work_dir,
-                    schema: metadata.schema.clone(),
-                    mem_buf_size: page_size,
-                }));
+                    page_size,
+                ));
             }
 
-            Plan::Update(Update {
+            Planner::Update(Update {
                 comparator: metadata.comp()?,
                 table: metadata.clone(),
-                assignments: columns,
+                assigments: columns,
                 pager: Rc::clone(&db.pager),
                 source: Box::new(source),
             })
         }
-
-        Statement::Delete { from, r#where } => {
-            let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
-            let work_dir = db.work_dir.clone();
-            let page_size = db.pager.borrow().page_size;
-            let metadata = db.metadata(&from)?;
-
-            if needs_collection(&source) {
-                source = Plan::Collect(Collect::from(CollectConfig {
-                    source: Box::new(source),
-                    work_dir,
-                    mem_buf_size: page_size,
-                    schema: metadata.schema.clone(),
-                }));
-            }
-
-            Plan::Delete(Delete {
-                comparator: metadata.comp()?,
-                table: metadata.clone(),
-                pager: Rc::clone(&db.pager),
-                source: Box::new(source),
-            })
-        }
-
         other => {
             return Err(DatabaseError::Other(format!(
-                "statement {other} not yet implemeted or supported"
+                "Statement {other} not implemented or supported for this"
             )))
         }
     })
 }
 
-fn resolve_unknown_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
+fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
     Ok(match expr {
         Expression::Identifier(col) => {
             let index = schema.index_of(col).unwrap();
-            schema.columns[index].clone().data_type
+            schema.columns[index].data_type.clone()
         }
-
         _ => match analyzer::analyze_expression(schema, None, expr)? {
             VmType::Bool => Type::Boolean,
             VmType::Number => Type::BigInteger,
             VmType::String => Type::Varchar(65535),
-            VmType::Date => unimplemented!("resolve_unknown_type for datetime"),
+            VmType::Date => Type::DateTime,
         },
     })
 }
 
-fn needs_collection<F>(plan: &Plan<F>) -> bool {
-    match plan {
-        Plan::Filter(filter) => needs_collection(&filter.source),
-        // KeyScan has a sorter behind it which buffers all the tuples and
-        // ExactMatch only returns one tuple.
-        Plan::KeyScan(_) | Plan::ExactMatch(_) => false,
-        // Top-level SeqScan, RangeScan and LogicalOrScan will need collection
-        // to preserve their cursor state.
-        Plan::SeqScan(_) | Plan::RangeScan(_) | Plan::LogicalOrScan(_) => true,
-        _ => unreachable!("needs_collection() called with plan that is not a 'scan' plan"),
+fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
+    match planner {
+        Planner::Filter(filter) => needs_collection(&filter.source),
+        Planner::KeyScan(_) | Planner::ExactMatch(_) => false,
+        Planner::SeqScan(_) | Planner::LogicalScan(_) | Planner::RangeScan(_) => true,
+        _ => unreachable!("needs_collection() must be called only for a scan planner"),
     }
 }
+
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, collections::HashMap, path::PathBuf};
@@ -254,11 +207,9 @@ mod tests {
     }
 
     impl Ctx {
-        fn gen_plan(&mut self, query: &str) -> Result<Plan<MemoryBuffer>, DatabaseError> {
-            println!("query {query}");
+        fn gen_plan(&mut self, query: &str) -> Result<Planner<MemoryBuffer>, DatabaseError> {
             let statement = sql::pipeline(query, &mut self.db)?;
             let plan = generate_plan(statement, &mut self.db)?;
-            println!("plan {plan:#?}");
             Ok(plan)
         }
 
@@ -270,7 +221,6 @@ mod tests {
     fn new_db(ctx: &[&str]) -> Result<Ctx, DatabaseError> {
         let mut pager = Pager::default().block_size(4096);
         pager.init()?;
-        println!("pager {pager:#?}");
 
         let mut db = Database::new(Rc::new(RefCell::new(pager)), PathBuf::new());
         let mut tables = HashMap::new();
@@ -281,16 +231,13 @@ mod tests {
             if let Statement::Create(Create::Table { name, .. }) =
                 Parser::new(sql).parse_statement()?
             {
-                println!("table {name}");
                 fetch_tables.push(name);
             }
 
-            println!("sql: {}", sql);
             db.exec(sql)?;
         }
 
         for table_name in fetch_tables {
-            println!("called here");
             let table = db.metadata(&table_name)?;
             for idx in &table.indexes {
                 indexes.insert(idx.name.to_owned(), idx.to_owned());
@@ -319,7 +266,7 @@ mod tests {
 
         assert_eq!(
             db.gen_plan("SELECT * FROM users;")?,
-            Plan::SeqScan(SeqScan {
+            Planner::SeqScan(SeqScan {
                 pager: db.pager(),
                 cursor: Cursor::new(db.tables["users"].root, 0),
                 table: db.tables["users"].clone()

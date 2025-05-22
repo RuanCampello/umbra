@@ -34,25 +34,21 @@ pub(in crate::sql) fn analyze<'s>(
 ) -> AnalyzerResult<'s, ()> {
     match statement {
         Statement::Create(Create::Table { name, columns }) => {
-            println!("calling create on anaylyzer {name} {columns:#?}...");
             match ctx.metadata(name) {
                 Err(DatabaseError::Sql(SqlError::InvalidTable(_))) => {
-                    println!("table does not exist");
+                    // we'll create the table if it does not exist
                 }
                 Ok(_) => {
-                    println!("table exists");
                     return Err(SqlError::Analyzer(AnalyzerError::AlreadyExists(
                         AlreadyExists::Table(name.into()),
                     ))
                     .into());
                 }
                 Err(e) => {
-                    eprintln!("another error {e:#?}");
                     return Err(e);
                 }
             };
 
-            // we should get here but we are going to error
             let mut primary_key = false;
             let mut duplicates = HashSet::new();
 

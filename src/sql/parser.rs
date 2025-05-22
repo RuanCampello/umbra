@@ -427,7 +427,6 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression> {
-        println!("here");
         let value_str = self.parse_ident()?;
 
         let value = match keyword {

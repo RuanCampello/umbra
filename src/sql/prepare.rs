@@ -7,7 +7,6 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
         Statement::Select { columns, from, .. }
             if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) =>
         {
-            println!("preparing select ... {columns:#?} from {from}");
             let metadata = ctx.metadata(from)?;
             let identifiers: Vec<Expression> = metadata
                 .schema

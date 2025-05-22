@@ -1,18 +1,3 @@
-use crate::core::storage::pagination::io::FileOperations;
-use crate::vm::planner::{
-    CollectConfig, LogicalOrScan, Plan, RangeScanConfig, SortConfig, TuplesComparator,
-    DEFAULT_SORT_INPUT_BUFFERS,
-};
-use crate::{
-    core::storage::{btree::Cursor, tuple},
-    db::{Ctx, Database, DatabaseError, IndexMetadata, Relation},
-    sql::{
-        parser::Parser,
-        statement::{BinaryOperator, Expression, Value},
-    },
-    vm::planner::{Collect, ExactMatch, Filter, KeyScan, RangeScan, SeqScan, Sort},
-};
-use std::io::{Read, Seek, Write};
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
@@ -20,58 +5,58 @@ use std::{
     rc::Rc,
 };
 
+use crate::{
+    core::storage::{btree::Cursor, tuple},
+    db::{Ctx, Database, DatabaseError, IndexMetadata, Relation},
+    sql::{
+        parser::Parser,
+        statement::{BinaryOperator, Expression, Value},
+    },
+    vm::planner::{
+        Collect, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner, RangeScan,
+        SeqScan, Sort, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
+    },
+};
+
 type IndexBounds<'value> = (Bound<&'value Value>, Bound<&'value Value>);
 
-pub(in crate::sql::query) fn generate_seq_plan<File: Seek + Read + Write + FileOperations>(
+pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
     table: &str,
     mut filter: Option<Expression>,
     db: &mut Database<File>,
-) -> Result<Plan<File>, DatabaseError> {
+) -> Result<Planner<File>, DatabaseError> {
     let source = match generate_optimised_seq_plan(table, db, &mut filter)? {
-        Some(plan) => {
-            println!("on generate optimised seq plan: {plan}");
-            plan
-        }
-        None => {
-            println!("doesn't have filter");
-            generate_seq_scan_plan(table, db)?
-        }
+        Some(plan) => plan,
+        None => generate_seq_scan_plan(table, db)?,
     };
 
     let Some(expr) = filter else {
-        println!("returning source");
         return Ok(source);
     };
 
-    println!("on generate seq plan: {expr}");
-    Ok(Plan::Filter(Filter {
+    Ok(Planner::Filter(Filter {
         source: Box::new(source),
         schema: db.metadata(table)?.schema.clone(),
         filter: expr,
     }))
 }
 
-fn generate_optimised_seq_plan<File: Seek + Write + Read + FileOperations>(
+fn generate_optimised_seq_plan<File: PlanExecutor>(
     table: &str,
     db: &mut Database<File>,
     filter: &mut Option<Expression>,
-) -> Result<Option<Plan<File>>, DatabaseError> {
-    println!("generating optimized scan {table}");
+) -> Result<Option<Planner<File>>, DatabaseError> {
     let Some(expr) = filter else {
-        println!("returned none");
         return Ok(None);
     };
 
     let table = db.metadata(table)?.clone();
-    println!("searching paths for {}", table.name);
     let paths = find_index_paths(
         &table.schema.columns[0].name,
         &HashSet::from_iter(table.indexes.iter().map(|index| index.column.name.as_str())),
         expr,
         &mut HashSet::new(),
     );
-
-    println!("on generate optimised seq plan: {paths:#?}");
 
     if paths.is_empty() {
         return Ok(None);
@@ -84,7 +69,7 @@ fn generate_optimised_seq_plan<File: Seek + Write + Read + FileOperations>(
         .map(|idx| (idx.column.name.as_str(), idx))
         .collect();
 
-    let mut index_scans: Vec<(&str, VecDeque<Plan<File>>)> = paths
+    let mut index_scans: Vec<(&str, VecDeque<Planner<File>>)> = paths
         .into_iter()
         .map(|(col, ranges)| {
             let relation = match indexes.get(col) {
@@ -111,22 +96,17 @@ fn generate_optimised_seq_plan<File: Seek + Write + Read + FileOperations>(
                     let Bound::Included(key) = left else {
                         unreachable!();
                     };
-                    Plan::ExactMatch(ExactMatch {
+
+                    Planner::ExactMatch(ExactMatch {
                         key,
                         relation,
                         expr,
                         pager,
-                        emit_table_key_only: true,
+                        emit_only_key: true,
                         done: false,
                     })
                 } else {
-                    Plan::RangeScan(RangeScan::from(RangeScanConfig {
-                        range: (left, right),
-                        relation,
-                        expr,
-                        pager,
-                        emit_table_key_only: true,
-                    }))
+                    Planner::RangeScan(RangeScan::new((left, right), relation, true, expr, pager))
                 }
             });
 
@@ -147,20 +127,20 @@ fn generate_optimised_seq_plan<File: Seek + Write + Read + FileOperations>(
         .as_ref()
         .is_some_and(|col| col.eq(&table.schema.columns[0].name));
 
-    let mut planners: VecDeque<Plan<File>> =
+    let mut planners: VecDeque<Planner<File>> =
         index_scans.into_iter().flat_map(|(_, scan)| scan).collect();
 
     if is_only_scan {
         planners.iter_mut().for_each(|planner| match planner {
-            Plan::RangeScan(range_scan) => range_scan.emit_table_key_only = false,
-            Plan::ExactMatch(exact_match) => exact_match.emit_table_key_only = false,
+            Planner::RangeScan(range_scan) => range_scan.emit_only_key = false,
+            Planner::ExactMatch(exact_match) => exact_match.emit_only_key = false,
             _ => unreachable!(),
         });
     }
 
     let mut source = match planners.len().eq(&1) {
         true => planners.pop_front().unwrap(),
-        false => Plan::LogicalOrScan(LogicalOrScan { scans: planners }),
+        false => Planner::LogicalScan(LogicalScan { scans: planners }),
     };
 
     if let Some(col) = scan_only_one_index {
@@ -175,28 +155,25 @@ fn generate_optimised_seq_plan<File: Seek + Write + Read + FileOperations>(
         return Ok(Some(source));
     }
 
-    let page_size = db.pager.borrow().page_size;
-    let work_dir = db.work_dir.clone();
-    if let Plan::RangeScan(_) | Plan::LogicalOrScan(_) = source {
-        source = Plan::Sort(Sort::from(SortConfig {
-            page_size,
-            work_dir: work_dir.clone(),
-            collection: Collect::from(CollectConfig {
-                source: Box::new(source),
-                work_dir,
-                schema: table.key_only_schema(),
-                mem_buf_size: page_size,
-            }),
-            comparator: TuplesComparator {
-                schema: table.key_only_schema(),
-                sort_schema: table.key_only_schema(),
-                sort_keys_indexes: vec![0],
-            },
-            input_buffers: DEFAULT_SORT_INPUT_BUFFERS,
-        }));
-    };
+    if let Planner::RangeScan(_) | Planner::LogicalScan(_) = source {
+        let collection = Collect::new(
+            Box::new(source),
+            table.key_only_schema(),
+            db.work_dir.clone(),
+            db.pager.borrow().page_size,
+        );
+        let comparator =
+            TupleComparator::new(table.key_only_schema(), table.key_only_schema(), vec![0]);
+        source = Planner::Sort(Sort::new(
+            db.pager.borrow().page_size,
+            db.work_dir.clone(),
+            collection,
+            comparator,
+            DEFAULT_SORT_BUFFER_SIZE,
+        ));
+    }
 
-    Ok(Some(Plan::KeyScan(KeyScan {
+    Ok(Some(Planner::KeyScan(KeyScan {
         comparator: table.comp()?,
         pager: Rc::clone(&db.pager),
         source: Box::new(source),
@@ -204,13 +181,13 @@ fn generate_optimised_seq_plan<File: Seek + Write + Read + FileOperations>(
     })))
 }
 
-fn generate_seq_scan_plan<File: Seek + Write + Read + FileOperations>(
+fn generate_seq_scan_plan<File: PlanExecutor>(
     table: &str,
     db: &mut Database<File>,
-) -> Result<Plan<File>, DatabaseError> {
+) -> Result<Planner<File>, DatabaseError> {
     let metadata = db.metadata(table)?;
 
-    Ok(Plan::SeqScan(SeqScan {
+    Ok(Planner::SeqScan(SeqScan {
         cursor: Cursor::new(metadata.root, 0),
         table: metadata.clone(),
         pager: Rc::clone(&db.pager),
@@ -794,3 +771,4 @@ mod tests {
         .assert();
     }
 }
+
