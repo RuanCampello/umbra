@@ -325,4 +325,33 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_sequential_scan_with_projection_when_narrowing() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(35), email VARCHAR(135));",
+        ])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT email, id FROM employees;")?,
+            Planner::Project(Project {
+                source: Box::new(Planner::SeqScan(SeqScan {
+                    cursor: Cursor::new(db.tables["employees"].root, 0),
+                    table: db.tables["employees"].to_owned(),
+                    pager: db.pager()
+                })),
+                input: db.tables["employees"].schema.to_owned(),
+                output: Schema::new(vec![
+                    Column::new("email", Type::Varchar(135)),
+                    Column::primary_key("id", Type::Integer),
+                ]),
+                projection: vec![
+                    Expression::Identifier("email".into()),
+                    Expression::Identifier("id".into())
+                ]
+            })
+        );
+
+        Ok(())
+    }
 }
