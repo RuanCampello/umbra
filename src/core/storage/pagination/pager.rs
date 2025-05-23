@@ -59,7 +59,7 @@ const JOURNAL_PAGE_SIZE: usize = size_of::<u32>();
 const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u32>();
 const JOURNAL_HEADER_SIZE: usize = JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
 
-pub(in crate::core::storage::pagination) const DEFAULT_PAGE_SIZE: usize = 4096;
+pub(crate) const DEFAULT_PAGE_SIZE: usize = 4096;
 const DEFAULT_BUFFERED_PAGES: usize = 10;
 
 #[macro_export]
@@ -147,6 +147,7 @@ impl<File> Pager<File> {
 
     method_builder!(dirty_pages, HashSet<PageNumber>);
     method_builder!(journal_pages, HashSet<PageNumber>);
+    method_builder!(cache, Cache);
 }
 
 impl<File: Seek + Write + Read + FileOperations> Pager<File> {

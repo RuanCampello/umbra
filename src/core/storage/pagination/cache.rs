@@ -83,7 +83,7 @@ use std::mem;
 /// - **Write Tracking**: Dirty pages are identified for disk writes.
 ///
 #[derive(Debug, PartialEq)]
-pub(in crate::core::storage) struct Cache {
+pub(crate) struct Cache {
     /// See [Pager](super::pager::Pager).
     pub page_size: usize,
     /// The maximum number of pages that this cache can handle.

@@ -6,3 +6,5 @@
 mod cache;
 pub(crate) mod io;
 pub(crate) mod pager;
+
+pub(crate) use cache::Cache;

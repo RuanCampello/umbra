@@ -88,7 +88,7 @@ pub(in crate::core) struct CellHeader {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(in crate::core) enum MemoryPage {
+pub(crate) enum MemoryPage {
     Zero(PageZero),
     /// A usual database page contain a [Btree](crate::core::btree::BTree).
     Ordinary(Page),

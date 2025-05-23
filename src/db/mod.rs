@@ -48,6 +48,7 @@ struct PreparedStatement<'db, File: FileOperations> {
     autocommit: bool,
 }
 
+#[derive(Debug, PartialEq)]
 pub(crate) struct QuerySet {
     tuples: Vec<Vec<Value>>,
     schema: Schema,
@@ -646,5 +647,70 @@ impl From<std::io::Error> for DatabaseError {
 impl From<ParserError> for DatabaseError {
     fn from(value: ParserError) -> Self {
         DatabaseError::Parser(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::storage::{
+        pagination::{pager::DEFAULT_PAGE_SIZE, Cache},
+        MemoryBuffer,
+    };
+
+    use super::*;
+
+    struct Configuration {
+        page_size: usize,
+        cache_size: usize,
+    }
+
+    type DatabaseResult = Result<(), DatabaseError>;
+    impl Default for Database<MemoryBuffer> {
+        fn default() -> Self {
+            new_db(Configuration {
+                cache_size: DEFAULT_CACHE_SIZE,
+                page_size: DEFAULT_PAGE_SIZE,
+            })
+            .expect("Couldn't create table with default configuration")
+        }
+    }
+
+    fn new_db(config: Configuration) -> io::Result<Database<MemoryBuffer>> {
+        let Configuration {
+            page_size,
+            cache_size,
+        } = config;
+        let mut pager = Pager::<MemoryBuffer>::default()
+            .page_size(page_size)
+            .cache(Cache::with_max_size(cache_size));
+
+        pager.init()?;
+
+        Ok(Database::new(Rc::new(RefCell::new(pager)), PathBuf::new()))
+    }
+
+    #[test]
+    fn test_create_simple_table() -> DatabaseResult {
+        let mut db = Database::default();
+        let sql = "CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255));";
+
+        db.exec(sql)?;
+
+        let query = db.exec("SELECT * FROM umbra_db_meta;")?;
+
+        assert_eq!(
+            query,
+            QuerySet::new(
+                umbra_schema(),
+                vec![vec![
+                    Value::String("table".into()),
+                    Value::String("users".into()),
+                    Value::Number(1),
+                    Value::String("users".into()),
+                    Value::String(Parser::new(sql).parse_statement()?.to_string())
+                ]]
+            )
+        );
+        Ok(())
     }
 }
