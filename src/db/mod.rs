@@ -713,4 +713,68 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_create_table_with_forced_pk() -> DatabaseResult {
+        let mut db = Database::default();
+        let sql = "CREATE TABLE users (name VARCHAR(255), id INTEGER PRIMARY KEY);";
+
+        db.exec(sql)?;
+        let query = db.exec("SELECT * FROM umbra_db_meta;")?;
+
+        assert_eq!(
+            query,
+            QuerySet::new(
+                umbra_schema(),
+                vec![
+                    vec![
+                        Value::String("table".into()),
+                        Value::String("users".into()),
+                        Value::Number(1),
+                        Value::String("users".into()),
+                        Value::String(Parser::new(sql).parse_statement()?.to_string()),
+                    ],
+                    vec![
+                        Value::String("index".into()),
+                        Value::String("users_pk_index".into()),
+                        Value::Number(2),
+                        Value::String("users".into()),
+                        Value::String(
+                            Parser::new("CREATE UNIQUE INDEX users_pk_index ON users(id);")
+                                .parse_statement()?
+                                .to_string()
+                        )
+                    ],
+                ]
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_on_table() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(255));")?;
+        db.exec("INSERT INTO employees (id, name) VALUES (1, 'John Doe'), (2, 'Mary Dove');")?;
+
+        let query = db.exec("SELECT * FROM employees;")?;
+
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(255))
+                ]),
+                tuples: vec![
+                    vec![Value::Number(1), Value::String("John Doe".into())],
+                    vec![Value::Number(2), Value::String("Mary Dove".into())]
+                ]
+            }
+        );
+
+        Ok(())
+    }
 }
