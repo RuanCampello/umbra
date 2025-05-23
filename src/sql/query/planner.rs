@@ -581,4 +581,89 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_generate_simple_sort() -> PlannerResult {
+        let mut db =
+            new_db(&["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(135), age INT);"])?;
+
+        let page_size = db.db.pager.borrow().page_size;
+        let work_dir = db.db.work_dir.clone();
+        assert_eq!(
+            db.gen_plan("SELECT * FROM users ORDER BY name, age;")?,
+            Planner::Sort(
+                SortBuilder {
+                    page_size,
+                    work_dir: work_dir.clone(),
+                    input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                    comparator: TupleComparator::new(
+                        db.tables["users"].schema.to_owned(),
+                        db.tables["users"].schema.to_owned(),
+                        vec![1, 2]
+                    ),
+                    collection: CollectBuilder {
+                        mem_buff_size: page_size,
+                        work_dir,
+                        schema: db.tables["users"].schema.to_owned(),
+                        source: Box::new(Planner::SeqScan(SeqScan {
+                            pager: db.pager(),
+                            table: db.tables["users"].to_owned(),
+                            cursor: Cursor::new(db.tables["users"].root, 0)
+                        }))
+                    }
+                    .into()
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_sort_with_expressions() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(135), age INT, followers INT);",
+        ])?;
+
+        let mut sort_schema = db.tables["users"].schema.clone();
+        sort_schema.push(Column::new("age + 20", Type::BigInteger));
+        sort_schema.push(Column::new("followers * 5", Type::BigInteger));
+
+        let page_size = db.db.pager.borrow().page_size;
+        let work_dir = db.db.work_dir.clone();
+        assert_eq!(
+            db.gen_plan("SELECT * FROM users ORDER BY name, age + 20, followers * 5;")?,
+            Planner::Sort(
+                SortBuilder {
+                    page_size,
+                    work_dir: work_dir.clone(),
+                    input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                    comparator: TupleComparator::new(
+                        db.tables["users"].schema.clone(),
+                        sort_schema.clone(),
+                        vec![1, 4, 5]
+                    ),
+                    collection: CollectBuilder {
+                        mem_buff_size: page_size,
+                        work_dir,
+                        schema: sort_schema,
+                        source: Box::new(Planner::SortKeys(SortKeys {
+                            expressions: vec![parse_expr("age + 20"), parse_expr("followers * 5")],
+                            schema: db.tables["users"].schema.clone(),
+                            source: Box::new(Planner::SeqScan(SeqScan {
+                                pager: db.pager(),
+                                table: db.tables["users"].to_owned(),
+                                cursor: Cursor::new(db.tables["users"].root, 0)
+                            }))
+                        }))
+                    }
+                    .into()
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
 }
