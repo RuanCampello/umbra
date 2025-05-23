@@ -210,7 +210,8 @@ mod tests {
             statement::{Create, Value},
         },
         vm::planner::{
-            CollectBuilder, ExactMatch, Filter, KeyScan, RangeScan, SeqScan, SortBuilder,
+            CollectBuilder, ExactMatch, Filter, KeyScan, RangeScan, RangeScanBuilder, SeqScan,
+            SortBuilder,
         },
     };
 
@@ -489,6 +490,55 @@ mod tests {
                 }))),
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_simple_range_scan() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(135));"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM employees WHERE id < 5;")?,
+            Planner::RangeScan(RangeScan::from(RangeScanBuilder {
+                emit_only_key: false,
+                pager: db.pager(),
+                expr: parse_expr("id < 5"),
+                relation: Relation::Table(db.tables["employees"].to_owned()),
+                range: (
+                    Bound::Unbounded,
+                    Bound::Excluded(serialize(&Type::Integer, &Value::Number(5)))
+                )
+            }))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_range_scan_applying_filter() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(135));"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM users WHERE id < 5 AND name = 'john';")?,
+            Planner::Filter(Filter {
+                filter: parse_expr("name = 'john'"),
+                schema: db.tables["users"].schema.to_owned(),
+                source: Box::new(Planner::RangeScan(
+                    RangeScanBuilder {
+                        emit_only_key: false,
+                        pager: db.pager(),
+                        expr: parse_expr("id < 5"),
+                        relation: Relation::Table(db.tables["users"].to_owned()),
+                        range: (
+                            Bound::Unbounded,
+                            Bound::Excluded(serialize(&Type::Integer, &Value::Number(5)))
+                        )
+                    }
+                    .into()
+                ))
+            })
+        );
+
         Ok(())
     }
 }

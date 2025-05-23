@@ -197,6 +197,15 @@ pub(crate) struct TupleComparator {
 }
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct RangeScanBuilder<File: FileOperations> {
+    pub pager: Rc<RefCell<Pager<File>>>,
+    pub relation: Relation,
+    pub range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
+    pub expr: Expression,
+    pub emit_only_key: bool,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct SortBuilder<File: FileOperations> {
     pub page_size: usize,
     pub work_dir: PathBuf,
@@ -447,6 +456,33 @@ impl<File: PlanExecutor> Execute for RangeScan<File> {
         }
 
         Ok(Some(tuple))
+    }
+}
+
+impl<File: FileOperations> From<RangeScanBuilder<File>> for RangeScan<File> {
+    fn from(value: RangeScanBuilder<File>) -> Self {
+        let RangeScanBuilder {
+            relation,
+            emit_only_key,
+            range,
+            pager,
+            expr,
+        } = value;
+
+        Self {
+            emit_only_key,
+            range,
+            expr,
+            pager,
+            init: false,
+            done: false,
+            relation: relation.clone(),
+            index: relation.index(),
+            schema: relation.schema().clone(),
+            comparator: relation.comp(),
+            root: relation.root(),
+            cursor: Cursor::new(relation.root(), 0),
+        }
     }
 }
 
