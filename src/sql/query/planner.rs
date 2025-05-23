@@ -541,4 +541,44 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_sequential_scan_if_unbounded_ranges() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(135));"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM users WHERE (id > 10 OR id < 15) OR id > 24;")?,
+            Planner::Filter(Filter {
+                filter: parse_expr("(id > 10 OR id < 15) OR id > 24"),
+                schema: db.tables["users"].schema.clone(),
+                source: Box::new(Planner::SeqScan(SeqScan {
+                    table: db.tables["users"].to_owned(),
+                    pager: db.pager(),
+                    cursor: Cursor::new(db.tables["users"].root, 0)
+                }))
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sequencial_scan_if_intersection_cancels_ranges() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(135));"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM users WHERE (id < 5 OR id > 10) AND id = 8;")?,
+            Planner::Filter(Filter {
+                schema: db.tables["users"].schema.clone(),
+                filter: parse_expr("(id < 5 OR id > 10) AND id = 8"),
+                source: Box::new(Planner::SeqScan(SeqScan {
+                    pager: db.pager(),
+                    table: db.tables["users"].to_owned(),
+                    cursor: Cursor::new(db.tables["users"].root, 0),
+                }))
+            })
+        );
+
+        Ok(())
+    }
 }
