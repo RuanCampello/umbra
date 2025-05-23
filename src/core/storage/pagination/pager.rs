@@ -5,6 +5,7 @@ use crate::core::storage::btree::Content;
 use crate::core::storage::page::overflow::OverflowPage;
 use crate::core::storage::page::zero::{PageZero, DATABASE_IDENTIFIER};
 use crate::core::storage::page::{Cell, MemoryPage, Page, PageConversion, PageNumber, SlotId};
+use crate::db::DatabaseError;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::fmt::{Debug, Formatter};
@@ -45,7 +46,15 @@ struct Journal<File> {
     file: Option<File>,
 }
 
+#[derive(PartialEq)]
+struct JournalPagesIter<'journal, File> {
+    journal: &'journal mut Journal<File>,
+    cursor: usize,
+    eof: bool,
+}
+
 const JOURNAL_SIZE: usize = size_of::<u64>();
+const JOURNAL_ID_SIZE: usize = size_of::<u64>();
 const JOURNAL_PAGE_SIZE: usize = size_of::<u32>();
 const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u32>();
 const JOURNAL_HEADER_SIZE: usize = JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
@@ -219,6 +228,28 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         }
 
         Ok(())
+    }
+
+    pub fn rollback(&mut self) -> Result<usize, DatabaseError> {
+        self.journal.open_if_exists()?;
+
+        let mut pages_rolled_back = 0;
+        let mut journal_pages = self.journal.iter()?;
+
+        while let Some((page_number, content)) = journal_pages.try_next()? {
+            self.file.write(page_number, content)?;
+            self.cache.invalidate(page_number);
+            self.dirty_pages.remove(&page_number);
+            pages_rolled_back += 1;
+        }
+
+        self.file.flush()?;
+        self.file.save()?;
+
+        self.journal_pages.clear();
+        self.journal.invalidate()?;
+
+        Ok(pages_rolled_back)
     }
 
     /// Adds a given page to the `free` list.
@@ -509,11 +540,113 @@ impl<File: FileOperations> Journal<File> {
         Ok(())
     }
 
+    /// Opens the journal file only if its not already open and exists.
+    pub fn open_if_exists(&mut self) -> io::Result<()> {
+        if self.file.is_some() {
+            return Ok(());
+        }
+
+        if self.path.is_file() {
+            self.file = Some(File::open(&self.path)?);
+        }
+
+        Ok(())
+    }
+
     fn sync(&mut self) -> io::Result<()> {
         self.file.as_mut().unwrap().save()
     }
 }
 
+impl<File: Seek + Read> Journal<File> {
+    fn iter(&mut self) -> io::Result<JournalPagesIter<'_, File>> {
+        if let Some(file) = self.file.as_mut() {
+            file.rewind()?;
+        };
+
+        Ok(JournalPagesIter {
+            journal: self,
+            cursor: JOURNAL_HEADER_SIZE,
+            eof: false,
+        })
+    }
+}
+
+impl<'journal, File: Read> JournalPagesIter<'journal, File> {
+    fn try_next(&mut self) -> Result<Option<(PageNumber, &[u8])>, DatabaseError> {
+        if self.eof {
+            return Ok(None);
+        }
+
+        let corrupted_err = || {
+            DatabaseError::Corrupted(
+                "Journal file is corrupted or something went wrong there".into(),
+            )
+        };
+
+        if self.cursor >= self.journal.buffer.len() {
+            let Some(file) = self.journal.file.as_mut() else {
+                self.eof = true;
+                return Ok(None);
+            };
+
+            let mut header_b = [0; JOURNAL_HEADER_SIZE];
+            let bytes = file.read(&mut header_b)?;
+
+            if bytes == 0 {
+                self.eof = true;
+                return Ok(None);
+            }
+
+            if bytes != header_b.len() {
+                return Err(corrupted_err());
+            }
+
+            let id = u64::from_le_bytes(header_b[..JOURNAL_ID_SIZE].try_into().unwrap());
+            if id.ne(&self.journal.journal_number) {
+                return Err(corrupted_err());
+            }
+
+            let number_pages = u32::from_le_bytes(header_b[JOURNAL_ID_SIZE..].try_into().unwrap());
+            let total_b = journal_page_size(self.journal.page_size) * number_pages as usize;
+
+            self.journal.buffer.resize(JOURNAL_HEADER_SIZE + total_b, 0);
+
+            if file
+                .read(&mut self.journal.buffer[JOURNAL_HEADER_SIZE..])?
+                .ne(&total_b)
+            {
+                return Err(corrupted_err());
+            }
+
+            self.journal.buffered_pages = 0;
+            self.cursor = JOURNAL_HEADER_SIZE;
+        }
+
+        let page_number = u32::from_le_bytes(
+            self.journal.buffer[self.cursor..self.cursor + JOURNAL_PAGE_SIZE]
+                .try_into()
+                .unwrap(),
+        );
+        self.cursor += JOURNAL_PAGE_SIZE;
+
+        let page_b = &self.journal.buffer[self.cursor..self.cursor + self.journal.page_size];
+        self.cursor += self.journal.page_size;
+
+        let checksum = u32::from_le_bytes(
+            self.journal.buffer[self.cursor..self.cursor + JOURNAL_CHECKSUM_SIZE]
+                .try_into()
+                .unwrap(),
+        );
+        self.cursor += JOURNAL_CHECKSUM_SIZE;
+
+        if checksum != (self.journal.journal_number.wrapping_add(page_number as _)) as u32 {
+            return Err(corrupted_err());
+        }
+
+        Ok(Some((page_number, page_b)))
+    }
+}
 /// Joins a given page [content](Content) into a contiguous memory space.
 pub(crate) fn reassemble_content<File: Seek + Write + Read + FileOperations>(
     pager: &mut Pager<File>,

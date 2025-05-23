@@ -216,7 +216,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
     }
 
     fn rollback(&mut self) -> Result<usize, DatabaseError> {
-        todo!()
+        self.transaction_state = TransactionState::Terminated;
+        self.pager.borrow_mut().rollback()
     }
 
     fn load_metadata(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
