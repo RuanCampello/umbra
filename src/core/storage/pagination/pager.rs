@@ -59,8 +59,8 @@ const JOURNAL_PAGE_SIZE: usize = size_of::<u32>();
 const JOURNAL_CHECKSUM_SIZE: usize = size_of::<u32>();
 const JOURNAL_HEADER_SIZE: usize = JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
 
-pub(crate) const DEFAULT_PAGE_SIZE: usize = 4096;
 const DEFAULT_BUFFERED_PAGES: usize = 10;
+pub(crate) const DEFAULT_PAGE_SIZE: usize = 4096;
 
 #[macro_export]
 macro_rules! method_builder {
@@ -648,6 +648,7 @@ impl<'journal, File: Read> JournalPagesIter<'journal, File> {
         Ok(Some((page_number, page_b)))
     }
 }
+
 /// Joins a given page [content](Content) into a contiguous memory space.
 pub(crate) fn reassemble_content<File: Seek + Write + Read + FileOperations>(
     pager: &mut Pager<File>,

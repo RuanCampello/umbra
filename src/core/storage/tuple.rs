@@ -68,6 +68,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             let endian_b = num.to_be_bytes();
             buff.extend_from_slice(&endian_b[endian_b.len() - b_len..]);
         }
+        // TODO: checkout why this values are not coming already with the date parsed
         (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
         (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
         (Type::DateTime, Value::String(datetime)) => {

@@ -815,4 +815,74 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_select_where() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE products (id INT PRIMARY KEY, validity DATE, price INT);")?;
+        db.exec(
+            r#"
+            INSERT INTO products (id, validity, price) 
+            VALUES (1, '2030-12-24', 2*30), (2, '2029-02-13', 100 / (3+2)), (3, '2028-07-02', 25);
+        "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM products WHERE price > 20;")?;
+
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("validity", Type::Date),
+                    Column::new("price", Type::Integer)
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::Date(NaiveDate::parse_str("2030-12-24").unwrap()),
+                        Value::Number(60),
+                    ],
+                    vec![
+                        Value::Number(3),
+                        Value::Date(NaiveDate::parse_str("2028-07-02").unwrap()),
+                        Value::Number(25),
+                    ]
+                ]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sleect_with_different_order() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(135), age INT);")?;
+        db.exec(
+            r#"
+            INSERT INTO users (id, name, age) VALUES (1, 'John Doe', 22), (2, 'Mary Dove', 27);
+        "#,
+        )?;
+
+        let query = db.exec("SELECT age, name FROM users;")?;
+
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::new("age", Type::Integer),
+                    Column::new("name", Type::Varchar(135)),
+                ]),
+                tuples: vec![
+                    vec![Value::Number(22), Value::String("John Doe".into())],
+                    vec![Value::Number(27), Value::String("Mary Dove".into())]
+                ]
+            }
+        );
+
+        Ok(())
+    }
 }
