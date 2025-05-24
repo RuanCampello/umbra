@@ -578,7 +578,7 @@ impl<File: PlanExecutor> Execute for Sort<File> {
 
 impl<File: PlanExecutor> Sort<File> {
     fn sort(&mut self) -> Result<(), DatabaseError> {
-        if self.collection.reader.is_some() {
+        if self.collection.reader.is_none() {
             self.output_buffer =
                 std::mem::replace(&mut self.collection.mem_buff, TupleBuffer::empty());
 

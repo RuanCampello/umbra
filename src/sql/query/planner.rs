@@ -76,8 +76,6 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     sorted_indexes.push(index)
                 }
 
-                println!("sorted indexes {sorted_indexes:#?} sorted schema {sorted_schema:#?}");
-
                 let collect_source = match sorted_schema.len() > table.schema.len() {
                     true => Planner::SortKeys(SortKeys {
                         expressions: order_by

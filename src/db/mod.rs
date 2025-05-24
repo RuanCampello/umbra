@@ -933,12 +933,12 @@ mod tests {
         db.exec(
             r#"
             INSERT INTO employees(id, name, age) 
-            VALUES (3, 'John Doe', 27), (2, 'Paul Dean', 22), (1, 'Paul Dean', 20);
+            VALUES (3, 'John Doe', 27), (2, 'Mary Dove', 22), (1, 'Paul Dean', 20);
         "#,
         )?;
 
-        let query = db.exec("SELECT * FROM employees ORDER BY name, age;")?;
-        println!("query result {query:#?}");
+        let query = db.exec("SELECT * FROM employees ORDER BY age, name;")?;
+        println!("query {query:#?}");
 
         assert_eq!(
             query,
@@ -956,7 +956,7 @@ mod tests {
                     ],
                     vec![
                         Value::Number(2),
-                        Value::String("Paul Dean".into()),
+                        Value::String("Mary Dove".into()),
                         Value::Number(22)
                     ],
                     vec![
