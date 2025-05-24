@@ -88,6 +88,11 @@ pub trait Parse: Sized {
     fn timestamp(&self) -> i64;
 }
 
+/// This serializes the date types into a compact binary format.
+pub trait Serialize {
+    fn serialize(&self, buff: &mut Vec<u8>);
+}
+
 impl Parse for NaiveDateTime {
     fn parse_str(date: &str) -> DateError<Self> {
         if date.len() != 19 {
@@ -109,6 +114,23 @@ impl Parse for NaiveDateTime {
     #[inline(always)]
     fn timestamp(&self) -> i64 {
         self.date.timestamp() + self.time.timestamp()
+    }
+}
+
+impl Serialize for NaiveDateTime {
+    fn serialize(&self, buff: &mut Vec<u8>) {
+        self.date.serialize(buff);
+        self.time.serialize(buff);
+    }
+}
+
+impl TryFrom<([u8; 4], [u8; 3])> for NaiveDateTime {
+    type Error = std::io::Error;
+    fn try_from((date_bytes, time_bytes): ([u8; 4], [u8; 3])) -> Result<Self, Self::Error> {
+        Ok(Self {
+            date: NaiveDate::try_from(date_bytes)?,
+            time: NaiveTime::from(time_bytes),
+        })
     }
 }
 
@@ -241,6 +263,27 @@ impl Parse for NaiveDate {
     }
 }
 
+impl Serialize for NaiveDate {
+    fn serialize(&self, buff: &mut Vec<u8>) {
+        buff.extend_from_slice(&self.yof.get().to_le_bytes());
+    }
+}
+
+impl TryFrom<[u8; 4]> for NaiveDate {
+    type Error = std::io::Error;
+    fn try_from(bytes: [u8; 4]) -> Result<Self, Self::Error> {
+        let yof = i32::from_le_bytes(bytes);
+        let date = NonZeroI32::new(yof).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidFilename,
+                "Received zero value in date",
+            )
+        })?;
+
+        Ok(Self { yof: date })
+    }
+}
+
 impl Display for NaiveDate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}-{:02}-{:02}", self.year(), self.month(), self.day())
@@ -299,6 +342,18 @@ impl Parse for NaiveTime {
     #[inline(always)]
     fn timestamp(&self) -> i64 {
         (self.hour() as i64) * 3600 + (self.minute() as i64) * 60 + (self.second() as i64)
+    }
+}
+
+impl Serialize for NaiveTime {
+    fn serialize(&self, buff: &mut Vec<u8>) {
+        buff.extend_from_slice(&self.hms.0);
+    }
+}
+
+impl From<[u8; 3]> for NaiveTime {
+    fn from(bytes: [u8; 3]) -> Self {
+        Self { hms: u24(bytes) }
     }
 }
 

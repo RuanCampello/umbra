@@ -652,9 +652,12 @@ impl From<ParserError> for DatabaseError {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::storage::{
-        pagination::{pager::DEFAULT_PAGE_SIZE, Cache},
-        MemoryBuffer,
+    use crate::core::{
+        date::{NaiveDate, Parse},
+        storage::{
+            pagination::{pager::DEFAULT_PAGE_SIZE, Cache},
+            MemoryBuffer,
+        },
     };
 
     use super::*;
@@ -771,6 +774,41 @@ mod tests {
                 tuples: vec![
                     vec![Value::Number(1), Value::String("John Doe".into())],
                     vec![Value::Number(2), Value::String("Mary Dove".into())]
+                ]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_with_expression() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE products (id INT PRIMARY KEY, validity DATE, price INT);")?;
+        db.exec("INSERT INTO products (id, validity, price) VALUES (1, '2030-12-24', 2*30), (2, '2029-02-13', 100 / (3+2));")?;
+
+        let query = db.exec("SELECT * FROM products;")?;
+
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("validity", Type::Date),
+                    Column::new("price", Type::Integer)
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::Date(NaiveDate::parse_str("2030-12-24").unwrap()),
+                        Value::Number(60),
+                    ],
+                    vec![
+                        Value::Number(2),
+                        Value::Date(NaiveDate::parse_str("2029-02-13").unwrap()),
+                        Value::Number(20),
+                    ]
                 ]
             }
         );

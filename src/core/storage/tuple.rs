@@ -3,8 +3,14 @@ use std::{
     mem,
 };
 
-use crate::db::{RowId, Schema};
-use crate::sql::statement::{Type, Value};
+use crate::{
+    core::date::{NaiveDate, NaiveTime, Parse},
+    sql::statement::{Type, Value},
+};
+use crate::{
+    core::date::{NaiveDateTime, Serialize},
+    db::{RowId, Schema},
+};
 
 /// Returns the byte length of a given SQL [`Type`].
 pub(crate) fn byte_len_of_type(data_type: &Type) -> usize {
@@ -61,6 +67,11 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             let b_len = byte_len_of_type(int);
             let endian_b = num.to_be_bytes();
             buff.extend_from_slice(&endian_b[endian_b.len() - b_len..]);
+        }
+        (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
+        (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
+        (Type::DateTime, Value::String(datetime)) => {
+            NaiveDateTime::parse_str(datetime).unwrap().serialize(buff)
         }
         _ => unimplemented!("Tried to call serialize from {value} into {type}"),
     }
@@ -153,9 +164,14 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             Ok(Value::Number(i128::from_be_bytes(big_endian)))
         }
 
-        date @ (Type::Date | Type::Time | Type::DateTime) => {
-            todo!()
-        }
+        date @ (Type::Date | Type::Time | Type::DateTime) => match date {
+            Type::Date => {
+                let mut bytes = [0; 4];
+                reader.read_exact(&mut bytes)?;
+                Ok(Value::Date(NaiveDate::try_from(bytes)?))
+            }
+            _ => todo!(),
+        },
     });
 
     values.collect()
