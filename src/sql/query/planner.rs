@@ -76,6 +76,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     sorted_indexes.push(index)
                 }
 
+                println!("sorted indexes {sorted_indexes:#?} sorted schema {sorted_schema:#?}");
+
                 let collect_source = match sorted_schema.len() > table.schema.len() {
                     true => Planner::SortKeys(SortKeys {
                         expressions: order_by
@@ -662,6 +664,21 @@ mod tests {
                 }
                 .into()
             )
+        );
+
+        Ok(())
+    }
+
+    fn test_ignore_sorting_if_order_by() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT * FROM users ORDER BY id;")?,
+            Planner::SeqScan(SeqScan {
+                pager: db.pager(),
+                table: db.tables["users"].to_owned(),
+                cursor: Cursor::new(db.tables["users"].root, 0),
+            })
         );
 
         Ok(())

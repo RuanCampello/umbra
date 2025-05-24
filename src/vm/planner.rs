@@ -581,6 +581,7 @@ impl<File: PlanExecutor> Sort<File> {
         if self.collection.reader.is_some() {
             self.output_buffer =
                 std::mem::replace(&mut self.collection.mem_buff, TupleBuffer::empty());
+
             self.output_buffer
                 .sort_by(|tuple, other| self.comparator.cmp(tuple, other));
 

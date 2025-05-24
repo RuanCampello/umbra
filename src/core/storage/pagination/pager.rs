@@ -131,6 +131,11 @@ impl<File> Pager<File> {
         self
     }
 
+    pub fn file(mut self, file: File) -> Self {
+        self.file = BlockIo::new(file, self.block_size, self.page_size);
+        self
+    }
+
     /// Update all instances that use `page_size` to the new `page_size`.
     fn update_pages_size(&mut self, page_size: usize) {
         self.page_size = page_size;

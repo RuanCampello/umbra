@@ -685,7 +685,9 @@ mod tests {
         } = config;
         let mut pager = Pager::<MemoryBuffer>::default()
             .page_size(page_size)
-            .cache(Cache::with_max_size(cache_size));
+            .block_size(page_size)
+            .cache(Cache::with_max_size(cache_size))
+            .file(io::Cursor::new(Vec::<u8>::new()));
 
         pager.init()?;
 
@@ -857,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sleect_with_different_order() -> DatabaseResult {
+    fn test_select_with_different_order() -> DatabaseResult {
         let mut db = Database::default();
 
         db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(135), age INT);")?;
@@ -879,6 +881,89 @@ mod tests {
                 tuples: vec![
                     vec![Value::Number(22), Value::String("John Doe".into())],
                     vec![Value::Number(27), Value::String("Mary Dove".into())]
+                ]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_many() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(135));")?;
+
+        let mut expected = Vec::new();
+        for i in 1..500 {
+            expected.push(vec![
+                Value::Number(i),
+                Value::String(format!("employee_{i}")),
+            ]);
+        }
+
+        for employee in expected.iter().rev() {
+            db.exec(&format!(
+                "INSERT INTO employees (id, name) VALUES ({}, {});",
+                employee[0], employee[1]
+            ))?;
+        }
+
+        let query = db.exec("SELECT * FROM employees;")?;
+
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(135))
+                ]),
+                tuples: expected,
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_with_order_by() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(135), age INT);")?;
+        db.exec(
+            r#"
+            INSERT INTO employees(id, name, age) 
+            VALUES (3, 'John Doe', 27), (2, 'Paul Dean', 22), (1, 'Paul Dean', 20);
+        "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM employees ORDER BY name, age;")?;
+        println!("query result {query:#?}");
+
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(135)),
+                    Column::new("age", Type::Integer),
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::String("Paul Dean".into()),
+                        Value::Number(20)
+                    ],
+                    vec![
+                        Value::Number(2),
+                        Value::String("Paul Dean".into()),
+                        Value::Number(22)
+                    ],
+                    vec![
+                        Value::Number(3),
+                        Value::String("John Doe".into()),
+                        Value::Number(27)
+                    ]
                 ]
             }
         );
