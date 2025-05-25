@@ -1134,4 +1134,64 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_delete_where_with_range() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(135), age INT, email VARCHAR(255) UNIQUE);")?;
+        const SEEDING_QUERY: &str = r#"
+            INSERT INTO employees (id, name, age, email) VALUES 
+            (1, 'John Doe', 25, 'johndoe@email.com'),
+            (2, 'Mary Dove', 37, 'marydove@email.com'),
+            (3, 'Paul Dean', 19, 'pauldean@email.com');
+        "#;
+        const SELECT_QUERY: &str = "SELECT * FROM employees;";
+        let schema = Schema::new(vec![
+            Column::primary_key("id", Type::Integer),
+            Column::new("name", Type::Varchar(135)),
+            Column::new("age", Type::Integer),
+            Column::unique("email", Type::Varchar(255)),
+        ]);
+
+        db.exec(SEEDING_QUERY)?;
+        db.exec("DELETE FROM employees WHERE age <= 30;")?;
+
+        let query = db.exec(SELECT_QUERY)?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: schema.clone(),
+                tuples: vec![vec![
+                    Value::Number(2),
+                    Value::String("Mary Dove".into()),
+                    Value::Number(37),
+                    Value::String("marydove@email.com".into())
+                ]]
+            }
+        );
+
+        db.exec("DELETE FROM employees;")?;
+        let query = db.exec(SELECT_QUERY)?;
+        assert!(query.is_empty());
+
+        db.exec(SEEDING_QUERY)?;
+        db.exec("DELETE FROM employees WHERE email <= 'marydove@email.com';")?;
+
+        let query = db.exec(SELECT_QUERY)?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema,
+                tuples: vec![vec![
+                    Value::Number(3),
+                    Value::String("Paul Dean".into()),
+                    Value::Number(19),
+                    Value::String("pauldean@email.com".into())
+                ]]
+            }
+        );
+
+        Ok(())
+    }
 }
