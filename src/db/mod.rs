@@ -165,7 +165,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
     pub(crate) fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
         let query = self.exec(&format!(
-            "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index'"
+            "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index';"
         ))?;
 
         if query.is_empty() {
@@ -1250,6 +1250,56 @@ mod tests {
                 ]]
             }
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_with_auto_index() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("
+            CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(135), age INT, email VARCHAR(255) UNIQUE);
+        ")?;
+        db.exec(
+            r#"INSERT INTO employees (id, name, age, email) VALUES 
+            (1, 'John Doe', 25, 'johndoe@email.com'),
+            (2, 'Mary Dove', 37, 'marydove@email.com'),
+            (3, 'Paul Dean', 19, 'pauldean@email.com');
+        "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM employees WHERE id >= 2;")?;
+        assert_eq!(query.tuples.len(), 2);
+
+        db.exec("DELETE FROM employees WHERE id >= 2;")?;
+        let query = db.exec("SELECT * FROM employees;")?;
+
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(135)),
+                    Column::new("age", Type::Integer),
+                    Column::unique("email", Type::Varchar(255)),
+                ]),
+                tuples: vec![vec![
+                    Value::Number(1),
+                    Value::String("John Doe".into()),
+                    Value::Number(25),
+                    Value::String("johndoe@email.com".into())
+                ]]
+            }
+        );
+
+        db.assert_index_contains(
+            "employees_email_uq_index",
+            &[vec![
+                Value::String("johndoe@email.com".into()),
+                Value::Number(1),
+            ]],
+        )?;
 
         Ok(())
     }
