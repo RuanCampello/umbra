@@ -1303,4 +1303,66 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_delete_without_match() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(255), birth_date DATE, email VARCHAR(255) UNIQUE);",
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO employees (id, name, birth_date, email) VALUES 
+            (1, 'John Doe', '1995-03-01', 'johndoe@email.com'),
+            (2, 'Mary Dove', '2000-04-24', 'marydove@email.com'),
+            (3, 'Paul Dean', '1999-01-27', 'pauldean@email.com');
+        "#,
+        )?;
+        db.exec("DELETE FROM employees WHERE id >= 4;")?;
+
+        let query = db.exec("SELECT * FROM employees;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(255)),
+                    Column::new("birth_date", Type::Date),
+                    Column::unique("email", Type::Varchar(255))
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::String("John Doe".into()),
+                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap()),
+                        Value::String("johndoe@email.com".into())
+                    ],
+                    vec![
+                        Value::Number(2),
+                        Value::String("Mary Dove".into()),
+                        Value::Date(NaiveDate::parse_str("2000-04-24").unwrap()),
+                        Value::String("marydove@email.com".into())
+                    ],
+                    vec![
+                        Value::Number(3),
+                        Value::String("Paul Dean".into()),
+                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap()),
+                        Value::String("pauldean@email.com".into())
+                    ]
+                ]
+            }
+        );
+
+        db.assert_index_contains(
+            "employees_email_uq_index",
+            &[
+                vec![Value::String("johndoe@email.com".into()), Value::Number(1)],
+                vec![Value::String("marydove@email.com".into()), Value::Number(2)],
+                vec![Value::String("pauldean@email.com".into()), Value::Number(3)],
+            ],
+        )?;
+
+        Ok(())
+    }
 }
