@@ -1134,7 +1134,6 @@ mod tests {
         let mut db = Database::default();
 
         db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(135), age INT);")?;
-
         db.exec(
             r#"
             INSERT INTO employees (id, name, age) VALUES 
@@ -1362,6 +1361,44 @@ mod tests {
                 vec![Value::String("pauldean@email.com".into()), Value::Number(3)],
             ],
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_where_with_multiple_ranges() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE users (id INT PRIMARY KEY, email VARCHAR(255) UNIQUE);")?;
+        db.exec(
+            r#"
+            INSERT INTO users (id, email) VALUES
+            (1, 'johndoe@email.com'),
+            (2, 'marydove@email.com'),
+            (3, 'pauldean@email.com'),
+            (4, 'philipdahmer@email.com'),
+            (5, 'katedavis@email.com');
+        "#,
+        )?;
+        db.exec("DELETE FROM users WHERE id >= 2 AND id <= 3 OR id > 4;")?;
+
+        let query = db.exec("SELECT * FROM users;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::unique("email", Type::Varchar(255))
+                ]),
+                tuples: vec![
+                    vec![Value::Number(1), Value::String("johndoe@email.com".into())],
+                    vec![
+                        Value::Number(4),
+                        Value::String("philipdahmer@email.com".into())
+                    ]
+                ]
+            }
+        );
 
         Ok(())
     }
