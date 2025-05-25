@@ -7,7 +7,7 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
+use crate::db::{DatabaseError, Exec, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{join, Assignment, Expression, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
@@ -42,6 +42,7 @@ pub(crate) enum Planner<File: FileOperations> {
     Sort(Sort<File>),
     Insert(Insert<File>),
     Update(Update<File>),
+    Delete(Delete<File>),
     SortKeys(SortKeys<File>),
     Project(Project<File>),
     Collect(Collect<File>),
@@ -132,6 +133,14 @@ pub(crate) struct Update<File: FileOperations> {
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
     pub comparator: FixedSizeCmp,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Delete<File: FileOperations> {
+    pub table: TableMetadata,
+    pub comparator: FixedSizeCmp,
+    pub pager: Rc<RefCell<Pager<File>>>,
+    pub source: Box<Planner<File>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -245,6 +254,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Sort(sort) => sort.try_next(),
             Self::Insert(insert) => insert.try_next(),
             Self::Update(update) => update.try_next(),
+            Self::Delete(delete) => delete.try_next(),
             Self::SortKeys(keys) => keys.try_next(),
             Self::Project(projection) => projection.try_next(),
             Self::Collect(collection) => collection.try_next(),
@@ -261,6 +271,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Sort(sort) => &sort.collection.source,
             Self::Insert(insert) => &insert.source,
             Self::Update(update) => &update.source,
+            Self::Delete(delete) => &delete.source,
             Self::SortKeys(keys) => &keys.source,
             Self::Collect(collection) => &collection.source,
             _ => return None,
@@ -268,7 +279,7 @@ impl<File: FileOperations> Planner<File> {
     }
 
     fn display(&self) -> String {
-        let prefix = "->";
+        let prefix = "-> ";
 
         let display = match self {
             Self::SeqScan(seq) => format!("{seq}"),
@@ -280,6 +291,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Sort(sort) => format!("{sort}"),
             Self::Insert(insert) => format!("{insert}"),
             Self::Update(update) => format!("{update}"),
+            Self::Delete(delete) => format!("{delete}"),
             Self::SortKeys(keys) => format!("{keys}"),
             Self::Project(projection) => format!("{projection}"),
             Self::Collect(collection) => format!("{collection}"),
@@ -934,6 +946,37 @@ impl<File: PlanExecutor> Execute for Update<File> {
     }
 }
 
+impl<File: PlanExecutor> Execute for Delete<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let Some(tuple) = self.source.try_next()? else {
+            return Ok(None);
+        };
+
+        let mut pager = self.pager.borrow_mut();
+        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator.clone());
+
+        btree.remove(&tuple::serialize(
+            &self.table.schema.columns[0].data_type,
+            &tuple[0],
+        ))?;
+
+        for index in &self.table.indexes {
+            let col = self.table.schema.index_of(&index.column.name).unwrap();
+            let key = tuple::serialize(&index.column.data_type, &tuple[col]);
+
+            let mut btree = BTree::new(
+                &mut pager,
+                index.root,
+                BTreeKeyCmp::from(&index.column.data_type),
+            );
+
+            btree.remove(&key)?;
+        }
+
+        Ok(Some(vec![]))
+    }
+}
+
 impl<File: PlanExecutor> Execute for SortKeys<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         let Some(mut tuple) = self.source.try_next()? else {
@@ -1485,6 +1528,12 @@ impl<File: FileOperations> Display for Update<File> {
             join(&self.assigments, ", "),
             self.table.name
         )
+    }
+}
+
+impl<File: FileOperations> Display for Delete<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Delete from table {}", self.table.name)
     }
 }
 

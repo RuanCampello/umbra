@@ -7,7 +7,7 @@ use std::{
 use crate::{
     core::storage::page,
     vm::planner::{
-        Collect, CollectBuilder, Project, SortBuilder, TupleComparator, Update,
+        Collect, CollectBuilder, Delete, Project, SortBuilder, TupleComparator, Update,
         DEFAULT_SORT_BUFFER_SIZE,
     },
 };
@@ -159,6 +159,33 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 source: Box::new(source),
             })
         }
+
+        Statement::Delete { from, r#where } => {
+            let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
+            let work_dir = db.work_dir.clone();
+            let page_size = db.pager.borrow().page_size;
+            let metadata = db.metadata(&from)?;
+
+            if needs_collection(&source) {
+                source = Planner::Collect(
+                    CollectBuilder {
+                        work_dir,
+                        mem_buff_size: page_size,
+                        source: Box::new(source),
+                        schema: metadata.schema.clone(),
+                    }
+                    .into(),
+                );
+            }
+
+            Planner::Delete(Delete {
+                table: metadata.clone(),
+                comparator: metadata.comp()?,
+                pager: Rc::clone(&db.pager),
+                source: Box::new(source),
+            })
+        }
+
         other => {
             return Err(DatabaseError::Other(format!(
                 "Statement {other} not implemented or supported for this"

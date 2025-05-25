@@ -589,6 +589,10 @@ impl QuerySet {
     fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
         Self { schema, tuples }
     }
+
+    fn is_empty(&self) -> bool {
+        self.tuples.iter().all(|tuple| tuple.is_empty())
+    }
 }
 impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     fn from(columns: Col) -> Self {
@@ -1062,6 +1066,34 @@ mod tests {
                 ]
             }
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(135), age INT);")?;
+
+        db.exec(
+            r#"
+            INSERT INTO employees (id, name, age) VALUES 
+            (1, 'John Doe', 25),
+            (2, 'Mary Dove', 37),
+            (3, 'Paul Dean', 19);
+        "#,
+        )?;
+
+        let query = db.exec("DELETE FROM employees;")?;
+
+        println!(
+            "tuples {:#?} {}",
+            query.tuples,
+            query.tuples.iter().all(|tuple| tuple.is_empty())
+        );
+
+        assert!(query.is_empty());
 
         Ok(())
     }
