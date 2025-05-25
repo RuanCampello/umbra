@@ -162,6 +162,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
         Statement::Delete { from, r#where } => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
+
             let work_dir = db.work_dir.clone();
             let page_size = db.pager.borrow().page_size;
             let metadata = db.metadata(&from)?;

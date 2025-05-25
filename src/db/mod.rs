@@ -1086,14 +1086,51 @@ mod tests {
         )?;
 
         let query = db.exec("DELETE FROM employees;")?;
-
-        println!(
-            "tuples {:#?} {}",
-            query.tuples,
-            query.tuples.iter().all(|tuple| tuple.is_empty())
-        );
-
         assert!(query.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_with_where() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(135), birth_date DATE);",
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO employees (id, name, birth_date) VALUES 
+            (1, 'John Doe', '1995-03-01'),
+            (2, 'Mary Dove', '2000-04-24'),
+            (3, 'Paul Dean', '1999-01-27');
+        "#,
+        )?;
+        db.exec("DELETE FROM employees WHERE id = 2;")?;
+
+        let query = db.exec("SELECT * FROM employees;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(135)),
+                    Column::new("birth_date", Type::Date)
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::String("John Doe".into()),
+                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap())
+                    ],
+                    vec![
+                        Value::Number(3),
+                        Value::String("Paul Dean".into()),
+                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap())
+                    ]
+                ]
+            }
+        );
 
         Ok(())
     }
