@@ -163,6 +163,34 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(query_set)
     }
 
+    pub(crate) fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
+        let query = self.exec(&format!(
+            "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index'"
+        ))?;
+
+        if query.is_empty() {
+            return Err(SqlError::Other(format!("Index '{index}' does not exists")).into());
+        }
+
+        let table_name = query
+            .get(0, "table_name")
+            .map(|value| match value {
+                Value::String(name) => name,
+                _ => unreachable!(),
+            })
+            .unwrap();
+
+        let metadata = self.metadata(table_name)?;
+
+        // FIXME: make this more efficient
+        Ok(metadata
+            .indexes
+            .iter()
+            .find(|idx| idx.name.eq(index))
+            .unwrap()
+            .clone())
+    }
+
     fn prepare(
         &mut self,
         sql: &str,
@@ -590,6 +618,10 @@ impl QuerySet {
         Self { schema, tuples }
     }
 
+    fn get(&self, row: usize, column: &str) -> Option<&Value> {
+        self.tuples.get(row)?.get(self.schema.index_of(column)?)
+    }
+
     fn is_empty(&self) -> bool {
         self.tuples.iter().all(|tuple| tuple.is_empty())
     }
@@ -659,7 +691,11 @@ mod tests {
     use crate::core::{
         date::{NaiveDate, Parse},
         storage::{
-            pagination::{pager::DEFAULT_PAGE_SIZE, Cache},
+            btree::Cursor,
+            pagination::{
+                pager::{reassemble_content, DEFAULT_PAGE_SIZE},
+                Cache,
+            },
             MemoryBuffer,
         },
     };
@@ -679,6 +715,29 @@ mod tests {
                 page_size: DEFAULT_PAGE_SIZE,
             })
             .expect("Couldn't create table with default configuration")
+        }
+    }
+
+    impl Database<MemoryBuffer> {
+        fn assert_index_contains(
+            &mut self,
+            index: &str,
+            expected: &[Vec<Value>],
+        ) -> DatabaseResult {
+            let index = self.index_metadata(index)?;
+
+            let mut pager = self.pager.borrow_mut();
+            let mut cursor = Cursor::new(index.root, 0);
+
+            let mut entries = Vec::new();
+            while let Some((page, slot_id)) = cursor.try_next(&mut pager)? {
+                let entry = reassemble_content(&mut pager, page, slot_id)?;
+                entries.push(tuple::deserialize(entry.as_ref(), &index.schema));
+            }
+
+            assert_eq!(entries, expected);
+
+            Ok(())
         }
     }
 
