@@ -1402,4 +1402,23 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_delete_from_empty_table() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(69), email VARCHAR(135) UNIQUE);",
+        )?;
+        db.exec("CREATE UNIQUE INDEX name_idx ON users(name);")?;
+        db.exec("DELETE FROM users WHERE id >= 100;")?;
+
+        let query = db.exec("SELECT * FROM users;")?;
+        assert!(query.is_empty());
+
+        db.assert_index_contains("users_email_uq_index", &[])?;
+        db.assert_index_contains("name_idx", &[])?;
+
+        Ok(())
+    }
 }
