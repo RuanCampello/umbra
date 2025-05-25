@@ -970,4 +970,99 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_create_unique_index_duplicated() -> DatabaseResult {
+        let mut db = Database::default();
+        let create_query = "CREATE TABLE users (id INT PRIMARY KEY, email VARCHAR(255));";
+
+        db.exec(create_query)?;
+        db.exec(
+            r#"
+            INSERT INTO users (id, email) VALUES
+            (1, 'johndoe@email.com'),
+            (2, 'marydove@email.com'),
+            (3, 'johndoe@email.com');
+        "#,
+        )?;
+
+        let query = db.exec("CREATE UNIQUE INDEX email_uq ON users(email);");
+        assert_eq!(
+            query,
+            Err(SqlError::DuplicatedKey(Value::String("johndoe@email.com".into())).into()),
+        );
+
+        let query = db.exec("SELECT * FROM umbra_db_meta;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: umbra_schema(),
+
+                tuples: vec![vec![
+                    Value::String("table".into()),
+                    Value::String("users".into()),
+                    Value::Number(1),
+                    Value::String("users".into()),
+                    Value::String(Parser::new(create_query).parse_statement()?.to_string())
+                ]]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_duplicated() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(255), birth_date DATE);",
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO employees (id, name, birth_date) VALUES 
+            (1, 'John Doe', '1995-03-01'),
+            (2, 'Mary Dove', '2000-04-24'),
+            (3, 'Paul Dean', '1999-01-27');
+        "#,
+        )?;
+
+        let query = db.exec(
+            r#"
+            INSERT INTO employees (id, name, birth_date) VALUES (2, 'Philip Dahmer', '2005-12-07');
+        "#,
+        );
+        assert_eq!(query, Err(SqlError::DuplicatedKey(Value::Number(2)).into()));
+
+        let query = db.exec("SELECT * FROM employees;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(255)),
+                    Column::new("birth_date", Type::Date)
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::String("John Doe".into()),
+                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap())
+                    ],
+                    vec![
+                        Value::Number(2),
+                        Value::String("Mary Dove".into()),
+                        Value::Date(NaiveDate::parse_str("2000-04-24").unwrap())
+                    ],
+                    vec![
+                        Value::Number(3),
+                        Value::String("Paul Dean".into()),
+                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap())
+                    ]
+                ]
+            }
+        );
+
+        Ok(())
+    }
 }
