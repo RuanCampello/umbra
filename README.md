@@ -2,6 +2,9 @@
     <h1>Umbra</h1>
     <img alt="Logo" src=".github/umbra-icon.png" width="250" height="250" />
     <h5>A zero-dependency Rust database implemented from scratch 🦇</h5>
+  
+  ![Rust](https://img.shields.io/badge/rust-00?style=for-the-badge&logo=rust&color=d62828&link=https%3A%2F%2Fwww.rust-lang.org)
+
 </div>
 
 ---
