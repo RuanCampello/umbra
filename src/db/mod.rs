@@ -804,7 +804,7 @@ mod tests {
                     ],
                     vec![
                         Value::String("index".into()),
-                        Value::String("users_pk_index".into()),
+                        Value::String(index!(primary on users)),
                         Value::Number(2),
                         Value::String("users".into()),
                         Value::String(

@@ -1,20 +1,85 @@
 <div align="center">
     <h1>Umbra</h1>
+    <h4>(/ˈʌm.brə/)</h4>
     <img alt="Logo" src=".github/umbra-icon.png" width="250" height="250" />
-    <h5>A zero-dependency Rust database implemented from scratch 🦇</h5>
-  
-  ![Rust](https://img.shields.io/badge/rust-00?style=for-the-badge&logo=rust&color=d62828&link=https%3A%2F%2Fwww.rust-lang.org)
-  ![Linux](https://img.shields.io/badge/linux-00?style=for-the-badge&logo=linux&logoColor=000&color=%23FCC624)
+    <h5>Self-contained, shadowy, and slightly suspicious database :bat: </h5>
+
+![Rust](https://img.shields.io/badge/rust-00?style=for-the-badge&logo=rust&color=d62828&link=https%3A%2F%2Fwww.rust-lang.org)
+![Linux](https://img.shields.io/badge/linux-0?style=for-the-badge&logo=linux&logoColor=fff&color=f77f00)
 
 </div>
 
 ---
 
-### ✨ Just so you know
+### ✨ Not PostgreSQL. Not SQLite. Something... _else_
 
-Umbra is a project I started during my summer holiday of December 2024 to early 2025 because I was bored as hell.
+This project takes certain... liberties with database paradigms. Born from the existential void of a southern hemisphere
+summer (December 2024–January 2025, when ennui struck like the heatwave), Umbra cosplays as PostgreSQL with its query
+planner (proper cost-based optimisation using expression trees, darling—we’re civilised), while harbouring SQLite’s
+scandalous little secrets under the bonnet (ahem `RowId`, you disreputable little implementation detail).
+
+_The bat is non-negotiable._
+
+Let's be clear: **this isn't a replacement for anything,** unless you're replacing sanity with chaos, which
+case—welcome. The focus here is the **learning process**, read as "the screams of debugging hand-rolled date parsing at
+3AM."
 
 ---
 
-You can find complete documentation including architecture deep dives, API references, and usage
-examples [here](https://ruancampello.github.io/umbra-documentation/). 
+### Implementation Status
+
+#### 🧾 Types
+
+- [x] `INTEGER` (for counting your regrets)
+    - [ ] `SERIAL` (auto-increment would be too convenient, init?)
+- [x] `BIGINT` (when regular regrets aren't enough)
+- [x] `VARCHAR`
+- [x] `BOOLEAN`
+- [ ] `DECIMAL`
+- [ ] `TEXT`
+- [x] Temporal types (because time flies when... I ran out of jokes)
+    - [x] `DATE`
+    - [x] `TIME`
+    - [x] `TIMESTAMP` (precision: "ish")
+
+#### 🔗 Constraints
+
+- [x] `PRIMARY KEY`
+    - [ ] Auto-incrementing (still manual like the dark ages)
+- [x] `UNIQUE` (because duplicates are tacky)
+- [ ] `FOREIGN KEY` (relationships are hard)
+- [ ] `CHECK`
+- [ ] `NOT NULL` (I'm very chill about emptiness)
+
+#### 💼 Table Operations
+
+- [x] `CREATE TABLE` (where hope begins)
+- [x] `DROP TABLE` (where hope ends)
+- [ ] `ALTER TABLE`
+
+#### 📊 Indexes
+
+- [x] Unique indexes
+- [ ] Non-unique indexes (for the masses)
+- [ ] Partial indexes (discrimination coming soon)
+
+#### ⚙️ CRUD Operations
+
+- [x] `INSERT` (manual ID entry builds character)
+- [x] `SELECT`
+    - [ ] `JOIN` (relationships take work)
+- [x] `UPDATE`
+    - [ ] `RETURNING` clauses
+- [x] `DELETE` (sometimes you just want to erase mistakes)
+
+#### Basic Functions
+
+- [ ] `COUNT`
+- [ ] `AVG`
+- [ ] `SUM`
+
+### *✨ Just So You Know*
+
+- **Documentation**: [Here be dragons](https://ruancampello.github.io/umbra-documentation/) (*and possibly bats*)
+- **Philosophy**: *"Compiling is victory. Running is a miracle."*
+
