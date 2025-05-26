@@ -14,6 +14,7 @@ use crate::{
         has_btree_key, umbra_schema, Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
         SqlError, DB_METADATA,
     },
+    index,
     sql::statement::{Constraint, Create, Statement, Value},
     vm::planner::{Execute, Planner, SeqScan},
 };
@@ -52,10 +53,9 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 .flat_map(|col| {
                     let table = name.clone();
                     col.constraints.into_iter().map(move |constraint| {
-                        println!("index on {table} for {constraint:#?}");
                         let name = match constraint {
-                            Constraint::PrimaryKey => format!("{table}_pk_index"),
-                            Constraint::Unique => format!("{table}_{}_uq_index", &col.name),
+                            Constraint::PrimaryKey => index!(primary on (table)),
+                            Constraint::Unique => index!(unique on (table) (col.name)),
                         };
 
                         Create::Index {

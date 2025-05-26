@@ -232,6 +232,7 @@ mod tests {
             MemoryBuffer,
         },
         db::{Ctx as DbCtx, IndexMetadata, Relation, TableMetadata},
+        index,
         sql::{
             self,
             parser::Parser,
@@ -440,7 +441,9 @@ mod tests {
                         &Type::Varchar(135),
                         &Value::String("johndoe@email.com".into())
                     ),
-                    relation: Relation::Index(db.indexes["employees_email_uq_index"].to_owned())
+                    relation: Relation::Index(
+                        db.indexes[&index!(unique on employees (email))].to_owned()
+                    )
                 }))
             })
         );
@@ -492,7 +495,7 @@ mod tests {
         );
         let range_scan = Planner::RangeScan(RangeScan::new(
             range,
-            Relation::Index(db.indexes["employees_email_uq_index"].to_owned()),
+            Relation::Index(db.indexes[&index!(unique on employees (email))].clone()),
             true,
             parse_expr("email <= 'johndoe@email.com'"),
             db.pager(),

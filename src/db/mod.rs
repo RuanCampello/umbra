@@ -17,9 +17,9 @@ use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::query;
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
-use crate::vm;
 use crate::vm::expression::{TypeError, VmError};
 use crate::vm::planner::{Execute, Planner, Tuple};
+use crate::{index, vm};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -456,8 +456,8 @@ impl TryFrom<&[&str]> for Context {
                     columns.iter().for_each(|col| {
                         col.constraints.iter().for_each(|constraint| {
                             let index = match constraint {
-                                Constraint::Unique => format!("{name}_{}_uq_index", col.name),
-                                Constraint::PrimaryKey => format!("{name}_pk_index"),
+                                Constraint::Unique => index!(unique on name (col.name)),
+                                Constraint::PrimaryKey => index!(primary on (name)),
                             };
 
                             metadata.indexes.push(IndexMetadata {
@@ -1293,7 +1293,7 @@ mod tests {
         );
 
         db.assert_index_contains(
-            "employees_email_uq_index",
+            &index!(unique on employees (email)),
             &[vec![
                 Value::String("johndoe@email.com".into()),
                 Value::Number(1),
@@ -1354,7 +1354,7 @@ mod tests {
         );
 
         db.assert_index_contains(
-            "employees_email_uq_index",
+            &index!(unique on employees (email)),
             &[
                 vec![Value::String("johndoe@email.com".into()), Value::Number(1)],
                 vec![Value::String("marydove@email.com".into()), Value::Number(2)],
@@ -1416,7 +1416,7 @@ mod tests {
         let query = db.exec("SELECT * FROM users;")?;
         assert!(query.is_empty());
 
-        db.assert_index_contains("users_email_uq_index", &[])?;
+        db.assert_index_contains(&index!(unique on users (email)), &[])?;
         db.assert_index_contains("name_idx", &[])?;
 
         Ok(())
