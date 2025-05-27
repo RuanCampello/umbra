@@ -38,6 +38,8 @@ static mut LOG_FILE: Option<File> = None;
 pub const LOG_FILE_PATH: &str = "umbra.log";
 
 #[macro_export]
+/// Logs at [error](Level::Error) level.
+///
 macro_rules! error {
     ($($args:tt)*) => {
         match $crate::core::log::log(
@@ -69,7 +71,7 @@ pub fn init(level: Level) -> io::Result<()> {
     INIT.call_once(|| {
         let original_hook = panic::take_hook();
         panic::set_hook(Box::new(move |panic_info| {
-            cleanup();
+            deinit();
             original_hook(panic_info);
         }));
 
@@ -90,7 +92,7 @@ pub fn init(level: Level) -> io::Result<()> {
     result
 }
 
-fn cleanup() {
+fn deinit() {
     unsafe {
         if let Some(file) = LOG_FILE.take() {
             drop(file)
@@ -151,33 +153,51 @@ mod tests {
 
     use super::*;
 
+    fn cleanup() {
+        deinit();
+
+        // ensure clean state for tests
+        File::create(LOG_FILE_PATH).unwrap();
+    }
+
     fn assert_log_content(level: Level, content: &str) -> io::Result<Vec<String>> {
-        let level = level.to_string();
-        let level = format!("[{}{}]", &level[..1], level[1..].to_lowercase().as_str());
+        let expected_level = format!(
+            "[{}{}]",
+            &level.to_string()[..1],
+            level.to_string()[1..].to_lowercase().as_str()
+        );
 
         let log_file = File::open(LOG_FILE_PATH)?;
 
         let reader = BufReader::new(log_file);
 
-        let lines = reader
+        let lines: Vec<String> = reader
             .lines()
-            .inspect(|res| match res {
-                Ok(line) => {
-                    assert!(line.contains(&level));
-                    assert!(line.contains(content));
-                }
-                Err(err) => panic!("error reading line: {}", err),
+            .map(|line_result| {
+                let line = line_result?;
+                assert!(
+                    line.contains(&expected_level),
+                    "Expected line to contain level '{}': but found {}",
+                    expected_level,
+                    line
+                );
+                assert!(
+                    line.contains(content),
+                    "Expected line to contain content '{}': {}",
+                    content,
+                    line
+                );
+                Ok(line)
             })
-            .collect();
+            .collect::<Result<_, io::Error>>()?;
 
-        // ensure clean state for tests
-        File::create(LOG_FILE_PATH)?;
-
-        lines
+        Ok(lines)
     }
 
     #[test]
-    fn test_using_initialised_log() {
+    fn test_use_uninitialised_log() {
+        cleanup();
+
         let err = log(Level::Error, "something really useful").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other)
     }
@@ -190,5 +210,6 @@ mod tests {
         error!("{}", content);
 
         assert_log_content(Level::Error, content).unwrap();
+        cleanup();
     }
 }
