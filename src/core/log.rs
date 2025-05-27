@@ -1,6 +1,6 @@
 //! This module provides a simple logging API.
 
-#![allow(static_mut_refs)]
+#![allow(static_mut_refs, dead_code)]
 
 use std::{
     fmt::Display,
