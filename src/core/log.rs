@@ -35,6 +35,8 @@ static INIT: Once = Once::new();
 static LOG_LEVEL: AtomicUsize = AtomicUsize::new(Level::Info as usize);
 static mut LOG_FILE: Option<File> = None;
 
+pub const LOG_FILE_PATH: &str = "umbra.log";
+
 #[macro_export]
 macro_rules! error {
     ($($args:tt)*) => {
@@ -48,8 +50,20 @@ macro_rules! error {
     };
 }
 
+impl Display for Level {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let string = match self {
+            Self::Error => "ERROR",
+            Self::Warn => "WARN",
+            Self::Info => "INFO",
+            Self::Debug => "DEBUG",
+        };
+
+        f.write_str(string)
+    }
+}
+
 pub fn init(level: Level) -> io::Result<()> {
-    const LOG_FILE_PATH: &str = "umbra.log";
     let mut result = Ok(());
 
     INIT.call_once(|| {
@@ -133,11 +147,48 @@ impl<'p> Display for ParseError<'p> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{BufRead, BufReader};
+
     use super::*;
+
+    fn assert_log_content(level: Level, content: &str) -> io::Result<Vec<String>> {
+        let level = level.to_string();
+        let level = format!("[{}{}]", &level[..1], level[1..].to_lowercase().as_str());
+
+        let log_file = File::open(LOG_FILE_PATH)?;
+
+        let reader = BufReader::new(log_file);
+
+        let lines = reader
+            .lines()
+            .inspect(|res| match res {
+                Ok(line) => {
+                    assert!(line.contains(&level));
+                    assert!(line.contains(content));
+                }
+                Err(err) => panic!("error reading line: {}", err),
+            })
+            .collect();
+
+        // ensure clean state for tests
+        File::create(LOG_FILE_PATH)?;
+
+        lines
+    }
 
     #[test]
     fn test_using_initialised_log() {
-        let err = log(super::Level::Error, "something really useful").unwrap_err();
+        let err = log(Level::Error, "something really useful").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other)
+    }
+
+    #[test]
+    fn test_error_content() {
+        init(Level::Debug).unwrap();
+
+        let content = "some really constructive error log";
+        error!("{}", content);
+
+        assert_log_content(Level::Error, content).unwrap();
     }
 }
