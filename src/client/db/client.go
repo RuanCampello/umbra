@@ -1,4 +1,4 @@
-package main
+package db
 
 import (
 	"context"
@@ -14,7 +14,11 @@ type Client struct {
 	db  *pgx.Conn
 }
 
-func (c *Client) seedDatabase() error {
+func NewClient(ctx context.Context, db *pgx.Conn) Client {
+	return Client{ctx, db}
+}
+
+func (c *Client) SeedDatabase() error {
 	sql, err := os.ReadFile("seed.sql")
 	if err != nil {
 		return fmt.Errorf("Failed to parse seed.sql: %v", err)
