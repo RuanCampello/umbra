@@ -155,7 +155,8 @@ fn log(level: Level, message: &str) -> io::Result<()> {
         match &mut LOG_FILE {
             Some(file) => {
                 writeln!(file, "[{level:#?}]: {message}")?;
-                file.flush()
+                file.flush()?;
+                Ok(())
             }
             None => Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -207,7 +208,9 @@ mod tests {
         File::create(LOG_FILE_PATH).unwrap();
     }
 
-    fn assert_log_content(level: Level, content: &str) -> io::Result<Vec<String>> {
+    fn assert_log_content(level: Level, content: &[&str]) -> io::Result<()> {
+        cleanup();
+
         let expected_level = format!(
             "[{}{}]",
             &level.to_string()[..1],
@@ -217,28 +220,21 @@ mod tests {
         let log_file = File::open(LOG_FILE_PATH)?;
 
         let reader = BufReader::new(log_file);
+        let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
 
-        let lines: Vec<String> = reader
-            .lines()
-            .map(|line_result| {
-                let line = line_result?;
-                assert!(
-                    line.contains(&expected_level),
-                    "Expected line to contain level '{}': but found {}",
-                    expected_level,
-                    line
-                );
-                assert!(
-                    line.contains(content),
-                    "Expected line to contain content '{}': {}",
-                    content,
-                    line
-                );
-                Ok(line)
-            })
-            .collect::<Result<_, io::Error>>()?;
+        for ((num, line), expected_line) in lines.iter().enumerate().zip(content.iter()) {
+            assert!(
+                line.contains(&expected_level),
+                "Expected line {num} to be {expected_level} but found {line}"
+            );
+            assert!(
+                line.contains(&expected_level),
+                "Expected line {num} to have {expected_line} content but found {line}"
+            );
+        }
 
-        Ok(lines)
+        cleanup();
+        Ok(())
     }
 
     #[test]
@@ -246,30 +242,42 @@ mod tests {
         cleanup();
 
         let err = log(Level::Error, "something really useful").unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Other)
+        assert_eq!(err.kind(), io::ErrorKind::Other);
     }
 
     #[test]
     fn test_level_and_content() -> io::Result<()> {
         let content = "some really constructive error log";
-
         init(Level::Debug)?;
 
         error!("{}", content);
-        assert_log_content(Level::Error, content)?;
-        clean_log_file();
+        assert_log_content(Level::Error, &[content])?;
 
         warn!("{}", content);
-        assert_log_content(Level::Warn, content)?;
-        clean_log_file();
+        assert_log_content(Level::Warn, &[content])?;
 
         info!("{}", content);
-        assert_log_content(Level::Info, content)?;
-        clean_log_file();
+        assert_log_content(Level::Info, &[content])?;
 
         debug!("{}", content);
-        assert_log_content(Level::Debug, content)?;
-        cleanup();
+        assert_log_content(Level::Debug, &[content])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_multiline_content() -> io::Result<()> {
+        let content = [
+            "our beautiful first error line",
+            "our beautiful secound error line",
+        ];
+        init(Level::Error)?;
+
+        error!("{}", content[0]);
+        error!("{}", content[1]);
+        info!("you will not be logged ma boy :(");
+
+        assert_log_content(Level::Error, &content)?;
 
         Ok(())
     }
