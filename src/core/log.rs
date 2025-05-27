@@ -200,8 +200,10 @@ mod tests {
 
     fn cleanup() {
         deinit();
+        clean_log_file();
+    }
 
-        // ensure clean state for tests
+    fn clean_log_file() {
         File::create(LOG_FILE_PATH).unwrap();
     }
 
@@ -248,13 +250,27 @@ mod tests {
     }
 
     #[test]
-    fn test_error_content() {
-        init(Level::Debug).unwrap();
-
+    fn test_level_and_content() -> io::Result<()> {
         let content = "some really constructive error log";
-        error!("{}", content);
 
-        assert_log_content(Level::Error, content).unwrap();
+        init(Level::Debug)?;
+
+        error!("{}", content);
+        assert_log_content(Level::Error, content)?;
+        clean_log_file();
+
+        warn!("{}", content);
+        assert_log_content(Level::Warn, content)?;
+        clean_log_file();
+
+        info!("{}", content);
+        assert_log_content(Level::Info, content)?;
+        clean_log_file();
+
+        debug!("{}", content);
+        assert_log_content(Level::Debug, content)?;
         cleanup();
+
+        Ok(())
     }
 }
