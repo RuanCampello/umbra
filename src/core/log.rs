@@ -32,66 +32,20 @@ pub enum ParseError<'p> {
 }
 
 static INIT: Once = Once::new();
-// static LOG_LEVELS: [&str; 4] = ["ERROR", "WARN", "INFO", "DEBUG"];
 static LOG_LEVEL: AtomicUsize = AtomicUsize::new(Level::Info as usize);
 static mut LOG_FILE: Option<File> = None;
 
 #[macro_export]
 macro_rules! error {
-    // This pattern explicitly matches parentheses
     ($($args:tt)*) => {
-        match $crate::log::log(
-            $crate::log::Level::Error,
+        match $crate::core::log::log(
+            $crate::core::log::Level::Error,
             &format!("{}:{} - {}", file!(), line!(), format_args!($($args)*))
-        {
+        ) {
             Ok(_) => (),
             Err(e) => eprintln!("Failed to log: {}", e),
         }
     };
-}
-
-#[macro_export]
-macro_rules! warn {
-    ($($arg:tt)*) => {
-        $crate::log::log(
-            $crate::log::Level::Warn,
-            &format!("{}:{} - {}", file!(), line!(), format_args!($($arg)*))
-        ).unwrap_or_else(|e| eprintln!("Failed to log: {}", e));
-    };
-}
-
-#[macro_export]
-macro_rules! info {
-    ($($arg:tt)*) => {
-        $crate::log::log(
-            $crate::log::Level::Info,
-            &format!("{}:{} - {}", file!(), line!(), format_args!($($arg)*))
-        ).unwrap_or_else(|e| eprintln!("Failed to log: {}", e));
-    };
-}
-
-#[macro_export]
-macro_rules! debug {
-    ($($arg:tt)*) => {
-        $crate::log::log(
-            $crate::log::Level::Debug,
-            &format!("{}:{} - {}", file!(), line!(), format_args!($($arg)*))
-        ).unwrap_or_else(|e| eprintln!("Failed to log: {}", e));
-    };
-}
-
-error!("someerrorboy");
-
-impl Level {
-    pub fn from_usize(u: usize) -> Option<Self> {
-        match u {
-            1 => Some(Self::Error),
-            2 => Some(Self::Warn),
-            3 => Some(Self::Info),
-            4 => Some(Self::Debug),
-            _ => None,
-        }
-    }
 }
 
 pub fn init(level: Level) -> io::Result<()> {
@@ -174,5 +128,16 @@ impl<'p> Display for ParseError<'p> {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_using_initialised_log() {
+        let err = log(super::Level::Error, "something really useful").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other)
     }
 }
