@@ -52,6 +52,51 @@ macro_rules! error {
     };
 }
 
+#[macro_export]
+/// Logs at [warn](Level::Warn) level.
+///
+macro_rules! warn {
+    ($($args:tt)*) => {
+        match $crate::core::log::log(
+            $crate::core::log::Level::Warn,
+            &format!("{}:{} - {}", file!(), line!(), format_args!($($args)*))
+        ) {
+            Ok(_) => (),
+            Err(e) => eprintln!("Failed to log: {}", e),
+        }
+    };
+}
+
+#[macro_export]
+/// Logs at [info](Level::Info) level.
+///
+macro_rules! info {
+    ($($args:tt)*) => {
+        match $crate::core::log::log(
+            $crate::core::log::Level::Info,
+            &format!("{}:{} - {}", file!(), line!(), format_args!($($args)*))
+        ) {
+            Ok(_) => (),
+            Err(e) => eprintln!("Failed to log: {}", e),
+        }
+    };
+}
+
+#[macro_export]
+/// Logs at [debug](Level::Debug) level.
+///
+macro_rules! debug {
+    ($($args:tt)*) => {
+        match $crate::core::log::log(
+            $crate::core::log::Level::Debug,
+            &format!("{}:{} - {}", file!(), line!(), format_args!($($args)*))
+        ) {
+            Ok(_) => (),
+            Err(e) => eprintln!("Failed to log: {}", e),
+        }
+    };
+}
+
 impl Display for Level {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let string = match self {
