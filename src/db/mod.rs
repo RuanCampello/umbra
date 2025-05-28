@@ -1421,4 +1421,60 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    #[should_panic]
+    fn test_transaction_commit() {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE products (id INT PRIMARY KEY, price INT, name VARCHAR(30), discount INT);").unwrap();
+
+        db.exec("START TRANSACTION;").unwrap();
+
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (1, 'coffee', 18, 0);")
+            .unwrap();
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (2, 'tea', 12, 0);")
+            .unwrap();
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (3, 'soda', 10, 1);")
+            .unwrap();
+
+        db.exec("UPDATE products SET discount = 2 WHERE name = 'coffee';")
+            .unwrap();
+        db.exec("UPDATE products SET price = 11 WHERE id = 3;")
+            .unwrap();
+
+        db.exec("COMMIT;").unwrap();
+
+        let query = db.exec("SELECT * FROM products ORDER BY price;").unwrap();
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(30)),
+                    Column::new("price", Type::Integer),
+                    Column::new("discount", Type::Integer),
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(3),
+                        Value::String("soda".into()),
+                        Value::Number(11),
+                        Value::Number(1)
+                    ],
+                    vec![
+                        Value::Number(2),
+                        Value::String("tea".into()),
+                        Value::Number(12),
+                        Value::Number(0)
+                    ],
+                    vec![
+                        Value::Number(1),
+                        Value::String("coffee".into()),
+                        Value::Number(18),
+                        Value::Number(2),
+                    ]
+                ]
+            }
+        );
+    }
 }

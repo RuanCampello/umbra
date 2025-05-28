@@ -16,7 +16,7 @@
 This project takes certain... liberties with database paradigms. Born from the existential void of a southern hemisphere
 summer (December 2024–January 2025, when ennui struck like the heatwave), Umbra cosplays as PostgreSQL with its query
 planner (proper cost-based optimisation using expression trees, darling—we’re civilised), while harbouring SQLite’s
-scandalous little secrets under the bonnet (ahem `RowId`, you disreputable little implementation detail).
+scandalous little secrets under the bonnet (_ahem_ `RowId`, you disreputable little implementation detail).
 
 _The bat is non-negotiable._
 
@@ -72,7 +72,7 @@ case—welcome. The focus here is the **learning process**, read as "the screams
     - [ ] `RETURNING` clauses
 - [x] `DELETE` (sometimes you just want to erase mistakes)
 
-#### Basic Functions
+#### 🧮 Basic Functions
 
 - [ ] `COUNT`
 - [ ] `AVG`
