@@ -253,7 +253,7 @@ impl Display for Statement {
             }
 
             Statement::StartTransaction => {
-                f.write_str("START TRANSACTION")?;
+                f.write_str("BEGIN TRANSACTION")?;
             }
 
             Statement::Commit => {

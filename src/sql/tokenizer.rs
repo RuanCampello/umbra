@@ -175,7 +175,7 @@ impl<'input> Tokenizer<'input> {
             "INDEX" => Keyword::Index,
             "ORDER" => Keyword::Order,
             "ON" => Keyword::On,
-            "START" => Keyword::Start,
+            "BEGIN" => Keyword::Start,
             "TRANSACTION" => Keyword::Transaction,
             "ROLLBACK" => Keyword::Rollback,
             "COMMIT" => Keyword::Commit,

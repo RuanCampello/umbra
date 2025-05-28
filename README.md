@@ -1,6 +1,6 @@
 <div align="center">
     <h1>Umbra</h1>
-    <h4>(/ˈʌm.brə/)</h4>
+    <h3>(/ˈʌm.brə/)</h3>
     <img alt="Logo" src=".github/umbra-icon.png" width="250" height="250" />
     <h5>Self-contained, shadowy, and slightly suspicious database :bat: </h5>
 
@@ -11,7 +11,7 @@
 
 ---
 
-### ✨ Not PostgreSQL. Not SQLite. Something... _else_
+## ✨ Not PostgreSQL. Not SQLite. Something... _else_
 
 This project takes certain... liberties with database paradigms. Born from the existential void of a southern hemisphere
 summer (December 2024–January 2025, when ennui struck like the heatwave), Umbra cosplays as PostgreSQL with its query
@@ -26,10 +26,9 @@ case—welcome. The focus here is the **learning process**, read as "the screams
 
 ---
 
-### Implementation Status
+## Implementation Status
 
-#### 🧾 Types
-
+### 🧾 Types
 - [x] `INTEGER` (for counting your regrets)
     - [ ] `SERIAL` (auto-increment would be too convenient, init?)
 - [x] `BIGINT` (when regular regrets aren't enough)
@@ -42,8 +41,7 @@ case—welcome. The focus here is the **learning process**, read as "the screams
     - [x] `TIME`
     - [x] `TIMESTAMP` (precision: "ish")
 
-#### 🔗 Constraints
-
+### 🔗 Constraints
 - [x] `PRIMARY KEY`
     - [ ] Auto-incrementing (still manual like the dark ages)
 - [x] `UNIQUE` (because duplicates are tacky)
@@ -51,29 +49,23 @@ case—welcome. The focus here is the **learning process**, read as "the screams
 - [ ] `CHECK`
 - [ ] `NOT NULL` (I'm very chill about emptiness)
 
-#### 💼 Table Operations
-
-- [x] `CREATE TABLE` (where hope begins)
-- [x] `DROP TABLE` (where hope ends)
+### ⚙️ Operations
+#### 💼 **Table Operations**
+- [x] `CREATE TABLE` *(where hope begins)*
+- [x] `DROP TABLE` *(where hope ends)*
 - [ ] `ALTER TABLE`
 
-#### 📊 Indexes
+#### 💸 **Transactions**
+- [x] `BEGIN` 
+- [x] `COMMIT` 
+- [x] `ROLLBACK`
 
-- [x] Unique indexes
-- [ ] Non-unique indexes (for the masses)
-- [ ] Partial indexes (discrimination coming soon)
+#### 📊 **Indexes**
+- [x] Unique indexes *(exclusivity is key)*
+- [ ] Non-unique indexes *(for the masses)*
+- [ ] Partial indexes *(discrimination coming soon)*
 
-#### ⚙️ CRUD Operations
-
-- [x] `INSERT` (manual ID entry builds character)
-- [x] `SELECT`
-    - [ ] `JOIN` (relationships take work)
-- [x] `UPDATE`
-    - [ ] `RETURNING` clauses
-- [x] `DELETE` (sometimes you just want to erase mistakes)
-
-#### 🧮 Basic Functions
-
+### 🧮 Basic Functions
 - [ ] `COUNT`
 - [ ] `AVG`
 - [ ] `SUM`

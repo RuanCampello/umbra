@@ -1427,7 +1427,7 @@ mod tests {
         let mut db = Database::default();
         db.exec("CREATE TABLE products (id INT PRIMARY KEY, price INT, name VARCHAR(30), discount INT);")?;
 
-        db.exec("START TRANSACTION;")?;
+        db.exec("BEGIN TRANSACTION;")?;
 
         db.exec("INSERT INTO products (id, name, price, discount) VALUES (1, 'coffee', 18, 0);")?;
         db.exec("INSERT INTO products (id, name, price, discount) VALUES (2, 'tea', 12, 0);")?;
@@ -1479,7 +1479,7 @@ mod tests {
         let mut db = Database::default();
         db.exec("CREATE TABLE products (id INT PRIMARY KEY, price INT, name VARCHAR(30), discount INT);")?;
 
-        db.exec("START TRANSACTION;")?;
+        db.exec("BEGIN TRANSACTION;")?;
 
         db.exec("INSERT INTO products (id, name, price, discount) VALUES (1, 'coffee', 18, 0);")?;
         db.exec("INSERT INTO products (id, name, price, discount) VALUES (2, 'tea', 12, 0);")?;
