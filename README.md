@@ -55,6 +55,15 @@ case—welcome. The focus here is the **learning process**, read as "the screams
 - [x] `DROP TABLE` *(where hope ends)*
 - [ ] `ALTER TABLE`
 
+#### 🔍 SELECT Operations
+- [x] `WHERE` (basic filtering, no existential crises)
+- [x] `ORDER BY` (implemented after herding literal bats)
+- [ ] `LIMIT`/`OFFSET` (self-restraint coming soon™)
+- [ ] Table aliases (`FROM crypts AS c` - naming things is hard)
+- [ ] `JOIN` (relationships require couples therapy)
+- [ ] `GROUP BY` (aggregation is a social construct)
+- [ ] `HAVING` 
+
 #### 💸 **Transactions**
 - [x] `BEGIN` 
 - [x] `COMMIT` 
