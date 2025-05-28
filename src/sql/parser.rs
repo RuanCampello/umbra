@@ -182,8 +182,7 @@ impl<'input> Parser<'input> {
             }
             Keyword::Start => {
                 self.expect_keyword(Keyword::Transaction)?;
-                // TODO: start transaction
-                todo!()
+                Statement::StartTransaction
             }
             Keyword::Commit => Statement::Commit,
             Keyword::Rollback => Statement::Rollback,

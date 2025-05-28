@@ -545,8 +545,8 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                 let Some(Exec::Statement(statement)) = self.exec.take() else {
                     unreachable!()
                 };
-
                 let mut affected_rows = 0;
+
                 match statement {
                     Statement::Commit => {
                         if self.db.transaction_state.eq(&TransactionState::Aborted) {
@@ -1423,28 +1423,22 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_transaction_commit() {
+    fn test_transaction_commit() -> DatabaseResult {
         let mut db = Database::default();
-        db.exec("CREATE TABLE products (id INT PRIMARY KEY, price INT, name VARCHAR(30), discount INT);").unwrap();
+        db.exec("CREATE TABLE products (id INT PRIMARY KEY, price INT, name VARCHAR(30), discount INT);")?;
 
-        db.exec("START TRANSACTION;").unwrap();
+        db.exec("START TRANSACTION;")?;
 
-        db.exec("INSERT INTO products (id, name, price, discount) VALUES (1, 'coffee', 18, 0);")
-            .unwrap();
-        db.exec("INSERT INTO products (id, name, price, discount) VALUES (2, 'tea', 12, 0);")
-            .unwrap();
-        db.exec("INSERT INTO products (id, name, price, discount) VALUES (3, 'soda', 10, 1);")
-            .unwrap();
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (1, 'coffee', 18, 0);")?;
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (2, 'tea', 12, 0);")?;
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (3, 'soda', 10, 1);")?;
 
-        db.exec("UPDATE products SET discount = 2 WHERE name = 'coffee';")
-            .unwrap();
-        db.exec("UPDATE products SET price = 11 WHERE id = 3;")
-            .unwrap();
+        db.exec("UPDATE products SET discount = 2 WHERE name = 'coffee';")?;
+        db.exec("UPDATE products SET price = 11 WHERE id = 3;")?;
 
-        db.exec("COMMIT;").unwrap();
+        db.exec("COMMIT;")?;
 
-        let query = db.exec("SELECT * FROM products ORDER BY price;").unwrap();
+        let query = db.exec("SELECT id, name, price, discount FROM products ORDER BY price;")?;
         assert_eq!(
             query,
             QuerySet {
@@ -1476,5 +1470,7 @@ mod tests {
                 ]
             }
         );
+
+        Ok(())
     }
 }
