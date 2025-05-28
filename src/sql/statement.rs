@@ -92,14 +92,39 @@ pub(crate) enum Expression {
     Nested(Box<Self>),
 }
 
+/// Date/Time related types.
+///
+/// This enum wraps actual values of date/time types, such as a specific calendar date or a time of day.
+/// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level.
+///
+/// Values of this type are stored in the `Value::Temporal` variant.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Temporal {
+    Date(NaiveDate),
+    DateTime(NaiveDateTime),
+    Time(NaiveTime),
+}
+
+/// A runtime value stored in a table row or returned in a query.
+///
+/// This enum represents a *concrete value* associated with a column,
+/// typically used in query results, expression evaluation, and row serialization.
+///
+/// For example:
+/// - A row with a `VARCHAR` column might store `Value::String("hello".to_string())`.
+/// - A `DATE` column would store `Value::Temporal(Temporal::Date(...))`.
+///
+/// `Value` is the counterpart to `Type`:  
+/// - `Type` defines what *kind* of value is allowed.  
+/// - `Value` holds the *actual* data.
+///
+/// This separation allows the system to validate values against schema definitions at runtime.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Value {
     String(String),
     Number(i128),
     Boolean(bool),
-    Date(NaiveDate),
-    DateTime(NaiveDateTime),
-    Time(NaiveTime),
+    Temporal(Temporal),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -131,6 +156,15 @@ pub(crate) enum BinaryOperator {
 }
 
 /// SQL data types.
+///
+/// This enum describes the logical *type* of a column in a table schema.
+/// It is used during planning, validation, and schema definition.
+///
+/// For example:
+/// - A column defined as `VARCHAR(255)` will be represented as `Type::Varchar(255)`.
+/// - A column of `DATE` will be represented as `Type::Date`.
+///
+/// `Type` does not store actual data — it represents the expected type *declaration* in the schema.#[derive(Debug, PartialEq, Clone)]
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Type {
     Integer,
@@ -397,10 +431,42 @@ impl Display for Value {
             Value::String(string) => write!(f, "\"{string}\""),
             Value::Number(number) => write!(f, "{number}"),
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
-            Value::DateTime(datetime) => Display::fmt(datetime, f),
-            Value::Date(date) => Display::fmt(date, f),
-            Value::Time(time) => Display::fmt(time, f),
+            Value::Temporal(temporal) => write!(f, "{temporal}"),
         }
+    }
+}
+
+impl Display for Temporal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DateTime(datetime) => Display::fmt(datetime, f),
+            Self::Date(date) => Display::fmt(date, f),
+            Self::Time(time) => Display::fmt(time, f),
+        }
+    }
+}
+
+impl From<Temporal> for Value {
+    fn from(value: Temporal) -> Self {
+        Self::Temporal(value)
+    }
+}
+
+impl From<NaiveDate> for Temporal {
+    fn from(value: NaiveDate) -> Self {
+        Self::Date(value)
+    }
+}
+
+impl From<NaiveDateTime> for Temporal {
+    fn from(value: NaiveDateTime) -> Self {
+        Self::DateTime(value)
+    }
+}
+
+impl From<NaiveTime> for Temporal {
+    fn from(value: NaiveTime) -> Self {
+        Self::Time(value)
     }
 }
 

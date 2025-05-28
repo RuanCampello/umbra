@@ -169,8 +169,14 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             Type::Date => {
                 let mut bytes = [0; 4];
                 reader.read_exact(&mut bytes)?;
-                Ok(Value::Date(NaiveDate::try_from(bytes)?))
+                Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
             }
+            Type::Time => {
+                let mut bytes = [0; 8];
+
+                todo!()
+            }
+
             _ => todo!(),
         },
     });

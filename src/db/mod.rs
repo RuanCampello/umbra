@@ -866,12 +866,12 @@ mod tests {
                 tuples: vec![
                     vec![
                         Value::Number(1),
-                        Value::Date(NaiveDate::parse_str("2030-12-24").unwrap()),
+                        Value::Temporal(NaiveDate::parse_str("2030-12-24").unwrap().into()),
                         Value::Number(60),
                     ],
                     vec![
                         Value::Number(2),
-                        Value::Date(NaiveDate::parse_str("2029-02-13").unwrap()),
+                        Value::Temporal(NaiveDate::parse_str("2029-02-13").unwrap().into()),
                         Value::Number(20),
                     ]
                 ]
@@ -906,12 +906,12 @@ mod tests {
                 tuples: vec![
                     vec![
                         Value::Number(1),
-                        Value::Date(NaiveDate::parse_str("2030-12-24").unwrap()),
+                        Value::Temporal(NaiveDate::parse_str("2030-12-24").unwrap().into()),
                         Value::Number(60),
                     ],
                     vec![
                         Value::Number(3),
-                        Value::Date(NaiveDate::parse_str("2028-07-02").unwrap()),
+                        Value::Temporal(NaiveDate::parse_str("2028-07-02").unwrap().into()),
                         Value::Number(25),
                     ]
                 ]
@@ -1110,17 +1110,17 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap())
+                        Value::Temporal(NaiveDate::parse_str("1995-03-01").unwrap().into())
                     ],
                     vec![
                         Value::Number(2),
                         Value::String("Mary Dove".into()),
-                        Value::Date(NaiveDate::parse_str("2000-04-24").unwrap())
+                        Value::Temporal(NaiveDate::parse_str("2000-04-24").unwrap().into())
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap())
+                        Value::Temporal(NaiveDate::parse_str("1999-01-27").unwrap().into())
                     ]
                 ]
             }
@@ -1179,12 +1179,12 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap())
+                        Value::Temporal(NaiveDate::parse_str("1995-03-01").unwrap().into())
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap())
+                        Value::Temporal(NaiveDate::parse_str("1999-01-27").unwrap().into())
                     ]
                 ]
             }
@@ -1334,19 +1334,19 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap()),
+                        Value::Temporal(NaiveDate::parse_str("1995-03-01").unwrap().into()),
                         Value::String("johndoe@email.com".into())
                     ],
                     vec![
                         Value::Number(2),
                         Value::String("Mary Dove".into()),
-                        Value::Date(NaiveDate::parse_str("2000-04-24").unwrap()),
+                        Value::Temporal(NaiveDate::parse_str("2000-04-24").unwrap().into()),
                         Value::String("marydove@email.com".into())
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap()),
+                        Value::Temporal(NaiveDate::parse_str("1999-01-27").unwrap().into()),
                         Value::String("pauldean@email.com".into())
                     ]
                 ]
