@@ -172,9 +172,19 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
                 Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
             }
             Type::Time => {
-                let mut bytes = [0; 8];
+                let mut bytes = [0; 3];
+                reader.read_exact(&mut bytes)?;
+                Ok(Value::Temporal(NaiveTime::from(bytes).into()))
+            }
+            Type::DateTime => {
+                let mut date_bytes = [0; 4];
+                reader.read_exact(&mut date_bytes)?;
+                let mut time_bytes = [0; 3];
+                reader.read_exact(&mut time_bytes)?;
 
-                todo!()
+                let bytes = (date_bytes, time_bytes);
+
+                Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
             }
 
             _ => todo!(),
