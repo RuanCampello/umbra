@@ -1473,4 +1473,35 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_transaction_abort() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE products (id INT PRIMARY KEY, price INT, name VARCHAR(30), discount INT);")?;
+
+        db.exec("START TRANSACTION;")?;
+
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (1, 'coffee', 18, 0);")?;
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (2, 'tea', 12, 0);")?;
+        db.exec("INSERT INTO products (id, name, price, discount) VALUES (3, 'soda', 10, 1);")?;
+
+        db.exec("UPDATE products SET discount = 2 WHERE name = 'coffee';")?;
+        db.exec("UPDATE products SET price = 11 WHERE id = 3;")?;
+
+        db.exec("ROLLBACK;")?;
+
+        let query = db.exec("SELECT id, name, price, discount FROM products ORDER BY price;")?;
+        assert!(query.is_empty());
+        assert_eq!(
+            query.schema,
+            Schema::new(vec![
+                Column::primary_key("id", Type::Integer),
+                Column::new("name", Type::Varchar(30)),
+                Column::new("price", Type::Integer),
+                Column::new("discount", Type::Integer),
+            ]),
+        );
+
+        Ok(())
+    }
 }

@@ -31,6 +31,7 @@ pub(crate) struct ParserError {
 }
 
 #[derive(Debug, PartialEq)]
+#[allow(unused)]
 enum ErrorKind {
     TokenizerError(tokenizer::ErrorKind),
     Expected { expected: Token, found: Token },
@@ -44,6 +45,7 @@ pub(in crate::sql) type ParserResult<T> = Result<T, ParserError>;
 
 const UNARY_ARITHMETIC_OPERATOR: u8 = 50;
 
+#[allow(unused)]
 impl<'input> Parser<'input> {
     pub fn new(input: &'input str) -> Self {
         Self {
