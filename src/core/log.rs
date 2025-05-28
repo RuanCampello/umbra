@@ -9,7 +9,7 @@ use std::{
     panic,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Once,
+        Once, OnceLock,
     },
 };
 
@@ -34,8 +34,9 @@ pub enum ParseError<'p> {
 static INIT: Once = Once::new();
 static LOG_LEVEL: AtomicUsize = AtomicUsize::new(Level::Info as usize);
 static mut LOG_FILE: Option<File> = None;
+static LOG_FILE_PATH: OnceLock<String> = OnceLock::new();
 
-pub const LOG_FILE_PATH: &str = "umbra.log";
+const TEST_LOG_FILE_PATH: &str = "umbra.log";
 
 #[macro_export]
 /// Logs at [error](Level::Error) level.
@@ -110,7 +111,7 @@ impl Display for Level {
     }
 }
 
-pub fn init(level: Level) -> io::Result<()> {
+pub fn init(level: Level, file_path: &str) -> io::Result<()> {
     let mut result = Ok(());
 
     INIT.call_once(|| {
@@ -120,11 +121,16 @@ pub fn init(level: Level) -> io::Result<()> {
             original_hook(panic_info);
         }));
 
-        match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(LOG_FILE_PATH)
-        {
+        let log_file = match cfg!(test) {
+            true => TEST_LOG_FILE_PATH,
+            false => file_path,
+        };
+
+        LOG_FILE_PATH
+            .set(log_file.to_string())
+            .expect("LOG_FILE_PATH already initialised");
+
+        match OpenOptions::new().create(true).append(true).open(log_file) {
             Ok(file) => unsafe {
                 LOG_FILE = Some(file);
             },
@@ -205,7 +211,7 @@ mod tests {
     }
 
     fn clean_log_file() {
-        File::create(LOG_FILE_PATH).unwrap();
+        File::create(LOG_FILE_PATH.get().expect("File does not exists")).unwrap();
     }
 
     fn assert_log_content(level: Level, content: &[&str]) -> io::Result<()> {
@@ -217,8 +223,7 @@ mod tests {
             level.to_string()[1..].to_lowercase().as_str()
         );
 
-        let log_file = File::open(LOG_FILE_PATH)?;
-
+        let log_file = File::open(LOG_FILE_PATH.get().expect("LOG_FILE not initialised"))?;
         let reader = BufReader::new(log_file);
         let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
 
@@ -248,7 +253,7 @@ mod tests {
     #[test]
     fn test_level_and_content() -> io::Result<()> {
         let content = "some really constructive error log";
-        init(Level::Debug)?;
+        init(Level::Debug, "")?;
 
         error!("{}", content);
         assert_log_content(Level::Error, &[content])?;
@@ -271,7 +276,7 @@ mod tests {
             "our beautiful first error line",
             "our beautiful secound error line",
         ];
-        init(Level::Error)?;
+        init(Level::Error, "")?;
 
         error!("{}", content[0]);
         error!("{}", content[1]);
