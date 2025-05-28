@@ -2,6 +2,8 @@
 //! See [this](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 //! to reach out about statements and/or AST.
 
+#![allow(unused)]
+
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};

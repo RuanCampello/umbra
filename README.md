@@ -30,8 +30,10 @@ case—welcome. The focus here is the **learning process**, read as "the screams
 
 ### 🧾 Types
 - [x] `INTEGER` (for counting your regrets)
+    - [x] `UNSIGNED INTEGER` (for when you're feeling optimistic)
     - [ ] `SERIAL` (auto-increment would be too convenient, init?)
 - [x] `BIGINT` (when regular regrets aren't enough)
+    - [x] `UNSIGNED BIGINT`
 - [x] `VARCHAR`
 - [x] `BOOLEAN`
 - [ ] `DECIMAL`
