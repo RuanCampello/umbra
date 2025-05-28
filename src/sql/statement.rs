@@ -4,7 +4,7 @@
 
 #![allow(unused)]
 
-use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime};
+use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 
@@ -470,6 +470,25 @@ impl From<NaiveTime> for Temporal {
     }
 }
 
+impl TryFrom<&str> for Temporal {
+    type Error = DateParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if let Ok(dt) = NaiveDateTime::parse_str(value) {
+            return Ok(Temporal::DateTime(dt));
+        }
+
+        if let Ok(date) = NaiveDate::parse_str(value) {
+            return Ok(Temporal::Date(date));
+        }
+
+        if let Ok(time) = NaiveTime::parse_str(value) {
+            return Ok(Temporal::Time(time));
+        }
+
+        Err(DateParseError::InvalidDateTime)
+    }
+}
 pub(crate) fn join<'t, T: Display + 't>(
     values: impl IntoIterator<Item = &'t T>,
     separator: &str,

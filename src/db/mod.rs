@@ -1130,6 +1130,59 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_temporal_values() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            "CREATE TABLE logs (
+            id INT PRIMARY KEY,
+            log_time TIME,
+            created_at TIMESTAMP
+        );",
+        )?;
+
+        db.exec(
+            r#"
+        INSERT INTO logs (id, log_time, created_at) VALUES 
+        (1, '13:45:30', '2023-12-01T13:45:30'),
+        (2, '00:00:00', '2020-01-01T00:00:00'),
+        (3, '23:59:59', '1999-12-31T23:59:59');
+    "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM logs;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("log_time", Type::Time),
+                    Column::new("created_at", Type::DateTime),
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::Temporal("13:45:30".try_into().unwrap()),
+                        Value::Temporal("2023-12-01T13:45:30".try_into().unwrap()),
+                    ],
+                    vec![
+                        Value::Number(2),
+                        Value::Temporal("00:00:00".try_into().unwrap()),
+                        Value::Temporal("2020-01-01T00:00:00".try_into().unwrap()),
+                    ],
+                    vec![
+                        Value::Number(3),
+                        Value::Temporal("23:59:59".try_into().unwrap()),
+                        Value::Temporal("1999-12-31T23:59:59".try_into().unwrap()),
+                    ]
+                ]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_delete() -> DatabaseResult {
         let mut db = Database::default();
 
