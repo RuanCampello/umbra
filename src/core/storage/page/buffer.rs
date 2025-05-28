@@ -92,6 +92,7 @@ impl<Header> BufferWithHeader<Header> {
     }
 
     /// Consumes [`self`] and returns a buffer of a given [`BufferWithHeader`] type.
+    #[allow(unused_variables)]
     pub fn cast<Type>(self) -> BufferWithHeader<Type> {
         let Self {
             header,

@@ -8,3 +8,4 @@ pub(crate) mod io;
 pub(crate) mod pager;
 
 pub(crate) use cache::Cache;
+pub(in crate::core::storage::pagination) use pager::DEFAULT_PAGE_SIZE;

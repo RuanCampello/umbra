@@ -14,9 +14,9 @@ use std::ptr;
 /// any significant issues, especially with reasonable page sizes (e.g., 4096 bytes or larger).
 /// Using an entire page solely for the [`DatabaseHeader`] would be inefficient in such cases.
 #[derive(Debug, PartialEq, Clone)]
-pub(in crate::core) struct PageZero {
+pub(in crate::core::storage) struct PageZero {
     /// Page buffer, including the [`DatabaseHeader`].
-    pub(in crate::core) buffer: ManuallyDrop<BufferWithHeader<DatabaseHeader>>,
+    pub(in crate::core::storage) buffer: ManuallyDrop<BufferWithHeader<DatabaseHeader>>,
     /// Inner B-Tree slotted page.
     page: ManuallyDrop<Page>,
 }

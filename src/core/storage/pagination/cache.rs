@@ -3,6 +3,8 @@
 //! This module provides an in-memory page cache with an eviction policy.
 //! It must return owned values by indexing, preventing common Rust's borrowing errors.
 
+#![allow(private_interfaces, unused)]
+
 use crate::core::storage::page::MemoryPage;
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;

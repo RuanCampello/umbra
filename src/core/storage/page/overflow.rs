@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::core::storage::page::{buffer::BufferWithHeader, PageNumber};
 
 /// Cell overflow page.

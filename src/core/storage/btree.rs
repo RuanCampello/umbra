@@ -1,9 +1,10 @@
 //! Disk management and B-Tree data structure implementation.
 
-use super::page::{Cell, Page, PageNumber, SlotId};
+#![allow(dead_code, unused_assignments)]
+
+use super::page::{Cell, OverflowPage, Page, PageNumber, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
-use crate::core::storage::page::overflow::OverflowPage;
 use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
 use crate::sql::statement::Type;
 use std::cmp::{min, Ordering, Reverse};
@@ -858,6 +859,7 @@ mod tests {
         }
     }
 
+    #[allow(static_mut_refs)]
     impl<'p> Default for BTree<'p, MemoryBuffer, FixedSizeCmp> {
         fn default() -> Self {
             static mut PAGER: Option<Pager<MemoryBuffer>> = None;

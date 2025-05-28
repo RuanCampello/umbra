@@ -1,13 +1,17 @@
 //! Implementation of disk "page".
 //! As this manually alloc memory, it contains the only database's `unsafe` module.
 
+#![allow(private_interfaces)]
+
 mod buffer;
-pub(in crate::core::storage) mod overflow;
-pub(in crate::core::storage) mod zero;
+mod overflow;
+mod zero;
+
+pub(in crate::core::storage) use overflow::{OverflowPage, OverflowPageHeader};
+pub(in crate::core) use zero::DATABASE_IDENTIFIER;
+pub(in crate::core::storage) use zero::{DatabaseHeader, PageZero};
 
 use crate::core::storage::page::buffer::BufferWithHeader;
-use crate::core::storage::page::overflow::{OverflowPage, OverflowPageHeader};
-use crate::core::storage::page::zero::{DatabaseHeader, PageZero};
 use std::collections::{BinaryHeap, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::ops::Bound;
@@ -107,7 +111,7 @@ const PAGE_ALIGNMENT: usize = 4096;
 const MIN_PAGE_SIZE: usize = 32;
 const MAX_PAGE_SIZE: usize = 64 << 10;
 
-pub(in crate::core) trait PageConversion:
+pub(in crate::core::storage) trait PageConversion:
     From<BufferWithHeader<PageHeader>>
     + From<BufferWithHeader<OverflowPageHeader>>
     + From<BufferWithHeader<DatabaseHeader>>
@@ -691,7 +695,7 @@ impl MemoryPage {
     }
 
     /// Converts this page into another [`MemoryPage`] type.
-    pub fn reinit_as<P: PageConversion>(&mut self) {
+    pub(super) fn reinit_as<P: PageConversion>(&mut self) {
         unsafe {
             let memory_page = ptr::from_mut(self);
 
