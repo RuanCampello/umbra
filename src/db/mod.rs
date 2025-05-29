@@ -105,6 +105,12 @@ pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
 }
 
+macro_rules! temporal {
+    ($time_str:expr) => {
+        $time_str.try_into().map(Value::Temporal)
+    };
+}
+
 impl Database<File> {
     fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let file = os::Fs::options()
@@ -653,6 +659,12 @@ impl From<TypeError> for SqlError {
 impl From<DateParseError> for SqlError {
     fn from(value: DateParseError) -> Self {
         TypeError::InvalidDate(value).into()
+    }
+}
+
+impl From<DateParseError> for DatabaseError {
+    fn from(value: DateParseError) -> Self {
+        value.into()
     }
 }
 
@@ -1232,12 +1244,12 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Temporal(NaiveDate::parse_str("1995-03-01").unwrap().into())
+                        temporal!("1995-03-01")?,
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Temporal(NaiveDate::parse_str("1999-01-27").unwrap().into())
+                        temporal!("1999-01-27")?,
                     ]
                 ]
             }

@@ -288,18 +288,9 @@ impl Display for Statement {
                 };
             }
 
-            Statement::StartTransaction => {
-                f.write_str("BEGIN TRANSACTION")?;
-            }
-
-            Statement::Commit => {
-                f.write_str("COMMIT")?;
-            }
-
-            Statement::Rollback => {
-                f.write_str("ROLLBACK")?;
-            }
-
+            Statement::StartTransaction => f.write_str("BEGIN TRANSACTION")?,
+            Statement::Commit => f.write_str("COMMIT")?,
+            Statement::Rollback => f.write_str("ROLLBACK")?,
             Statement::Explain(statement) => write!(f, "EXPLAIN {statement}")?,
         };
 
@@ -489,6 +480,7 @@ impl TryFrom<&str> for Temporal {
         Err(DateParseError::InvalidDateTime)
     }
 }
+
 pub(crate) fn join<'t, T: Display + 't>(
     values: impl IntoIterator<Item = &'t T>,
     separator: &str,
