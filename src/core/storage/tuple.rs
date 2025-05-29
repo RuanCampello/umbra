@@ -147,61 +147,50 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             reader.read_exact(&mut byte)?;
             Ok(Value::Boolean(byte[0] != 0))
         }
+        Type::Integer => {
+            let mut buf = [0; byte_len_of_type(&Type::Integer)];
+            reader.read_exact(&mut buf)?;
+            let n = i32::from_le_bytes(buf) as i128;
+            Ok(Value::Number(n))
+        }
+        Type::UnsignedInteger => {
+            let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
+            reader.read_exact(&mut buf)?;
+            let n = u32::from_le_bytes(buf) as i128;
+            Ok(Value::Number(n))
+        }
+        Type::BigInteger => {
+            let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
+            reader.read_exact(&mut buf)?;
+            let n = i64::from_le_bytes(buf) as i128;
+            Ok(Value::Number(n))
+        }
+        Type::UnsignedBigInteger => {
+            let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
+            reader.read_exact(&mut buf)?;
+            let n = u64::from_le_bytes(buf) as i128;
+            Ok(Value::Number(n))
+        }
+        Type::Date => {
+            let mut bytes = [0; byte_len_of_type(&Type::Date)];
+            reader.read_exact(&mut bytes)?;
+            Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
+        }
+        Type::Time => {
+            let mut bytes = [0; byte_len_of_type(&Type::Time)];
+            reader.read_exact(&mut bytes)?;
+            Ok(Value::Temporal(NaiveTime::from(bytes).into()))
+        }
+        Type::DateTime => {
+            let mut date_bytes = [0; byte_len_of_type(&Type::Date)];
+            reader.read_exact(&mut date_bytes)?;
+            let mut time_bytes = [0; byte_len_of_type(&Type::Time)];
+            reader.read_exact(&mut time_bytes)?;
 
-        int @ (Type::Integer
-        | Type::UnsignedInteger
-        | Type::BigInteger
-        | Type::UnsignedBigInteger) => match int {
-            Type::Integer => {
-                let mut buf = [0; byte_len_of_type(&Type::Integer)];
-                reader.read_exact(&mut buf)?;
-                let n = i32::from_le_bytes(buf) as i128;
-                Ok(Value::Number(n))
-            }
-            Type::UnsignedInteger => {
-                let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
-                reader.read_exact(&mut buf)?;
-                let n = u32::from_le_bytes(buf) as i128;
-                Ok(Value::Number(n))
-            }
-            Type::BigInteger => {
-                let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
-                reader.read_exact(&mut buf)?;
-                let n = i64::from_le_bytes(buf) as i128;
-                Ok(Value::Number(n))
-            }
-            Type::UnsignedBigInteger => {
-                let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
-                reader.read_exact(&mut buf)?;
-                let n = u64::from_le_bytes(buf) as i128;
-                Ok(Value::Number(n))
-            }
-            _ => unreachable!(),
-        },
-        date @ (Type::Date | Type::Time | Type::DateTime) => match date {
-            Type::Date => {
-                let mut bytes = [0; byte_len_of_type(&Type::Date)];
-                reader.read_exact(&mut bytes)?;
-                Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
-            }
-            Type::Time => {
-                let mut bytes = [0; byte_len_of_type(&Type::Time)];
-                reader.read_exact(&mut bytes)?;
-                Ok(Value::Temporal(NaiveTime::from(bytes).into()))
-            }
-            Type::DateTime => {
-                let mut date_bytes = [0; byte_len_of_type(&Type::Date)];
-                reader.read_exact(&mut date_bytes)?;
-                let mut time_bytes = [0; byte_len_of_type(&Type::Time)];
-                reader.read_exact(&mut time_bytes)?;
+            let bytes = (date_bytes, time_bytes);
 
-                let bytes = (date_bytes, time_bytes);
-
-                Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
-            }
-
-            _ => todo!(),
-        },
+            Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
+        }
     });
 
     values.collect()
