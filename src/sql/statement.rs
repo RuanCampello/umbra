@@ -407,7 +407,7 @@ impl Display for Type {
             Type::Integer => f.write_str("INT"),
             Type::UnsignedInteger => f.write_str("INT UNSIGNED"),
             Type::BigInteger => f.write_str("BIGINT"),
-            Type::UnsignedBigInteger => f.write_str("UNSIGNED BIGINT"),
+            Type::UnsignedBigInteger => f.write_str("BIGINT UNSIGNED"),
             Type::DateTime => f.write_str("TIMESTAMP"),
             Type::Time => f.write_str("TIME"),
             Type::Date => f.write_str("DATE"),
