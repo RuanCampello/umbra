@@ -1635,4 +1635,66 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_inserting_uint_overflow() -> DatabaseResult {
+        let mut db = Database::default();
+        const UINT_MAX: u64 = u32::MAX as u64 + 1;
+        const NEGATIVE_VALUE: i64 = -1;
+
+        db.exec("CREATE TABLE shops (id INT UNSIGNED PRIMARY KEY, name VARCHAR(69));")?;
+
+        let query = db.exec(&format!(
+            "INSERT INTO shops (id, name) VALUES ({}, 'Shop A');",
+            UINT_MAX
+        ));
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::UnsignedInteger, UINT_MAX as _).into())
+        );
+
+        let query = db.exec(&format!(
+            "INSERT INTO shops (id, name) VALUES ({}, 'Shop B');",
+            NEGATIVE_VALUE
+        ));
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::UnsignedInteger, NEGATIVE_VALUE as _).into())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_inserting_ubigint_overflow() -> DatabaseResult {
+        let mut db = Database::default();
+        const UBIGINT_MAX: u128 = u64::MAX as u128 + 1;
+        const NEGATIVE_VALUE: i64 = -1;
+
+        db.exec("CREATE TABLE big_shops (id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(100));")?;
+
+        let query = db.exec(&format!(
+            "INSERT INTO big_shops (id, name) VALUES ({}, 'Big Shop A');",
+            UBIGINT_MAX
+        ));
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::UnsignedBigInteger, UBIGINT_MAX as _).into())
+        );
+
+        let query = db.exec(&format!(
+            "INSERT INTO big_shops (id, name) VALUES ({}, 'Big Shop B');",
+            NEGATIVE_VALUE
+        ));
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::UnsignedBigInteger, NEGATIVE_VALUE as _).into())
+        );
+
+        Ok(())
+    }
 }
