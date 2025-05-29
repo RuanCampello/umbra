@@ -1571,7 +1571,7 @@ mod tests {
     }
 
     #[test]
-    fn test_inserting_overflow() -> DatabaseResult {
+    fn test_inserting_int_overflow() -> DatabaseResult {
         let mut db = Database::default();
         const INT_MAX: i64 = i32::MAX as i64 + 1;
         const INT_MIN: i64 = i32::MIN as i64 - 1;
@@ -1598,6 +1598,39 @@ mod tests {
         assert_eq!(
             query,
             Err(AnalyzerError::Overflow(Type::Integer, INT_MIN as _).into())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_inserting_big_int_overflow() -> DatabaseResult {
+        let mut db = Database::default();
+        const BIG_INT_MAX: i128 = i64::MAX as i128 + 1;
+        const BIG_INT_MIN: i128 = i64::MIN as i128 - 1;
+
+        db.exec("CREATE TABLE coffee_shops (id BIGINT PRIMARY KEY, address VARCHAR(100));")?;
+
+        let query = db.exec(&format!(
+            "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
+            BIG_INT_MAX
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::BigInteger, BIG_INT_MAX as _).into())
+        );
+
+        let query = db.exec(&format!(
+            "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
+            BIG_INT_MIN
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::BigInteger, BIG_INT_MIN as _).into())
         );
 
         Ok(())
