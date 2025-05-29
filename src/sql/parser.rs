@@ -313,7 +313,7 @@ impl<'input> Parser<'input> {
         let name = self.parse_ident()?;
 
         let data_type = match self.expect_one(&Self::supported_types())? {
-            int @ (Keyword::Int | Keyword::BigInt) => {
+            int if Self::is_integer(&int) => {
                 let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
 
                 match (int, unsigned) {
@@ -593,6 +593,13 @@ impl<'input> Parser<'input> {
             Keyword::Date,
             Keyword::Timestamp,
         ]
+    }
+
+    const fn is_integer(keyword: &Keyword) -> bool {
+        match keyword {
+            Keyword::SmallInt | Keyword::Int | Keyword::BigInt => true,
+            _ => false,
+        }
     }
 }
 
@@ -1018,7 +1025,31 @@ mod tests {
             pages SMALLINT
         );"#;
 
-        let _statement = Parser::new(sql).parse_statement().unwrap();
+        let statement = Parser::new(sql).parse_statement().unwrap();
+
+        assert_eq!(
+            statement,
+            Statement::Create(Create::Table {
+                name: "books".into(),
+                columns: vec![
+                    Column {
+                        name: "book_id".into(),
+                        data_type: Type::Integer,
+                        constraints: vec![Constraint::PrimaryKey],
+                    },
+                    Column {
+                        name: "title".into(),
+                        data_type: Type::Varchar(255),
+                        constraints: vec![]
+                    },
+                    Column {
+                        name: "pages".into(),
+                        data_type: Type::SmallInt,
+                        constraints: vec![]
+                    }
+                ]
+            })
+        )
     }
 
     #[test]

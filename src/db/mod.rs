@@ -1200,11 +1200,51 @@ mod tests {
         db.exec(
             r#"
             CREATE TABLE product_inventory (
-                product_id INT UNSIGNED PRIMARY KEY,
-                product_name VARCHAR(100),
-                current_stock SMALLINT,
+                id INT UNSIGNED PRIMARY KEY,
+                name VARCHAR(100),
+                stock SMALLINT UNSIGNED
             );"#,
         )?;
+
+        db.exec(
+            "INSERT INTO product_inventory (id, name, stock)
+            VALUES (1, 'Laptop', 3), (3, 'Mechanical keyboard', 5);",
+        )?;
+
+        let query = db.exec(
+            "INSERT INTO product_inventory (id, name, stock) VALUES (2, 'Wireless mouse', -2);",
+        );
+
+        let underflow_value = -2;
+        assert!(query.is_err());
+        assert_eq!(
+            query.unwrap_err(),
+            AnalyzerError::Overflow(Type::UnsignedSmallInt, underflow_value as _).into()
+        );
+
+        let query = db.exec("SELECT * FROM product_inventory;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::UnsignedInteger),
+                    Column::new("name", Type::Varchar(100)),
+                    Column::new("stock", Type::UnsignedSmallInt)
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::String("Laptop".into()),
+                        Value::Number(3)
+                    ],
+                    vec![
+                        Value::Number(3),
+                        Value::String("Mechanical keyboard".into()),
+                        Value::Number(5)
+                    ]
+                ],
+            }
+        );
 
         Ok(())
     }
