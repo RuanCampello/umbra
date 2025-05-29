@@ -405,7 +405,7 @@ impl Display for Type {
         match self {
             Type::Boolean => f.write_str("BOOL"),
             Type::Integer => f.write_str("INT"),
-            Type::UnsignedInteger => f.write_str("UNSIGNED INT"),
+            Type::UnsignedInteger => f.write_str("INT UNSIGNED"),
             Type::BigInteger => f.write_str("BIGINT"),
             Type::UnsignedBigInteger => f.write_str("UNSIGNED BIGINT"),
             Type::DateTime => f.write_str("TIMESTAMP"),

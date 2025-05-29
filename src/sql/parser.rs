@@ -282,7 +282,6 @@ impl<'input> Parser<'input> {
             Token::Number(number) => Ok(Expression::Value(Value::Number(
                 number
                     .parse()
-                    // TODO: add proper error of int out of range
                     .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
             ))),
             token @ (Token::Minus | Token::Plus) => {
@@ -715,6 +714,32 @@ mod tests {
                     },
                 ],
             }))
+        );
+    }
+
+    #[test]
+    fn test_create_table_with_unsigned_keys() {
+        let sql = r#"
+            CREATE TABLE companies (
+                id INT UNSIGNED PRIMARY KEY,
+                name VARCHAR(50),
+                address VARCHAR(255),
+                phone VARCHAR(10)
+            );
+        "#;
+
+        let statement = Parser::new(sql).parse_statement();
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Table {
+                columns: vec![
+                    Column::primary_key("id", Type::UnsignedInteger),
+                    Column::new("name", Type::Varchar(50)),
+                    Column::new("address", Type::Varchar(255)),
+                    Column::new("phone", Type::Varchar(10))
+                ],
+                name: "companies".into()
+            })
         );
     }
 

@@ -4,12 +4,9 @@ use std::{
     rc::Rc,
 };
 
-use crate::{
-    core::storage::page,
-    vm::planner::{
-        Collect, CollectBuilder, Delete, Project, SortBuilder, TupleComparator, Update,
-        DEFAULT_SORT_BUFFER_SIZE,
-    },
+use crate::vm::planner::{
+    Collect, CollectBuilder, Delete, Project, SortBuilder, TupleComparator, Update,
+    DEFAULT_SORT_BUFFER_SIZE,
 };
 use crate::{
     core::storage::pagination::io::FileOperations,

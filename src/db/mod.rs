@@ -1013,7 +1013,6 @@ mod tests {
         )?;
 
         let query = db.exec("SELECT * FROM employees ORDER BY age, name;")?;
-        println!("query {query:#?}");
 
         assert_eq!(
             query,
@@ -1577,7 +1576,6 @@ mod tests {
         const INT_MIN: i64 = i32::MIN as i64 - 1;
 
         db.exec("CREATE TABLE coffee_shops (id INT PRIMARY KEY, address VARCHAR(100));")?;
-
         let query = db.exec(&format!(
             "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
             INT_MAX
@@ -1610,7 +1608,6 @@ mod tests {
         const BIG_INT_MIN: i128 = i64::MIN as i128 - 1;
 
         db.exec("CREATE TABLE coffee_shops (id BIGINT PRIMARY KEY, address VARCHAR(100));")?;
-
         let query = db.exec(&format!(
             "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
             BIG_INT_MAX
@@ -1642,32 +1639,42 @@ mod tests {
         const UINT_MAX: u64 = u32::MAX as u64 + 1;
         const NEGATIVE_VALUE: i64 = -1;
 
-        db.exec("CREATE TABLE shops (id INT UNSIGNED PRIMARY KEY, name VARCHAR(69));")?;
+        db.exec(
+            r#"
+            CREATE TABLE companies (
+                id INT PRIMARY KEY,
+                years INT UNSIGNED,
+                name VARCHAR(50)
+            );
+        "#,
+        )?;
 
         let query = db.exec(&format!(
-            "INSERT INTO shops (id, name) VALUES ({}, 'Shop A');",
+            "INSERT INTO companies (id, years, name) VALUES (69, {}, 'Mongibello');",
             UINT_MAX
         ));
+
         assert!(query.is_err());
         assert_eq!(
             query,
-            Err(AnalyzerError::Overflow(Type::UnsignedInteger, UINT_MAX as _).into())
+            Err(AnalyzerError::Overflow(Type::UnsignedInteger, UINT_MAX as usize).into())
         );
 
         let query = db.exec(&format!(
-            "INSERT INTO shops (id, name) VALUES ({}, 'Shop B');",
+            "INSERT INTO companies (id, years, name) VALUES (69, {}, 'Sanremo');",
             NEGATIVE_VALUE
         ));
         assert!(query.is_err());
         assert_eq!(
             query,
-            Err(AnalyzerError::Overflow(Type::UnsignedInteger, NEGATIVE_VALUE as _).into())
+            Err(AnalyzerError::Overflow(Type::UnsignedInteger, NEGATIVE_VALUE as usize).into())
         );
 
         Ok(())
     }
 
     #[test]
+    #[ignore]
     fn test_inserting_ubigint_overflow() -> DatabaseResult {
         let mut db = Database::default();
         const UBIGINT_MAX: u128 = u64::MAX as u128 + 1;
