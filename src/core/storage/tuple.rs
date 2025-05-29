@@ -24,7 +24,7 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
 }
 
 /// Returns the length of bytes needed to storage a given `Varchar` [`Type`].
-pub(in crate::core::storage) fn utf_8_length_bytes(max_size: usize) -> usize {
+pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usize {
     match max_size {
         0..64 => 1,
         64..16384 => 2,
@@ -65,8 +65,8 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             Value::Number(num),
         ) => {
             let b_len = byte_len_of_type(int);
-            let endian_b = num.to_be_bytes();
-            buff.extend_from_slice(&endian_b[endian_b.len() - b_len..]);
+            let be_bytes = num.to_be_bytes();
+            buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
         }
         // TODO: checkout why this values are not coming already with the date parsed
         (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
@@ -194,4 +194,38 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
     });
 
     values.collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use crate::sql::statement::Column;
+
+    use super::*;
+
+    fn round_trip(r#type: Type, value: &Value) -> Value {
+        let mut buff = Vec::new();
+        serialize_into(&mut buff, &r#type, value);
+
+        let mut cursor = Cursor::new(buff);
+        let schema = Schema::new(vec![Column::new("col", r#type)]);
+
+        let mut rows = read_from(&mut cursor, &schema).expect("Failed to read from schema");
+        rows.pop().expect("No value inside rows")
+    }
+
+    #[test]
+    fn test_int_round_trip() {
+        let original = Value::Number(69);
+        let got = round_trip(Type::Integer, &Value::Number(69));
+
+        assert_eq!(got, original)
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_type_mismatch() {
+        round_trip(Type::Varchar(20), &Value::Number(20));
+    }
 }

@@ -1569,4 +1569,37 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_inserting_overflow() -> DatabaseResult {
+        let mut db = Database::default();
+        const INT_MAX: i64 = i32::MAX as i64 + 1;
+        const INT_MIN: i64 = i32::MIN as i64 - 1;
+
+        db.exec("CREATE TABLE coffee_shops (id INT PRIMARY KEY, address VARCHAR(100));")?;
+
+        let query = db.exec(&format!(
+            "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
+            INT_MAX
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::Integer, INT_MAX as _).into())
+        );
+
+        let query = db.exec(&format!(
+            "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
+            INT_MIN
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::Integer, INT_MIN as _).into())
+        );
+
+        Ok(())
+    }
 }
