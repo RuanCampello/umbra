@@ -19,7 +19,7 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
         Type::Integer | Type::UnsignedInteger | Type::Date => 4,
         Type::Time => 3, // TODO: this can be 4, but let it happen
         Type::Boolean => 1,
-        _ => panic!("This must only be used for integers."),
+        _ => panic!("This must be used only for types with length defined at compile time"),
     }
 }
 
@@ -151,20 +151,33 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
         int @ (Type::Integer
         | Type::UnsignedInteger
         | Type::BigInteger
-        | Type::UnsignedBigInteger) => {
-            let len = byte_len_of_type(int);
-            let mut big_endian = [0; mem::size_of::<i128>()];
-
-            let start = mem::size_of::<i128>() - len;
-            reader.read_exact(&mut big_endian[start..])?;
-
-            if big_endian[start] & 0x80 != 0 && matches!(int, Type::BigInteger | Type::Integer) {
-                big_endian[..start].fill(u8::MAX);
+        | Type::UnsignedBigInteger) => match int {
+            Type::Integer => {
+                let mut buf = [0; byte_len_of_type(&Type::Integer)];
+                reader.read_exact(&mut buf)?;
+                let n = i32::from_le_bytes(buf) as i128;
+                Ok(Value::Number(n))
             }
-
-            Ok(Value::Number(i128::from_be_bytes(big_endian)))
-        }
-
+            Type::UnsignedInteger => {
+                let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
+                reader.read_exact(&mut buf)?;
+                let n = u32::from_le_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
+            Type::BigInteger => {
+                let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
+                reader.read_exact(&mut buf)?;
+                let n = i64::from_le_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
+            Type::UnsignedBigInteger => {
+                let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
+                reader.read_exact(&mut buf)?;
+                let n = u64::from_le_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
+            _ => unreachable!(),
+        },
         date @ (Type::Date | Type::Time | Type::DateTime) => match date {
             Type::Date => {
                 let mut bytes = [0; byte_len_of_type(&Type::Date)];
