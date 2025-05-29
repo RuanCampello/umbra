@@ -13,13 +13,13 @@ use crate::{
 };
 
 /// Returns the byte length of a given SQL [`Type`].
-pub(crate) fn byte_len_of_type(data_type: &Type) -> usize {
+pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
         Type::BigInteger | Type::UnsignedBigInteger | Type::DateTime => 8,
         Type::Integer | Type::UnsignedInteger | Type::Date => 4,
         Type::Time => 3, // TODO: this can be 4, but let it happen
         Type::Boolean => 1,
-        _ => unreachable!("This must only be used for integers."),
+        _ => panic!("This must only be used for integers."),
     }
 }
 
@@ -143,7 +143,7 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             ))
         }
         Type::Boolean => {
-            let mut byte = [0];
+            let mut byte = [0; byte_len_of_type(&Type::Boolean)];
             reader.read_exact(&mut byte)?;
             Ok(Value::Boolean(byte[0] != 0))
         }
@@ -167,19 +167,19 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
 
         date @ (Type::Date | Type::Time | Type::DateTime) => match date {
             Type::Date => {
-                let mut bytes = [0; 4];
+                let mut bytes = [0; byte_len_of_type(&Type::Date)];
                 reader.read_exact(&mut bytes)?;
                 Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
             }
             Type::Time => {
-                let mut bytes = [0; 3];
+                let mut bytes = [0; byte_len_of_type(&Type::Time)];
                 reader.read_exact(&mut bytes)?;
                 Ok(Value::Temporal(NaiveTime::from(bytes).into()))
             }
             Type::DateTime => {
-                let mut date_bytes = [0; 4];
+                let mut date_bytes = [0; byte_len_of_type(&Type::Date)];
                 reader.read_exact(&mut date_bytes)?;
-                let mut time_bytes = [0; 3];
+                let mut time_bytes = [0; byte_len_of_type(&Type::Time)];
                 reader.read_exact(&mut time_bytes)?;
 
                 let bytes = (date_bytes, time_bytes);
