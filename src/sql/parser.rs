@@ -565,8 +565,8 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    fn supported_statements() -> Vec<Keyword> {
-        vec![
+    const fn supported_statements() -> [Keyword; 10] {
+        [
             Keyword::Select,
             Keyword::Create,
             Keyword::Update,
@@ -580,8 +580,9 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    fn supported_types() -> Vec<Keyword> {
-        vec![
+    const fn supported_types() -> [Keyword; 8] {
+        [
+            Keyword::SmallInt,
             Keyword::Int,
             Keyword::BigInt,
             Keyword::Bool,

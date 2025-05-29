@@ -327,6 +327,8 @@ impl PartialOrd for Value {
 impl Type {
     pub fn is_integer_in_bounds(&self, int: &i128) -> bool {
         let bound = match self {
+            Self::SmallInt => i16::MIN as i128..=i16::MAX as i128,
+            Self::UnsignedSmallInt => u16::MIN as i128..=u16::MAX as i128,
             Self::Integer => i32::MIN as i128..=i32::MAX as i128,
             Self::UnsignedInteger => 0..=u32::MAX as i128,
             Self::BigInteger => i64::MIN as i128..=i64::MAX as i128,
