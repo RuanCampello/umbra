@@ -17,7 +17,8 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
         Type::BigInteger | Type::UnsignedBigInteger | Type::DateTime => 8,
         Type::Integer | Type::UnsignedInteger | Type::Date => 4,
-        Type::Time => 3, // TODO: this can be 4, but let it happen
+        Type::Time => 3,
+        Type::SmallInt | Type::UnsignedSmallInt => 2,
         Type::Boolean => 1,
         _ => panic!("This must be used only for types with length defined at compile time"),
     }
@@ -146,6 +147,18 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             let mut byte = [0; byte_len_of_type(&Type::Boolean)];
             reader.read_exact(&mut byte)?;
             Ok(Value::Boolean(byte[0] != 0))
+        }
+        Type::SmallInt => {
+            let mut buf = [0; byte_len_of_type(&Type::SmallInt)];
+            reader.read_exact(&mut buf)?;
+            let n = i16::from_be_bytes(buf) as i128;
+            Ok(Value::Number(n))
+        }
+        Type::UnsignedSmallInt => {
+            let mut buf = [0; byte_len_of_type(&Type::UnsignedSmallInt)];
+            reader.read_exact(&mut buf)?;
+            let n = u16::from_be_bytes(buf) as i128;
+            Ok(Value::Number(n))
         }
         Type::Integer => {
             let mut buf = [0; byte_len_of_type(&Type::Integer)];
