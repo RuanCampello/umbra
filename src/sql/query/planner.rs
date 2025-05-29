@@ -109,12 +109,10 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 match expr {
                     Expression::Identifier(ident) => output
                         .push(table.schema.columns[table.schema.index_of(ident).unwrap()].clone()),
-                    _ => {
-                        output.push(Column::new(
-                            expr.to_string().as_str(),
-                            resolve_type(&table.schema, expr)?,
-                        ));
-                    }
+                    _ => output.push(Column::new(
+                        expr.to_string().as_str(),
+                        resolve_type(&table.schema, expr)?,
+                    )),
                 }
             }
 
@@ -225,7 +223,7 @@ mod tests {
         core::storage::{
             btree::{Cursor, FixedSizeCmp},
             pagination::pager::Pager,
-            tuple::{self, byte_len_of_type, serialize},
+            tuple::{byte_len_of_type, serialize},
             MemoryBuffer,
         },
         db::{Ctx as DbCtx, IndexMetadata, Relation, TableMetadata},
@@ -695,6 +693,7 @@ mod tests {
         Ok(())
     }
 
+    #[test]
     fn test_ignore_sorting_if_order_by() -> PlannerResult {
         let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));"])?;
 
