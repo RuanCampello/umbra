@@ -878,12 +878,12 @@ mod tests {
                 tuples: vec![
                     vec![
                         Value::Number(1),
-                        Value::Temporal(NaiveDate::parse_str("2030-12-24").unwrap().into()),
+                        temporal!("2030-12-24")?,
                         Value::Number(60),
                     ],
                     vec![
                         Value::Number(2),
-                        Value::Temporal(NaiveDate::parse_str("2029-02-13").unwrap().into()),
+                        temporal!("2029-02-13")?,
                         Value::Number(20),
                     ]
                 ]
@@ -918,12 +918,12 @@ mod tests {
                 tuples: vec![
                     vec![
                         Value::Number(1),
-                        Value::Temporal(NaiveDate::parse_str("2030-12-24").unwrap().into()),
+                        temporal!("2030-12-24")?,
                         Value::Number(60),
                     ],
                     vec![
                         Value::Number(3),
-                        Value::Temporal(NaiveDate::parse_str("2028-07-02").unwrap().into()),
+                        temporal!("2028-07-02")?,
                         Value::Number(25),
                     ]
                 ]
@@ -1122,17 +1122,17 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Temporal(NaiveDate::parse_str("1995-03-01").unwrap().into())
+                        temporal!("1995-03-01")?,
                     ],
                     vec![
                         Value::Number(2),
                         Value::String("Mary Dove".into()),
-                        Value::Temporal(NaiveDate::parse_str("2000-04-24").unwrap().into())
+                        temporal!("2000-04-24")?,
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Temporal(NaiveDate::parse_str("1999-01-27").unwrap().into())
+                        temporal!("1999-01-27")?,
                     ]
                 ]
             }
@@ -1174,18 +1174,18 @@ mod tests {
                 tuples: vec![
                     vec![
                         Value::Number(1),
-                        Value::Temporal("13:45:30".try_into().unwrap()),
-                        Value::Temporal("2023-12-01T13:45:30".try_into().unwrap()),
+                        temporal!("13:45:30")?,
+                        temporal!("2023-12-01T13:45:30")?,
                     ],
                     vec![
                         Value::Number(2),
-                        Value::Temporal("00:00:00".try_into().unwrap()),
-                        Value::Temporal("2020-01-01T00:00:00".try_into().unwrap()),
+                        temporal!("00:00:00")?,
+                        temporal!("2020-01-01T00:00:00")?,
                     ],
                     vec![
                         Value::Number(3),
-                        Value::Temporal("23:59:59".try_into().unwrap()),
-                        Value::Temporal("1999-12-31T23:59:59".try_into().unwrap()),
+                        temporal!("23:59:59")?,
+                        temporal!("1999-12-31T23:59:59")?,
                     ]
                 ]
             }
@@ -1399,19 +1399,19 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Temporal(NaiveDate::parse_str("1995-03-01").unwrap().into()),
+                        temporal!("1995-03-01")?,
                         Value::String("johndoe@email.com".into())
                     ],
                     vec![
                         Value::Number(2),
                         Value::String("Mary Dove".into()),
-                        Value::Temporal(NaiveDate::parse_str("2000-04-24").unwrap().into()),
+                        temporal!("2000-04-24")?,
                         Value::String("marydove@email.com".into())
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Temporal(NaiveDate::parse_str("1999-01-27").unwrap().into()),
+                        temporal!("1999-01-27")?,
                         Value::String("pauldean@email.com".into())
                     ]
                 ]
