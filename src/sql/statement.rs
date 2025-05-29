@@ -167,11 +167,20 @@ pub(crate) enum BinaryOperator {
 /// `Type` does not store actual data — it represents the expected type *declaration* in the schema.#[derive(Debug, PartialEq, Clone)]
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Type {
+    /// 2 bytes signed integer
+    SmallInt,
+    /// 2 bytes unsigned integer
+    UnsignedSmallInt,
+    /// 4 bytes signed integer
     Integer,
+    /// 4 bytes unsigned integer
     UnsignedInteger,
+    /// 8 bytes signed integer
     BigInteger,
+    /// 8 bytes unsigned integer
     UnsignedBigInteger,
     Boolean,
+    /// Variable length character type with limit
     Varchar(usize),
     Date,
     Time,
@@ -404,6 +413,8 @@ impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Boolean => f.write_str("BOOL"),
+            Type::SmallInt => f.write_str("SMALLINT"),
+            Type::UnsignedSmallInt => f.write_str("SMALLINT UNSIGNED"),
             Type::Integer => f.write_str("INT"),
             Type::UnsignedInteger => f.write_str("INT UNSIGNED"),
             Type::BigInteger => f.write_str("BIGINT"),

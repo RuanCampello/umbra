@@ -1015,7 +1015,7 @@ mod tests {
             pages SMALLINT
         );"#;
 
-        let statement = Parser::new(sql).parse_statement().unwrap();
+        let _statement = Parser::new(sql).parse_statement().unwrap();
     }
 
     #[test]
