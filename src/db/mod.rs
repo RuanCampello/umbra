@@ -1194,6 +1194,22 @@ mod tests {
     }
 
     #[test]
+    fn test_inserting_smallint() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE product_inventory (
+                product_id INT UNSIGNED PRIMARY KEY,
+                product_name VARCHAR(100),
+                current_stock SMALLINT,
+            );"#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn test_delete() -> DatabaseResult {
         let mut db = Database::default();
 

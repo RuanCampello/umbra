@@ -675,6 +675,18 @@ mod tests {
     }
 
     #[test]
+    fn insert_smallint() -> AnalyzerResult {
+        const CTX: &str = "CREATE TABLE hamlets (id INT PRIMARY KEY, population SMALLINT);";
+
+        Analyze {
+            sql: "INSERT INTO hamlets (id, population) VALUES (1, 4302);",
+            ctx: &[CTX],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
     fn multiple_primary_keys() -> AnalyzerResult {
         let analyze = Analyze {
             sql: "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255) PRIMARY KEY);",

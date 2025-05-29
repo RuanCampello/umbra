@@ -1007,6 +1007,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_small_int() {
+        let sql = r#"
+        CREATE TABLE books (
+            book_id INT PRIMARY KEY,
+            title VARCHAR (255),
+            pages SMALLINT
+        );"#;
+
+        let statement = Parser::new(sql).parse_statement().unwrap();
+    }
+
+    #[test]
     fn test_missing_identifier() {
         let sql = "INSERT INTO 1 VALUES (2);";
         let statement = Parser::new(sql).parse_statement();
