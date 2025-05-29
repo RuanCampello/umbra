@@ -151,7 +151,7 @@ fn deinit() {
     }
 }
 
-fn log(level: Level, message: &str) -> io::Result<()> {
+pub fn log(level: Level, message: &str) -> io::Result<()> {
     let global_level = LOG_LEVEL.load(Ordering::Acquire);
     if (level.clone() as usize) > global_level {
         return Ok(());

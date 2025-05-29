@@ -150,25 +150,25 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
         Type::Integer => {
             let mut buf = [0; byte_len_of_type(&Type::Integer)];
             reader.read_exact(&mut buf)?;
-            let n = i32::from_le_bytes(buf) as i128;
+            let n = i32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
         Type::UnsignedInteger => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
             reader.read_exact(&mut buf)?;
-            let n = u32::from_le_bytes(buf) as i128;
+            let n = u32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
         Type::BigInteger => {
             let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
             reader.read_exact(&mut buf)?;
-            let n = i64::from_le_bytes(buf) as i128;
+            let n = i64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
         Type::UnsignedBigInteger => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
             reader.read_exact(&mut buf)?;
-            let n = u64::from_le_bytes(buf) as i128;
+            let n = u64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
         Type::Date => {
