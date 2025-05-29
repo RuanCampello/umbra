@@ -338,6 +338,18 @@ impl Type {
 
         bound.contains(int)
     }
+
+    pub const fn is_integer(&self) -> bool {
+        match self {
+            Self::SmallInt
+            | Self::UnsignedSmallInt
+            | Self::Integer
+            | Self::UnsignedInteger
+            | Self::BigInteger
+            | Self::UnsignedBigInteger => true,
+            _ => false,
+        }
+    }
 }
 
 impl Display for Column {

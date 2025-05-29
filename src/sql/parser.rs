@@ -317,11 +317,13 @@ impl<'input> Parser<'input> {
                 let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
 
                 match (int, unsigned) {
+                    (Keyword::SmallInt, true) => Type::UnsignedSmallInt,
+                    (Keyword::SmallInt, false) => Type::SmallInt,
                     (Keyword::Int, true) => Type::UnsignedInteger,
                     (Keyword::Int, false) => Type::Integer,
                     (Keyword::BigInt, true) => Type::UnsignedBigInteger,
                     (Keyword::BigInt, false) => Type::BigInteger,
-                    _ => unreachable!(),
+                    _ => unreachable!("unknown integer"),
                 }
             }
             Keyword::Varchar => {

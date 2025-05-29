@@ -385,9 +385,7 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
 }
 
 fn analyze_number(integer: &i128, data_type: &Type) -> Result<(), AnalyzerError> {
-    if let Type::Integer | Type::BigInteger | Type::UnsignedInteger | Type::UnsignedBigInteger =
-        data_type
-    {
+    if data_type.is_integer() {
         if !data_type.is_integer_in_bounds(integer) {
             // TODO: this is a bit hacky, we should probably have a better way to get the max size of the type
             return Err(AnalyzerError::Overflow(

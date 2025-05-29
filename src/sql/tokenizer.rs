@@ -165,6 +165,7 @@ impl<'input> Tokenizer<'input> {
             "PRIMARY" => Keyword::Primary,
             "KEY" => Keyword::Key,
             "UNIQUE" => Keyword::Unique,
+            "SMALLINT" => Keyword::SmallInt,
             "INT" | "INTEGER" => Keyword::Int,
             "BIGINT" => Keyword::BigInt,
             "BY" => Keyword::By,

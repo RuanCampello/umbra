@@ -58,13 +58,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             buff.extend_from_slice(string.as_bytes());
         }
         (Type::Boolean, Value::Boolean(bool)) => buff.push(u8::from(*bool)),
-        (
-            int @ (Type::Integer
-            | Type::BigInteger
-            | Type::UnsignedInteger
-            | Type::UnsignedBigInteger),
-            Value::Number(num),
-        ) => {
+        (int, Value::Number(num)) if int.is_integer() => {
             let b_len = byte_len_of_type(int);
             let be_bytes = num.to_be_bytes();
             buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
