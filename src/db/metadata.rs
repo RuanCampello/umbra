@@ -83,6 +83,13 @@ impl TableMetadata {
         row_id
     }
 
+    pub fn next_serial_id(&mut self, column: &str) -> u64 {
+        self.serials
+            .get(column)
+            .map(|count| count.fetch_add(1, Ordering::Relaxed) + 1)
+            .expect("Unable to get next serial id for column")
+    }
+
     pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
         FixedSizeCmp::try_from(&self.schema.columns[0].data_type).map_err(|e| {
             DatabaseError::Corrupted(format!(

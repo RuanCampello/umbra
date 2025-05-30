@@ -344,15 +344,19 @@ impl Type {
 
     pub const fn is_integer(&self) -> bool {
         match self {
-            Self::SmallSerial
-            | Self::Serial
-            | Self::BigSerial
-            | Self::SmallInt
+            Self::SmallInt
             | Self::UnsignedSmallInt
             | Self::Integer
             | Self::UnsignedInteger
             | Self::BigInteger
             | Self::UnsignedBigInteger => true,
+            _ => self.is_serial(),
+        }
+    }
+
+    pub const fn is_serial(&self) -> bool {
+        match self {
+            Self::SmallSerial | Self::Serial | Self::BigSerial => true,
             _ => false,
         }
     }
