@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::storage::btree::{BTreeKeyCmp, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
@@ -9,12 +11,13 @@ use crate::sql::statement::{Column, Value};
 use super::schema::umbra_schema;
 use super::Database;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug)]
 pub(crate) struct TableMetadata {
     pub root: PageNumber,
     pub name: String,
     pub schema: Schema,
     pub indexes: Vec<IndexMetadata>,
+    pub serials: HashMap<String, AtomicU64>,
     pub(in crate::db) row_id: RowId,
 }
 
@@ -139,6 +142,47 @@ impl Relation {
             Self::Index(_) => 1,
             Self::Table(_) => 0,
         }
+    }
+}
+
+impl Clone for TableMetadata {
+    fn clone(&self) -> Self {
+        let serials = self
+            .serials
+            .iter()
+            .map(|(key, value)| (key.clone(), AtomicU64::new(value.load(Ordering::SeqCst))))
+            .collect();
+
+        TableMetadata {
+            root: self.root,
+            name: self.name.clone(),
+            schema: self.schema.clone(),
+            indexes: self.indexes.clone(),
+            serials,
+            row_id: self.row_id,
+        }
+    }
+}
+
+impl PartialEq for TableMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        if self.root != other.root
+            || self.row_id != other.row_id
+            || self.schema != other.schema
+            || self.indexes != other.indexes
+            || self.name != other.name
+            || self.serials.len() != other.serials.len()
+        {
+            return false;
+        }
+
+        self.serials.iter().all(|(k, v)| {
+            other
+                .serials
+                .get(k)
+                .map(|ov| v.load(Ordering::SeqCst) == ov.load(Ordering::SeqCst))
+                .unwrap_or(false)
+        })
     }
 }
 

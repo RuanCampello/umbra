@@ -110,6 +110,8 @@ pub(in crate::sql) fn analyze<'s>(
                 }
             }
 
+            println!("columns {:#?}", metadata.schema.keys());
+
             for row in rows {
                 if row.len() != columns.len() {
                     return Err(AnalyzerError::MissingCols.into());
@@ -631,6 +633,19 @@ mod tests {
 
             analyze.assert()?;
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_serial() -> AnalyzerResult {
+        const CTX: &str = "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(120));";
+
+        Analyze {
+            sql: "INSERT INTO users ('John Doe');",
+            ctx: &[CTX],
+            expected: Ok(()),
+        };
 
         Ok(())
     }

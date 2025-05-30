@@ -267,6 +267,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 row_id,
                 indexes: vec![],
                 schema,
+                serials: HashMap::new(),
             });
         }
 
@@ -276,6 +277,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             name: String::from(table),
             schema: Schema::empty(),
             indexes: Vec::new(),
+            serials: HashMap::new(),
         };
 
         let mut found_table_def = false;
@@ -456,6 +458,7 @@ impl TryFrom<&[&str]> for Context {
                         row_id: 1,
                         schema,
                         indexes: vec![],
+                        serials: HashMap::new(),
                     };
                     root += 1;
 
