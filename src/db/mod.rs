@@ -1795,4 +1795,39 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_serial_during_transactions() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30));")?;
+        // 1st successful insert
+        db.exec("BEGIN TRANSACTION;")?;
+        db.exec("INSERT INTO users(name) VALUES ('Alice');")?;
+        db.exec("COMMIT;")?;
+
+        // failed insertion
+        db.exec("BEGIN TRANSACTION;")?;
+        db.exec("INSERT INTO users(name) VALUES ('Milena');")?;
+        db.exec("ROLLBACK;")?;
+
+        // 2nd successful insert
+        db.exec("BEGIN TRANSACTION;")?;
+        db.exec("INSERT INTO users(name) VALUES ('Carla');")?;
+        db.exec("COMMIT;")?;
+
+        let ids: Vec<i128> = db
+            .exec("SELECT id FROM users;")?
+            .tuples
+            .iter()
+            .map(|row| match row[0] {
+                Value::Number(num) => num,
+                _ => panic!("Should be a number"),
+            })
+            .collect();
+
+        assert_eq!(ids, vec![1, 3]);
+
+        Ok(())
+    }
 }
