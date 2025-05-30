@@ -1768,4 +1768,33 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_incrementing_serial() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(15));")?;
+
+        (0..15).for_each(|user| {
+            db.exec(&format!(
+                "INSERT INTO users (name) VALUES ('user_{}');",
+                user
+            ))
+            .unwrap();
+        });
+
+        (0..15).for_each(|id| {
+            let query = db.exec("SELECT id FROM users;");
+            assert!(query.is_ok());
+            assert_eq!(
+                query.unwrap(),
+                QuerySet {
+                    schema: Schema::new(vec![Column::primary_key("id", Type::Serial)]),
+                    tuples: vec![vec![Value::Number(id)]]
+                }
+            )
+        });
+
+        Ok(())
+    }
 }

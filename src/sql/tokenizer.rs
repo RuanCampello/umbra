@@ -1,5 +1,7 @@
 //! SQL tokenizer that generates ours [tokens](Token) instances.
 
+#![allow(unused)]
+
 use crate::sql::tokens::{Keyword, Token, Whitespace};
 use std::iter::Peekable;
 use std::str::Chars;
@@ -165,6 +167,7 @@ impl<'input> Tokenizer<'input> {
             "PRIMARY" => Keyword::Primary,
             "KEY" => Keyword::Key,
             "UNIQUE" => Keyword::Unique,
+            "SERIAL" => Keyword::Serial,
             "SMALLINT" => Keyword::SmallInt,
             "INT" | "INTEGER" => Keyword::Int,
             "BIGINT" => Keyword::BigInt,

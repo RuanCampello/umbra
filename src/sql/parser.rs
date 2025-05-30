@@ -582,8 +582,11 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 8] {
+    const fn supported_types() -> [Keyword; 11] {
         [
+            Keyword::SmallSerial,
+            Keyword::Serial,
+            Keyword::BigSerial,
             Keyword::SmallInt,
             Keyword::Int,
             Keyword::BigInt,

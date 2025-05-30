@@ -179,6 +179,9 @@ pub(crate) enum Type {
     BigInteger,
     /// 8 bytes unsigned integer
     UnsignedBigInteger,
+    SmallSerial,
+    Serial,
+    BigSerial,
     Boolean,
     /// Variable length character type with limit
     Varchar(usize),
@@ -433,6 +436,9 @@ impl Display for Type {
             Type::UnsignedInteger => f.write_str("INT UNSIGNED"),
             Type::BigInteger => f.write_str("BIGINT"),
             Type::UnsignedBigInteger => f.write_str("BIGINT UNSIGNED"),
+            Type::SmallSerial => f.write_str("SMALLSERIAL"),
+            Type::Serial => f.write_str("SERIAL"),
+            Type::BigSerial => f.write_str("BIGSERIAL"),
             Type::DateTime => f.write_str("TIMESTAMP"),
             Type::Time => f.write_str("TIME"),
             Type::Date => f.write_str("DATE"),
