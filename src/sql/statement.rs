@@ -184,12 +184,12 @@ pub(crate) enum Type {
     SmallSerial,
     /// Auto-incrementing 4-byte signed integer (serial) backed by a sequence.
     /// Behaves like PostgreSQL `SERIAL`: uses `next_serial_id`, which is atomic and
-    /// not rolled back on transaction abort, so gaps can occur.
+    /// **not** rolled back on transaction abort, so gaps can occur.
     /// ([ftp.postgresql.kr](https://ftp.postgresql.kr/docs/9.2/functions-sequence.html))
     Serial,
     /// Auto-incrementing 8-byte signed integer (bigserial) backed by a sequence.
     /// Behaves like PostgreSQL `BIGSERIAL`: uses `next_serial_id`, which is atomic and
-    /// not rolled back on transaction abort, so gaps can occur.
+    /// **not** rolled back on transaction abort, so gaps can occur.
     /// ([ftp.postgresql.kr](https://ftp.postgresql.kr/docs/9.2/functions-sequence.html))
     BigSerial,
     /// Boolean type (true/false)
