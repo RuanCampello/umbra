@@ -15,10 +15,10 @@ use crate::{
 /// Returns the byte length of a given SQL [`Type`].
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
-        Type::BigInteger | Type::UnsignedBigInteger | Type::DateTime => 8,
-        Type::Integer | Type::UnsignedInteger | Type::Date => 4,
+        Type::BigInteger | Type::BigSerial | Type::UnsignedBigInteger | Type::DateTime => 8,
+        Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date => 4,
         Type::Time => 3,
-        Type::SmallInt | Type::UnsignedSmallInt => 2,
+        Type::SmallInt | Type::SmallSerial | Type::UnsignedSmallInt => 2,
         Type::Boolean => 1,
         _ => panic!("This must be used only for types with length defined at compile time"),
     }

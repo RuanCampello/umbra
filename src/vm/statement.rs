@@ -15,7 +15,7 @@ use crate::{
         SqlError, DB_METADATA,
     },
     index,
-    sql::statement::{Constraint, Create, Statement, Value},
+    sql::statement::{Column, Constraint, Create, Statement, Value},
     vm::planner::{Execute, Planner, SeqScan},
 };
 
@@ -29,7 +29,6 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
     match statement {
         Statement::Create(Create::Table { name, columns }) => {
             let root = allocate_root(db)?;
-
             insert_into_metadata(
                 db,
                 vec![
@@ -40,6 +39,15 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(sql),
                 ],
             )?;
+
+            let metatada = db.metadata(&name)?;
+
+            columns
+                .iter()
+                .filter(|col| col.data_type.is_serial())
+                .for_each(|col| {
+                    metatada.create_serial_for_col(col.name.to_string());
+                });
 
             let skip_pk_idx = match has_btree_key(&columns) {
                 true => 1,

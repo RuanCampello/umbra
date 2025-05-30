@@ -1786,17 +1786,12 @@ mod tests {
             .unwrap();
         });
 
-        (0..15).for_each(|id| {
-            let query = db.exec("SELECT id FROM users;");
-            assert!(query.is_ok());
-            assert_eq!(
-                query.unwrap(),
-                QuerySet {
-                    schema: Schema::new(vec![Column::primary_key("id", Type::Serial)]),
-                    tuples: vec![vec![Value::Number(id)]]
-                }
-            )
-        });
+        let query = db.exec("SELECT id FROM users;")?;
+        query
+            .tuples
+            .iter()
+            .enumerate()
+            .for_each(|(id, user)| assert_eq!(user, &vec![Value::Number((id + 1) as i128)]));
 
         Ok(())
     }

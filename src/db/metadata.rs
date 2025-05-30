@@ -90,6 +90,12 @@ impl TableMetadata {
             .expect("Unable to get next serial id for column")
     }
 
+    pub fn create_serial_for_col(&mut self, column: String) {
+        self.serials
+            .entry(column)
+            .or_insert_with(|| AtomicU64::new(0));
+    }
+
     pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
         FixedSizeCmp::try_from(&self.schema.columns[0].data_type).map_err(|e| {
             DatabaseError::Corrupted(format!(

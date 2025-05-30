@@ -87,7 +87,6 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 (0..columns.len()).for_each(|idx| {
                     let sorted_idx = metadata.schema.index_of(&columns[idx]).unwrap();
 
-                    println!("sorted index {sorted_idx} for values {values:#?}");
                     columns.swap(idx, sorted_idx);
                     values.swap(idx, sorted_idx);
                 });
