@@ -163,27 +163,38 @@ pub(crate) enum BinaryOperator {
 /// For example:
 /// - A column defined as `VARCHAR(255)` will be represented as `Type::Varchar(255)`.
 /// - A column of `DATE` will be represented as `Type::Date`.
-///
-/// `Type` does not store actual data — it represents the expected type *declaration* in the schema.#[derive(Debug, PartialEq, Clone)]
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Type {
-    /// 2 bytes signed integer
+    /// 2-byte signed integer
     SmallInt,
-    /// 2 bytes unsigned integer
+    /// 2-byte unsigned integer
     UnsignedSmallInt,
-    /// 4 bytes signed integer
+    /// 4-byte signed integer
     Integer,
-    /// 4 bytes unsigned integer
+    /// 4-byte unsigned integer
     UnsignedInteger,
-    /// 8 bytes signed integer
+    /// 8-byte signed integer
     BigInteger,
-    /// 8 bytes unsigned integer
+    /// 8-byte unsigned integer
     UnsignedBigInteger,
+    /// Auto-incrementing 2-byte signed integer (serial) backed by a sequence.
+    /// Behaves like PostgreSQL `SERIAL`: uses `next_serial_id`, which is atomic and
+    /// **not** rolled back on transaction abort, so gaps can occur.
+    /// ([ftp.postgresql.kr](https://ftp.postgresql.kr/docs/9.2/functions-sequence.html))
     SmallSerial,
+    /// Auto-incrementing 4-byte signed integer (serial) backed by a sequence.
+    /// Behaves like PostgreSQL `SERIAL`: uses `next_serial_id`, which is atomic and
+    /// not rolled back on transaction abort, so gaps can occur.
+    /// ([ftp.postgresql.kr](https://ftp.postgresql.kr/docs/9.2/functions-sequence.html))
     Serial,
+    /// Auto-incrementing 8-byte signed integer (bigserial) backed by a sequence.
+    /// Behaves like PostgreSQL `BIGSERIAL`: uses `next_serial_id`, which is atomic and
+    /// not rolled back on transaction abort, so gaps can occur.
+    /// ([ftp.postgresql.kr](https://ftp.postgresql.kr/docs/9.2/functions-sequence.html))
     BigSerial,
+    /// Boolean type (true/false)
     Boolean,
-    /// Variable length character type with limit
+    /// Variable length character type with a limit
     Varchar(usize),
     Date,
     Time,
