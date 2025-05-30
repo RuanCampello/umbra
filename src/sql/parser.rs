@@ -323,6 +323,9 @@ impl<'input> Parser<'input> {
                     (Keyword::Int, false) => Type::Integer,
                     (Keyword::BigInt, true) => Type::UnsignedBigInteger,
                     (Keyword::BigInt, false) => Type::BigInteger,
+                    (Keyword::SmallSerial, _) => Type::SmallSerial,
+                    (Keyword::Serial, _) => Type::Serial,
+                    (Keyword::BigSerial, _) => Type::BigSerial,
                     _ => unreachable!("unknown integer"),
                 }
             }
@@ -349,7 +352,7 @@ impl<'input> Parser<'input> {
             Keyword::Timestamp => Type::DateTime,
             Keyword::Date => Type::Date,
             Keyword::Time => Type::Time,
-            _ => unreachable!(),
+            keyword => unreachable!("unexpected column token: {keyword}"),
         };
 
         let mut constraints = Vec::new();
@@ -600,7 +603,12 @@ impl<'input> Parser<'input> {
 
     const fn is_integer(keyword: &Keyword) -> bool {
         match keyword {
-            Keyword::SmallInt | Keyword::Int | Keyword::BigInt => true,
+            Keyword::SmallInt
+            | Keyword::Int
+            | Keyword::BigInt
+            | Keyword::SmallSerial
+            | Keyword::Serial
+            | Keyword::BigSerial => true,
             _ => false,
         }
     }
