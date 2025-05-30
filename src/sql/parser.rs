@@ -1064,6 +1064,30 @@ mod tests {
     }
 
     #[test]
+    fn test_create_table_with_serials() {
+        let sql = r#"CREATE TABLE cursed_items (
+            item_id BIGSERIAL PRIMARY KEY,
+            name VARCHAR(255),
+            darkness_level SMALLINT UNSIGNED,
+            soul_count BIGINT UNSIGNED
+        );"#;
+
+        let statement = Parser::new(sql).parse_statement().unwrap();
+        assert_eq!(
+            statement,
+            Statement::Create(Create::Table {
+                name: "cursed_items".into(),
+                columns: vec![
+                    Column::primary_key("item_id", Type::BigSerial),
+                    Column::new("name", Type::Varchar(255)),
+                    Column::new("darkness_level", Type::UnsignedSmallInt),
+                    Column::new("soul_count", Type::UnsignedBigInteger)
+                ]
+            })
+        )
+    }
+
+    #[test]
     fn test_missing_identifier() {
         let sql = "INSERT INTO 1 VALUES (2);";
         let statement = Parser::new(sql).parse_statement();
