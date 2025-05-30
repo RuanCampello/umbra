@@ -98,46 +98,57 @@ pub(in crate::sql) fn analyze<'s>(
                 return Err(AnalyzerError::MetadataAssignment.into());
             }
 
-            let mut columns = columns.as_slice();
-            let schema_columns: Vec<String>;
+            // FIXME: there's a lot of things here, maybe check the performance
+            let schema = metadata.key_only_schema();
+            let columns_provided_by_user = !columns.is_empty();
 
-            if columns.is_empty() {
-                schema_columns = metadata.schema.columns_ids();
-                columns = schema_columns.as_slice();
+            let columns: Vec<&str> = match !columns_provided_by_user {
+                true => schema
+                    .columns
+                    .iter()
+                    .filter(|col| col.name.ne(ROW_COL_ID))
+                    .map(|col| col.name.as_str())
+                    .collect(),
+                false => columns.iter().map(String::as_str).collect(),
+            };
 
-                if columns[0].eq(ROW_COL_ID) {
-                    columns = &schema_columns[1..];
-                }
-            }
+            let column_set: HashSet<&str> = columns.iter().copied().collect();
 
             for row in rows {
-                if row.len() != columns.len() {
+                if row.len().ne(&columns.len()) {
                     return Err(AnalyzerError::MissingCols.into());
                 }
 
                 let mut seen = HashSet::new();
-                for col in columns {
+                for &col in &columns {
+                    if col.eq(ROW_COL_ID) {
+                        return Err(AnalyzerError::MetadataAssignment.into());
+                    }
                     if metadata.schema.index_of(col).is_none() {
                         return Err(SqlError::InvalidColumn(col.into()).into());
                     }
                     if !seen.insert(col) {
                         return Err(AnalyzerError::DuplicateCols(col.into()).into());
                     }
-                    if col.eq(ROW_COL_ID) {
-                        return Err(AnalyzerError::MetadataAssignment.into());
+                }
+
+                for col in &schema.columns {
+                    if col.name == ROW_COL_ID {
+                        continue;
+                    }
+                    if matches!(
+                        col.data_type,
+                        Type::SmallSerial | Type::Serial | Type::BigSerial
+                    ) {
+                        continue;
+                    }
+
+                    if !column_set.contains(col.name.as_str()) {
+                        return Err(AnalyzerError::MissingCols.into());
                     }
                 }
 
-                let schema_len = if metadata.schema.columns[0].name.eq(ROW_COL_ID) {
-                    metadata.schema.columns.len() - 1
-                } else {
-                    metadata.schema.columns.len()
-                };
-                if schema_len != columns.len() {
-                    return Err(AnalyzerError::MissingCols.into());
-                }
-
-                for (expr, col) in row.iter().zip(columns) {
+                for (expr, col) in row.iter().zip(&columns) {
                     analyze_assignment(metadata, col, expr, false)?;
                 }
             }
@@ -385,9 +396,7 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
 }
 
 fn analyze_number(integer: &i128, data_type: &Type) -> Result<(), AnalyzerError> {
-    if let Type::Integer | Type::BigInteger | Type::UnsignedInteger | Type::UnsignedBigInteger =
-        data_type
-    {
+    if data_type.is_integer() {
         if !data_type.is_integer_in_bounds(integer) {
             // TODO: this is a bit hacky, we should probably have a better way to get the max size of the type
             return Err(AnalyzerError::Overflow(
@@ -638,6 +647,19 @@ mod tests {
     }
 
     #[test]
+    fn insert_serial() -> AnalyzerResult {
+        const CTX: &str = "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(120));";
+
+        Analyze {
+            sql: "INSERT INTO users ('John Doe');",
+            ctx: &[CTX],
+            expected: Ok(()),
+        };
+
+        Ok(())
+    }
+
+    #[test]
     fn insert_invalid_datetime_format() -> AnalyzerResult {
         const CTX: &str = r#"
             CREATE TABLE events (
@@ -672,6 +694,18 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn insert_smallint() -> AnalyzerResult {
+        const CTX: &str = "CREATE TABLE hamlets (id INT PRIMARY KEY, population SMALLINT);";
+
+        Analyze {
+            sql: "INSERT INTO hamlets (id, population) VALUES (1, 4302);",
+            ctx: &[CTX],
+            expected: Ok(()),
+        }
+        .assert()
     }
 
     #[test]

@@ -1,7 +1,9 @@
 // ! Random numbers implementation for identifiers without dependencies.
 // ! This is a simplified version of https://github.com/smol-rs/fastrand implementation.
 
-use core::ops::{Bound, RangeBounds};
+#![allow(dead_code)]
+
+use core::ops::Bound;
 use std::cell::Cell;
 use std::hash::Hasher;
 

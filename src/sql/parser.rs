@@ -282,7 +282,6 @@ impl<'input> Parser<'input> {
             Token::Number(number) => Ok(Expression::Value(Value::Number(
                 number
                     .parse()
-                    // TODO: add proper error of int out of range
                     .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
             ))),
             token @ (Token::Minus | Token::Plus) => {
@@ -314,15 +313,20 @@ impl<'input> Parser<'input> {
         let name = self.parse_ident()?;
 
         let data_type = match self.expect_one(&Self::supported_types())? {
-            int @ (Keyword::Int | Keyword::BigInt) => {
+            int if Self::is_integer(&int) => {
                 let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
 
                 match (int, unsigned) {
+                    (Keyword::SmallInt, true) => Type::UnsignedSmallInt,
+                    (Keyword::SmallInt, false) => Type::SmallInt,
                     (Keyword::Int, true) => Type::UnsignedInteger,
                     (Keyword::Int, false) => Type::Integer,
                     (Keyword::BigInt, true) => Type::UnsignedBigInteger,
                     (Keyword::BigInt, false) => Type::BigInteger,
-                    _ => unreachable!(),
+                    (Keyword::SmallSerial, _) => Type::SmallSerial,
+                    (Keyword::Serial, _) => Type::Serial,
+                    (Keyword::BigSerial, _) => Type::BigSerial,
+                    _ => unreachable!("unknown integer"),
                 }
             }
             Keyword::Varchar => {
@@ -348,7 +352,7 @@ impl<'input> Parser<'input> {
             Keyword::Timestamp => Type::DateTime,
             Keyword::Date => Type::Date,
             Keyword::Time => Type::Time,
-            _ => unreachable!(),
+            keyword => unreachable!("unexpected column token: {keyword}"),
         };
 
         let mut constraints = Vec::new();
@@ -566,8 +570,8 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    fn supported_statements() -> Vec<Keyword> {
-        vec![
+    const fn supported_statements() -> [Keyword; 10] {
+        [
             Keyword::Select,
             Keyword::Create,
             Keyword::Update,
@@ -581,8 +585,12 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    fn supported_types() -> Vec<Keyword> {
-        vec![
+    const fn supported_types() -> [Keyword; 11] {
+        [
+            Keyword::SmallSerial,
+            Keyword::Serial,
+            Keyword::BigSerial,
+            Keyword::SmallInt,
             Keyword::Int,
             Keyword::BigInt,
             Keyword::Bool,
@@ -591,6 +599,18 @@ impl<'input> Parser<'input> {
             Keyword::Date,
             Keyword::Timestamp,
         ]
+    }
+
+    const fn is_integer(keyword: &Keyword) -> bool {
+        match keyword {
+            Keyword::SmallInt
+            | Keyword::Int
+            | Keyword::BigInt
+            | Keyword::SmallSerial
+            | Keyword::Serial
+            | Keyword::BigSerial => true,
+            _ => false,
+        }
     }
 }
 
@@ -715,6 +735,32 @@ mod tests {
                     },
                 ],
             }))
+        );
+    }
+
+    #[test]
+    fn test_create_table_with_unsigned_keys() {
+        let sql = r#"
+            CREATE TABLE companies (
+                id INT UNSIGNED PRIMARY KEY,
+                name VARCHAR(50),
+                address VARCHAR(255),
+                phone VARCHAR(10)
+            );
+        "#;
+
+        let statement = Parser::new(sql).parse_statement();
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Table {
+                columns: vec![
+                    Column::primary_key("id", Type::UnsignedInteger),
+                    Column::new("name", Type::Varchar(50)),
+                    Column::new("address", Type::Varchar(255)),
+                    Column::new("phone", Type::Varchar(10))
+                ],
+                name: "companies".into()
+            })
         );
     }
 
@@ -977,6 +1023,66 @@ mod tests {
                     expected: Token::LeftParen,
                     found: Token::Identifier("id".into())
                 }
+            })
+        )
+    }
+
+    #[test]
+    fn test_parse_small_int() {
+        let sql = r#"
+        CREATE TABLE books (
+            book_id INT PRIMARY KEY,
+            title VARCHAR (255),
+            pages SMALLINT
+        );"#;
+
+        let statement = Parser::new(sql).parse_statement().unwrap();
+
+        assert_eq!(
+            statement,
+            Statement::Create(Create::Table {
+                name: "books".into(),
+                columns: vec![
+                    Column {
+                        name: "book_id".into(),
+                        data_type: Type::Integer,
+                        constraints: vec![Constraint::PrimaryKey],
+                    },
+                    Column {
+                        name: "title".into(),
+                        data_type: Type::Varchar(255),
+                        constraints: vec![]
+                    },
+                    Column {
+                        name: "pages".into(),
+                        data_type: Type::SmallInt,
+                        constraints: vec![]
+                    }
+                ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_create_table_with_serials() {
+        let sql = r#"CREATE TABLE cursed_items (
+            item_id BIGSERIAL PRIMARY KEY,
+            name VARCHAR(255),
+            darkness_level SMALLINT UNSIGNED,
+            soul_count BIGINT UNSIGNED
+        );"#;
+
+        let statement = Parser::new(sql).parse_statement().unwrap();
+        assert_eq!(
+            statement,
+            Statement::Create(Create::Table {
+                name: "cursed_items".into(),
+                columns: vec![
+                    Column::primary_key("item_id", Type::BigSerial),
+                    Column::new("name", Type::Varchar(255)),
+                    Column::new("darkness_level", Type::UnsignedSmallInt),
+                    Column::new("soul_count", Type::UnsignedBigInteger)
+                ]
             })
         )
     }

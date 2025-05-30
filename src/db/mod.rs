@@ -105,6 +105,12 @@ pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
 }
 
+macro_rules! temporal {
+    ($time_str:expr) => {
+        $time_str.try_into().map(Value::Temporal)
+    };
+}
+
 impl Database<File> {
     fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let file = os::Fs::options()
@@ -261,6 +267,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 row_id,
                 indexes: vec![],
                 schema,
+                serials: HashMap::new(),
             });
         }
 
@@ -270,6 +277,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             name: String::from(table),
             schema: Schema::empty(),
             indexes: Vec::new(),
+            serials: HashMap::new(),
         };
 
         let mut found_table_def = false;
@@ -450,6 +458,7 @@ impl TryFrom<&[&str]> for Context {
                         row_id: 1,
                         schema,
                         indexes: vec![],
+                        serials: HashMap::new(),
                     };
                     root += 1;
 
@@ -653,6 +662,12 @@ impl From<TypeError> for SqlError {
 impl From<DateParseError> for SqlError {
     fn from(value: DateParseError) -> Self {
         TypeError::InvalidDate(value).into()
+    }
+}
+
+impl From<DateParseError> for DatabaseError {
+    fn from(value: DateParseError) -> Self {
+        value.into()
     }
 }
 
@@ -866,12 +881,12 @@ mod tests {
                 tuples: vec![
                     vec![
                         Value::Number(1),
-                        Value::Date(NaiveDate::parse_str("2030-12-24").unwrap()),
+                        temporal!("2030-12-24")?,
                         Value::Number(60),
                     ],
                     vec![
                         Value::Number(2),
-                        Value::Date(NaiveDate::parse_str("2029-02-13").unwrap()),
+                        temporal!("2029-02-13")?,
                         Value::Number(20),
                     ]
                 ]
@@ -906,12 +921,12 @@ mod tests {
                 tuples: vec![
                     vec![
                         Value::Number(1),
-                        Value::Date(NaiveDate::parse_str("2030-12-24").unwrap()),
+                        temporal!("2030-12-24")?,
                         Value::Number(60),
                     ],
                     vec![
                         Value::Number(3),
-                        Value::Date(NaiveDate::parse_str("2028-07-02").unwrap()),
+                        temporal!("2028-07-02")?,
                         Value::Number(25),
                     ]
                 ]
@@ -1001,7 +1016,6 @@ mod tests {
         )?;
 
         let query = db.exec("SELECT * FROM employees ORDER BY age, name;")?;
-        println!("query {query:#?}");
 
         assert_eq!(
             query,
@@ -1110,19 +1124,128 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap())
+                        temporal!("1995-03-01")?,
                     ],
                     vec![
                         Value::Number(2),
                         Value::String("Mary Dove".into()),
-                        Value::Date(NaiveDate::parse_str("2000-04-24").unwrap())
+                        temporal!("2000-04-24")?,
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap())
+                        temporal!("1999-01-27")?,
                     ]
                 ]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_temporal_values() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            "CREATE TABLE logs (
+            id INT PRIMARY KEY,
+            log_time TIME,
+            created_at TIMESTAMP
+        );",
+        )?;
+
+        db.exec(
+            r#"
+        INSERT INTO logs (id, log_time, created_at) VALUES 
+        (1, '13:45:30', '2023-12-01T13:45:30'),
+        (2, '00:00:00', '2020-01-01T00:00:00'),
+        (3, '23:59:59', '1999-12-31T23:59:59');
+    "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM logs;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("log_time", Type::Time),
+                    Column::new("created_at", Type::DateTime),
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        temporal!("13:45:30")?,
+                        temporal!("2023-12-01T13:45:30")?,
+                    ],
+                    vec![
+                        Value::Number(2),
+                        temporal!("00:00:00")?,
+                        temporal!("2020-01-01T00:00:00")?,
+                    ],
+                    vec![
+                        Value::Number(3),
+                        temporal!("23:59:59")?,
+                        temporal!("1999-12-31T23:59:59")?,
+                    ]
+                ]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_inserting_smallint() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE product_inventory (
+                id INT UNSIGNED PRIMARY KEY,
+                name VARCHAR(100),
+                stock SMALLINT UNSIGNED
+            );"#,
+        )?;
+
+        db.exec(
+            "INSERT INTO product_inventory (id, name, stock)
+            VALUES (1, 'Laptop', 3), (3, 'Mechanical keyboard', 5);",
+        )?;
+
+        let query = db.exec(
+            "INSERT INTO product_inventory (id, name, stock) VALUES (2, 'Wireless mouse', -2);",
+        );
+
+        let underflow_value = -2;
+        assert!(query.is_err());
+        assert_eq!(
+            query.unwrap_err(),
+            AnalyzerError::Overflow(Type::UnsignedSmallInt, underflow_value as _).into()
+        );
+
+        let query = db.exec("SELECT * FROM product_inventory;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::UnsignedInteger),
+                    Column::new("name", Type::Varchar(100)),
+                    Column::new("stock", Type::UnsignedSmallInt)
+                ]),
+                tuples: vec![
+                    vec![
+                        Value::Number(1),
+                        Value::String("Laptop".into()),
+                        Value::Number(3)
+                    ],
+                    vec![
+                        Value::Number(3),
+                        Value::String("Mechanical keyboard".into()),
+                        Value::Number(5)
+                    ]
+                ],
             }
         );
 
@@ -1179,12 +1302,12 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap())
+                        temporal!("1995-03-01")?,
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap())
+                        temporal!("1999-01-27")?,
                     ]
                 ]
             }
@@ -1334,19 +1457,19 @@ mod tests {
                     vec![
                         Value::Number(1),
                         Value::String("John Doe".into()),
-                        Value::Date(NaiveDate::parse_str("1995-03-01").unwrap()),
+                        temporal!("1995-03-01")?,
                         Value::String("johndoe@email.com".into())
                     ],
                     vec![
                         Value::Number(2),
                         Value::String("Mary Dove".into()),
-                        Value::Date(NaiveDate::parse_str("2000-04-24").unwrap()),
+                        temporal!("2000-04-24")?,
                         Value::String("marydove@email.com".into())
                     ],
                     vec![
                         Value::Number(3),
                         Value::String("Paul Dean".into()),
-                        Value::Date(NaiveDate::parse_str("1999-01-27").unwrap()),
+                        temporal!("1999-01-27")?,
                         Value::String("pauldean@email.com".into())
                     ]
                 ]
@@ -1501,6 +1624,209 @@ mod tests {
                 Column::new("discount", Type::Integer),
             ]),
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_inserting_int_overflow() -> DatabaseResult {
+        let mut db = Database::default();
+        const INT_MAX: i64 = i32::MAX as i64 + 1;
+        const INT_MIN: i64 = i32::MIN as i64 - 1;
+
+        db.exec("CREATE TABLE coffee_shops (id INT PRIMARY KEY, address VARCHAR(100));")?;
+        let query = db.exec(&format!(
+            "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
+            INT_MAX
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::Integer, INT_MAX as _).into())
+        );
+
+        let query = db.exec(&format!(
+            "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
+            INT_MIN
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::Integer, INT_MIN as _).into())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_inserting_big_int_overflow() -> DatabaseResult {
+        let mut db = Database::default();
+        const BIG_INT_MAX: i128 = i64::MAX as i128 + 1;
+        const BIG_INT_MIN: i128 = i64::MIN as i128 - 1;
+
+        db.exec("CREATE TABLE coffee_shops (id BIGINT PRIMARY KEY, address VARCHAR(100));")?;
+        let query = db.exec(&format!(
+            "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
+            BIG_INT_MAX
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::BigInteger, BIG_INT_MAX as _).into())
+        );
+
+        let query = db.exec(&format!(
+            "INSERT INTO coffee_shops (id, address) VALUES ({}, 'Mongibello');",
+            BIG_INT_MIN
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::BigInteger, BIG_INT_MIN as _).into())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_inserting_uint_overflow() -> DatabaseResult {
+        let mut db = Database::default();
+        const UINT_MAX: u64 = u32::MAX as u64 + 1;
+        const NEGATIVE_VALUE: i64 = -1;
+
+        db.exec(
+            r#"
+            CREATE TABLE companies (
+                id INT PRIMARY KEY,
+                years INT UNSIGNED,
+                name VARCHAR(50)
+            );
+        "#,
+        )?;
+
+        let query = db.exec(&format!(
+            "INSERT INTO companies (id, years, name) VALUES (69, {}, 'Mongibello');",
+            UINT_MAX
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::UnsignedInteger, UINT_MAX as usize).into())
+        );
+
+        let query = db.exec(&format!(
+            "INSERT INTO companies (id, years, name) VALUES (69, {}, 'Sanremo');",
+            NEGATIVE_VALUE
+        ));
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::UnsignedInteger, NEGATIVE_VALUE as usize).into())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_inserting_ubigint_overflow() -> DatabaseResult {
+        let mut db = Database::default();
+        const UBIG_INT_MAX: u128 = u64::MAX as u128 + 1;
+        const NEGATIVE_VALUE: i128 = -1;
+
+        db.exec(
+            r#"
+            CREATE TABLE companies (
+                id INT PRIMARY KEY,
+                years BIGINT UNSIGNED,
+                name VARCHAR(50)
+            );
+        "#,
+        )?;
+
+        let query = db.exec(&format!(
+            "INSERT INTO companies (id, years, name) VALUES (69, {}, 'Mongibello');",
+            UBIG_INT_MAX
+        ));
+
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::UnsignedBigInteger, UBIG_INT_MAX as usize).into())
+        );
+
+        let query = db.exec(&format!(
+            "INSERT INTO companies (id, years, name) VALUES (69, {}, 'Sanremo');",
+            NEGATIVE_VALUE
+        ));
+        assert!(query.is_err());
+        assert_eq!(
+            query,
+            Err(AnalyzerError::Overflow(Type::UnsignedBigInteger, NEGATIVE_VALUE as usize).into())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_incrementing_serial() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(15));")?;
+
+        (0..15).for_each(|user| {
+            db.exec(&format!(
+                "INSERT INTO users (name) VALUES ('user_{}');",
+                user
+            ))
+            .unwrap();
+        });
+
+        let query = db.exec("SELECT id FROM users;")?;
+        query
+            .tuples
+            .iter()
+            .enumerate()
+            .for_each(|(id, user)| assert_eq!(user, &vec![Value::Number((id + 1) as i128)]));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_serial_during_transactions() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30));")?;
+        // 1st successful insert
+        db.exec("BEGIN TRANSACTION;")?;
+        db.exec("INSERT INTO users(name) VALUES ('Alice');")?;
+        db.exec("COMMIT;")?;
+
+        // failed insertion
+        db.exec("BEGIN TRANSACTION;")?;
+        db.exec("INSERT INTO users(name) VALUES ('Milena');")?;
+        db.exec("ROLLBACK;")?;
+
+        // 2nd successful insert
+        db.exec("BEGIN TRANSACTION;")?;
+        db.exec("INSERT INTO users(name) VALUES ('Carla');")?;
+        db.exec("COMMIT;")?;
+
+        let ids: Vec<i128> = db
+            .exec("SELECT id FROM users;")?
+            .tuples
+            .iter()
+            .map(|row| match row[0] {
+                Value::Number(num) => num,
+                _ => panic!("Should be a number"),
+            })
+            .collect();
+
+        assert_eq!(ids, vec![1, 3]);
 
         Ok(())
     }

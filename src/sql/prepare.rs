@@ -1,6 +1,6 @@
 use crate::db::{Ctx, DatabaseError, ROW_COL_ID};
 
-use super::statement::{Expression, Statement, Value};
+use super::statement::{Expression, Statement, Type, Value};
 
 pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
@@ -50,8 +50,41 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 });
             }
 
+            // increment the `SERIAL` columns
+
+            // missing serial columns and their schema index
+            let serial_inserts: Vec<(usize, String)> = metadata
+                .schema
+                .columns
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, col)| {
+                    match matches!(
+                        col.data_type,
+                        Type::SmallSerial | Type::Serial | Type::BigSerial
+                    ) && !columns.contains(&col.name)
+                    {
+                        true => Some((idx, col.name.clone())),
+                        false => None,
+                    }
+                })
+                .collect();
+
+            // insert them into the columns list
+            for (idx, name) in &serial_inserts {
+                columns.insert(*idx, name.clone());
+            }
+
+            // insert generated serial values into EACH row of values
+            for row in values.iter_mut() {
+                for (idx, name) in &serial_inserts {
+                    let serial = metadata.next_serial_id(name);
+                    row.insert(*idx, Expression::Value(Value::Number(serial.into())));
+                }
+            }
+
             values.iter_mut().for_each(|values| {
-                (0..metadata.schema.len()).for_each(|idx| {
+                (0..columns.len()).for_each(|idx| {
                     let sorted_idx = metadata.schema.index_of(&columns[idx]).unwrap();
 
                     columns.swap(idx, sorted_idx);
