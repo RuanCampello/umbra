@@ -344,7 +344,10 @@ impl Type {
 
     pub const fn is_integer(&self) -> bool {
         match self {
-            Self::SmallInt
+            Self::SmallSerial
+            | Self::Serial
+            | Self::BigSerial
+            | Self::SmallInt
             | Self::UnsignedSmallInt
             | Self::Integer
             | Self::UnsignedInteger

@@ -147,7 +147,7 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             let n = i16::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
-        Type::UnsignedSmallInt => {
+        Type::UnsignedSmallInt | Type::SmallSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedSmallInt)];
             reader.read_exact(&mut buf)?;
             let n = u16::from_be_bytes(buf) as i128;
@@ -159,7 +159,7 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             let n = i32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
-        Type::UnsignedInteger => {
+        Type::UnsignedInteger | Type::Serial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
             reader.read_exact(&mut buf)?;
             let n = u32::from_be_bytes(buf) as i128;
@@ -171,7 +171,7 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             let n = i64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
-        Type::UnsignedBigInteger => {
+        Type::UnsignedBigInteger | Type::BigSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
             reader.read_exact(&mut buf)?;
             let n = u64::from_be_bytes(buf) as i128;
