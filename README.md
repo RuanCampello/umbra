@@ -29,11 +29,43 @@ case—welcome. The focus here is the **learning process**, read as "the screams
 ## Implementation Status
 
 ### 🧾 Types
-- [x] `INTEGER` (for counting your regrets)
-    - [x] `UNSIGNED INTEGER` (for when you're feeling optimistic)
-    - [ ] `SERIAL` (auto-increment would be too convenient, init?)
-- [x] `BIGINT` (when regular regrets aren't enough)
-    - [x] `UNSIGNED BIGINT`
+
+#### 🔢 **Numeric Types**
+
+Integers: the beating heart of databases—and poor life decisions.
+
+Umbra supports both **signed** and **unsigned** integer types, as well as their attention-seeking cousins: the **serial** pseudo-types. These `SERIAL` types aren’t real—they're syntactic sugar that auto-magically generate sequences behind the scenes (just like PostgreSQL, but with fewer emotional boundaries).
+
+| Type                 | Status | Range       | Notes                                         |
+|----------------------|--------|-------------|-----------------------------------------------|
+| `SMALLINT`           | ✅     | ±2¹⁵        | Petite regrets                                |
+| `INTEGER`          | ✅     | ±2³¹      | Standard regret capacity                      |
+| `BIGINT`             | ✅     | ±2⁶³        | When regular regrets aren't enough                             |
+| `SMALLINT UNSIGNED`  | ✅     | 0 → 2¹⁶−1   | For when you're cautiously hopeful            |
+| `INTEGER UNSIGNED`   | ✅     | 0 → 2³²−1   | Delusional optimism                           |
+| `BIGINT UNSIGNED`    | ✅     | 0 → 2⁶⁴−1   | Sheer madness                                 |
+| `SMALLSERIAL`        | ✅     | 1 → 2¹⁵−1   | Small but permanent mistakes    |
+| `SERIAL`             | ✅     | 1 → 2³¹−1   | Commitment issues               |
+| `BIGSERIAL`          | ✅     | 1 → 2⁶³−1   | Lifelong consequences            |
+
+> [!NOTE]  
+> **Unsigned Integers**  
+> PostgreSQL demands check constraints, SQLite shrugs, but Umbra embraces MySQL's blunt [syntax](https://dev.mysql.com/doc/refman/8.4/en/numeric-type-syntax.html) for that.
+
+> [!IMPORTANT]  
+> **`SERIAL` Types are forgetful**  
+> Much like PostgreSQL, Umbra's serial values never look back. 
+> Once generated—even if your transaction fails—they’re [gone](https://www.postgresql.org/docs/17/functions-sequence.html).
+
+```sql
+CREATE TABLE cursed_items (
+    item_id SERIAL PRIMARY KEY,
+    name VARCHAR(255),
+    darkness_level SMALLINT UNSIGNED,
+    soul_count BIGINT UNSIGNED
+);
+```
+
 - [x] `VARCHAR`
 - [x] `BOOLEAN`
 - [ ] `DECIMAL`
