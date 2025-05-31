@@ -84,6 +84,7 @@ impl TableMetadata {
     }
 
     pub fn next_serial_id(&mut self, column: &str) -> u64 {
+        // FIX: save serials sequence to the database
         self.serials
             .get(column)
             .map(|count| count.fetch_add(1, Ordering::Relaxed) + 1)

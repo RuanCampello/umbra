@@ -209,10 +209,7 @@ impl<'input> Parser<'input> {
         })
     }
 
-    pub(in crate::sql) fn parse_expr(
-        &mut self,
-        precedence: Option<u8>,
-    ) -> ParserResult<Expression> {
+    pub(crate) fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression> {
         let mut expr = self.parse_pref()?;
         let mut next = self.get_precedence();
 
