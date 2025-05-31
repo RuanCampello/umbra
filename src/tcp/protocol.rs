@@ -280,4 +280,15 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn serialize_error() -> Result<(), EncodingError> {
+        let err = String::from("something strange occorred, mate");
+        let response = Response::from(Err(DatabaseError::Other(err.clone())));
+        let packet = serialize(&response)?;
+
+        assert_eq!(deserialize(&packet[4..])?, Response::Err(err));
+
+        Ok(())
+    }
 }
