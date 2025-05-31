@@ -48,7 +48,7 @@ pub(crate) struct Assignment {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Column {
+pub struct Column {
     pub name: String,
     pub data_type: Type,
     pub constraints: Vec<Constraint>,

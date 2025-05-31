@@ -9,6 +9,7 @@ use std::{
 use rustyline::{DefaultEditor, error::ReadlineError};
 use umbra::{
     db::QuerySet,
+    sql::statement::Value,
     tcp::{self, Response},
 };
 
@@ -150,6 +151,11 @@ fn main() -> rustyline::Result<()> {
 
             cursor += 1;
         }
+
+        if clear {
+            sql.clear();
+            cursor = 0;
+        }
     }
 
     rsl.save_history("history.usql")?;
@@ -157,5 +163,77 @@ fn main() -> rustyline::Result<()> {
 }
 
 fn table(query: &QuerySet) -> String {
-    todo!()
+    let mut width: Vec<usize> = query
+        .schema
+        .columns
+        .iter()
+        .map(|col| col.name.chars().count())
+        .collect();
+
+    let rows: Vec<Vec<String>> = query
+        .tuples
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|col| match col {
+                    Value::String(string) => string.replace('\n', "\\n"),
+                    other => other.to_string(),
+                })
+                .collect()
+        })
+        .collect();
+
+    (rows).iter().for_each(|row| {
+        row.iter().enumerate().for_each(|(idx, col)| {
+            if col.len() > width[idx] {
+                width[idx] = col.len();
+            }
+        })
+    });
+
+    width.iter_mut().for_each(|w| *w += 2);
+
+    let mut border = String::from('+');
+    width.iter().for_each(|w| {
+        (0..*w).for_each(|_| border.push('-'));
+        border.push('+');
+    });
+
+    let draw_row = |row: &Vec<String>| -> String {
+        let mut row_string = String::from('|');
+
+        row.iter().enumerate().for_each(|(idx, col)| {
+            row_string.push(' ');
+            row_string.push_str(col);
+            (0..width[idx] - col.len() - 1).for_each(|_| row_string.push(' '));
+            row_string.push('|');
+        });
+
+        row_string
+    };
+
+    let mut table = String::from(&border);
+    table.push('\n');
+    table.push_str(&draw_row(
+        &query
+            .schema
+            .columns
+            .iter()
+            .map(|col| col.name.to_string())
+            .collect(),
+    ));
+    table.push('\n');
+    table.push_str(&border);
+    table.push('\n');
+
+    rows.iter().for_each(|row| {
+        table.push_str(&draw_row(row));
+        table.push('\n');
+    });
+
+    if !rows.is_empty() {
+        table.push_str(&border);
+    }
+
+    table
 }

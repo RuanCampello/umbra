@@ -3,7 +3,7 @@ use db::DatabaseError;
 mod core;
 pub mod db;
 pub(crate) mod os;
-mod sql;
+pub mod sql;
 pub mod tcp;
 mod vm;
 
