@@ -1,17 +1,22 @@
-use std::{fmt::Display, num::TryFromIntError};
+use std::{array::TryFromSliceError, fmt::Display, num::TryFromIntError};
 
-use crate::{core::storage::tuple, db::QuerySet, sql::statement::Type};
+use crate::{
+    core::storage::tuple,
+    db::QuerySet,
+    sql::statement::{Column, Type},
+};
 
 #[derive(Debug, PartialEq)]
-enum Response {
+pub enum Response {
     QuerySet(QuerySet),
     Empty(usize),
     Err(String),
 }
 
 #[derive(Debug, PartialEq)]
-enum EncodingError {
+pub enum EncodingError {
     IntConversion(TryFromIntError),
+    SliceConversion(String),
     InvalidPrefix(u8),
     InvalidType(u8),
 }
@@ -43,6 +48,35 @@ impl From<&Type> for u8 {
             Type::Date => TEMPORAL_CATEGORY | 0x0,
             Type::Time => TEMPORAL_CATEGORY | 0x1,
             Type::DateTime => TEMPORAL_CATEGORY | 0x2,
+        }
+    }
+}
+
+impl TryFrom<&u8> for Type {
+    type Error = ();
+
+    fn try_from(byte: &u8) -> Result<Self, Self::Error> {
+        let cat = byte & 0xF0;
+        let sub = byte & 0x0F;
+
+        match (cat, sub) {
+            (BOOLEAN_CATEGORY, 0x0) => Ok(Type::Boolean),
+
+            (INTEGER_CATEGORY, 0x0) => Ok(Type::SmallInt),
+            (INTEGER_CATEGORY, 0x1) => Ok(Type::UnsignedSmallInt),
+            (INTEGER_CATEGORY, 0x2) => Ok(Type::Integer),
+            (INTEGER_CATEGORY, 0x3) => Ok(Type::UnsignedInteger),
+            (INTEGER_CATEGORY, 0x4) => Ok(Type::BigInteger),
+            (INTEGER_CATEGORY, 0x5) => Ok(Type::UnsignedBigInteger),
+            (INTEGER_CATEGORY, 0x6) => Ok(Type::SmallSerial),
+            (INTEGER_CATEGORY, 0x7) => Ok(Type::Serial),
+            (INTEGER_CATEGORY, 0x8) => Ok(Type::BigSerial),
+
+            (TEMPORAL_CATEGORY, 0x0) => Ok(Type::Date),
+            (TEMPORAL_CATEGORY, 0x1) => Ok(Type::Time),
+            (TEMPORAL_CATEGORY, 0x2) => Ok(Type::DateTime),
+
+            _ => Err(()),
         }
     }
 }
@@ -86,18 +120,77 @@ pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
     Ok(packed)
 }
 
+pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
+    Ok(match content[0] {
+        b'+' => {
+            let mut query_set = QuerySet::empty();
+            let mut cursor = 1;
+
+            let schema_len = u16::from_le_bytes(content[cursor..cursor + 2].try_into()?);
+            cursor += 2;
+
+            for _ in 0..schema_len {
+                let name_len = u16::from_le_bytes(content[cursor..cursor + 2].try_into()?) as usize;
+                cursor += 2;
+
+                let name =
+                    String::from_utf8(Vec::from(&content[cursor..cursor + name_len])).unwrap();
+                cursor += name_len;
+
+                let data_type = match content[cursor] {
+                    STRING_CATEGORY | 0x00 => {
+                        let mut max_chars_buf = [0; 4];
+                        max_chars_buf.copy_from_slice(&content[cursor + 1..cursor + 5]);
+
+                        let max_chars = u32::from_le_bytes(max_chars_buf) as usize;
+                        cursor += 4;
+
+                        Type::Varchar(max_chars)
+                    }
+                    content => {
+                        Type::try_from(&content).map_err(|_| EncodingError::InvalidType(content))?
+                    }
+                };
+                cursor += 1;
+
+                query_set.schema.push(Column::new(&name, data_type));
+            }
+
+            let num_tuples = u32::from_le_bytes(content[cursor..cursor + 4].try_into()?);
+            cursor += 4;
+
+            for _ in 0..num_tuples {
+                let tuple = tuple::deserialize(&content[cursor..], &query_set.schema);
+                cursor += tuple::size_of(&tuple, &query_set.schema);
+                query_set.tuples.push(tuple);
+            }
+
+            Response::QuerySet(query_set)
+        }
+        _ => todo!(),
+    })
+}
+
 impl Display for EncodingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::IntConversion(int_conversion) => write!(f, "{int_conversion}"),
+            Self::SliceConversion(slice_conversion) => write!(f, "{slice_conversion}"),
             Self::InvalidPrefix(prefix) => write!(f, "Invalid ASCII prefix: {prefix}"),
             Self::InvalidType(typ) => write!(f, "Invalid data type: {typ}"),
         }
     }
 }
+
 impl From<TryFromIntError> for EncodingError {
     fn from(value: TryFromIntError) -> Self {
         Self::IntConversion(value)
+    }
+}
+
+impl From<TryFromSliceError> for EncodingError {
+    fn from(value: TryFromSliceError) -> Self {
+        Self::SliceConversion(value.to_string())
     }
 }
 
@@ -141,7 +234,11 @@ mod tests {
             ],
         };
 
-        let packet = serialize(&Response::QuerySet(content))?;
+        let response = Response::QuerySet(content);
+
+        let packet = serialize(&response)?;
+        assert_eq!(deserialize(&packet[4..])?, response);
+
         Ok(())
     }
 }

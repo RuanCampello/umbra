@@ -627,6 +627,13 @@ impl QuerySet {
         Self { schema, tuples }
     }
 
+    pub fn empty() -> Self {
+        Self {
+            schema: Schema::empty(),
+            tuples: Vec::new(),
+        }
+    }
+
     fn get(&self, row: usize, column: &str) -> Option<&Value> {
         self.tuples.get(row)?.get(self.schema.index_of(column)?)
     }
