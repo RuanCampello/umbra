@@ -1,4 +1,4 @@
-use std::{array::TryFromSliceError, fmt::Display, io::empty, num::TryFromIntError};
+use std::{array::TryFromSliceError, fmt::Display, num::TryFromIntError};
 
 use crate::{
     core::storage::tuple,

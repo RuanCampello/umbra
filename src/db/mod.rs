@@ -70,7 +70,7 @@ pub(crate) enum Exec<File: FileOperations> {
 }
 
 #[derive(Debug)]
-pub(crate) enum DatabaseError {
+pub enum DatabaseError {
     Parser(ParserError),
     Sql(SqlError),
     Io(std::io::Error),
@@ -113,7 +113,7 @@ macro_rules! temporal {
 }
 
 impl Database<File> {
-    fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
+    pub fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let file = os::Fs::options()
             .create(true)
             .truncate(false)
