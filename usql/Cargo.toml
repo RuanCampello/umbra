@@ -1,0 +1,8 @@
+[package]
+name = "usql"
+version = "0.1.0"
+description = "Umbra's (mostly) friendly CLI client"
+edition = "2024"
+
+[dependencies]
+umbra = {path = ".."}
