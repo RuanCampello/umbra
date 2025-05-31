@@ -20,7 +20,7 @@ use crate::{
 pub fn start<File: AsRef<Path>>(address: SocketAddr, file: File) -> Result<(), DatabaseError> {
     // it's alright have a static lifetime here because... well, the database will live forever
     // until the program exit :)
-    let mut db = &*Box::leak(Box::new(Mutex::new(Database::init(&file)?)));
+    let db = &*Box::leak(Box::new(Mutex::new(Database::init(&file)?)));
     println!("Database file initialised on {}", file.as_ref().display());
 
     let pool = ThreadPool::new(8);
