@@ -404,6 +404,8 @@ impl<File> Database<File> {
     }
 }
 
+unsafe impl Send for Database<File> {}
+
 impl Context {
     pub fn new() -> Self {
         Self {

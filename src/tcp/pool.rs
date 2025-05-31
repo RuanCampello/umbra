@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 
-struct ThreadPool {
+pub(in crate::tcp) struct ThreadPool {
     workers: Vec<Worker>,
     sender: Option<mpsc::Sender<Job>>,
 }
@@ -20,12 +20,14 @@ struct Worker {
 type Job = Box<dyn FnOnce() + Send>;
 
 impl ThreadPool {
-    fn new(size: NonZeroUsize) -> Self {
+    pub fn new(size: usize) -> Self {
+        assert_ne!(size, 0, "ThreadPool cannot have zero workers");
+
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
-        let mut workers = Vec::with_capacity(size.get());
+        let mut workers = Vec::with_capacity(size);
 
-        (0..size.get()).for_each(|id| workers.push(Worker::new(id, Arc::clone(&receiver))));
+        (0..size).for_each(|id| workers.push(Worker::new(id, Arc::clone(&receiver))));
 
         Self {
             workers,
