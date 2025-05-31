@@ -87,7 +87,7 @@ pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
     match content {
         Response::QuerySet(query_set) => {
             packed.push(b'+');
-            packed.extend_from_slice(&(u16::try_from(query_set.schema.len())?).to_be_bytes());
+            packed.extend_from_slice(&(u16::try_from(query_set.schema.len())?).to_le_bytes());
 
             for column in &query_set.schema.columns {
                 packed.extend_from_slice(&(u16::try_from(column.name.len())?).to_le_bytes());
@@ -138,15 +138,14 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                 cursor += name_len;
 
                 let data_type = match content[cursor] {
-                    STRING_CATEGORY | 0x00 => {
-                        let mut max_chars_buf = [0; 4];
-                        max_chars_buf.copy_from_slice(&content[cursor + 1..cursor + 5]);
-
-                        let max_chars = u32::from_le_bytes(max_chars_buf) as usize;
+                    STRING_CATEGORY | 0x0 => {
+                        let mut buff = [0; 4];
+                        buff.copy_from_slice(&content[cursor + 1..cursor + 5]);
+                        let max_chars = u32::from_le_bytes(buff) as usize;
                         cursor += 4;
-
                         Type::Varchar(max_chars)
                     }
+
                     content => {
                         Type::try_from(&content).map_err(|_| EncodingError::InvalidType(content))?
                     }
@@ -235,8 +234,10 @@ mod tests {
         };
 
         let response = Response::QuerySet(content);
-
         let packet = serialize(&response)?;
+
+        //println!("packet {packet:#?}");
+
         assert_eq!(deserialize(&packet[4..])?, response);
 
         Ok(())
