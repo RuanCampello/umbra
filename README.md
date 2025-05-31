@@ -6,6 +6,7 @@
 
 ![Rust](https://img.shields.io/badge/rust-00?style=for-the-badge&logo=rust&color=d62828&link=https%3A%2F%2Fwww.rust-lang.org)
 ![Linux](https://img.shields.io/badge/linux-0?style=for-the-badge&logo=linux&logoColor=fff&color=f77f00)
+![MacOS](https://img.shields.io/badge/macos-0?style=for-the-badge&logo=macos&logoColor=fff&color=313244)
 
 </div>
 
