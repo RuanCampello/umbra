@@ -1,0 +1,147 @@
+use std::{fmt::Display, num::TryFromIntError};
+
+use crate::{core::storage::tuple, db::QuerySet, sql::statement::Type};
+
+#[derive(Debug, PartialEq)]
+enum Response {
+    QuerySet(QuerySet),
+    Empty(usize),
+    Err(String),
+}
+
+#[derive(Debug, PartialEq)]
+enum EncodingError {
+    IntConversion(TryFromIntError),
+    InvalidPrefix(u8),
+    InvalidType(u8),
+}
+
+const BOOLEAN_CATEGORY: u8 = 0x00;
+const INTEGER_CATEGORY: u8 = 0x10;
+// const FLOAT_CATEGORY: u8    = 0x30;
+const STRING_CATEGORY: u8 = 0x40;
+const TEMPORAL_CATEGORY: u8 = 0x50;
+
+// we could just do a const fn here but :/
+impl From<&Type> for u8 {
+    fn from(r#type: &Type) -> Self {
+        match r#type {
+            Type::Boolean => BOOLEAN_CATEGORY | 0x0,
+
+            Type::SmallInt => INTEGER_CATEGORY | 0x0,
+            Type::UnsignedSmallInt => INTEGER_CATEGORY | 0x1,
+            Type::Integer => INTEGER_CATEGORY | 0x2,
+            Type::UnsignedInteger => INTEGER_CATEGORY | 0x3,
+            Type::BigInteger => INTEGER_CATEGORY | 0x4,
+            Type::UnsignedBigInteger => INTEGER_CATEGORY | 0x5,
+            Type::SmallSerial => INTEGER_CATEGORY | 0x06,
+            Type::Serial => INTEGER_CATEGORY | 0x07,
+            Type::BigSerial => INTEGER_CATEGORY | 0x08,
+
+            Type::Varchar(_) => STRING_CATEGORY | 0x0,
+
+            Type::Date => TEMPORAL_CATEGORY | 0x0,
+            Type::Time => TEMPORAL_CATEGORY | 0x1,
+            Type::DateTime => TEMPORAL_CATEGORY | 0x2,
+        }
+    }
+}
+
+pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
+    let mut packed: Vec<u8> = Vec::from(0u32.to_le_bytes());
+
+    match content {
+        Response::QuerySet(query_set) => {
+            packed.push(b'+');
+            packed.extend_from_slice(&(u16::try_from(query_set.schema.len())?).to_be_bytes());
+
+            for column in &query_set.schema.columns {
+                packed.extend_from_slice(&(u16::try_from(column.name.len())?).to_le_bytes());
+                packed.extend_from_slice(column.name.as_bytes());
+
+                packed.push(u8::from(&column.data_type));
+                if let Type::Varchar(length) = column.data_type {
+                    packed.extend_from_slice(&(length as u32).to_le_bytes());
+                }
+            }
+
+            packed.extend_from_slice(&(u32::try_from(query_set.tuples.len())?).to_le_bytes());
+            query_set.tuples.iter().for_each(|tuple| {
+                packed.extend_from_slice(&tuple::serialize_tuple(&query_set.schema, tuple))
+            });
+        }
+        Response::Empty(affected_rows) => {
+            packed.push(b'!');
+            packed.extend_from_slice(&(u32::try_from(*affected_rows)?).to_le_bytes());
+        }
+        Response::Err(err) => {
+            packed.push(b'-');
+            packed.extend_from_slice(err.as_bytes());
+        }
+    }
+
+    let content_len = u32::try_from(packed[4..].len())?;
+    packed[..4].copy_from_slice(&content_len.to_le_bytes());
+
+    Ok(packed)
+}
+
+impl Display for EncodingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IntConversion(int_conversion) => write!(f, "{int_conversion}"),
+            Self::InvalidPrefix(prefix) => write!(f, "Invalid ASCII prefix: {prefix}"),
+            Self::InvalidType(typ) => write!(f, "Invalid data type: {typ}"),
+        }
+    }
+}
+impl From<TryFromIntError> for EncodingError {
+    fn from(value: TryFromIntError) -> Self {
+        Self::IntConversion(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        db::{QuerySet, Schema},
+        sql::statement::{Column, Type, Value},
+    };
+
+    use super::*;
+
+    #[test]
+    fn serialize_and_deserialize() -> Result<(), EncodingError> {
+        let content = QuerySet {
+            schema: Schema::new(vec![
+                Column::new("item_id", Type::BigSerial),
+                Column::new("name", Type::Varchar(255)),
+                Column::new("darkness_level", Type::UnsignedSmallInt),
+                Column::new("souls_count", Type::UnsignedBigInteger),
+            ]),
+            tuples: vec![
+                vec![
+                    Value::Number(1),
+                    Value::String("Sword of Darkness".to_string()),
+                    Value::Number(42),
+                    Value::Number(1000),
+                ],
+                vec![
+                    Value::Number(2),
+                    Value::String("Shield of Light".to_string()),
+                    Value::Number(5),
+                    Value::Number(500),
+                ],
+                vec![
+                    Value::Number(3),
+                    Value::String("Amulet of Shadows".to_string()),
+                    Value::Number(87),
+                    Value::Number(2500),
+                ],
+            ],
+        };
+
+        let packet = serialize(&Response::QuerySet(content))?;
+        Ok(())
+    }
+}
