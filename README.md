@@ -77,7 +77,7 @@ CREATE TABLE cursed_items (
 
 ### 🔗 Constraints
 - [x] `PRIMARY KEY`
-    - [ ] Auto-incrementing (still manual like the dark ages)
+  - [x] Auto-incrementing (via `SERIAL`, no manual gear-shifting required)
 - [x] `UNIQUE` (because duplicates are tacky)
 - [ ] `FOREIGN KEY` (relationships are hard)
 - [ ] `CHECK`
