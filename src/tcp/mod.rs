@@ -3,3 +3,5 @@
 mod pool;
 mod protocol;
 pub mod server;
+
+pub use protocol::{deserialize, serialize, Response};

@@ -50,9 +50,9 @@ struct PreparedStatement<'db, File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct QuerySet {
-    pub(crate) tuples: Vec<Vec<Value>>,
-    pub(crate) schema: Schema,
+pub struct QuerySet {
+    pub tuples: Vec<Vec<Value>>,
+    pub schema: Schema,
 }
 
 #[derive(Debug, PartialEq)]

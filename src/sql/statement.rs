@@ -99,7 +99,7 @@ pub(crate) enum Expression {
 ///
 /// Values of this type are stored in the `Value::Temporal` variant.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Temporal {
+pub enum Temporal {
     Date(NaiveDate),
     DateTime(NaiveDateTime),
     Time(NaiveTime),
@@ -120,7 +120,7 @@ pub(crate) enum Temporal {
 ///
 /// This separation allows the system to validate values against schema definitions at runtime.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Value {
+pub enum Value {
     String(String),
     Number(i128),
     Boolean(bool),
