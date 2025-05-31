@@ -141,7 +141,7 @@ fn main() -> rustyline::Result<()> {
                             "{}\n{} {} ({:.2?})",
                             table(&query_set),
                             query_set.tuples.len(),
-                            "row",
+                            plural("row", query_set.tuples.len()),
                             packet_transmission.elapsed()
                         )
                     }
@@ -236,4 +236,11 @@ fn table(query: &QuerySet) -> String {
     }
 
     table
+}
+
+fn plural(word: &str, length: usize) -> String {
+    match length == 1 {
+        true => word.to_string(),
+        false => format!("{word}s"),
+    }
 }
