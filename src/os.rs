@@ -97,6 +97,7 @@ mod unix {
         fn open(mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<File> {
             let mut flags = 0;
 
+            #[cfg(target_os = "linux")]
             if self.bypass_cache {
                 flags |= libc::O_DIRECT;
             }
