@@ -251,7 +251,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         self.pager.borrow_mut().commit()
     }
 
-    fn rollback(&mut self) -> Result<usize, DatabaseError> {
+    pub(crate) fn rollback(&mut self) -> Result<usize, DatabaseError> {
         self.transaction_state = TransactionState::Terminated;
         self.pager.borrow_mut().rollback()
     }
@@ -392,7 +392,7 @@ impl<File> Database<File> {
         self.transaction_state = TransactionState::Active
     }
 
-    fn active_transaction(&self) -> bool {
+    pub(crate) fn active_transaction(&self) -> bool {
         matches!(
             self.transaction_state,
             TransactionState::Active | TransactionState::Aborted
