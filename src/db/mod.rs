@@ -624,11 +624,11 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
 }
 
 impl QuerySet {
-    fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
+    pub(crate) fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
         Self { schema, tuples }
     }
 
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             schema: Schema::empty(),
             tuples: Vec::new(),

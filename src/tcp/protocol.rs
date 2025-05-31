@@ -268,6 +268,16 @@ mod tests {
     fn serialize_empty() -> Result<(), EncodingError> {
         let empty = QuerySet::empty();
         let response = Response::from(Ok(empty));
+        let packet = serialize(&response)?;
+
+        assert_eq!(deserialize(&packet[4..])?, Response::Empty(0));
+
+        let empty = QuerySet::new(Schema::new(vec![]), vec![vec![], vec![], vec![]]);
+        let response = Response::from(Ok(empty));
+        let packet = serialize(&response)?;
+
+        assert_eq!(deserialize(&packet[4..])?, Response::Empty(3));
+
         Ok(())
     }
 }
