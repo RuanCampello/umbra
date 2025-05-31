@@ -23,6 +23,7 @@ use crate::{index, vm};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -645,6 +646,33 @@ impl QuerySet {
 impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     fn from(columns: Col) -> Self {
         Self::new(Vec::from_iter(columns.into_iter().cloned()))
+    }
+}
+
+impl Display for DatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "{err}"),
+            Self::Parser(err) => write!(f, "{err}"),
+            Self::Sql(err) => write!(f, "{err}"),
+            Self::Corrupted(message) => f.write_str(message),
+            Self::Other(message) => f.write_str(message),
+            Self::NoMemory => f.write_str("Out of memory"),
+        }
+    }
+}
+
+impl Display for SqlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidTable(table) => write!(f, "Invalid table '{table}'"),
+            Self::InvalidColumn(column) => write!(f, "Invalid column '{column}'"),
+            Self::DuplicatedKey(key) => write!(f, "Duplicated key {key}"),
+            Self::Analyzer(err) => write!(f, "{err}"),
+            Self::Vm(err) => write!(f, "{err}"),
+            Self::Type(err) => write!(f, "{err}"),
+            Self::Other(other) => f.write_str(other),
+        }
     }
 }
 

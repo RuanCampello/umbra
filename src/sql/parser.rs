@@ -15,6 +15,8 @@ use crate::sql::statement::{
 };
 use crate::sql::tokenizer::{self, Location, TokenWithLocation, Tokenizer, TokenizerError};
 use crate::sql::tokens::{Keyword, Token};
+use std::borrow::Cow;
+use std::fmt::Display;
 use std::iter::Peekable;
 
 pub(crate) struct Parser<'input> {
@@ -610,6 +612,75 @@ impl<'input> Parser<'input> {
             | Keyword::Serial
             | Keyword::BigSerial => true,
             _ => false,
+        }
+    }
+}
+
+impl Display for ParserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "Parser error at line {} column {}: {}",
+            self.location.line, self.location.col, self.kind
+        )?;
+
+        let whitespaces = match self.input.lines().nth(self.location.line.saturating_sub(1)) {
+            Some(line) => {
+                f.write_str(line)?;
+                self.location.col.saturating_sub(1)
+            }
+            None => {
+                let line = self.input.lines().last().unwrap();
+                f.write_str(line)?;
+                line.chars().count()
+            }
+        };
+
+        write!(f, "\n{}^", String::from(" ").repeat(whitespaces))
+    }
+}
+
+impl<'s> ErrorKind {
+    fn expected_token_str(token: &'s Token) -> Cow<'s, str> {
+        match token {
+            Token::Identifier(_) => Cow::Borrowed("identifier"),
+            Token::Number(_) => Cow::Borrowed("number"),
+            Token::String(_) => Cow::Borrowed("string"),
+            _ => Cow::Owned(token.to_string()),
+        }
+    }
+}
+
+impl Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ErrorKind::FormatError(err) => f.write_str(err),
+            ErrorKind::TokenizerError(err) => write!(f, "{err}"),
+            ErrorKind::UnexpectedEof => write!(f, "Unexpected end of file"),
+            ErrorKind::Unsupported(token) => write!(f, "Unexpected or unsupported token: {token}"),
+            ErrorKind::Expected { expected, found } => write!(
+                f,
+                "Expected {} but found '{found}' instead",
+                ErrorKind::expected_token_str(expected)
+            ),
+            ErrorKind::ExpectedOneOf { expected, found } => {
+                let mut one_of = String::new();
+
+                one_of.push_str(&ErrorKind::expected_token_str(&expected[0]));
+                (expected[1..expected.len() - 1]).iter().for_each(|token| {
+                    one_of.push_str(", ");
+                    one_of.push_str(&ErrorKind::expected_token_str(token));
+                });
+
+                if expected.len() > 1 {
+                    one_of.push_str(" or ");
+                    one_of.push_str(&&ErrorKind::expected_token_str(
+                        &expected[expected.len() - 1],
+                    ));
+                }
+
+                write!(f, "Expected {one_of} but found '{found}' instead")
+            }
         }
     }
 }
