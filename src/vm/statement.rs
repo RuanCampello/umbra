@@ -47,12 +47,13 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 .iter()
                 .filter(|col| col.data_type.is_serial())
                 .map(|col| Create::Sequence {
-                    name: format!("{name}_{col}_seq"),
+                    name: format!("{name}_{}_seq", col.name),
                     r#type: Type::UnsignedBigInteger,
                     table: name.clone(),
                 });
 
             for sequence in sequences {
+                println!("sequence {sequence:#?}");
                 exec(Statement::Create(sequence), db)?;
             }
 
@@ -154,9 +155,9 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             r#type,
             table,
         }) => {
-            if !r#type.is_serial() {
+            if !r#type.is_integer() {
                 return Err(
-                    SqlError::Other("Sequences can only be created for serials".into()).into(),
+                    SqlError::Other("Sequences can only be created for integers".into()).into(),
                 );
             }
 

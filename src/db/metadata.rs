@@ -176,7 +176,7 @@ impl PartialEq for SequenceMetadata {
         self.root == other.root
             && self.name == other.name
             && self.data_type == other.data_type
-            && self.value.load(Ordering::Acquire) == other.value.load(Ordering::Acquire)
+            && self.value.load(Ordering::SeqCst) == other.value.load(Ordering::SeqCst)
     }
 }
 

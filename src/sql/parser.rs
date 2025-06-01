@@ -87,6 +87,7 @@ impl<'input> Parser<'input> {
             Keyword::Create => {
                 let keyword = self.expect_one(&[
                     Keyword::Database,
+                    Keyword::Sequence,
                     Keyword::Table,
                     Keyword::Unique,
                     Keyword::Index,
@@ -118,7 +119,25 @@ impl<'input> Parser<'input> {
                             unique,
                         }
                     }
-                    _ => unreachable!(),
+                    Keyword::Sequence => {
+                        let name = self.parse_ident()?;
+                        self.expect_keyword(Keyword::As)?;
+                        // FIXME: hardcoded type
+                        self.expect_keyword(Keyword::BigInt)?;
+                        self.expect_keyword(Keyword::Unsigned)?;
+                        self.expect_keyword(Keyword::Owned)?;
+                        self.expect_keyword(Keyword::By)?;
+                        let table = self.parse_ident()?;
+
+                        Create::Sequence {
+                            table,
+                            name,
+                            r#type: Type::UnsignedBigInteger,
+                        }
+                    }
+                    _ => {
+                        unreachable!("Not found any statement that matches this for CREATE keyword")
+                    }
                 })
             }
             Keyword::Insert => {
