@@ -5,6 +5,7 @@ use std::collections::HashMap;
 #[derive(Debug, PartialEq, Clone)]
 pub struct Schema {
     pub columns: Vec<Column>,
+    /// Index of columns definitions based on their name
     index: HashMap<String, usize>,
 }
 
@@ -77,13 +78,5 @@ pub(crate) fn umbra_schema() -> Schema {
         Column::new("root", Type::UnsignedInteger),
         Column::new("table_name", Type::Varchar(255)),
         Column::new("sql", Type::Varchar(65535)),
-    ])
-}
-
-pub(crate) fn umbra_sequence() -> Schema {
-    Schema::from(&[
-        Column::new("name", Type::Varchar(255)),
-        Column::new("root", Type::UnsignedInteger),
-        Column::new("table_name", Type::Varchar(255)),
     ])
 }

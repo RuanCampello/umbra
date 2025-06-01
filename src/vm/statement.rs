@@ -49,7 +49,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 .iter()
                 .filter(|col| col.data_type.is_serial())
                 .for_each(|col| {
-                    metatada.create_serial_for_col(col.name.to_string());
+                    //metatada.create_serial_for_col(col.name.to_string());
                 });
 
             let skip_pk_idx = match has_btree_key(&columns) {
@@ -145,6 +145,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             db.context.invalidate(&table);
         }
+        Statement::Create(Create::Sequence { name, r#type }) => {}
 
         Statement::Drop(Drop::Table(name)) => {
             let comparator = db.metadata(DB_METADATA)?.comp()?;

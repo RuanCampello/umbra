@@ -168,7 +168,7 @@ pub(crate) enum BinaryOperator {
 /// - A column defined as `VARCHAR(255)` will be represented as `Type::Varchar(255)`.
 /// - A column of `DATE` will be represented as `Type::Date`.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Type {
+pub enum Type {
     /// 2-byte signed integer
     SmallInt,
     /// 2-byte unsigned integer

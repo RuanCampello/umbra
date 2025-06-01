@@ -34,6 +34,7 @@ pub(crate) struct Database<File> {
     pub(crate) pager: Rc<RefCell<Pager<File>>>,
     pub(crate) context: Context,
     pub(crate) work_dir: PathBuf,
+    sequence_root: Option<PageNumber>,
     transaction_state: TransactionState,
 }
 
@@ -246,6 +247,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         Ok((schema, prepared_statement))
     }
+
     fn commit(&mut self) -> io::Result<()> {
         self.transaction_state = TransactionState::Terminated;
         self.pager.borrow_mut().commit()
@@ -268,8 +270,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 name: String::from(table),
                 row_id,
                 indexes: vec![],
-                schema,
                 serials: HashMap::new(),
+                schema,
             });
         }
 
@@ -329,6 +331,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                                 )))?;
 
                         let idx_col = metadata.schema.columns[col_idx].clone();
+                        println!("index column for {name} {column:#?}");
 
                         metadata.indexes.push(IndexMetadata {
                             root: *root as PageNumber,
@@ -337,6 +340,9 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                             schema: Schema::new(vec![idx_col, metadata.schema.columns[0].clone()]),
                             unique,
                         });
+                    }
+                    Statement::Create(Create::Sequence { name, r#type }) => {
+                        todo!("creating the sequences for {name}...")
                     }
                     _ => return Err(corrupted_err()),
                 },
@@ -386,6 +392,7 @@ impl<File> Database<File> {
             work_dir,
             context: Context::with_size(DEFAULT_CACHE_SIZE),
             transaction_state: TransactionState::Terminated,
+            sequence_root: None,
         }
     }
 
