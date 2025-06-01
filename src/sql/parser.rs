@@ -26,7 +26,7 @@ pub(crate) struct Parser<'input> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct ParserError {
+pub struct ParserError {
     kind: ErrorKind,
     location: Location,
     input: String,

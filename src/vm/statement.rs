@@ -145,7 +145,30 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             db.context.invalidate(&table);
         }
-        Statement::Create(Create::Sequence { name, r#type }) => {}
+        Statement::Create(Create::Sequence {
+            name,
+            r#type,
+            table,
+        }) => {
+            if !r#type.is_serial() {
+                return Err(
+                    SqlError::Other("Sequences can only be created for serials".into()).into(),
+                );
+            }
+
+            let root = allocate_root(db)?;
+            insert_into_metadata(
+                db,
+                vec![
+                    Value::String("sequence".into()),
+                    Value::String(name.clone()),
+                    Value::Number(root as _),
+                    Value::String(table),
+                    Value::String("".into()),
+                ],
+            );
+            todo!()
+        }
 
         Statement::Drop(Drop::Table(name)) => {
             let comparator = db.metadata(DB_METADATA)?.comp()?;

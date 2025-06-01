@@ -78,8 +78,8 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             // insert generated serial values into EACH row of values
             for row in values.iter_mut() {
                 for (idx, name) in &serial_inserts {
-                    // let serial = metadata.next_serial_id(name);
-                    // row.insert(*idx, Expression::Value(Value::Number(serial.into())));
+                    let serial = metadata.next_val(name);
+                    row.insert(*idx, Expression::Value(Value::Number(serial.into())));
                 }
             }
 

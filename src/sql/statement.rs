@@ -60,6 +60,7 @@ pub(crate) enum Create {
     Sequence {
         name: String,
         r#type: Type,
+        table: String,
     },
     Table {
         name: String,
@@ -132,7 +133,7 @@ pub enum Value {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Constraint {
+pub enum Constraint {
     PrimaryKey,
     Unique,
 }
@@ -235,7 +236,11 @@ impl Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Statement::Create(create) => match create {
-                Create::Sequence { name, r#type } => write!(f, "CREATE SEQUENCE {name} AS {type}")?,
+                Create::Sequence {
+                    name,
+                    r#type,
+                    table,
+                } => write!(f, "CREATE SEQUENCE {name} AS {type} OWNED BY {table}")?,
                 Create::Table { name, columns } => {
                     write!(f, "CREATE TABLE {name} ({})", join(columns, ", "))?;
                 }

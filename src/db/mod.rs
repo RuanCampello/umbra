@@ -3,6 +3,7 @@
 mod metadata;
 mod schema;
 
+use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
 
@@ -34,7 +35,6 @@ pub(crate) struct Database<File> {
     pub(crate) pager: Rc<RefCell<Pager<File>>>,
     pub(crate) context: Context,
     pub(crate) work_dir: PathBuf,
-    sequence_root: Option<PageNumber>,
     transaction_state: TransactionState,
 }
 
@@ -82,7 +82,7 @@ pub enum DatabaseError {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum SqlError {
+pub enum SqlError {
     /// Database table isn't found or somewhat corrupted.
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
@@ -171,7 +171,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(query_set)
     }
 
-    pub(crate) fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
+    fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
         let query = self.exec(&format!(
             "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index';"
         ))?;
@@ -197,6 +197,10 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             .find(|idx| idx.name.eq(index))
             .unwrap()
             .clone())
+    }
+
+    fn sequence_metadata(&mut self, sequence: &str) -> Result<SequenceMetadata, DatabaseError> {
+        todo!()
     }
 
     fn prepare(
@@ -260,7 +264,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
     fn load_metadata(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
         if table == DB_METADATA {
-            println!("Loading metadata for umbra...");
             let mut schema = umbra_schema();
             schema.prepend_id();
 
@@ -331,7 +334,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                                 )))?;
 
                         let idx_col = metadata.schema.columns[col_idx].clone();
-                        println!("index column for {name} {column:#?}");
 
                         metadata.indexes.push(IndexMetadata {
                             root: *root as PageNumber,
@@ -341,7 +343,14 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                             unique,
                         });
                     }
-                    Statement::Create(Create::Sequence { name, r#type }) => {
+                    Statement::Create(Create::Sequence {
+                        name,
+                        table,
+                        r#type,
+                    }) => {
+                        let sequence = metadata.serials.get(&name).ok_or(SqlError::Other(
+                            format!("Couldn't find sequence for column {name}"),
+                        ))?;
                         todo!("creating the sequences for {name}...")
                     }
                     _ => return Err(corrupted_err()),
@@ -392,7 +401,6 @@ impl<File> Database<File> {
             work_dir,
             context: Context::with_size(DEFAULT_CACHE_SIZE),
             transaction_state: TransactionState::Terminated,
-            sequence_root: None,
         }
     }
 

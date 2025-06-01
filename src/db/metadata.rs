@@ -96,6 +96,13 @@ impl TableMetadata {
         row_id
     }
 
+    pub fn next_val(&mut self, column: &str) -> u64 {
+        self.serials
+            .get(column)
+            .map(|seq| seq.value.fetch_add(1, Ordering::Relaxed) + 1)
+            .expect("Failed to get next_val for this column")
+    }
+
     pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
         FixedSizeCmp::try_from(&self.schema.columns[0].data_type).map_err(|e| {
             DatabaseError::Corrupted(format!(
