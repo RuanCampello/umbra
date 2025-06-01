@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::storage::btree::{BTreeKeyCmp, FixedSizeCmp};
+use crate::core::storage::btree::{BTree, BTreeKeyCmp, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::db::{DatabaseError, RowId, Schema};

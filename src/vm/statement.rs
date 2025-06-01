@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     core::storage::{
-        btree::{BTree, BytesCmp, Cursor, FixedSizeCmp},
+        btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp},
         page::{Page, PageNumber},
         pagination::io::FileOperations,
         tuple::{self, serialize_tuple},
@@ -17,7 +17,7 @@ use crate::{
     index,
     sql::{
         parser::Parser,
-        statement::{Constraint, Create, Drop, Statement, Value},
+        statement::{Column, Constraint, Create, Drop, Statement, Type, Value},
     },
     vm::planner::{CollectBuilder, Execute, Filter, Planner, SeqScan},
 };
@@ -43,14 +43,18 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 ],
             )?;
 
-            let metatada = db.metadata(&name)?;
-
-            columns
+            let sequences = columns
                 .iter()
                 .filter(|col| col.data_type.is_serial())
-                .for_each(|col| {
-                    //metatada.create_serial_for_col(col.name.to_string());
+                .map(|col| Create::Sequence {
+                    name: format!("{name}_{col}_seq"),
+                    r#type: Type::UnsignedBigInteger,
+                    table: name.clone(),
                 });
+
+            for sequence in sequences {
+                exec(Statement::Create(sequence), db)?;
+            }
 
             let skip_pk_idx = match has_btree_key(&columns) {
                 true => 1,
@@ -164,10 +168,21 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(name.clone()),
                     Value::Number(root as _),
                     Value::String(table),
-                    Value::String("".into()),
+                    Value::String(sql),
                 ],
-            );
-            todo!()
+            )?;
+
+            let seq_schema = Schema::new(vec![Column::new("value", Type::UnsignedBigInteger)]);
+            let comparator = BTreeKeyCmp::from(&Type::UnsignedBigInteger);
+
+            let mut pager = db.pager.borrow_mut();
+            let mut btree = BTree::new(&mut pager, root, comparator);
+
+            let initial = Value::Number(1);
+            let entry_bytes = serialize_tuple(&seq_schema, [&initial]);
+            btree
+                .try_insert(entry_bytes)?
+                .map_err(|_| SqlError::DuplicatedKey(initial))?;
         }
 
         Statement::Drop(Drop::Table(name)) => {
