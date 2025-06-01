@@ -258,6 +258,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
     fn load_metadata(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
         if table == DB_METADATA {
+            println!("Loading metadata for umbra...");
             let mut schema = umbra_schema();
             schema.prepend_id();
 

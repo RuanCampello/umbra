@@ -79,3 +79,11 @@ pub(crate) fn umbra_schema() -> Schema {
         Column::new("sql", Type::Varchar(65535)),
     ])
 }
+
+pub(crate) fn umbra_sequence() -> Schema {
+    Schema::from(&[
+        Column::new("name", Type::Varchar(255)),
+        Column::new("root", Type::UnsignedInteger),
+        Column::new("table_name", Type::Varchar(255)),
+    ])
+}

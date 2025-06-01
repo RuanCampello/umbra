@@ -57,6 +57,10 @@ pub struct Column {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Create {
     Database(String),
+    Sequence {
+        name: String,
+        r#type: Type,
+    },
     Table {
         name: String,
         columns: Vec<Column>,
@@ -231,6 +235,7 @@ impl Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Statement::Create(create) => match create {
+                Create::Sequence { name, r#type } => write!(f, "CREATE SEQUENCE {name} AS {type}")?,
                 Create::Table { name, columns } => {
                     write!(f, "CREATE TABLE {name} ({})", join(columns, ", "))?;
                 }
