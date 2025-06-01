@@ -17,7 +17,7 @@ use crate::{
     index,
     sql::{
         parser::Parser,
-        statement::{Column, Constraint, Create, Drop, Statement, Value},
+        statement::{Constraint, Create, Drop, Statement, Value},
     },
     vm::planner::{CollectBuilder, Execute, Filter, Planner, SeqScan},
 };

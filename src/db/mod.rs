@@ -1810,6 +1810,36 @@ mod tests {
     }
 
     #[test]
+    fn test_drop_table() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE companies (
+                id INT PRIMARY KEY,
+                years BIGINT UNSIGNED,
+                name VARCHAR(50)
+            );
+        "#,
+        )?;
+
+        #[rustfmt::skip]
+        db.exec("INSERT INTO companies (id, years, name) VALUES (69, 142, 'Mongibello');")?;
+        let query = db.exec("SELECT * FROM companies;")?;
+        assert!(!query.is_empty());
+
+        db.exec("DROP TABLE companies;")?;
+        let query = db.exec("SELECT * FROM companies;");
+        assert!(query.is_err());
+        assert_eq!(
+            query.unwrap_err(),
+            DatabaseError::Sql(SqlError::InvalidTable("companies".into()))
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_incrementing_serial() -> DatabaseResult {
         let mut db = Database::default();
 
