@@ -2,7 +2,7 @@
 
 #![allow(unused)]
 
-use crate::sql::tokens::{Keyword, Token, Whitespace};
+use super::tokens::{Keyword, Token, Whitespace};
 use std::fmt::Display;
 use std::iter::Peekable;
 use std::str::Chars;

@@ -8,16 +8,19 @@
 //! It's mostly inspired by the way postgres'
 //! [parser stage](https://www.postgresql.org/docs/17/parser-stage.html) works.
 
+mod tokenizer;
+mod tokens;
+
 use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Statement, Type,
     UnaryOperator, Value,
 };
-use crate::sql::tokenizer::{self, Location, TokenWithLocation, Tokenizer, TokenizerError};
-use crate::sql::tokens::{Keyword, Token};
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::iter::Peekable;
+use tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
+use tokens::{Keyword, Token};
 
 use super::statement::Insert;
 
