@@ -7,7 +7,7 @@ use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 
-use super::statement::Insert;
+use super::statement::{Insert, Select, Update};
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum AnalyzerError {
@@ -156,12 +156,12 @@ pub(in crate::sql) fn analyze<'s>(
             }
         }
 
-        Statement::Select {
+        Statement::Select(Select {
             columns,
             from,
             order_by,
             r#where,
-        } => {
+        }) => {
             let metadata = ctx.metadata(from)?;
 
             for expr in columns {
@@ -187,11 +187,11 @@ pub(in crate::sql) fn analyze<'s>(
             analyze_where(&metadata.schema, r#where)?;
         }
 
-        Statement::Update {
+        Statement::Update(Update {
             r#where,
             table,
             columns,
-        } => {
+        }) => {
             let metadata = ctx.metadata(table)?;
             if table.eq(DB_METADATA) {
                 return Err(AnalyzerError::MetadataAssignment.into());

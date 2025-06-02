@@ -12,18 +12,8 @@ use std::fmt::{self, Debug, Display, Formatter, Write};
 #[derive(Debug, PartialEq)]
 pub(crate) enum Statement {
     Create(Create),
-    Select {
-        columns: Vec<Expression>,
-        from: String,
-        r#where: Option<Expression>,
-        order_by: Vec<Expression>,
-        // TODO: limit
-    },
-    Update {
-        table: String,
-        columns: Vec<Assignment>,
-        r#where: Option<Expression>,
-    },
+    Select(Select),
+    Update(Update),
     Insert(Insert),
     Delete {
         from: String,
@@ -68,6 +58,22 @@ pub(crate) enum Create {
         column: String,
         unique: bool,
     },
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Select {
+    pub columns: Vec<Expression>,
+    pub from: String,
+    pub r#where: Option<Expression>,
+    pub order_by: Vec<Expression>,
+    // TODO: limit
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Update {
+    pub table: String,
+    pub columns: Vec<Assignment>,
+    pub r#where: Option<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -263,12 +269,12 @@ impl Display for Statement {
                 }
             },
 
-            Statement::Select {
+            Statement::Select(Select {
                 columns,
                 from,
                 r#where,
                 order_by,
-            } => {
+            }) => {
                 write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
@@ -285,11 +291,11 @@ impl Display for Statement {
                 }
             }
 
-            Statement::Update {
+            Statement::Update(Update {
                 table,
                 columns,
                 r#where,
-            } => {
+            }) => {
                 write!(f, "UPDATE {table} SET {}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;

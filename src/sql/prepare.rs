@@ -1,10 +1,10 @@
 use crate::db::{Ctx, DatabaseError, ROW_COL_ID};
 
-use super::statement::{Expression, Insert, Statement, Type, Value};
+use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 
 pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
-        Statement::Select { columns, from, .. }
+        Statement::Select(Select { columns, from, .. })
             if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) =>
         {
             let metadata = ctx.metadata(from)?;
