@@ -24,11 +24,7 @@ pub(crate) enum Statement {
         columns: Vec<Assignment>,
         r#where: Option<Expression>,
     },
-    Insert {
-        into: String,
-        columns: Vec<String>,
-        values: Vec<Vec<Expression>>,
-    },
+    Insert(Insert),
     Delete {
         from: String,
         r#where: Option<Expression>,
@@ -72,6 +68,13 @@ pub(crate) enum Create {
         column: String,
         unique: bool,
     },
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Insert {
+    pub into: String,
+    pub columns: Vec<String>,
+    pub values: Vec<Vec<Expression>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -293,11 +296,11 @@ impl Display for Statement {
                 }
             }
 
-            Statement::Insert {
+            Statement::Insert(Insert {
                 into,
                 columns,
                 values,
-            } => {
+            }) => {
                 let columns = match columns.is_empty() {
                     true => String::from(" "),
                     false => format!(" ({}) ", join(columns, ", ")),

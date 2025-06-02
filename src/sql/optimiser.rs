@@ -6,10 +6,11 @@ use crate::db::SqlError;
 use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
 use crate::vm::expression::resolve_only_expression;
 
+use super::statement::Insert;
+
 pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
     match statement {
         Statement::Select {
-            from,
             columns,
             r#where,
             order_by,
@@ -27,7 +28,7 @@ pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
         }
         Statement::Delete { r#where, .. } => simplify_where(r#where)?,
         Statement::Explain(inner) => optimise(inner)?,
-        Statement::Insert { values, .. } => {
+        Statement::Insert(Insert { values, .. }) => {
             let expr_iter = values.iter_mut().flat_map(|row| row.iter_mut());
             simplify_iter(expr_iter)?;
         }

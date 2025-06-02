@@ -7,6 +7,8 @@ use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 
+use super::statement::Insert;
+
 #[derive(Debug, PartialEq)]
 pub(crate) enum AnalyzerError {
     MissingCols,
@@ -88,11 +90,11 @@ pub(in crate::sql) fn analyze<'s>(
             }
         }
 
-        Statement::Insert {
+        Statement::Insert(Insert {
             into,
             values: rows,
             columns,
-        } => {
+        }) => {
             let metadata = ctx.metadata(into)?;
             if into.eq(DB_METADATA) {
                 return Err(AnalyzerError::MetadataAssignment.into());

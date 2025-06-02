@@ -4,10 +4,6 @@ use std::{
     rc::Rc,
 };
 
-use crate::vm::planner::{
-    Collect, CollectBuilder, Delete, Project, SortBuilder, TupleComparator, Update,
-    DEFAULT_SORT_BUFFER_SIZE,
-};
 use crate::{
     core::storage::pagination::io::FileOperations,
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
@@ -19,7 +15,14 @@ use crate::{
     },
     vm::{
         expression::VmType,
-        planner::{Insert, Planner, Sort, SortKeys, Values},
+        planner::{Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+    },
+};
+use crate::{
+    sql::statement::Insert,
+    vm::planner::{
+        Collect, CollectBuilder, Delete, Project, SortBuilder, TupleComparator, Update,
+        DEFAULT_SORT_BUFFER_SIZE,
     },
 };
 
@@ -28,12 +31,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     Ok(match statement {
-        Statement::Insert { into, values, .. } => {
+        Statement::Insert(Insert { into, values, .. }) => {
             let values = VecDeque::from(values);
             let source = Box::new(Planner::Values(Values { values }));
             let table = db.metadata(&into)?;
 
-            Planner::Insert(Insert {
+            Planner::Insert(InsertPlan {
                 source,
                 comparator: table.comp()?,
                 table: db.metadata(&into)?.clone(),

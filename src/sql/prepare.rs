@@ -1,6 +1,6 @@
 use crate::db::{Ctx, DatabaseError, ROW_COL_ID};
 
-use super::statement::{Expression, Statement, Type, Value};
+use super::statement::{Expression, Insert, Statement, Type, Value};
 
 pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
@@ -28,11 +28,11 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
 
             *columns = wildcards
         }
-        Statement::Insert {
-            into,
-            columns,
+        Statement::Insert(Insert {
             values,
-        } => {
+            columns,
+            into,
+        }) => {
             let metadata = ctx.metadata(into)?;
 
             if columns.is_empty() {

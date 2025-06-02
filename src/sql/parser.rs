@@ -19,6 +19,8 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::iter::Peekable;
 
+use super::statement::Insert;
+
 pub(crate) struct Parser<'input> {
     input: &'input str,
     tokenizer: Peekable<tokenizer::IntoIter<'input>>,
@@ -46,6 +48,10 @@ enum ErrorKind {
 pub(in crate::sql) type ParserResult<T> = Result<T, ParserError>;
 
 const UNARY_ARITHMETIC_OPERATOR: u8 = 50;
+
+trait Sql<'sql>: Sized {
+    fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self>;
+}
 
 #[allow(unused)]
 impl<'input> Parser<'input> {
@@ -84,93 +90,8 @@ impl<'input> Parser<'input> {
                     order_by,
                 }
             }
-            Keyword::Create => {
-                let keyword = self.expect_one(&[
-                    Keyword::Database,
-                    Keyword::Sequence,
-                    Keyword::Table,
-                    Keyword::Unique,
-                    Keyword::Index,
-                ])?;
-
-                Statement::Create(match keyword {
-                    Keyword::Database => Create::Database(self.parse_ident()?),
-                    Keyword::Table => Create::Table {
-                        name: self.parse_ident()?,
-                        columns: self.parse_separated_tokens(Self::parse_col, true)?,
-                    },
-                    Keyword::Unique | Keyword::Index => {
-                        let unique = keyword.eq(&Keyword::Unique);
-                        if unique {
-                            self.expect_keyword(Keyword::Index)?;
-                        }
-
-                        let name = self.parse_ident()?;
-                        self.expect_keyword(Keyword::On)?;
-                        let table = self.parse_ident()?;
-                        self.expect_token(Token::LeftParen)?;
-                        let column = self.parse_ident()?;
-                        self.expect_token(Token::RightParen)?;
-
-                        Create::Index {
-                            name,
-                            table,
-                            column,
-                            unique,
-                        }
-                    }
-                    Keyword::Sequence => {
-                        let name = self.parse_ident()?;
-                        self.expect_keyword(Keyword::As)?;
-                        // FIXME: hardcoded type
-                        self.expect_keyword(Keyword::BigInt)?;
-                        self.expect_keyword(Keyword::Unsigned)?;
-                        self.expect_keyword(Keyword::Owned)?;
-                        self.expect_keyword(Keyword::By)?;
-                        let table = self.parse_ident()?;
-
-                        Create::Sequence {
-                            table,
-                            name,
-                            r#type: Type::UnsignedBigInteger,
-                        }
-                    }
-                    _ => {
-                        unreachable!("Not found any statement that matches this for CREATE keyword")
-                    }
-                })
-            }
-            Keyword::Insert => {
-                self.expect_keyword(Keyword::Into)?;
-                let into = self.parse_ident()?;
-                let columns: Vec<String> = match self.peek_token() {
-                    Some(_) => self.parse_separated_tokens(Self::parse_ident, true),
-                    None => Ok(vec![]),
-                }?;
-
-                self.expect_keyword(Keyword::Values)?;
-
-                let mut rows = Vec::new();
-                loop {
-                    // each row is ( expr, expr, ... )
-                    self.expect_token(Token::LeftParen)?;
-                    let row = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
-                    self.expect_token(Token::RightParen)?;
-                    rows.push(row);
-
-                    // comma? if so, more rows; otherwise break
-                    match self.consume_optional(Token::Comma) {
-                        true => continue,
-                        false => break,
-                    }
-                }
-
-                Statement::Insert {
-                    into,
-                    columns,
-                    values: rows,
-                }
-            }
+            Keyword::Create => Statement::Create(Create::parse(self)?),
+            Keyword::Insert => Statement::Insert(Insert::parse(self)?),
             Keyword::Update => {
                 let table = self.parse_ident()?;
                 self.expect_keyword(Keyword::Set)?;
@@ -632,6 +553,96 @@ impl<'input> Parser<'input> {
     }
 }
 
+impl<'sql> Sql<'sql> for Create {
+    fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
+        let keyword = parser.expect_one(&[
+            Keyword::Database,
+            Keyword::Table,
+            Keyword::Unique,
+            Keyword::Index,
+        ])?;
+
+        Ok(match keyword {
+            Keyword::Database => Create::Database(parser.parse_ident()?),
+            Keyword::Table => Create::Table {
+                name: parser.parse_ident()?,
+                columns: parser.parse_separated_tokens(Parser::parse_col, true)?,
+            },
+            Keyword::Unique | Keyword::Index => {
+                let unique = keyword.eq(&Keyword::Unique);
+                if unique {
+                    parser.expect_keyword(Keyword::Index)?;
+                }
+
+                let name = parser.parse_ident()?;
+                parser.expect_keyword(Keyword::On)?;
+                let table = parser.parse_ident()?;
+                parser.expect_token(Token::LeftParen)?;
+                let column = parser.parse_ident()?;
+                parser.expect_token(Token::RightParen)?;
+
+                Create::Index {
+                    name,
+                    column,
+                    table,
+                    unique,
+                }
+            }
+            Keyword::Sequence => {
+                let name = parser.parse_ident()?;
+                parser.expect_keyword(Keyword::As)?;
+                // FIXME: hardcoded type
+                parser.expect_keyword(Keyword::BigInt)?;
+                parser.expect_keyword(Keyword::Unsigned)?;
+                parser.expect_keyword(Keyword::Owned)?;
+                parser.expect_keyword(Keyword::By)?;
+                let table = parser.parse_ident()?;
+
+                Create::Sequence {
+                    table,
+                    name,
+                    r#type: Type::UnsignedBigInteger,
+                }
+            }
+            _ => panic!("Unsupported keyword"),
+        })
+    }
+}
+
+impl<'sql> Sql<'sql> for Insert {
+    fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
+        parser.expect_keyword(Keyword::Into)?;
+        let into = parser.parse_ident()?;
+        let columns: Vec<String> = match parser.peek_token() {
+            Some(_) => parser.parse_separated_tokens(Parser::parse_ident, true),
+            None => Ok(vec![]),
+        }?;
+
+        parser.expect_keyword(Keyword::Values)?;
+
+        let mut rows = Vec::new();
+        loop {
+            // each row is ( expr, expr, ... )
+            parser.expect_token(Token::LeftParen)?;
+            let row = parser.parse_separated_tokens(|p| p.parse_expr(None), false)?;
+            parser.expect_token(Token::RightParen)?;
+            rows.push(row);
+
+            // comma? if so, more rows; otherwise break
+            match parser.consume_optional(Token::Comma) {
+                true => continue,
+                false => break,
+            }
+        }
+
+        Ok(Self {
+            into,
+            columns,
+            values: rows,
+        })
+    }
+}
+
 impl Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
@@ -941,7 +952,7 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Insert {
+            Ok(Statement::Insert(Insert {
                 into: "departments".to_string(),
                 columns: vec!["id".to_string(), "name".to_string()],
                 values: vec![vec![
@@ -949,7 +960,7 @@ mod tests {
                     Expression::Value(Value::Number(1)),
                     Expression::Value(Value::String("HR".to_string()))
                 ],],
-            })
+            }))
         )
     }
 
