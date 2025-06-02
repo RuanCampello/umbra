@@ -84,22 +84,8 @@ impl<'input> Parser<'input> {
             Keyword::Create => Statement::Create(Create::parse(self)?),
             Keyword::Insert => Statement::Insert(Insert::parse(self)?),
             Keyword::Update => Statement::Update(Update::parse(self)?),
-            Keyword::Drop => {
-                let keyword = self.expect_one(&[Keyword::Database, Keyword::Table])?;
-                let identifier = self.parse_ident()?;
-
-                Statement::Drop(match keyword {
-                    Keyword::Database => Drop::Database(identifier),
-                    Keyword::Table => Drop::Table(identifier),
-                    _ => unreachable!(),
-                })
-            }
-            Keyword::Delete => {
-                self.expect_keyword(Keyword::From)?;
-                let (from, r#where) = self.parse_from_and_where()?;
-
-                Statement::Delete(Delete { from, r#where })
-            }
+            Keyword::Drop => Statement::Drop(Drop::parse(self)?),
+            Keyword::Delete => Statement::Delete(Delete::parse(self)?),
             Keyword::Start => {
                 self.expect_keyword(Keyword::Transaction)?;
                 Statement::StartTransaction

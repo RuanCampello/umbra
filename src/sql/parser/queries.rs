@@ -1,4 +1,4 @@
-use crate::sql::statement::{Create, Insert, Select, Type, Update};
+use crate::sql::statement::{Create, Delete, Drop, Insert, Select, Type, Update};
 
 use super::{
     tokens::{Keyword, Token},
@@ -128,5 +128,27 @@ impl<'sql> Sql<'sql> for Update {
             r#where,
             table,
         })
+    }
+}
+
+impl<'sql> Sql<'sql> for Drop {
+    fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
+        let keyword = parser.expect_one(&[Keyword::Database, Keyword::Table])?;
+        let identifier = parser.parse_ident()?;
+
+        Ok(match keyword {
+            Keyword::Database => Drop::Database(identifier),
+            Keyword::Table => Drop::Table(identifier),
+            _ => unreachable!("Unsupported statement for DROP"),
+        })
+    }
+}
+
+impl<'sql> Sql<'sql> for Delete {
+    fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
+        parser.expect_keyword(Keyword::From)?;
+        let (from, r#where) = parser.parse_from_and_where()?;
+
+        Ok(Self { from, r#where })
     }
 }
