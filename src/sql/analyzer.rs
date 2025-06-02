@@ -7,7 +7,7 @@ use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 
-use super::statement::{Insert, Select, Update};
+use super::statement::{Delete, Insert, Select, Update};
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum AnalyzerError {
@@ -177,7 +177,7 @@ pub(in crate::sql) fn analyze<'s>(
             }
         }
 
-        Statement::Delete { from, r#where } => {
+        Statement::Delete(Delete { from, r#where }) => {
             let metadata = ctx.metadata(from)?;
 
             if from.eq(DB_METADATA) {

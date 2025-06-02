@@ -15,10 +15,7 @@ pub(crate) enum Statement {
     Select(Select),
     Update(Update),
     Insert(Insert),
-    Delete {
-        from: String,
-        r#where: Option<Expression>,
-    },
+    Delete(Delete),
     Drop(Drop),
     Commit,
     StartTransaction,
@@ -81,6 +78,12 @@ pub(crate) struct Insert {
     pub into: String,
     pub columns: Vec<String>,
     pub values: Vec<Vec<Expression>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Delete {
+    pub from: String,
+    pub r#where: Option<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -284,7 +287,7 @@ impl Display for Statement {
                 }
             }
 
-            Statement::Delete { from, r#where } => {
+            Statement::Delete(Delete { from, r#where }) => {
                 write!(f, "DELETE FROM {from}")?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;

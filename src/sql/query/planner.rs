@@ -10,7 +10,7 @@ use crate::{
     sql::{
         analyzer,
         query::optimiser,
-        statement::{Column, Expression, Select, Type, Update},
+        statement::{Column, Delete, Expression, Select, Type, Update},
         Statement,
     },
     vm::{
@@ -21,7 +21,7 @@ use crate::{
 use crate::{
     sql::statement::Insert,
     vm::planner::{
-        Collect, CollectBuilder, Delete, Project, SortBuilder, TupleComparator,
+        Collect, CollectBuilder, Delete as DeletePlan, Project, SortBuilder, TupleComparator,
         Update as UpdatePlan, DEFAULT_SORT_BUFFER_SIZE,
     },
 };
@@ -158,7 +158,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             })
         }
 
-        Statement::Delete { from, r#where } => {
+        Statement::Delete(Delete { from, r#where }) => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
 
             let work_dir = db.work_dir.clone();
@@ -177,7 +177,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 );
             }
 
-            Planner::Delete(Delete {
+            Planner::Delete(DeletePlan {
                 table: metadata.clone(),
                 comparator: metadata.comp()?,
                 pager: Rc::clone(&db.pager),

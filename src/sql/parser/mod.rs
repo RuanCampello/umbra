@@ -23,7 +23,7 @@ use std::iter::Peekable;
 use tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
 use tokens::{Keyword, Token};
 
-use super::statement::{Insert, Select, Update};
+use super::statement::{Delete, Insert, Select, Update};
 
 pub(crate) struct Parser<'input> {
     input: &'input str,
@@ -98,7 +98,7 @@ impl<'input> Parser<'input> {
                 self.expect_keyword(Keyword::From)?;
                 let (from, r#where) = self.parse_from_and_where()?;
 
-                Statement::Delete { from, r#where }
+                Statement::Delete(Delete { from, r#where })
             }
             Keyword::Start => {
                 self.expect_keyword(Keyword::Transaction)?;
