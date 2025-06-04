@@ -91,8 +91,8 @@ macro_rules! index {
 
 macro_rules! sequence {
     // ── SEQUENCE ────────────────────────────────────────────────────────
-    (sequence on ($table:ident) ($col:ident)) => {{
-        format!("{}_{}_seq", stringify!($table), stringify!($col))
+    (sequence on ($table:expr) ($col:expr)) => {{
+        format!("{}_{}_seq", $table, $col)
     }};
 }
 
@@ -105,7 +105,7 @@ impl TableMetadata {
 
     pub fn next_val(&mut self, table: &str, column: &str) -> u64 {
         self.serials
-            .get(&sequence!(sequence on (table) (col)))
+            .get(&sequence!(sequence on (table) (column)))
             .map(|seq| seq.value.fetch_add(1, Ordering::Relaxed) + 1)
             .expect("Failed to get next_val for this column")
     }
