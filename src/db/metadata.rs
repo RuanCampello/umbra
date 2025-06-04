@@ -89,6 +89,13 @@ macro_rules! index {
     }};
 }
 
+macro_rules! sequence {
+    // ── SEQUENCE ────────────────────────────────────────────────────────
+    (sequence on ($table:ident) ($col:ident)) => {{
+        format!("{}_{}_seq", stringify!($table), stringify!($col))
+    }};
+}
+
 impl TableMetadata {
     pub fn next_id(&mut self) -> RowId {
         let row_id = self.row_id;
@@ -97,9 +104,8 @@ impl TableMetadata {
     }
 
     pub fn next_val(&mut self, table: &str, column: &str) -> u64 {
-        let name = format!("{table}_{column}_seq");
         self.serials
-            .get(name.as_str())
+            .get(&sequence!(sequence on (table) (col)))
             .map(|seq| seq.value.fetch_add(1, Ordering::Relaxed) + 1)
             .expect("Failed to get next_val for this column")
     }
