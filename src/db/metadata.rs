@@ -96,9 +96,10 @@ impl TableMetadata {
         row_id
     }
 
-    pub fn next_val(&mut self, column: &str) -> u64 {
+    pub fn next_val(&mut self, table: &str, column: &str) -> u64 {
+        let name = format!("{table}_{column}_seq");
         self.serials
-            .get(column)
+            .get(name.as_str())
             .map(|seq| seq.value.fetch_add(1, Ordering::Relaxed) + 1)
             .expect("Failed to get next_val for this column")
     }
