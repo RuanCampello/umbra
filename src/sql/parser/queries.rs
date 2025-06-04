@@ -29,6 +29,7 @@ impl<'sql> Sql<'sql> for Create {
             Keyword::Table,
             Keyword::Unique,
             Keyword::Index,
+            Keyword::Sequence,
         ])?;
 
         Ok(match keyword {

@@ -29,6 +29,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::AtomicU64;
 
 #[derive(Debug)]
 pub(crate) struct Database<File> {
@@ -304,7 +305,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             else {
                 return Err(corrupted_err());
             };
-
             match &tuple[schema.index_of("sql").ok_or(corrupted_err())?] {
                 Value::String(sql) => match Parser::new(sql).parse_statement()? {
                     Statement::Create(Create::Table { columns, .. }) => {
@@ -348,10 +348,16 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                         table,
                         r#type,
                     }) => {
-                        let sequence = metadata.serials.get(&name).ok_or(SqlError::Other(
-                            format!("Couldn't find sequence for column {name}"),
-                        ))?;
-                        todo!("creating the sequences for {name}...")
+                        let root = *root as PageNumber;
+                        metadata.serials.insert(
+                            name.clone(),
+                            SequenceMetadata {
+                                root,
+                                name: name.clone(),
+                                value: AtomicU64::new(0),
+                                data_type: r#type,
+                            },
+                        );
                     }
                     _ => return Err(corrupted_err()),
                 },
@@ -366,6 +372,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {
             metadata.row_id = self.load_next_row_id(metadata.root)?;
         }
+
+        println!("METADATA {:#?}", metadata);
 
         Ok(metadata)
     }

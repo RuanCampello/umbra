@@ -172,18 +172,6 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(sql),
                 ],
             )?;
-
-            let seq_schema = Schema::new(vec![Column::new("value", Type::UnsignedBigInteger)]);
-            let comparator = BTreeKeyCmp::from(&Type::UnsignedBigInteger);
-
-            let mut pager = db.pager.borrow_mut();
-            let mut btree = BTree::new(&mut pager, root, comparator);
-
-            let initial = Value::Number(1);
-            let entry_bytes = serialize_tuple(&seq_schema, [&initial]);
-            btree
-                .try_insert(entry_bytes)?
-                .map_err(|_| SqlError::DuplicatedKey(initial))?;
         }
 
         Statement::Drop(Drop::Table(name)) => {
