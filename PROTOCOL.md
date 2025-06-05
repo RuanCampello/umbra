@@ -40,7 +40,7 @@ For each row:
 [ 4 bytes ] - Affected rows count (u32, LE)
 
 ### (-) Error Response:
------------------
+
 [ n bytes ] - UTF-8 encoded error message
 
 
@@ -49,26 +49,26 @@ For each row:
 Each column type is encoded as a single byte:
 
 Boolean Types:
-  0x00 - `BOOLEAN`
+ - 0x00 - `BOOLEAN`
 
 Integer Types:
-  0x10 - `SMALLINT`
-  0x11 - `UNSIGNED SMALLINT`
-  0x12 - `INTEGER`
-  0x13 - `UNSIGNED INTEGER`
-  0x14 - `BIGINT`
-  0x15 - `UNSIGNED BIGINT`
-  0x16 - `SMALLSERIAL`
-  0x17 - `SERIAL`
-  0x18 - `BIGSERIAL`
+ - 0x10 - `SMALLINT`
+ - 0x11 - `UNSIGNED SMALLINT`
+ - 0x12 - `INTEGER`
+ - 0x13 - `UNSIGNED INTEGER`
+ - 0x14 - `BIGINT`
+ - 0x15 - `UNSIGNED BIGINT`
+ - 0x16 - `SMALLSERIAL`
+ - 0x17 - `SERIAL`
+ - 0x18 - `BIGSERIAL`
 
 String Types:
-  0x40 - `VARCHAR` (requires additional 4-byte max length)
+ - 0x40 - `VARCHAR` (requires additional 4-byte max length)
 
 Temporal Types:
-  0x50 - `DATE`
-  0x51 - `TIME`
-  0x52 - `TIMESTAMP`
+ - 0x50 - `DATE`
+ - 0x51 - `TIME`
+ - 0x52 - `TIMESTAMP`
 
 
 ## Connection Flow:
