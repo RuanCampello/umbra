@@ -1104,4 +1104,28 @@ mod tests {
             })
         )
     }
+
+    #[test]
+    fn test_parse_real_and_double() {
+        let sql = r#"
+            CREATE TABLE weather_data (
+                reading_id SERIAL PRIMARY KEY,
+                temperature REAL,
+                humidity DOUBLE PRECISION
+            );
+        "#;
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Table {
+                name: "weather_data".into(),
+                columns: vec![
+                    Column::primary_key("reading_id", Type::Serial),
+                    Column::new("temperature", Type::Real),
+                    Column::new("humidity", Type::DoublePrecision)
+                ]
+            }))
+        )
+    }
 }
