@@ -5,7 +5,7 @@
 use super::tokens::{Keyword, Token, Whitespace};
 use std::fmt::Display;
 use std::iter::Peekable;
-use std::str::Chars;
+use std::str::{Chars, FromStr};
 
 pub(in crate::sql) struct Tokenizer<'input> {
     stream: Stream<'input>,
@@ -147,54 +147,7 @@ impl<'input> Tokenizer<'input> {
 
     fn tokenize_keyword(&mut self) -> TokenizerResult {
         let value: String = self.stream.take_while(Token::is_keyword).collect();
-
-        let keyword = match value.to_uppercase().as_str() {
-            "SELECT" => Keyword::Select,
-            "CREATE" => Keyword::Create,
-            "UPDATE" => Keyword::Update,
-            "DELETE" => Keyword::Delete,
-            "INSERT" => Keyword::Insert,
-            "VALUES" => Keyword::Values,
-            "INTO" => Keyword::Into,
-            "SET" => Keyword::Set,
-            "DROP" => Keyword::Drop,
-            "FROM" => Keyword::From,
-            "TABLE" => Keyword::Table,
-            "WHERE" => Keyword::Where,
-            "AND" => Keyword::And,
-            "OR" => Keyword::Or,
-            "TRUE" => Keyword::True,
-            "FALSE" => Keyword::False,
-            "PRIMARY" => Keyword::Primary,
-            "KEY" => Keyword::Key,
-            "UNIQUE" => Keyword::Unique,
-            "SMALLSERIAL" => Keyword::SmallSerial,
-            "SERIAL" => Keyword::Serial,
-            "BIGSERIAL" => Keyword::BigSerial,
-            "SMALLINT" => Keyword::SmallInt,
-            "INT" | "INTEGER" => Keyword::Int,
-            "BIGINT" => Keyword::BigInt,
-            "BY" => Keyword::By,
-            "DATABASE" => Keyword::Database,
-            "SEQUENCE" => Keyword::Sequence,
-            "AS" => Keyword::As,
-            "OWNED" => Keyword::Owned,
-            "UNSIGNED" => Keyword::Unsigned,
-            "VARCHAR" => Keyword::Varchar,
-            "BOOLEAN" => Keyword::Bool,
-            "INDEX" => Keyword::Index,
-            "ORDER" => Keyword::Order,
-            "ON" => Keyword::On,
-            "BEGIN" => Keyword::Start,
-            "TRANSACTION" => Keyword::Transaction,
-            "ROLLBACK" => Keyword::Rollback,
-            "COMMIT" => Keyword::Commit,
-            "EXPLAIN" => Keyword::Explain,
-            "TIMESTAMP" => Keyword::Timestamp,
-            "DATE" => Keyword::Date,
-            "TIME" => Keyword::Time,
-            _ => Keyword::None,
-        };
+        let keyword = Keyword::from_str(value.as_str()).unwrap_or(Keyword::None);
 
         Ok(match keyword {
             Keyword::None => Token::Identifier(value),

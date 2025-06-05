@@ -21,7 +21,9 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::iter::Peekable;
 use tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
-use tokens::{Keyword, Token};
+use tokens::Token;
+
+pub use tokens::Keyword;
 
 use super::statement::{Delete, Insert, Select, Update};
 

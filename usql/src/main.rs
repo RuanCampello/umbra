@@ -13,6 +13,9 @@ use umbra::{
     tcp::{self, Response},
 };
 
+mod highlight;
+mod palette;
+
 const EXIT: &str = "quit";
 const PROMPT: &str = "umbra > ";
 const SQL_PROMPT: &str = "sql > ";
