@@ -256,15 +256,12 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
     col_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError> {
-    println!("expression {expr:#?}");
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, col_type)?,
         Expression::Identifier(ident) => {
             let idx = schema
                 .index_of(ident)
                 .ok_or(SqlError::InvalidColumn(ident.to_string()))?;
-
-            println!("schema {schema:#?}");
 
             match schema.columns[idx].data_type {
                 Type::Boolean => VmType::Bool,
@@ -696,6 +693,31 @@ mod tests {
                 (23.5, 60.2),
                 (20.1, 65.3),
                 (22.8, 58.1);
+            "#,
+            ctx: &[CTX],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn insert_double_precision() -> AnalyzerResult {
+        const CTX: &str = r#"
+            CREATE TABLE scientific_data (
+                measurement_id SERIAL PRIMARY KEY,
+                precise_temperature DOUBLE PRECISION,
+                co2_levels DOUBLE PRECISION,
+                measurement_time TIMESTAMP
+            );
+        "#;
+
+        Analyze {
+            sql: r#"
+            INSERT INTO scientific_data (precise_temperature, co2_levels, measurement_time)
+            VALUES
+                (23.456789, 415.123456789, '2024-02-03 10:00:00'),
+                (20.123456, 417.123789012, '2024-02-03 11:00:00'),
+                (22.789012, 418.456123789, '2024-02-03 12:00:00');
             "#,
             ctx: &[CTX],
             expected: Ok(()),
