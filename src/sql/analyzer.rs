@@ -647,12 +647,35 @@ mod tests {
         const CTX: &str = "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(120));";
 
         Analyze {
-            sql: "INSERT INTO users ('John Doe');",
+            sql: "INSERT INTO users (name) VALUES ('John Doe');",
             ctx: &[CTX],
             expected: Ok(()),
-        };
+        }
+        .assert()
+    }
 
-        Ok(())
+    #[test]
+    fn insert_float() -> AnalyzerResult {
+        const CTX: &str = r#"
+            CREATE TABLE weather_data (
+                reading_id SERIAL PRIMARY KEY,
+                temperature REAL,
+                humidity REAL
+            );
+        "#;
+
+        Analyze {
+            sql: r#"
+            INSERT INTO weather_data (temperature, humidity)
+            VALUES
+                (23.5, 60.2),
+                (20.1, 65.3),
+                (22.8, 58.1);
+            "#,
+            ctx: &[CTX],
+            expected: Ok(()),
+        }
+        .assert()
     }
 
     #[test]
