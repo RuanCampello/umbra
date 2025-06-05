@@ -156,9 +156,21 @@ impl<'input> Tokenizer<'input> {
     }
 
     fn tokenize_number(&mut self) -> TokenizerResult {
-        Ok(Token::Number(
-            self.stream.take_while(char::is_ascii_digit).collect(),
-        ))
+        let mut number: String = self.stream.take_while(char::is_ascii_digit).collect();
+
+        if let Some('.') = self.stream.peek() {
+            self.stream.next();
+            let fraction: String = self.stream.take_while(char::is_ascii_digit).collect();
+
+            if fraction.is_empty() {
+                return self.error(ErrorKind::UnexpectedToken('.'));
+            }
+
+            number.push('.');
+            number.push_str(&fraction);
+        }
+
+        Ok(Token::Number(number))
     }
 
     fn tokenize_string(&mut self) -> TokenizerResult {
