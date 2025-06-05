@@ -343,6 +343,12 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
             }
             Ok(VmType::Number)
         }
+        Value::Float(f) => {
+            if let Some(col_type) = col_type {
+                analyze_float(f, col_type)?;
+            }
+            Ok(VmType::Float)
+        }
         Value::String(s) => match col_type {
             // if the column has a type, delegate to analyze_string,
             // which will return VmType::Date for valid dates,
@@ -395,11 +401,16 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
 }
 
 fn analyze_number(integer: &i128, data_type: &Type) -> Result<(), AnalyzerError> {
-    if data_type.is_integer() {
-        if !data_type.is_integer_in_bounds(integer) {
-            // TODO: this is a bit hacky, we should probably have a better way to get the max size of the type
-            return Err(AnalyzerError::Overflow(*data_type, *integer as usize));
-        }
+    if data_type.is_integer() && !data_type.is_integer_in_bounds(integer) {
+        return Err(AnalyzerError::Overflow(*data_type, *integer as usize));
+    }
+
+    Ok(())
+}
+
+fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
+    if data_type.is_float() && !data_type.is_float_in_bounds(float) {
+        return Err(AnalyzerError::Overflow(*data_type, *float as usize));
     }
 
     Ok(())

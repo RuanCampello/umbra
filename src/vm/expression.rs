@@ -9,6 +9,7 @@ pub(crate) enum VmType {
     Bool,
     String,
     Number,
+    Float,
     Date,
 }
 

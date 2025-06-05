@@ -263,6 +263,13 @@ impl Type {
 
         bound.contains(int)
     }
+    pub const fn is_float_in_bounds(&self, float: &f64) -> bool {
+        match self {
+            Self::Real => *float >= f32::MIN as f64 && *float <= f32::MAX as f64,
+            Self::DoublePrecision => float.is_finite(),
+            other => panic!("bound checking must be used only for floats"),
+        }
+    }
 
     pub const fn is_integer(&self) -> bool {
         match self {
@@ -279,6 +286,13 @@ impl Type {
     pub const fn is_serial(&self) -> bool {
         match self {
             Self::SmallSerial | Self::Serial | Self::BigSerial => true,
+            _ => false,
+        }
+    }
+
+    pub const fn is_float(&self) -> bool {
+        match self {
+            Self::Real | Self::DoublePrecision => true,
             _ => false,
         }
     }
