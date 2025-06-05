@@ -12,27 +12,10 @@ use std::fmt::{self, Debug, Display, Formatter, Write};
 #[derive(Debug, PartialEq)]
 pub(crate) enum Statement {
     Create(Create),
-    Select {
-        columns: Vec<Expression>,
-        from: String,
-        r#where: Option<Expression>,
-        order_by: Vec<Expression>,
-        // TODO: limit
-    },
-    Update {
-        table: String,
-        columns: Vec<Assignment>,
-        r#where: Option<Expression>,
-    },
-    Insert {
-        into: String,
-        columns: Vec<String>,
-        values: Vec<Vec<Expression>>,
-    },
-    Delete {
-        from: String,
-        r#where: Option<Expression>,
-    },
+    Select(Select),
+    Update(Update),
+    Insert(Insert),
+    Delete(Delete),
     Drop(Drop),
     Commit,
     StartTransaction,
@@ -48,7 +31,7 @@ pub(crate) struct Assignment {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Column {
+pub struct Column {
     pub name: String,
     pub data_type: Type,
     pub constraints: Vec<Constraint>,
@@ -57,6 +40,11 @@ pub(crate) struct Column {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Create {
     Database(String),
+    Sequence {
+        name: String,
+        r#type: Type,
+        table: String,
+    },
     Table {
         name: String,
         columns: Vec<Column>,
@@ -67,6 +55,35 @@ pub(crate) enum Create {
         column: String,
         unique: bool,
     },
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Select {
+    pub columns: Vec<Expression>,
+    pub from: String,
+    pub r#where: Option<Expression>,
+    pub order_by: Vec<Expression>,
+    // TODO: limit
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Update {
+    pub table: String,
+    pub columns: Vec<Assignment>,
+    pub r#where: Option<Expression>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Insert {
+    pub into: String,
+    pub columns: Vec<String>,
+    pub values: Vec<Vec<Expression>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Delete {
+    pub from: String,
+    pub r#where: Option<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -99,7 +116,7 @@ pub(crate) enum Expression {
 ///
 /// Values of this type are stored in the `Value::Temporal` variant.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Temporal {
+pub enum Temporal {
     Date(NaiveDate),
     DateTime(NaiveDateTime),
     Time(NaiveTime),
@@ -120,15 +137,15 @@ pub(crate) enum Temporal {
 ///
 /// This separation allows the system to validate values against schema definitions at runtime.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Value {
+pub enum Value {
     String(String),
     Number(i128),
     Boolean(bool),
     Temporal(Temporal),
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Constraint {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Constraint {
     PrimaryKey,
     Unique,
 }
@@ -163,8 +180,8 @@ pub(crate) enum BinaryOperator {
 /// For example:
 /// - A column defined as `VARCHAR(255)` will be represented as `Type::Varchar(255)`.
 /// - A column of `DATE` will be represented as `Type::Date`.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Type {
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Type {
     /// 2-byte signed integer
     SmallInt,
     /// 2-byte unsigned integer
@@ -231,6 +248,11 @@ impl Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Statement::Create(create) => match create {
+                Create::Sequence {
+                    name,
+                    r#type,
+                    table,
+                } => write!(f, "CREATE SEQUENCE {name} AS {type} OWNED BY {table}")?,
                 Create::Table { name, columns } => {
                     write!(f, "CREATE TABLE {name} ({})", join(columns, ", "))?;
                 }
@@ -250,12 +272,12 @@ impl Display for Statement {
                 }
             },
 
-            Statement::Select {
+            Statement::Select(Select {
                 columns,
                 from,
                 r#where,
                 order_by,
-            } => {
+            }) => {
                 write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
@@ -265,29 +287,29 @@ impl Display for Statement {
                 }
             }
 
-            Statement::Delete { from, r#where } => {
+            Statement::Delete(Delete { from, r#where }) => {
                 write!(f, "DELETE FROM {from}")?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
             }
 
-            Statement::Update {
+            Statement::Update(Update {
                 table,
                 columns,
                 r#where,
-            } => {
+            }) => {
                 write!(f, "UPDATE {table} SET {}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
             }
 
-            Statement::Insert {
+            Statement::Insert(Insert {
                 into,
                 columns,
                 values,
-            } => {
+            }) => {
                 let columns = match columns.is_empty() {
                     true => String::from(" "),
                     false => format!(" ({}) ", join(columns, ", ")),
@@ -369,6 +391,15 @@ impl Type {
         match self {
             Self::SmallSerial | Self::Serial | Self::BigSerial => true,
             _ => false,
+        }
+    }
+
+    pub const fn max(&self) -> usize {
+        match self {
+            Self::SmallSerial => 32767usize,
+            Self::Serial => 2147483647usize,
+            Self::BigSerial => 9223372036854775807usize,
+            _ => panic!("MAX function is meant to be used only for serial types"),
         }
     }
 }

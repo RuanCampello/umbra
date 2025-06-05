@@ -8,14 +8,22 @@
 //! It's mostly inspired by the way postgres'
 //! [parser stage](https://www.postgresql.org/docs/17/parser-stage.html) works.
 
+mod queries;
+mod tokenizer;
+mod tokens;
+
 use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Statement, Type,
     UnaryOperator, Value,
 };
-use crate::sql::tokenizer::{self, Location, TokenWithLocation, Tokenizer, TokenizerError};
-use crate::sql::tokens::{Keyword, Token};
+use std::borrow::Cow;
+use std::fmt::Display;
 use std::iter::Peekable;
+use tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
+use tokens::{Keyword, Token};
+
+use super::statement::{Delete, Insert, Select, Update};
 
 pub(crate) struct Parser<'input> {
     input: &'input str,
@@ -24,7 +32,7 @@ pub(crate) struct Parser<'input> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct ParserError {
+pub struct ParserError {
     kind: ErrorKind,
     location: Location,
     input: String,
@@ -44,6 +52,10 @@ enum ErrorKind {
 pub(in crate::sql) type ParserResult<T> = Result<T, ParserError>;
 
 const UNARY_ARITHMETIC_OPERATOR: u8 = 50;
+
+trait Sql<'sql>: Sized {
+    fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self>;
+}
 
 #[allow(unused)]
 impl<'input> Parser<'input> {
@@ -68,120 +80,12 @@ impl<'input> Parser<'input> {
 
     pub fn parse_statement(&mut self) -> ParserResult<Statement> {
         let statement = match self.expect_one(&Self::supported_statements())? {
-            Keyword::Select => {
-                let cols = self.parse_separated_tokens(|parser| parser.parse_expr(None), false)?;
-                self.expect_keyword(Keyword::From)?;
-                let (from, r#where) = self.parse_from_and_where()?;
-
-                let order_by = self.parse_order_by()?;
-
-                Statement::Select {
-                    columns: cols,
-                    from,
-                    r#where,
-                    order_by,
-                }
-            }
-            Keyword::Create => {
-                let keyword = self.expect_one(&[
-                    Keyword::Database,
-                    Keyword::Table,
-                    Keyword::Unique,
-                    Keyword::Index,
-                ])?;
-
-                Statement::Create(match keyword {
-                    Keyword::Database => Create::Database(self.parse_ident()?),
-                    Keyword::Table => Create::Table {
-                        name: self.parse_ident()?,
-                        columns: self.parse_separated_tokens(Self::parse_col, true)?,
-                    },
-                    Keyword::Unique | Keyword::Index => {
-                        let unique = keyword.eq(&Keyword::Unique);
-                        if unique {
-                            self.expect_keyword(Keyword::Index)?;
-                        }
-
-                        let name = self.parse_ident()?;
-                        self.expect_keyword(Keyword::On)?;
-                        let table = self.parse_ident()?;
-                        self.expect_token(Token::LeftParen)?;
-                        let column = self.parse_ident()?;
-                        self.expect_token(Token::RightParen)?;
-
-                        Create::Index {
-                            name,
-                            table,
-                            column,
-                            unique,
-                        }
-                    }
-                    _ => unreachable!(),
-                })
-            }
-            Keyword::Insert => {
-                self.expect_keyword(Keyword::Into)?;
-                let into = self.parse_ident()?;
-                let columns: Vec<String> = match self.peek_token() {
-                    Some(_) => self.parse_separated_tokens(Self::parse_ident, true),
-                    None => Ok(vec![]),
-                }?;
-
-                self.expect_keyword(Keyword::Values)?;
-
-                let mut rows = Vec::new();
-                loop {
-                    // each row is ( expr, expr, ... )
-                    self.expect_token(Token::LeftParen)?;
-                    let row = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
-                    self.expect_token(Token::RightParen)?;
-                    rows.push(row);
-
-                    // comma? if so, more rows; otherwise break
-                    match self.consume_optional(Token::Comma) {
-                        true => continue,
-                        false => break,
-                    }
-                }
-
-                Statement::Insert {
-                    into,
-                    columns,
-                    values: rows,
-                }
-            }
-            Keyword::Update => {
-                let table = self.parse_ident()?;
-                self.expect_keyword(Keyword::Set)?;
-
-                let columns = self.parse_separated_tokens(Self::parse_assign, false)?;
-                let r#where = match self.consume_optional(Token::Keyword(Keyword::Where)) {
-                    true => Some(self.parse_expr(None)?),
-                    false => None,
-                };
-
-                Statement::Update {
-                    columns,
-                    r#where,
-                    table,
-                }
-            }
-            Keyword::Drop => {
-                let keyword = self.expect_one(&[Keyword::Database, Keyword::Table])?;
-                let identifier = self.parse_ident()?;
-
-                Statement::Drop(match keyword {
-                    Keyword::Database => Drop::Database(identifier),
-                    Keyword::Table => Drop::Table(identifier),
-                    _ => unreachable!(),
-                })
-            }
-            Keyword::Delete => {
-                self.expect_keyword(Keyword::From)?;
-                let (from, r#where) = self.parse_from_and_where()?;
-
-                Statement::Delete { from, r#where }
-            }
+            Keyword::Select => Statement::Select(Select::parse(self)?),
+            Keyword::Create => Statement::Create(Create::parse(self)?),
+            Keyword::Insert => Statement::Insert(Insert::parse(self)?),
+            Keyword::Update => Statement::Update(Update::parse(self)?),
+            Keyword::Drop => Statement::Drop(Drop::parse(self)?),
+            Keyword::Delete => Statement::Delete(Delete::parse(self)?),
             Keyword::Start => {
                 self.expect_keyword(Keyword::Transaction)?;
                 Statement::StartTransaction
@@ -207,10 +111,7 @@ impl<'input> Parser<'input> {
         })
     }
 
-    pub(in crate::sql) fn parse_expr(
-        &mut self,
-        precedence: Option<u8>,
-    ) -> ParserResult<Expression> {
+    pub(crate) fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression> {
         let mut expr = self.parse_pref()?;
         let mut next = self.get_precedence();
 
@@ -311,49 +212,7 @@ impl<'input> Parser<'input> {
 
     fn parse_col(&mut self) -> ParserResult<Column> {
         let name = self.parse_ident()?;
-
-        let data_type = match self.expect_one(&Self::supported_types())? {
-            int if Self::is_integer(&int) => {
-                let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
-
-                match (int, unsigned) {
-                    (Keyword::SmallInt, true) => Type::UnsignedSmallInt,
-                    (Keyword::SmallInt, false) => Type::SmallInt,
-                    (Keyword::Int, true) => Type::UnsignedInteger,
-                    (Keyword::Int, false) => Type::Integer,
-                    (Keyword::BigInt, true) => Type::UnsignedBigInteger,
-                    (Keyword::BigInt, false) => Type::BigInteger,
-                    (Keyword::SmallSerial, _) => Type::SmallSerial,
-                    (Keyword::Serial, _) => Type::Serial,
-                    (Keyword::BigSerial, _) => Type::BigSerial,
-                    _ => unreachable!("unknown integer"),
-                }
-            }
-            Keyword::Varchar => {
-                self.expect_token(Token::LeftParen)?;
-
-                let len = match self.next_token()? {
-                    Token::Number(number) => number.parse().map_err(|_| {
-                        // TODO: add correct error to incorrect varchar length
-                        self.error(ErrorKind::UnexpectedEof)
-                    })?,
-                    token => {
-                        return Err(self.error(ErrorKind::Expected {
-                            expected: Token::Number(Default::default()),
-                            found: token,
-                        }))?
-                    }
-                };
-
-                self.expect_token(Token::RightParen)?;
-                Type::Varchar(len)
-            }
-            Keyword::Bool => Type::Boolean,
-            Keyword::Timestamp => Type::DateTime,
-            Keyword::Date => Type::Date,
-            Keyword::Time => Type::Time,
-            keyword => unreachable!("unexpected column token: {keyword}"),
-        };
+        let data_type = self.parse_type()?;
 
         let mut constraints = Vec::new();
         while let Some(constraint) = self
@@ -375,6 +234,51 @@ impl<'input> Parser<'input> {
             data_type,
             constraints,
         })
+    }
+
+    fn parse_type(&mut self) -> ParserResult<Type> {
+        match self.expect_one(&Self::supported_types())? {
+            int if Self::is_integer(&int) => {
+                let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
+
+                match (int, unsigned) {
+                    (Keyword::SmallInt, true) => Ok(Type::UnsignedSmallInt),
+                    (Keyword::SmallInt, false) => Ok(Type::SmallInt),
+                    (Keyword::Int, true) => Ok(Type::UnsignedInteger),
+                    (Keyword::Int, false) => Ok(Type::Integer),
+                    (Keyword::BigInt, true) => Ok(Type::UnsignedBigInteger),
+                    (Keyword::BigInt, false) => Ok(Type::BigInteger),
+                    (Keyword::SmallSerial, _) => Ok(Type::SmallSerial),
+                    (Keyword::Serial, _) => Ok(Type::Serial),
+                    (Keyword::BigSerial, _) => Ok(Type::BigSerial),
+                    _ => unreachable!("unknown integer"),
+                }
+            }
+            Keyword::Varchar => {
+                self.expect_token(Token::LeftParen)?;
+
+                let len = match self.next_token()? {
+                    Token::Number(number) => number.parse().map_err(|_| {
+                        // TODO: add correct error to incorrect varchar length
+                        self.error(ErrorKind::UnexpectedEof)
+                    })?,
+                    token => {
+                        return Err(self.error(ErrorKind::Expected {
+                            expected: Token::Number(Default::default()),
+                            found: token,
+                        }))?
+                    }
+                };
+
+                self.expect_token(Token::RightParen)?;
+                Ok(Type::Varchar(len))
+            }
+            Keyword::Bool => Ok(Type::Boolean),
+            Keyword::Timestamp => Ok(Type::DateTime),
+            Keyword::Date => Ok(Type::Date),
+            Keyword::Time => Ok(Type::Time),
+            keyword => unreachable!("unexpected column token: {keyword}"),
+        }
     }
 
     fn parse_assign(&mut self) -> ParserResult<Assignment> {
@@ -614,6 +518,75 @@ impl<'input> Parser<'input> {
     }
 }
 
+impl Display for ParserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "Parser error at line {} column {}: {}",
+            self.location.line, self.location.col, self.kind
+        )?;
+
+        let whitespaces = match self.input.lines().nth(self.location.line.saturating_sub(1)) {
+            Some(line) => {
+                f.write_str(line)?;
+                self.location.col.saturating_sub(1)
+            }
+            None => {
+                let line = self.input.lines().last().unwrap();
+                f.write_str(line)?;
+                line.chars().count()
+            }
+        };
+
+        write!(f, "\n{}^", String::from(" ").repeat(whitespaces))
+    }
+}
+
+impl<'s> ErrorKind {
+    fn expected_token_str(token: &'s Token) -> Cow<'s, str> {
+        match token {
+            Token::Identifier(_) => Cow::Borrowed("identifier"),
+            Token::Number(_) => Cow::Borrowed("number"),
+            Token::String(_) => Cow::Borrowed("string"),
+            _ => Cow::Owned(token.to_string()),
+        }
+    }
+}
+
+impl Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ErrorKind::FormatError(err) => f.write_str(err),
+            ErrorKind::TokenizerError(err) => write!(f, "{err}"),
+            ErrorKind::UnexpectedEof => write!(f, "Unexpected end of file"),
+            ErrorKind::Unsupported(token) => write!(f, "Unexpected or unsupported token: {token}"),
+            ErrorKind::Expected { expected, found } => write!(
+                f,
+                "Expected {} but found '{found}' instead",
+                ErrorKind::expected_token_str(expected)
+            ),
+            ErrorKind::ExpectedOneOf { expected, found } => {
+                let mut one_of = String::new();
+
+                one_of.push_str(&ErrorKind::expected_token_str(&expected[0]));
+                (expected[1..expected.len() - 1]).iter().for_each(|token| {
+                    one_of.push_str(", ");
+                    one_of.push_str(&ErrorKind::expected_token_str(token));
+                });
+
+                if expected.len() > 1 {
+                    one_of.push_str(" or ");
+                    one_of.push_str(&&ErrorKind::expected_token_str(
+                        &expected[expected.len() - 1],
+                    ));
+                }
+
+                write!(f, "Expected {one_of} but found '{found}' instead")
+            }
+        }
+    }
+}
+
 impl From<TokenizerError> for ParserError {
     fn from(
         TokenizerError {
@@ -642,7 +615,7 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select {
+            Ok(Statement::Select(Select {
                 columns: vec![
                     Expression::Identifier("id".to_string()),
                     Expression::Identifier("price".to_string())
@@ -650,7 +623,7 @@ mod tests {
                 from: "bills".to_string(),
                 r#where: None,
                 order_by: vec![],
-            })
+            }))
         );
     }
 
@@ -661,7 +634,7 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select {
+            Ok(Statement::Select(Select {
                 columns: vec![
                     Expression::Identifier("title".to_string()),
                     Expression::Identifier("author".to_string())
@@ -675,7 +648,7 @@ mod tests {
                     ))),
                 }),
                 order_by: vec![],
-            })
+            }))
         );
     }
 
@@ -686,12 +659,12 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select {
+            Ok(Statement::Select(Select {
                 columns: vec![Expression::Wildcard],
                 from: "users".to_string(),
                 r#where: None,
                 order_by: vec![],
-            })
+            }))
         );
     }
 
@@ -780,7 +753,7 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Update {
+            Ok(Statement::Update(Update {
                 table: "employees".to_string(),
                 columns: vec![
                     Assignment {
@@ -827,7 +800,7 @@ mod tests {
                         }),
                     })))
                 }),
-            })
+            }))
         );
     }
 
@@ -854,7 +827,7 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Insert {
+            Ok(Statement::Insert(Insert {
                 into: "departments".to_string(),
                 columns: vec!["id".to_string(), "name".to_string()],
                 values: vec![vec![
@@ -862,7 +835,7 @@ mod tests {
                     Expression::Value(Value::Number(1)),
                     Expression::Value(Value::String("HR".to_string()))
                 ],],
-            })
+            }))
         )
     }
 
@@ -898,12 +871,12 @@ mod tests {
                         },
                     ],
                 }),
-                Statement::Select {
+                Statement::Select(Select {
                     columns: vec![Expression::Wildcard],
                     from: "employees".to_string(),
                     r#where: None,
                     order_by: vec![],
-                }
+                })
             ]
         );
 
@@ -919,7 +892,7 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select {
+            Ok(Statement::Select(Select {
                 columns: vec![Expression::Wildcard],
                 from: "schedule".to_string(),
                 r#where: Some(Expression::BinaryOperation {
@@ -928,7 +901,7 @@ mod tests {
                     right: Box::new(Expression::Value(Value::String("12:00:00".into()))),
                 }),
                 order_by: vec![],
-            })
+            }))
         );
     }
 

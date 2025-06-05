@@ -179,3 +179,11 @@ impl Display for TypeError {
         }
     }
 }
+
+impl Display for VmError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DivisionByZero(left, right) => write!(f, "Division by zero: {left} / {right}"),
+        }
+    }
+}

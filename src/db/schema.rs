@@ -3,8 +3,9 @@ use crate::sql::statement::{Column, Constraint, Type};
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Schema {
+pub struct Schema {
     pub columns: Vec<Column>,
+    /// Index of columns definitions based on their name
     index: HashMap<String, usize>,
 }
 

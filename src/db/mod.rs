@@ -3,6 +3,7 @@
 mod metadata;
 mod schema;
 
+use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
 
@@ -23,10 +24,12 @@ use crate::{index, vm};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::AtomicU64;
 
 #[derive(Debug)]
 pub(crate) struct Database<File> {
@@ -42,6 +45,7 @@ pub(crate) struct Context {
     max_size: Option<usize>,
 }
 
+#[derive(Debug)]
 struct PreparedStatement<'db, File: FileOperations> {
     db: &'db mut Database<File>,
     exec: Option<Exec<File>>,
@@ -49,9 +53,9 @@ struct PreparedStatement<'db, File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct QuerySet {
-    pub(crate) tuples: Vec<Vec<Value>>,
-    pub(crate) schema: Schema,
+pub struct QuerySet {
+    pub tuples: Vec<Vec<Value>>,
+    pub schema: Schema,
 }
 
 #[derive(Debug, PartialEq)]
@@ -69,7 +73,7 @@ pub(crate) enum Exec<File: FileOperations> {
 }
 
 #[derive(Debug)]
-pub(crate) enum DatabaseError {
+pub enum DatabaseError {
     Parser(ParserError),
     Sql(SqlError),
     Io(std::io::Error),
@@ -80,7 +84,7 @@ pub(crate) enum DatabaseError {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum SqlError {
+pub enum SqlError {
     /// Database table isn't found or somewhat corrupted.
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
@@ -112,7 +116,7 @@ macro_rules! temporal {
 }
 
 impl Database<File> {
-    fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
+    pub fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let file = os::Fs::options()
             .create(true)
             .truncate(false)
@@ -169,7 +173,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(query_set)
     }
 
-    pub(crate) fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
+    fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
         let query = self.exec(&format!(
             "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index';"
         ))?;
@@ -195,6 +199,10 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             .find(|idx| idx.name.eq(index))
             .unwrap()
             .clone())
+    }
+
+    fn sequence_metadata(&mut self, sequence: &str) -> Result<SequenceMetadata, DatabaseError> {
+        todo!()
     }
 
     fn prepare(
@@ -245,12 +253,13 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         Ok((schema, prepared_statement))
     }
+
     fn commit(&mut self) -> io::Result<()> {
         self.transaction_state = TransactionState::Terminated;
         self.pager.borrow_mut().commit()
     }
 
-    fn rollback(&mut self) -> Result<usize, DatabaseError> {
+    pub(crate) fn rollback(&mut self) -> Result<usize, DatabaseError> {
         self.transaction_state = TransactionState::Terminated;
         self.pager.borrow_mut().rollback()
     }
@@ -266,8 +275,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 name: String::from(table),
                 row_id,
                 indexes: vec![],
-                schema,
                 serials: HashMap::new(),
+                schema,
             });
         }
 
@@ -280,6 +289,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             serials: HashMap::new(),
         };
 
+        let mut serials_to_load = Vec::new();
         let mut found_table_def = false;
 
         let (schema, mut results) = self.prepare(&format!(
@@ -297,7 +307,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             else {
                 return Err(corrupted_err());
             };
-
             match &tuple[schema.index_of("sql").ok_or(corrupted_err())?] {
                 Value::String(sql) => match Parser::new(sql).parse_statement()? {
                     Statement::Create(Create::Table { columns, .. }) => {
@@ -336,6 +345,24 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                             unique,
                         });
                     }
+                    Statement::Create(Create::Sequence {
+                        name,
+                        table,
+                        r#type,
+                    }) => {
+                        let root = *root as PageNumber;
+                        metadata.serials.insert(
+                            name.clone(),
+                            SequenceMetadata {
+                                root,
+                                name: name.clone(),
+                                value: AtomicU64::new(0),
+                                data_type: r#type.clone(),
+                            },
+                        );
+
+                        serials_to_load.push((name, table, r#type));
+                    }
                     _ => return Err(corrupted_err()),
                 },
                 _ => return Err(corrupted_err()),
@@ -348,6 +375,34 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {
             metadata.row_id = self.load_next_row_id(metadata.root)?;
+        }
+
+        for (name, table, data_type) in serials_to_load {
+            let col_idx = metadata
+                .schema
+                .index_of(&name.split('_').nth(1).unwrap())
+                .unwrap();
+
+            let mut pager = self.pager.borrow_mut();
+            let mut btree = BTree::new(
+                &mut pager,
+                metadata.root,
+                FixedSizeCmp::try_from(&data_type).unwrap_or(FixedSizeCmp::new::<RowId>()),
+            );
+            let curr_val = match btree.max()? {
+                Some(max_row) => {
+                    let row = tuple::deserialize(max_row.as_ref(), &metadata.schema);
+                    match &row[col_idx] {
+                        Value::Number(n) => *n as u64,
+                        _ => 0,
+                    }
+                }
+                None => 0,
+            };
+
+            if let Some(seq) = metadata.serials.get_mut(&name) {
+                seq.value = AtomicU64::new(curr_val);
+            }
         }
 
         Ok(metadata)
@@ -391,7 +446,7 @@ impl<File> Database<File> {
         self.transaction_state = TransactionState::Active
     }
 
-    fn active_transaction(&self) -> bool {
+    pub(crate) fn active_transaction(&self) -> bool {
         matches!(
             self.transaction_state,
             TransactionState::Active | TransactionState::Aborted
@@ -402,6 +457,8 @@ impl<File> Database<File> {
         self.transaction_state.eq(&TransactionState::Aborted)
     }
 }
+
+unsafe impl Send for Database<File> {}
 
 impl Context {
     pub fn new() -> Self {
@@ -623,11 +680,11 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
 }
 
 impl QuerySet {
-    fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
+    pub(crate) fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
         Self { schema, tuples }
     }
 
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             schema: Schema::empty(),
             tuples: Vec::new(),
@@ -645,6 +702,33 @@ impl QuerySet {
 impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     fn from(columns: Col) -> Self {
         Self::new(Vec::from_iter(columns.into_iter().cloned()))
+    }
+}
+
+impl Display for DatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "{err}"),
+            Self::Parser(err) => write!(f, "{err}"),
+            Self::Sql(err) => write!(f, "{err}"),
+            Self::Corrupted(message) => f.write_str(message),
+            Self::Other(message) => f.write_str(message),
+            Self::NoMemory => f.write_str("Out of memory"),
+        }
+    }
+}
+
+impl Display for SqlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidTable(table) => write!(f, "Invalid table '{table}'"),
+            Self::InvalidColumn(column) => write!(f, "Invalid column '{column}'"),
+            Self::DuplicatedKey(key) => write!(f, "Duplicated key {key}"),
+            Self::Analyzer(err) => write!(f, "{err}"),
+            Self::Vm(err) => write!(f, "{err}"),
+            Self::Type(err) => write!(f, "{err}"),
+            Self::Other(other) => f.write_str(other),
+        }
     }
 }
 
@@ -1260,6 +1344,39 @@ mod tests {
     }
 
     #[test]
+    fn test_serial_bounds() -> DatabaseResult {
+        let mut db = Database::default();
+        let max = Type::SmallSerial.max();
+
+        db.exec("CREATE TABLE users (id SMALLSERIAL PRIMARY KEY, name VARCHAR(50));")?;
+
+        for serial in (0..max) {
+            db.exec(&format!(
+                "INSERT INTO users (name) VALUES ('user_{serial}');"
+            ))?;
+        }
+
+        let query = db.exec("SELECT * FROM users;")?;
+        assert_eq!(query.tuples.len(), max);
+        assert_eq!(
+            query.schema,
+            Schema::new(vec![
+                Column::primary_key("id", Type::SmallSerial),
+                Column::new("name", Type::Varchar(50))
+            ])
+        );
+
+        let query = db.exec("INSERT INTO users (name) VALUES ('some cool name');");
+        assert!(query.is_err());
+        assert_eq!(
+            query.unwrap_err(),
+            AnalyzerError::Overflow(Type::SmallSerial, max).into()
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_delete() -> DatabaseResult {
         let mut db = Database::default();
 
@@ -1774,6 +1891,36 @@ mod tests {
         assert_eq!(
             query,
             Err(AnalyzerError::Overflow(Type::UnsignedBigInteger, NEGATIVE_VALUE as usize).into())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_drop_table() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE companies (
+                id INT PRIMARY KEY,
+                years BIGINT UNSIGNED,
+                name VARCHAR(50)
+            );
+        "#,
+        )?;
+
+        #[rustfmt::skip]
+        db.exec("INSERT INTO companies (id, years, name) VALUES (69, 142, 'Mongibello');")?;
+        let query = db.exec("SELECT * FROM companies;")?;
+        assert!(!query.is_empty());
+
+        db.exec("DROP TABLE companies;")?;
+        let query = db.exec("SELECT * FROM companies;");
+        assert!(query.is_err());
+        assert_eq!(
+            query.unwrap_err(),
+            DatabaseError::Sql(SqlError::InvalidTable("companies".into()))
         );
 
         Ok(())

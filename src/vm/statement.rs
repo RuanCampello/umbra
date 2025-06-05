@@ -15,8 +15,11 @@ use crate::{
         SqlError, DB_METADATA,
     },
     index,
-    sql::statement::{Column, Constraint, Create, Statement, Value},
-    vm::planner::{Execute, Planner, SeqScan},
+    sql::{
+        parser::Parser,
+        statement::{Constraint, Create, Drop, Statement, Value},
+    },
+    vm::planner::{CollectBuilder, Execute, Filter, Planner, SeqScan},
 };
 
 pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
@@ -40,14 +43,18 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 ],
             )?;
 
-            let metatada = db.metadata(&name)?;
-
-            columns
+            let sequences = columns
                 .iter()
                 .filter(|col| col.data_type.is_serial())
-                .for_each(|col| {
-                    metatada.create_serial_for_col(col.name.to_string());
+                .map(|col| Create::Sequence {
+                    name: format!("{name}_{}_seq", col.name),
+                    r#type: col.data_type.clone(),
+                    table: name.clone(),
                 });
+
+            for sequence in sequences {
+                exec(Statement::Create(sequence), db)?;
+            }
 
             let skip_pk_idx = match has_btree_key(&columns) {
                 true => 1,
@@ -142,6 +149,66 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             db.context.invalidate(&table);
         }
+        Statement::Create(Create::Sequence {
+            name,
+            r#type,
+            table,
+        }) => {
+            if !r#type.is_integer() {
+                return Err(
+                    SqlError::Other("Sequences can only be created for integers".into()).into(),
+                );
+            }
+
+            let root = allocate_root(db)?;
+            insert_into_metadata(
+                db,
+                vec![
+                    Value::String("sequence".into()),
+                    Value::String(name.clone()),
+                    Value::Number(root as _),
+                    Value::String(table),
+                    Value::String(sql),
+                ],
+            )?;
+        }
+
+        Statement::Drop(Drop::Table(name)) => {
+            let comparator = db.metadata(DB_METADATA)?.comp()?;
+            let mut planner = collect_from_metadata(db, &format!("table_name = '{name}'"))?;
+            let schema = planner.schema().ok_or(DatabaseError::Corrupted(format!(
+                "Could not obtain schema of {DB_METADATA} table"
+            )))?;
+
+            while let Some(tuple) = planner.try_next()? {
+                let Some(Value::Number(root)) =
+                    schema.index_of("root").and_then(|index| tuple.get(index))
+                else {
+                    return Err(DatabaseError::Corrupted(format!(
+                        "Could not read root of table {name}"
+                    )));
+                };
+
+                let removed_cells = free_btree(db, *root as PageNumber)?;
+
+                if affected_rows == 0 {
+                    schema
+                        .index_of("type")
+                        .and_then(|index| tuple.get(index))
+                        .inspect(|value| match value {
+                            Value::String(relation) if relation == "table" => {
+                                affected_rows = removed_cells;
+                            }
+                            _ => {}
+                        });
+                }
+
+                BTree::new(&mut db.pager.borrow_mut(), 0, comparator.clone())
+                    .remove(&tuple::serialize(&schema.columns[0].data_type, &tuple[0]))?;
+            }
+
+            db.context.invalidate(&name);
+        }
         _ => todo!("exec unimplemented for {statement}"),
     }
 
@@ -158,6 +225,28 @@ fn allocate_root<File: Seek + Write + Read + FileOperations>(
     Ok(root)
 }
 
+fn free_btree<File: Seek + Read + Write + FileOperations>(
+    db: &mut Database<File>,
+    root: PageNumber,
+) -> std::io::Result<usize> {
+    let mut stack = vec![root];
+    let mut pager = db.pager.borrow_mut();
+    let mut removed_cells = 0;
+
+    while let Some(num) = stack.pop() {
+        let page = pager.get_mut(num)?;
+        stack.extend(page.iter_children().rev());
+
+        let mut cells = page.drain(..).collect::<Vec<_>>().into_iter();
+        removed_cells += cells.len();
+        cells.try_for_each(|cell| pager.free_cell(cell))?;
+
+        pager.free_page(num)?;
+    }
+
+    Ok(removed_cells)
+}
+
 fn insert_into_metadata<File: Write + Seek + Read + FileOperations>(
     db: &mut Database<File>,
     mut values: Vec<Value>,
@@ -172,4 +261,32 @@ fn insert_into_metadata<File: Write + Seek + Read + FileOperations>(
     btree.insert(tuple::serialize_tuple(&schema, &values))?;
 
     Ok(())
+}
+
+fn collect_from_metadata<File: Write + Seek + Read + FileOperations>(
+    db: &mut Database<File>,
+    filter: &str,
+) -> Result<Planner<File>, DatabaseError> {
+    let work_dir = db.work_dir.clone();
+    let page_size = db.pager.borrow_mut().page_size;
+
+    let table = db.metadata(DB_METADATA)?;
+
+    Ok(Planner::Collect(
+        CollectBuilder {
+            work_dir,
+            mem_buff_size: page_size,
+            schema: table.schema.clone(),
+            source: Box::new(Planner::Filter(Filter {
+                filter: Parser::new(filter).parse_expr(None)?,
+                schema: table.schema.clone(),
+                source: Box::new(Planner::SeqScan(SeqScan {
+                    table: table.to_owned(),
+                    pager: Rc::clone(&db.pager),
+                    cursor: Cursor::new(0, 0),
+                })),
+            })),
+        }
+        .into(),
+    ))
 }

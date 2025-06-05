@@ -10,8 +10,6 @@ pub(crate) mod query;
 
 mod prepare;
 pub mod statement;
-mod tokenizer;
-mod tokens;
 
 pub(crate) fn pipeline(input: &str, db: &mut impl Ctx) -> Result<Statement, DatabaseError> {
     let mut statement = Parser::new(input).parse_statement()?;

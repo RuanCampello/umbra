@@ -2,8 +2,8 @@ use std::{array::TryFromSliceError, fmt::Display, num::TryFromIntError};
 
 use crate::{
     core::storage::tuple,
-    db::QuerySet,
-    sql::statement::{Column, Type},
+    db::{DatabaseError, QuerySet},
+    sql::statement::{Column, Type, Value},
 };
 
 #[derive(Debug, PartialEq)]
@@ -26,60 +26,6 @@ const INTEGER_CATEGORY: u8 = 0x10;
 // const FLOAT_CATEGORY: u8    = 0x30;
 const STRING_CATEGORY: u8 = 0x40;
 const TEMPORAL_CATEGORY: u8 = 0x50;
-
-// we could just do a const fn here but :/
-impl From<&Type> for u8 {
-    fn from(r#type: &Type) -> Self {
-        match r#type {
-            Type::Boolean => BOOLEAN_CATEGORY | 0x0,
-
-            Type::SmallInt => INTEGER_CATEGORY | 0x0,
-            Type::UnsignedSmallInt => INTEGER_CATEGORY | 0x1,
-            Type::Integer => INTEGER_CATEGORY | 0x2,
-            Type::UnsignedInteger => INTEGER_CATEGORY | 0x3,
-            Type::BigInteger => INTEGER_CATEGORY | 0x4,
-            Type::UnsignedBigInteger => INTEGER_CATEGORY | 0x5,
-            Type::SmallSerial => INTEGER_CATEGORY | 0x06,
-            Type::Serial => INTEGER_CATEGORY | 0x07,
-            Type::BigSerial => INTEGER_CATEGORY | 0x08,
-
-            Type::Varchar(_) => STRING_CATEGORY | 0x0,
-
-            Type::Date => TEMPORAL_CATEGORY | 0x0,
-            Type::Time => TEMPORAL_CATEGORY | 0x1,
-            Type::DateTime => TEMPORAL_CATEGORY | 0x2,
-        }
-    }
-}
-
-impl TryFrom<&u8> for Type {
-    type Error = ();
-
-    fn try_from(byte: &u8) -> Result<Self, Self::Error> {
-        let cat = byte & 0xF0;
-        let sub = byte & 0x0F;
-
-        match (cat, sub) {
-            (BOOLEAN_CATEGORY, 0x0) => Ok(Type::Boolean),
-
-            (INTEGER_CATEGORY, 0x0) => Ok(Type::SmallInt),
-            (INTEGER_CATEGORY, 0x1) => Ok(Type::UnsignedSmallInt),
-            (INTEGER_CATEGORY, 0x2) => Ok(Type::Integer),
-            (INTEGER_CATEGORY, 0x3) => Ok(Type::UnsignedInteger),
-            (INTEGER_CATEGORY, 0x4) => Ok(Type::BigInteger),
-            (INTEGER_CATEGORY, 0x5) => Ok(Type::UnsignedBigInteger),
-            (INTEGER_CATEGORY, 0x6) => Ok(Type::SmallSerial),
-            (INTEGER_CATEGORY, 0x7) => Ok(Type::Serial),
-            (INTEGER_CATEGORY, 0x8) => Ok(Type::BigSerial),
-
-            (TEMPORAL_CATEGORY, 0x0) => Ok(Type::Date),
-            (TEMPORAL_CATEGORY, 0x1) => Ok(Type::Time),
-            (TEMPORAL_CATEGORY, 0x2) => Ok(Type::DateTime),
-
-            _ => Err(()),
-        }
-    }
-}
 
 pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
     let mut packed: Vec<u8> = Vec::from(0u32.to_le_bytes());
@@ -158,15 +104,20 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
             let num_tuples = u32::from_le_bytes(content[cursor..cursor + 4].try_into()?);
             cursor += 4;
 
-            for _ in 0..num_tuples {
+            (0..num_tuples).for_each(|_| {
                 let tuple = tuple::deserialize(&content[cursor..], &query_set.schema);
                 cursor += tuple::size_of(&tuple, &query_set.schema);
                 query_set.tuples.push(tuple);
-            }
+            });
 
             Response::QuerySet(query_set)
         }
-        _ => todo!(),
+        b'!' => {
+            let affected_rows = u32::from_le_bytes(content[1..].try_into()?) as usize;
+            Response::Empty(affected_rows)
+        }
+        b'-' => Response::Err(String::from_utf8(Vec::from(&content[1..])).unwrap()),
+        prefix => Err(EncodingError::InvalidPrefix(prefix))?,
     })
 }
 
@@ -177,6 +128,78 @@ impl Display for EncodingError {
             Self::SliceConversion(slice_conversion) => write!(f, "{slice_conversion}"),
             Self::InvalidPrefix(prefix) => write!(f, "Invalid ASCII prefix: {prefix}"),
             Self::InvalidType(typ) => write!(f, "Invalid data type: {typ}"),
+        }
+    }
+}
+
+// we could just do a const fn here but :/
+impl From<&Type> for u8 {
+    fn from(r#type: &Type) -> Self {
+        match r#type {
+            Type::Boolean => BOOLEAN_CATEGORY | 0x0,
+
+            Type::SmallInt => INTEGER_CATEGORY | 0x0,
+            Type::UnsignedSmallInt => INTEGER_CATEGORY | 0x1,
+            Type::Integer => INTEGER_CATEGORY | 0x2,
+            Type::UnsignedInteger => INTEGER_CATEGORY | 0x3,
+            Type::BigInteger => INTEGER_CATEGORY | 0x4,
+            Type::UnsignedBigInteger => INTEGER_CATEGORY | 0x5,
+            Type::SmallSerial => INTEGER_CATEGORY | 0x06,
+            Type::Serial => INTEGER_CATEGORY | 0x07,
+            Type::BigSerial => INTEGER_CATEGORY | 0x08,
+
+            Type::Varchar(_) => STRING_CATEGORY | 0x0,
+
+            Type::Date => TEMPORAL_CATEGORY | 0x0,
+            Type::Time => TEMPORAL_CATEGORY | 0x1,
+            Type::DateTime => TEMPORAL_CATEGORY | 0x2,
+        }
+    }
+}
+
+impl TryFrom<&u8> for Type {
+    type Error = ();
+
+    fn try_from(byte: &u8) -> Result<Self, Self::Error> {
+        let cat = byte & 0xF0;
+        let sub = byte & 0x0F;
+
+        match (cat, sub) {
+            (BOOLEAN_CATEGORY, 0x0) => Ok(Type::Boolean),
+
+            (INTEGER_CATEGORY, 0x0) => Ok(Type::SmallInt),
+            (INTEGER_CATEGORY, 0x1) => Ok(Type::UnsignedSmallInt),
+            (INTEGER_CATEGORY, 0x2) => Ok(Type::Integer),
+            (INTEGER_CATEGORY, 0x3) => Ok(Type::UnsignedInteger),
+            (INTEGER_CATEGORY, 0x4) => Ok(Type::BigInteger),
+            (INTEGER_CATEGORY, 0x5) => Ok(Type::UnsignedBigInteger),
+            (INTEGER_CATEGORY, 0x6) => Ok(Type::SmallSerial),
+            (INTEGER_CATEGORY, 0x7) => Ok(Type::Serial),
+            (INTEGER_CATEGORY, 0x8) => Ok(Type::BigSerial),
+
+            (TEMPORAL_CATEGORY, 0x0) => Ok(Type::Date),
+            (TEMPORAL_CATEGORY, 0x1) => Ok(Type::Time),
+            (TEMPORAL_CATEGORY, 0x2) => Ok(Type::DateTime),
+
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<Result<QuerySet, DatabaseError>> for Response {
+    fn from(value: Result<QuerySet, DatabaseError>) -> Self {
+        match value {
+            Ok(empty) if empty.schema.columns.is_empty() => {
+                let affected_rows = match empty.tuples.first().map(|r#type| r#type.as_slice()) {
+                    Some([Value::Number(number)]) => *number as usize,
+                    _ => empty.tuples.len(),
+                };
+
+                Response::Empty(affected_rows)
+            }
+
+            Ok(query_set) => Response::QuerySet(query_set),
+            Err(err) => Response::Err(err.to_string()),
         }
     }
 }
@@ -236,9 +259,35 @@ mod tests {
         let response = Response::QuerySet(content);
         let packet = serialize(&response)?;
 
-        //println!("packet {packet:#?}");
-
         assert_eq!(deserialize(&packet[4..])?, response);
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_empty() -> Result<(), EncodingError> {
+        let empty = QuerySet::empty();
+        let response = Response::from(Ok(empty));
+        let packet = serialize(&response)?;
+
+        assert_eq!(deserialize(&packet[4..])?, Response::Empty(0));
+
+        let empty = QuerySet::new(Schema::new(vec![]), vec![vec![], vec![], vec![]]);
+        let response = Response::from(Ok(empty));
+        let packet = serialize(&response)?;
+
+        assert_eq!(deserialize(&packet[4..])?, Response::Empty(3));
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_error() -> Result<(), EncodingError> {
+        let err = String::from("something strange occorred, mate");
+        let response = Response::from(Err(DatabaseError::Other(err.clone())));
+        let packet = serialize(&response)?;
+
+        assert_eq!(deserialize(&packet[4..])?, Response::Err(err));
 
         Ok(())
     }

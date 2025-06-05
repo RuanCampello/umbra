@@ -2,7 +2,8 @@
 
 #![allow(unused)]
 
-use crate::sql::tokens::{Keyword, Token, Whitespace};
+use super::tokens::{Keyword, Token, Whitespace};
+use std::fmt::Display;
 use std::iter::Peekable;
 use std::str::Chars;
 
@@ -45,8 +46,8 @@ pub(in crate::sql) struct IntoIter<'input> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::sql) struct Location {
-    line: usize,
-    col: usize,
+    pub(in crate::sql) line: usize,
+    pub(in crate::sql) col: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -175,6 +176,9 @@ impl<'input> Tokenizer<'input> {
             "BIGINT" => Keyword::BigInt,
             "BY" => Keyword::By,
             "DATABASE" => Keyword::Database,
+            "SEQUENCE" => Keyword::Sequence,
+            "AS" => Keyword::As,
+            "OWNED" => Keyword::Owned,
             "UNSIGNED" => Keyword::Unsigned,
             "VARCHAR" => Keyword::Varchar,
             "BOOLEAN" => Keyword::Bool,
@@ -340,6 +344,28 @@ impl Default for Location {
     fn default() -> Self {
         // yeah, Lua-esque, Brazil mentioned
         Location { line: 1, col: 1 }
+    }
+}
+
+impl Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ErrorKind::Other(err) => f.write_str(err),
+            ErrorKind::StringUnclosed => f.write_str("Unclosed string"),
+            ErrorKind::OperatorUnclosed(op) => write!(f, "Operator {op} unclosed"),
+            ErrorKind::UnexpectedToken(token) => {
+                write!(f, "Unexpected or unsupported token: {token}")
+            }
+            ErrorKind::UnexpectedOperator {
+                unexpected,
+                operator,
+            } => {
+                write!(
+                    f,
+                    "Unexpected token '{unexpected}' while parsing operator '{operator}'"
+                )
+            }
+        }
     }
 }
 

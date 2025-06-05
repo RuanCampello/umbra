@@ -1,3 +1,8 @@
 /target
 .idea
 *.log
+
+# history of the usql client
+*.usql
+# db files for testing
+*.db

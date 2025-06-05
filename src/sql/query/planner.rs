@@ -4,22 +4,25 @@ use std::{
     rc::Rc,
 };
 
-use crate::vm::planner::{
-    Collect, CollectBuilder, Delete, Project, SortBuilder, TupleComparator, Update,
-    DEFAULT_SORT_BUFFER_SIZE,
-};
 use crate::{
     core::storage::pagination::io::FileOperations,
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
     sql::{
         analyzer,
         query::optimiser,
-        statement::{Column, Expression, Type},
+        statement::{Column, Delete, Expression, Select, Type, Update},
         Statement,
     },
     vm::{
         expression::VmType,
-        planner::{Insert, Planner, Sort, SortKeys, Values},
+        planner::{Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+    },
+};
+use crate::{
+    sql::statement::Insert,
+    vm::planner::{
+        Collect, CollectBuilder, Delete as DeletePlan, Project, SortBuilder, TupleComparator,
+        Update as UpdatePlan, DEFAULT_SORT_BUFFER_SIZE,
     },
 };
 
@@ -28,24 +31,24 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     Ok(match statement {
-        Statement::Insert { into, values, .. } => {
+        Statement::Insert(Insert { into, values, .. }) => {
             let values = VecDeque::from(values);
             let source = Box::new(Planner::Values(Values { values }));
             let table = db.metadata(&into)?;
 
-            Planner::Insert(Insert {
+            Planner::Insert(InsertPlan {
                 source,
                 comparator: table.comp()?,
                 table: db.metadata(&into)?.clone(),
                 pager: Rc::clone(&db.pager),
             })
         }
-        Statement::Select {
+        Statement::Select(Select {
             columns,
             from,
             r#where,
             order_by,
-        } => {
+        }) => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
@@ -127,11 +130,11 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 input: table.schema.clone(),
             })
         }
-        Statement::Update {
+        Statement::Update(Update {
             table,
             columns,
             r#where,
-        } => {
+        }) => {
             let mut source = optimiser::generate_seq_plan(&table, r#where, db)?;
             let work_dir = db.work_dir.clone();
             let page_size = db.pager.borrow().page_size;
@@ -146,7 +149,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }));
             }
 
-            Planner::Update(Update {
+            Planner::Update(UpdatePlan {
                 comparator: metadata.comp()?,
                 table: metadata.clone(),
                 assigments: columns,
@@ -155,7 +158,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             })
         }
 
-        Statement::Delete { from, r#where } => {
+        Statement::Delete(Delete { from, r#where }) => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
 
             let work_dir = db.work_dir.clone();
@@ -174,7 +177,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 );
             }
 
-            Planner::Delete(Delete {
+            Planner::Delete(DeletePlan {
                 table: metadata.clone(),
                 comparator: metadata.comp()?,
                 pager: Rc::clone(&db.pager),

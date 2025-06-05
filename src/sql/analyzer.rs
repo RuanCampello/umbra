@@ -7,6 +7,8 @@ use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 
+use super::statement::{Delete, Insert, Select, Update};
+
 #[derive(Debug, PartialEq)]
 pub(crate) enum AnalyzerError {
     MissingCols,
@@ -88,11 +90,11 @@ pub(in crate::sql) fn analyze<'s>(
             }
         }
 
-        Statement::Insert {
+        Statement::Insert(Insert {
             into,
             values: rows,
             columns,
-        } => {
+        }) => {
             let metadata = ctx.metadata(into)?;
             if into.eq(DB_METADATA) {
                 return Err(AnalyzerError::MetadataAssignment.into());
@@ -136,10 +138,7 @@ pub(in crate::sql) fn analyze<'s>(
                     if col.name == ROW_COL_ID {
                         continue;
                     }
-                    if matches!(
-                        col.data_type,
-                        Type::SmallSerial | Type::Serial | Type::BigSerial
-                    ) {
+                    if col.data_type.is_serial() {
                         continue;
                     }
 
@@ -154,12 +153,12 @@ pub(in crate::sql) fn analyze<'s>(
             }
         }
 
-        Statement::Select {
+        Statement::Select(Select {
             columns,
             from,
             order_by,
             r#where,
-        } => {
+        }) => {
             let metadata = ctx.metadata(from)?;
 
             for expr in columns {
@@ -175,7 +174,7 @@ pub(in crate::sql) fn analyze<'s>(
             }
         }
 
-        Statement::Delete { from, r#where } => {
+        Statement::Delete(Delete { from, r#where }) => {
             let metadata = ctx.metadata(from)?;
 
             if from.eq(DB_METADATA) {
@@ -185,11 +184,11 @@ pub(in crate::sql) fn analyze<'s>(
             analyze_where(&metadata.schema, r#where)?;
         }
 
-        Statement::Update {
+        Statement::Update(Update {
             r#where,
             table,
             columns,
-        } => {
+        }) => {
             let metadata = ctx.metadata(table)?;
             if table.eq(DB_METADATA) {
                 return Err(AnalyzerError::MetadataAssignment.into());
@@ -399,10 +398,7 @@ fn analyze_number(integer: &i128, data_type: &Type) -> Result<(), AnalyzerError>
     if data_type.is_integer() {
         if !data_type.is_integer_in_bounds(integer) {
             // TODO: this is a bit hacky, we should probably have a better way to get the max size of the type
-            return Err(AnalyzerError::Overflow(
-                data_type.clone(),
-                *integer as usize,
-            ));
+            return Err(AnalyzerError::Overflow(*data_type, *integer as usize));
         }
     }
 

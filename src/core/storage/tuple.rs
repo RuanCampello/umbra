@@ -102,7 +102,7 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
         .columns
         .iter()
         .enumerate()
-        .map(|(idx, col)| match col.data_type.clone() {
+        .map(|(idx, col)| match col.data_type {
             Type::Boolean => 1,
             Type::Varchar(max) => {
                 let Value::String(string) = &tuple[idx] else {

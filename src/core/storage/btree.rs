@@ -77,6 +77,7 @@ pub(crate) enum BTreeKeyCmp {
 }
 
 /// Represents the result of reading content from the [`BTree`].
+#[derive(Debug)]
 pub(crate) enum Content<'a> {
     /// Content was found within a single page and can be accessed directly as a slice.
     PageRef(&'a [u8]),

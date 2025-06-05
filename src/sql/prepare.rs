@@ -1,10 +1,10 @@
 use crate::db::{Ctx, DatabaseError, ROW_COL_ID};
 
-use super::statement::{Expression, Statement, Type, Value};
+use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 
 pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
-        Statement::Select { columns, from, .. }
+        Statement::Select(Select { columns, from, .. })
             if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) =>
         {
             let metadata = ctx.metadata(from)?;
@@ -28,11 +28,11 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
 
             *columns = wildcards
         }
-        Statement::Insert {
-            into,
-            columns,
+        Statement::Insert(Insert {
             values,
-        } => {
+            columns,
+            into,
+        }) => {
             let metadata = ctx.metadata(into)?;
 
             if columns.is_empty() {
@@ -78,8 +78,8 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             // insert generated serial values into EACH row of values
             for row in values.iter_mut() {
                 for (idx, name) in &serial_inserts {
-                    let serial = metadata.next_serial_id(name);
-                    row.insert(*idx, Expression::Value(Value::Number(serial.into())));
+                    let next_val = metadata.next_val(into.as_ref(), name)?;
+                    row.insert(*idx, Expression::Value(Value::Number(next_val.into())));
                 }
             }
 
