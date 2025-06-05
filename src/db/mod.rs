@@ -378,6 +378,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         for (name, table, data_type) in serials_to_load {
+            println!("{name} {table} {data_type}");
+            // FIXME: columns with underline in the name
             let col_idx = metadata
                 .schema
                 .index_of(&name.split('_').nth(1).unwrap())
@@ -1982,6 +1984,35 @@ mod tests {
 
         assert_eq!(ids, vec![1, 3]);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_float_types() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE scientific (
+                id SERIAL PRIMARY KEY,
+                precise_temperature DOUBLE PRECISION,
+                co2_levels DOUBLE PRECISION,
+                measurement_time TIMESTAMP
+            );
+        "#,
+        )?;
+
+        db.exec(
+            r#"
+            INSERT INTO scientific (precise_temperature, co2_levels, measurement_time)
+            VALUES
+                (23.456789, 415.123456789, '2024-02-03 10:00:00'),
+                (20.123456, 417.123789012, '2024-02-03 11:00:00'),
+                (22.789012, 418.456123789, '2024-02-03 12:00:00');
+        "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM scientific WHERE precise_temperature >= 23;")?;
         Ok(())
     }
 }

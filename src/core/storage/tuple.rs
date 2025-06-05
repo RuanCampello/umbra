@@ -67,6 +67,11 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             let be_bytes = num.to_be_bytes();
             buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
         }
+        (float, Value::Float(num)) if float.is_float() => {
+            let b_len = byte_len_of_type(float);
+            let be_bytes = num.to_be_bytes();
+            buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
+        }
         (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
         (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
         (Type::DateTime, Value::String(datetime)) => {
@@ -182,16 +187,14 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             Ok(Value::Number(n))
         }
         Type::Real => {
-            let mut buf = [0; byte_len_of_type(&Type::Real)];
-            reader.read_exact(&mut buf)?;
-
-            todo!()
+            let mut bytes = [0; byte_len_of_type(&Type::Real)];
+            reader.read_exact(&mut bytes)?;
+            Ok(Value::Float(f32::from_be_bytes(bytes).into()))
         }
         Type::DoublePrecision => {
-            let mut buf = [0; byte_len_of_type(&Type::DoublePrecision)];
-            reader.read_exact(&mut buf)?;
-
-            todo!()
+            let mut bytes = [0; byte_len_of_type(&Type::DoublePrecision)];
+            reader.read_exact(&mut bytes)?;
+            Ok(Value::Float(f64::from_be_bytes(bytes)))
         }
         Type::Date => {
             let mut bytes = [0; byte_len_of_type(&Type::Date)];
