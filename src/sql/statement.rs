@@ -140,6 +140,7 @@ pub enum Temporal {
 pub enum Value {
     String(String),
     Number(i128),
+    Float(f64),
     Boolean(bool),
     Temporal(Temporal),
 }
@@ -213,6 +214,10 @@ pub enum Type {
     Boolean,
     /// Variable length character type with a limit
     Varchar(usize),
+    /// 4-byte variable-precision floating point type.
+    Real,
+    /// 8-byte variable-precision floating point type.
+    DoublePrecision,
     Date,
     Time,
     DateTime,
@@ -240,6 +245,50 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::Unique],
+        }
+    }
+}
+
+impl Type {
+    pub fn is_integer_in_bounds(&self, int: &i128) -> bool {
+        let bound = match self {
+            Self::SmallInt => i16::MIN as i128..=i16::MAX as i128,
+            Self::UnsignedSmallInt => u16::MIN as i128..=u16::MAX as i128,
+            Self::Integer => i32::MIN as i128..=i32::MAX as i128,
+            Self::UnsignedInteger => 0..=u32::MAX as i128,
+            Self::BigInteger => i64::MIN as i128..=i64::MAX as i128,
+            Self::UnsignedBigInteger => 0..=u64::MAX as i128,
+            other => panic!("bound checking must be used only for integer: {other:#?}"),
+        };
+
+        bound.contains(int)
+    }
+
+    pub const fn is_integer(&self) -> bool {
+        match self {
+            Self::SmallInt
+            | Self::UnsignedSmallInt
+            | Self::Integer
+            | Self::UnsignedInteger
+            | Self::BigInteger
+            | Self::UnsignedBigInteger => true,
+            _ => self.is_serial(),
+        }
+    }
+
+    pub const fn is_serial(&self) -> bool {
+        match self {
+            Self::SmallSerial | Self::Serial | Self::BigSerial => true,
+            _ => false,
+        }
+    }
+
+    pub const fn max(&self) -> usize {
+        match self {
+            Self::SmallSerial => 32767usize,
+            Self::Serial => 2147483647usize,
+            Self::BigSerial => 9223372036854775807usize,
+            _ => panic!("MAX function is meant to be used only for serial types"),
         }
     }
 }
@@ -360,50 +409,6 @@ impl PartialOrd for Value {
     }
 }
 
-impl Type {
-    pub fn is_integer_in_bounds(&self, int: &i128) -> bool {
-        let bound = match self {
-            Self::SmallInt => i16::MIN as i128..=i16::MAX as i128,
-            Self::UnsignedSmallInt => u16::MIN as i128..=u16::MAX as i128,
-            Self::Integer => i32::MIN as i128..=i32::MAX as i128,
-            Self::UnsignedInteger => 0..=u32::MAX as i128,
-            Self::BigInteger => i64::MIN as i128..=i64::MAX as i128,
-            Self::UnsignedBigInteger => 0..=u64::MAX as i128,
-            other => panic!("bound checking must be used only for integer: {other:#?}"),
-        };
-
-        bound.contains(int)
-    }
-
-    pub const fn is_integer(&self) -> bool {
-        match self {
-            Self::SmallInt
-            | Self::UnsignedSmallInt
-            | Self::Integer
-            | Self::UnsignedInteger
-            | Self::BigInteger
-            | Self::UnsignedBigInteger => true,
-            _ => self.is_serial(),
-        }
-    }
-
-    pub const fn is_serial(&self) -> bool {
-        match self {
-            Self::SmallSerial | Self::Serial | Self::BigSerial => true,
-            _ => false,
-        }
-    }
-
-    pub const fn max(&self) -> usize {
-        match self {
-            Self::SmallSerial => 32767usize,
-            Self::Serial => 2147483647usize,
-            Self::BigSerial => 9223372036854775807usize,
-            _ => panic!("MAX function is meant to be used only for serial types"),
-        }
-    }
-}
-
 impl Display for Column {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.name, self.data_type)?;
@@ -488,6 +493,8 @@ impl Display for Type {
             Type::SmallSerial => f.write_str("SMALLSERIAL"),
             Type::Serial => f.write_str("SERIAL"),
             Type::BigSerial => f.write_str("BIGSERIAL"),
+            Type::Real => f.write_str("REAL"),
+            Type::DoublePrecision => f.write_str("DOUBLE PRECISION"),
             Type::DateTime => f.write_str("TIMESTAMP"),
             Type::Time => f.write_str("TIME"),
             Type::Date => f.write_str("DATE"),
@@ -501,6 +508,7 @@ impl Display for Value {
         match self {
             Value::String(string) => write!(f, "\"{string}\""),
             Value::Number(number) => write!(f, "{number}"),
+            Value::Float(float) => write!(f, "{float}"),
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
         }

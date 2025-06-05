@@ -275,6 +275,11 @@ impl<'input> Parser<'input> {
                 self.expect_token(Token::RightParen)?;
                 Ok(Type::Varchar(len))
             }
+            Keyword::Double => {
+                self.expect_keyword(Keyword::Precision)?;
+                Ok(Type::DoublePrecision)
+            }
+            Keyword::Real => Ok(Type::Real),
             Keyword::Bool => Ok(Type::Boolean),
             Keyword::Timestamp => Ok(Type::DateTime),
             Keyword::Date => Ok(Type::Date),
@@ -491,7 +496,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 11] {
+    const fn supported_types() -> [Keyword; 13] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -499,6 +504,8 @@ impl<'input> Parser<'input> {
             Keyword::SmallInt,
             Keyword::Int,
             Keyword::BigInt,
+            Keyword::Real,
+            Keyword::Double,
             Keyword::Bool,
             Keyword::Varchar,
             Keyword::Time,

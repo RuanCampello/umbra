@@ -15,8 +15,12 @@ use crate::{
 /// Returns the byte length of a given SQL [`Type`].
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
-        Type::BigInteger | Type::BigSerial | Type::UnsignedBigInteger | Type::DateTime => 8,
-        Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date => 4,
+        Type::BigInteger
+        | Type::BigSerial
+        | Type::UnsignedBigInteger
+        | Type::DateTime
+        | Type::DoublePrecision => 8,
+        Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date | Type::Real => 4,
         Type::Time => 3,
         Type::SmallInt | Type::SmallSerial | Type::UnsignedSmallInt => 2,
         Type::Boolean => 1,
@@ -176,6 +180,18 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             reader.read_exact(&mut buf)?;
             let n = u64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
+        }
+        Type::Real => {
+            let mut buf = [0; byte_len_of_type(&Type::Real)];
+            reader.read_exact(&mut buf)?;
+
+            todo!()
+        }
+        Type::DoublePrecision => {
+            let mut buf = [0; byte_len_of_type(&Type::DoublePrecision)];
+            reader.read_exact(&mut buf)?;
+
+            todo!()
         }
         Type::Date => {
             let mut bytes = [0; byte_len_of_type(&Type::Date)];

@@ -23,7 +23,7 @@ pub enum EncodingError {
 
 const BOOLEAN_CATEGORY: u8 = 0x00;
 const INTEGER_CATEGORY: u8 = 0x10;
-// const FLOAT_CATEGORY: u8    = 0x30;
+const FLOAT_CATEGORY: u8 = 0x20;
 const STRING_CATEGORY: u8 = 0x40;
 const TEMPORAL_CATEGORY: u8 = 0x50;
 
@@ -147,6 +147,9 @@ impl From<&Type> for u8 {
             Type::SmallSerial => INTEGER_CATEGORY | 0x06,
             Type::Serial => INTEGER_CATEGORY | 0x07,
             Type::BigSerial => INTEGER_CATEGORY | 0x08,
+
+            Type::Real => FLOAT_CATEGORY | 0x0,
+            Type::DoublePrecision => FLOAT_CATEGORY | 0x1,
 
             Type::Varchar(_) => STRING_CATEGORY | 0x0,
 
