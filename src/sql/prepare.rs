@@ -79,7 +79,6 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             for row in values.iter_mut() {
                 for (idx, name) in &serial_inserts {
                     let next_val = metadata.next_val(into.as_ref(), name)?;
-                    //println!("next value {next_val}");
                     row.insert(*idx, Expression::Value(Value::Number(next_val.into())));
                 }
             }

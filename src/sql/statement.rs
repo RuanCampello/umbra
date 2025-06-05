@@ -144,7 +144,7 @@ pub enum Value {
     Temporal(Temporal),
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Constraint {
     PrimaryKey,
     Unique,
@@ -180,7 +180,7 @@ pub(crate) enum BinaryOperator {
 /// For example:
 /// - A column defined as `VARCHAR(255)` will be represented as `Type::Varchar(255)`.
 /// - A column of `DATE` will be represented as `Type::Date`.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Type {
     /// 2-byte signed integer
     SmallInt,

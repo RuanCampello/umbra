@@ -111,11 +111,11 @@ impl TableMetadata {
             .get(&sequence_name)
             .expect("Failed to get next_val for this column");
 
-        let max = sequence.data_type.max() as u64;
+        let max = sequence.data_type.max();
         let current = sequence.value.fetch_add(1, Ordering::Relaxed);
 
-        if current >= max {
-            return Err(AnalyzerError::Overflow(sequence.data_type.clone(), max as usize).into());
+        if current >= max as u64 {
+            return Err(AnalyzerError::Overflow(sequence.data_type, max).into());
         }
 
         Ok(current + 1)
