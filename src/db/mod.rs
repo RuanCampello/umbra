@@ -45,6 +45,7 @@ pub(crate) struct Context {
     max_size: Option<usize>,
 }
 
+#[derive(Debug)]
 struct PreparedStatement<'db, File: FileOperations> {
     db: &'db mut Database<File>,
     exec: Option<Exec<File>>,
@@ -288,6 +289,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             serials: HashMap::new(),
         };
 
+        let mut serials_to_load = Vec::new();
         let mut found_table_def = false;
 
         let (schema, mut results) = self.prepare(&format!(
@@ -358,6 +360,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                                 data_type: r#type,
                             },
                         );
+
+                        serials_to_load.push((name, table));
                     }
                     _ => return Err(corrupted_err()),
                 },
@@ -373,8 +377,29 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             metadata.row_id = self.load_next_row_id(metadata.root)?;
         }
 
-        println!("METADATA {:#?}", metadata);
+        for (name, table) in serials_to_load {
+            let col_idx = metadata
+                .schema
+                .index_of(&name.split('_').nth(1).unwrap())
+                .unwrap();
 
+            let mut pager = self.pager.borrow_mut();
+            let mut btree = BTree::new(&mut pager, metadata.root, FixedSizeCmp::new::<RowId>());
+            let curr_val = match btree.max()? {
+                Some(max_row) => {
+                    let row = tuple::deserialize(max_row.as_ref(), &metadata.schema);
+                    match &row[col_idx] {
+                        Value::Number(n) => *n as u64,
+                        _ => 0,
+                    }
+                }
+                None => 0,
+            };
+
+            if let Some(seq) = metadata.serials.get_mut(&name) {
+                seq.value = AtomicU64::new(curr_val);
+            }
+        }
         Ok(metadata)
     }
 
@@ -388,6 +413,28 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         };
 
         Ok(row_id)
+    }
+
+    fn load_current_sequence(&mut self, column: &str, table: &str) -> Result<u64, DatabaseError> {
+        let sql = format!("SELECT {column} FROM {table};");
+        let (schema, mut results) = self.prepare(&sql)?;
+        let col_idx = schema
+            .index_of(column)
+            .ok_or(DatabaseError::Corrupted(format!(
+                "Column {column} not found in table {table}"
+            )))?;
+
+        let mut max = 0u64;
+        while let Some(row) = results.try_next()? {
+            if let Value::Number(n) = &row[col_idx] {
+                let n = *n as u64;
+                if n > max {
+                    max = n;
+                }
+            }
+        }
+
+        Ok(max)
     }
 }
 
