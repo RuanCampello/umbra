@@ -13,13 +13,13 @@ Each message is structured as follows:
 
 ## Message Types:
 
-[+] (0x2B) - `QuerySet` Response
-[!] (0x21) - Empty / OK Response
-[-] (0x2D) - Error Response
+ - (+) -> (0x2B) - `QuerySet` Response
+ - (!) -> (0x21) - Empty / OK Response
+ - (-) -> (0x2D) - Error Response
 
 ## Payload Details:
 
-### [+] `QuerySet` Response:
+### (+) `QuerySet` Response:
 
 [ 2 bytes ] - Column count (u16, little-endian)
 
@@ -35,11 +35,11 @@ For each column:
 For each row:
   [ n bytes ] - Serialized row data (encoded per column type)
 
-### [!] Empty / OK Response:
+### (!) Empty / OK Response:
 
 [ 4 bytes ] - Affected rows count (u32, LE)
 
-### [-] Error Response:
+### (-) Error Response:
 -----------------
 [ n bytes ] - UTF-8 encoded error message
 

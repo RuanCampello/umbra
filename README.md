@@ -27,6 +27,26 @@ case—welcome. The focus here is the **learning process**, read as "the screams
 
 ---
 
+## Getting Started
+
+```bash
+cargo run -- file.db 8000
+```
+
+`file.db`: The path to your Umbra database file (will be created if it doesn't exist).
+`8000`: The TCP port the server will listen on.
+
+#### Use the `usql` CLI (like `psql`, but darker)
+
+```bash
+cargo run --package usql -- 8000
+```
+
+Connects to the Umbra server running on port `8000`.
+
+> `usql` is your shadowy shell into the Umbra world. It understands SQL and the void.
+
+
 ## Implementation Status
 
 ### 🧾 Types
@@ -117,5 +137,6 @@ CREATE TABLE cursed_items (
 ### *✨ Just So You Know*
 
 - **Documentation**: [Here be dragons](https://ruancampello.github.io/umbra-documentation/) (*and possibly bats*)
+- **Protocol**: If you're implementing a client, or are just curious how the shadowy bits work under the hood, check the binary wire format [here](./PROTOCOL.md).
 - **Philosophy**: *"Compiling is victory. Running is a miracle."*
 
