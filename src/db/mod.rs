@@ -1344,6 +1344,39 @@ mod tests {
     }
 
     #[test]
+    fn test_serial_bounds() -> DatabaseResult {
+        let mut db = Database::default();
+        let max = Type::SmallSerial.max();
+
+        db.exec("CREATE TABLE users (id SMALLSERIAL PRIMARY KEY, name VARCHAR(50));")?;
+
+        for serial in (0..max) {
+            db.exec(&format!(
+                "INSERT INTO users (name) VALUES ('user_{serial}');"
+            ))?;
+        }
+
+        let query = db.exec("SELECT * FROM users;")?;
+        assert_eq!(query.tuples.len(), max);
+        assert_eq!(
+            query.schema,
+            Schema::new(vec![
+                Column::primary_key("id", Type::SmallSerial),
+                Column::new("name", Type::Varchar(50))
+            ])
+        );
+
+        let query = db.exec("INSERT INTO users (name) VALUES ('some cool name');");
+        assert!(query.is_err());
+        assert_eq!(
+            query.unwrap_err(),
+            AnalyzerError::Overflow(Type::SmallSerial, max).into()
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_delete() -> DatabaseResult {
         let mut db = Database::default();
 

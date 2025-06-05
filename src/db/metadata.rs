@@ -6,6 +6,7 @@ use crate::core::storage::btree::{BTree, BTreeKeyCmp, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::db::{DatabaseError, RowId, Schema};
+use crate::sql::analyzer::AnalyzerError;
 use crate::sql::statement::{Column, Type, Value};
 
 use super::schema::umbra_schema;
@@ -103,11 +104,21 @@ impl TableMetadata {
         row_id
     }
 
-    pub fn next_val(&mut self, table: &str, column: &str) -> u64 {
-        self.serials
-            .get(&sequence!(sequence on (table) (column)))
-            .map(|seq| seq.value.fetch_add(1, Ordering::Relaxed) + 1)
-            .expect("Failed to get next_val for this column")
+    pub fn next_val(&mut self, table: &str, column: &str) -> Result<u64, DatabaseError> {
+        let sequence_name = sequence!(sequence on (table) (column));
+        let sequence = self
+            .serials
+            .get(&sequence_name)
+            .expect("Failed to get next_val for this column");
+
+        let max = sequence.data_type.max() as u64;
+        let current = sequence.value.fetch_add(1, Ordering::Relaxed);
+
+        if current >= max {
+            return Err(AnalyzerError::Overflow(sequence.data_type.clone(), max as usize).into());
+        }
+
+        Ok(current + 1)
     }
 
     pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {

@@ -138,10 +138,7 @@ pub(in crate::sql) fn analyze<'s>(
                     if col.name == ROW_COL_ID {
                         continue;
                     }
-                    if matches!(
-                        col.data_type,
-                        Type::SmallSerial | Type::Serial | Type::BigSerial
-                    ) {
+                    if col.data_type.is_serial() {
                         continue;
                     }
 

@@ -393,6 +393,15 @@ impl Type {
             _ => false,
         }
     }
+
+    pub const fn max(&self) -> usize {
+        match self {
+            Self::SmallSerial => 32767usize,
+            Self::Serial => 2147483647usize,
+            Self::BigSerial => 9223372036854775807usize,
+            _ => panic!("MAX function is meant to be used only for serial types"),
+        }
+    }
 }
 
 impl Display for Column {

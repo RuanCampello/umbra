@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     core::storage::{
-        btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp},
+        btree::{BTree, BytesCmp, Cursor, FixedSizeCmp},
         page::{Page, PageNumber},
         pagination::io::FileOperations,
         tuple::{self, serialize_tuple},
@@ -17,7 +17,7 @@ use crate::{
     index,
     sql::{
         parser::Parser,
-        statement::{Column, Constraint, Create, Drop, Statement, Type, Value},
+        statement::{Constraint, Create, Drop, Statement, Value},
     },
     vm::planner::{CollectBuilder, Execute, Filter, Planner, SeqScan},
 };
@@ -53,7 +53,6 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 });
 
             for sequence in sequences {
-                println!("sequence {sequence:#?}");
                 exec(Statement::Create(sequence), db)?;
             }
 
