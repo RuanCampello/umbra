@@ -256,6 +256,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
     col_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError> {
+    println!("expression {expr:#?}");
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, col_type)?,
         Expression::Identifier(ident) => {
@@ -263,10 +264,13 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 .index_of(ident)
                 .ok_or(SqlError::InvalidColumn(ident.to_string()))?;
 
+            println!("schema {schema:#?}");
+
             match schema.columns[idx].data_type {
                 Type::Boolean => VmType::Bool,
                 Type::Varchar(_) => VmType::String,
                 Type::Date | Type::DateTime | Type::Time => VmType::Date,
+                Type::Real | Type::DoublePrecision => VmType::Float,
                 _ => VmType::Number,
             }
         }
@@ -304,23 +308,33 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                    if left_type.eq(&VmType::Number) =>
+                    if matches!(left_type, VmType::Number | VmType::Float) =>
                 {
-                    VmType::Number
+                    left_type
                 }
                 _ => Err(mis_type())?,
             }
         }
         Expression::UnaryOperation { operator, expr } => {
-            if let (Some(data_type), UnaryOperator::Minus, Expression::Value(Value::Number(num))) =
+            if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
                 (col_type, operator, &**expr)
             {
-                analyze_number(&-num, data_type)?;
-                return Ok(VmType::Number);
+                match value {
+                    Value::Number(num) => {
+                        analyze_number(&-num, data_type)?;
+                        return Ok(VmType::Number);
+                    }
+                    Value::Float(float) => {
+                        analyze_float(&-float, data_type)?;
+                        return Ok(VmType::Float);
+                    }
+                    _ => unreachable!(),
+                }
             }
 
             match analyze_expression(schema, col_type, expr)? {
                 VmType::Number => VmType::Number,
+                VmType::Float => VmType::Float,
                 _ => Err(TypeError::ExpectedType {
                     expected: VmType::Number,
                     found: *expr.clone(),

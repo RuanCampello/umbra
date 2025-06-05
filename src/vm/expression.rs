@@ -152,6 +152,7 @@ impl From<&Type> for VmType {
             Type::Boolean => VmType::Bool,
             Type::Varchar(_) => VmType::String,
             Type::Time | Type::Date | Type::DateTime => VmType::Date,
+            Type::Real | Type::DoublePrecision => VmType::Float,
             _ => VmType::Number,
         }
     }
