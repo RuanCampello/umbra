@@ -1,34 +1,33 @@
 # UMBRA BINARY PROTOCOL v0.1
 
-** The Shadow Whisper **
+**The Shadow Whisper**
 
 
-Message Format:
----------------
+## Message Format:
+
 Each message is structured as follows:
 
 [ 4 bytes ] - SQL Content length (u32, little-endian)
 [ 1 byte  ] - Message type (ASCII character)
 [ n bytes ] - Payload (depends on message type)
 
-Message Types:
---------------
-+ (0x2B) - QuerySet Response
-! (0x21) - Empty / OK Response
-- (0x2D) - Error Response
+## Message Types:
 
-Payload Details:
-----------------
+[+] (0x2B) - `QuerySet` Response
+[!] (0x21) - Empty / OK Response
+[-] (0x2D) - Error Response
 
-+ QuerySet Response:
---------------------
+## Payload Details:
+
+### [+] `QuerySet` Response:
+
 [ 2 bytes ] - Column count (u16, little-endian)
 
 For each column:
   [ 2 bytes ] - Column name length (u16, LE)
   [ n bytes ] - Column name (UTF-8)
   [ 1 byte  ] - Type code (see below)
-      If VARCHAR:
+      If `VARCHAR`:
         [ 4 bytes ] - Max length (u32, LE)
 
 [ 4 bytes ] - Row count (u32, LE)
@@ -36,17 +35,17 @@ For each column:
 For each row:
   [ n bytes ] - Serialized row data (encoded per column type)
 
-! Empty / OK Response:
-----------------------
+### [!] Empty / OK Response:
+
 [ 4 bytes ] - Affected rows count (u32, LE)
 
-- Error Response:
+### [-] Error Response:
 -----------------
 [ n bytes ] - UTF-8 encoded error message
 
 
-Type Encoding:
---------------
+## Type Encoding:
+
 Each column type is encoded as a single byte:
 
 Boolean Types:
@@ -72,13 +71,13 @@ Temporal Types:
   0x52 - `TIMESTAMP`
 
 
-Connection Flow:
-----------------
-1. Client connects via TCP
-3. Messages are exchanged using the format above
+## Connection Flow:
 
-Notes:
-------
+1. Client connects via TCP
+2. Messages are exchanged using the format above
+
+## Notes:
+
 - All numbers are little-endian
 - Strings are UTF-8 encoded
 
