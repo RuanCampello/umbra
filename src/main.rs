@@ -11,4 +11,3 @@ fn main() -> umbra::Result<()> {
 
     umbra::tcp::server::start(address, file)
 }
-

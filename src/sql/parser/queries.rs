@@ -61,9 +61,8 @@ impl<'sql> Sql<'sql> for Create {
             Keyword::Sequence => {
                 let name = parser.parse_ident()?;
                 parser.expect_keyword(Keyword::As)?;
-                // FIXME: hardcoded type
-                parser.expect_keyword(Keyword::BigInt)?;
-                parser.expect_keyword(Keyword::Unsigned)?;
+                let r#type = parser.parse_type()?;
+
                 parser.expect_keyword(Keyword::Owned)?;
                 parser.expect_keyword(Keyword::By)?;
                 let table = parser.parse_ident()?;
@@ -71,7 +70,7 @@ impl<'sql> Sql<'sql> for Create {
                 Create::Sequence {
                     table,
                     name,
-                    r#type: Type::UnsignedBigInteger,
+                    r#type,
                 }
             }
             _ => panic!("Unsupported keyword"),

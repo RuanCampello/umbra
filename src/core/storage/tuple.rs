@@ -76,19 +76,6 @@ pub(crate) fn deserialize_row_id<'value>(buff: &[u8]) -> RowId {
     RowId::from_be_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
 }
 
-pub(crate) fn deserialize_serial<'value>(buff: &[u8], serial: &Type) -> u64 {
-    let len = byte_len_of_type(serial);
-
-    let bytes = &buff[..len];
-
-    match serial {
-        Type::UnsignedSmallInt => u16::from_be_bytes(bytes.try_into().unwrap()) as u64,
-        Type::UnsignedInteger => u32::from_be_bytes(bytes.try_into().unwrap()) as u64,
-        Type::UnsignedBigInteger => u64::from_be_bytes(bytes.try_into().unwrap()),
-        _ => panic!("This is not a serial compatible type, mate"),
-    }
-}
-
 pub(crate) fn serialize_tuple<'value>(
     schema: &Schema,
     values: impl IntoIterator<Item = &'value Value> + Copy,

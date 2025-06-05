@@ -212,49 +212,7 @@ impl<'input> Parser<'input> {
 
     fn parse_col(&mut self) -> ParserResult<Column> {
         let name = self.parse_ident()?;
-
-        let data_type = match self.expect_one(&Self::supported_types())? {
-            int if Self::is_integer(&int) => {
-                let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
-
-                match (int, unsigned) {
-                    (Keyword::SmallInt, true) => Type::UnsignedSmallInt,
-                    (Keyword::SmallInt, false) => Type::SmallInt,
-                    (Keyword::Int, true) => Type::UnsignedInteger,
-                    (Keyword::Int, false) => Type::Integer,
-                    (Keyword::BigInt, true) => Type::UnsignedBigInteger,
-                    (Keyword::BigInt, false) => Type::BigInteger,
-                    (Keyword::SmallSerial, _) => Type::SmallSerial,
-                    (Keyword::Serial, _) => Type::Serial,
-                    (Keyword::BigSerial, _) => Type::BigSerial,
-                    _ => unreachable!("unknown integer"),
-                }
-            }
-            Keyword::Varchar => {
-                self.expect_token(Token::LeftParen)?;
-
-                let len = match self.next_token()? {
-                    Token::Number(number) => number.parse().map_err(|_| {
-                        // TODO: add correct error to incorrect varchar length
-                        self.error(ErrorKind::UnexpectedEof)
-                    })?,
-                    token => {
-                        return Err(self.error(ErrorKind::Expected {
-                            expected: Token::Number(Default::default()),
-                            found: token,
-                        }))?
-                    }
-                };
-
-                self.expect_token(Token::RightParen)?;
-                Type::Varchar(len)
-            }
-            Keyword::Bool => Type::Boolean,
-            Keyword::Timestamp => Type::DateTime,
-            Keyword::Date => Type::Date,
-            Keyword::Time => Type::Time,
-            keyword => unreachable!("unexpected column token: {keyword}"),
-        };
+        let data_type = self.parse_type()?;
 
         let mut constraints = Vec::new();
         while let Some(constraint) = self
@@ -276,6 +234,51 @@ impl<'input> Parser<'input> {
             data_type,
             constraints,
         })
+    }
+
+    fn parse_type(&mut self) -> ParserResult<Type> {
+        match self.expect_one(&Self::supported_types())? {
+            int if Self::is_integer(&int) => {
+                let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
+
+                match (int, unsigned) {
+                    (Keyword::SmallInt, true) => Ok(Type::UnsignedSmallInt),
+                    (Keyword::SmallInt, false) => Ok(Type::SmallInt),
+                    (Keyword::Int, true) => Ok(Type::UnsignedInteger),
+                    (Keyword::Int, false) => Ok(Type::Integer),
+                    (Keyword::BigInt, true) => Ok(Type::UnsignedBigInteger),
+                    (Keyword::BigInt, false) => Ok(Type::BigInteger),
+                    (Keyword::SmallSerial, _) => Ok(Type::SmallSerial),
+                    (Keyword::Serial, _) => Ok(Type::Serial),
+                    (Keyword::BigSerial, _) => Ok(Type::BigSerial),
+                    _ => unreachable!("unknown integer"),
+                }
+            }
+            Keyword::Varchar => {
+                self.expect_token(Token::LeftParen)?;
+
+                let len = match self.next_token()? {
+                    Token::Number(number) => number.parse().map_err(|_| {
+                        // TODO: add correct error to incorrect varchar length
+                        self.error(ErrorKind::UnexpectedEof)
+                    })?,
+                    token => {
+                        return Err(self.error(ErrorKind::Expected {
+                            expected: Token::Number(Default::default()),
+                            found: token,
+                        }))?
+                    }
+                };
+
+                self.expect_token(Token::RightParen)?;
+                Ok(Type::Varchar(len))
+            }
+            Keyword::Bool => Ok(Type::Boolean),
+            Keyword::Timestamp => Ok(Type::DateTime),
+            Keyword::Date => Ok(Type::Date),
+            Keyword::Time => Ok(Type::Time),
+            keyword => unreachable!("unexpected column token: {keyword}"),
+        }
     }
 
     fn parse_assign(&mut self) -> ParserResult<Assignment> {

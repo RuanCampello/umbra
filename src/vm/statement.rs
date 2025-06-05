@@ -48,7 +48,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 .filter(|col| col.data_type.is_serial())
                 .map(|col| Create::Sequence {
                     name: format!("{name}_{}_seq", col.name),
-                    r#type: Type::UnsignedBigInteger,
+                    r#type: col.data_type.clone(),
                     table: name.clone(),
                 });
 
