@@ -279,15 +279,13 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             let left_type = analyze_expression(schema, col_type, left)?;
             let right_type = analyze_expression(schema, col_type, right)?;
 
-            let mis_type = || {
-                SqlError::Type(TypeError::CannotApplyBinary {
+            if left_type.ne(&right_type) {
+                return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
                     operator: *operator,
-                })
-            };
-
-            let operation_type = check_binop_types(&left_type, &right_type, right, mis_type)?;
+                }));
+            }
 
             match operator {
                 BinaryOperator::Eq
@@ -296,18 +294,18 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 | BinaryOperator::LtEq
                 | BinaryOperator::Gt
                 | BinaryOperator::GtEq => VmType::Bool,
-                BinaryOperator::And | BinaryOperator::Or if operation_type == VmType::Bool => {
+                BinaryOperator::And | BinaryOperator::Or if left_type.eq(&VmType::Bool) => {
                     VmType::Bool
                 }
                 BinaryOperator::Plus
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                    if matches!(operation_type, VmType::Number | VmType::Float) =>
+                    if matches!(left_type, VmType::Number | VmType::Float) =>
                 {
-                    operation_type
+                    left_type
                 }
-                _ => Err(mis_type())?,
+                _ => unreachable!("unexpected operation state"),
             }
         }
         Expression::UnaryOperation { operator, expr } => {
@@ -428,7 +426,7 @@ fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
 fn check_binop_types(
     left_type: &VmType,
     right_type: &VmType,
-    right: &Expression,
+    _right: &Expression,
     mis_type: impl Fn() -> SqlError,
 ) -> Result<VmType, SqlError> {
     use VmType::*;
@@ -436,12 +434,7 @@ fn check_binop_types(
         // we don't need to cast
         (a, b) if a == b => Ok(*a),
         // safe casting, no information loss
-        (Number, Float) => Ok(Float),
-        (Float, Number) => match right {
-            // only allow implicit cast if the number is a literal constant
-            Expression::Value(Value::Number(_)) => Ok(Float),
-            _ => Err(mis_type()),
-        },
+        (Number, Float) | (Float, Number) => Ok(Float),
         _ => Err(mis_type()),
     }
 }

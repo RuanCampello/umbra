@@ -136,7 +136,7 @@ pub enum Temporal {
 /// - `Value` holds the *actual* data.
 ///
 /// This separation allows the system to validate values against schema definitions at runtime.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub enum Value {
     String(String),
     Number(i128),
@@ -409,6 +409,23 @@ impl Display for Statement {
 impl Default for Expression {
     fn default() -> Self {
         Expression::Wildcard
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            // we do this because we can coerce them later to do a comparison between floats and
+            // integers
+            (Value::Number(a), Value::Float(b)) => (*a as f64) == *b,
+            (Value::Float(a), Value::Number(b)) => *a == (*b as f64),
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::Temporal(a), Value::Temporal(b)) => a == b,
+            _ => false,
+        }
     }
 }
 

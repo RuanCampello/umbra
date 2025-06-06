@@ -4,7 +4,7 @@ use crate::sql::statement::{BinaryOperator, Expression, Type, UnaryOperator, Val
 use std::fmt::{Display, Formatter};
 use std::mem;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum VmType {
     Bool,
     String,
@@ -151,6 +151,7 @@ pub(crate) fn evaluate_where(
 fn try_coerce(left: Value, right: Value) -> (Value, Value) {
     match (&left, &right) {
         (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
+        (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
         _ => (left, right),
     }
 }
@@ -163,6 +164,16 @@ impl From<&Type> for VmType {
             Type::Time | Type::Date | Type::DateTime => VmType::Date,
             Type::Real | Type::DoublePrecision => VmType::Float,
             _ => VmType::Number,
+        }
+    }
+}
+
+impl PartialEq for VmType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // we do this for coercion properties
+            (VmType::Float, VmType::Number) | (VmType::Number, VmType::Float) => true,
+            _ => mem::discriminant(self) == mem::discriminant(other),
         }
     }
 }

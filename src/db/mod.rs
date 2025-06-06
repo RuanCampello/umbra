@@ -2033,4 +2033,33 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_invalid_implicit_cast() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE measurements (
+                id SERIAL PRIMARY KEY,
+                reading DOUBLE PRECISION,
+                sensor_a INTEGER,
+                sensor_b INTEGER
+            );
+        "#,
+        )?;
+
+        db.exec(
+            r#"
+            INSERT INTO measurements (reading, sensor_a, sensor_b)
+            VALUES
+                (25.7, 10, 15),
+                (20.0, 5, 12);
+        "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM measurements WHERE sensor_a > reading;")?;
+
+        Ok(())
+    }
 }
