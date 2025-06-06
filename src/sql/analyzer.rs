@@ -250,6 +250,7 @@ fn analyze_assignment<'exp, 'id>(
 
     Ok(())
 }
+
 pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
     schema: &'sch Schema,
     col_type: Option<&Type>,
@@ -421,22 +422,6 @@ fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
     }
 
     Ok(())
-}
-
-fn check_binop_types(
-    left_type: &VmType,
-    right_type: &VmType,
-    _right: &Expression,
-    mis_type: impl Fn() -> SqlError,
-) -> Result<VmType, SqlError> {
-    use VmType::*;
-    match (left_type, right_type) {
-        // we don't need to cast
-        (a, b) if a == b => Ok(*a),
-        // safe casting, no information loss
-        (Number, Float) | (Float, Number) => Ok(Float),
-        _ => Err(mis_type()),
-    }
 }
 
 impl Display for AnalyzerError {

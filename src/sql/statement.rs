@@ -136,6 +136,25 @@ pub enum Temporal {
 /// - `Value` holds the *actual* data.
 ///
 /// This separation allows the system to validate values against schema definitions at runtime.
+///
+/// ## Equality semantics
+///
+/// `Value` implements [`PartialEq`] for deep equality:
+/// - Two values are equal only if they are the same variant and hold exactly equal contents.
+///   For example, `Value::Number(5) == Value::Number(5)` is true,  
+///   but `Value::Number(5) == Value::Float(5.0)` is also true, because they can be coerced
+///   losslessly from integer to float.
+///
+/// This enable coercing comparisons (e.g., treating `Number` and `Float` as “same kind”)
+/// during query planning.
+///
+/// ```rust
+/// use umbra::sql::statement::Value;
+///
+/// assert_eq!(Value::Number(5), Value::Number(5));
+/// assert_ne!(Value::Number(5), Value::Float(5.1));
+/// assert!(Value::Number(5).eq(&Value::Float(5.0))); // both numeric kinds and lossless coercible
+/// ```
 #[derive(Debug, Clone)]
 pub enum Value {
     String(String),
