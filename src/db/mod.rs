@@ -2035,7 +2035,7 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_implicit_cast() -> DatabaseResult {
+    fn test_implicit_cast() -> DatabaseResult {
         let mut db = Database::default();
 
         db.exec(
@@ -2044,7 +2044,7 @@ mod tests {
                 id SERIAL PRIMARY KEY,
                 reading DOUBLE PRECISION,
                 sensor_a INTEGER,
-                sensor_b INTEGER
+                sensor_b SMALLINT
             );
         "#,
         )?;
@@ -2059,6 +2059,19 @@ mod tests {
         )?;
 
         let query = db.exec("SELECT * FROM measurements WHERE sensor_a > reading;")?;
+        assert_eq!(
+            query.schema,
+            Schema::new(vec![
+                Column::primary_key("id", Type::Serial),
+                Column::new("reading", Type::DoublePrecision),
+                Column::new("sensor_a", Type::Integer),
+                Column::new("sensor_b", Type::SmallInt)
+            ]),
+        );
+        assert!(query.is_empty());
+
+        let query = db.exec("SELECT reading FROM measurements WHERE sensor_a <= sensor_b;")?;
+        assert_eq!(2, query.tuples.len());
 
         Ok(())
     }
