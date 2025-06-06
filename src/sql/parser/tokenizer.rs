@@ -410,6 +410,20 @@ mod tests {
     }
 
     #[test]
+    fn test_tokenize_invalid_float() {
+        let sql = "INSERT INTO data(temp, co2_levels) VALUES (20.3, 400.);";
+
+        assert_eq!(
+            Tokenizer::new(sql).tokenize(),
+            Err(TokenizerError {
+                input: sql.to_string(),
+                location: Location::new(1, 54),
+                kind: ErrorKind::UnexpectedToken('.')
+            })
+        )
+    }
+
+    #[test]
     fn test_tokenize_string() {
         let sql = "SELECT name FROM users WHERE name = 'John Doe";
 
