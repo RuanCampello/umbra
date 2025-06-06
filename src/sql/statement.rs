@@ -93,7 +93,7 @@ pub(crate) enum Drop {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub(crate) enum Expression {
+pub enum Expression {
     Identifier(String),
     Value(Value),
     Wildcard,
@@ -171,13 +171,13 @@ pub enum Constraint {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
-pub(crate) enum UnaryOperator {
+pub enum UnaryOperator {
     Plus,
     Minus,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
-pub(crate) enum BinaryOperator {
+pub enum BinaryOperator {
     Eq,
     Neq,
     Lt,

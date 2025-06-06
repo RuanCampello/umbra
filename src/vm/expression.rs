@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter};
 use std::mem;
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum VmType {
+pub enum VmType {
     Bool,
     String,
     Number,
@@ -14,12 +14,12 @@ pub(crate) enum VmType {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum VmError {
+pub enum VmError {
     DivisionByZero(i128, i128),
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum TypeError {
+pub enum TypeError {
     CannotApplyUnary {
         operator: UnaryOperator,
         value: Value,

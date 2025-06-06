@@ -10,7 +10,7 @@ use std::fmt::Display;
 use super::statement::{Delete, Insert, Select, Update};
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum AnalyzerError {
+pub enum AnalyzerError {
     MissingCols,
     DuplicateCols(String),
     MultiplePrimaryKeys,
@@ -22,7 +22,7 @@ pub(crate) enum AnalyzerError {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum AlreadyExists {
+pub enum AlreadyExists {
     Table(String),
     Index(String),
 }
