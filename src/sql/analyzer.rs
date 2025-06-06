@@ -250,7 +250,6 @@ fn analyze_assignment<'exp, 'id>(
 
     Ok(())
 }
-
 pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
     schema: &'sch Schema,
     col_type: Option<&Type>,
@@ -267,8 +266,9 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 Type::Boolean => VmType::Bool,
                 Type::Varchar(_) => VmType::String,
                 Type::Date | Type::DateTime | Type::Time => VmType::Date,
-                Type::Real | Type::DoublePrecision => VmType::Float,
-                _ => VmType::Number,
+                float if float.is_float() => VmType::Float,
+                int if int.is_integer() => VmType::Number,
+                _ => unreachable!("this type is not defined for analyze_expression"),
             }
         }
         Expression::BinaryOperation {
@@ -287,9 +287,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 })
             };
 
-            if left_type.ne(&right_type) {
-                return Err(mis_type());
-            }
+            let operation_type = check_binop_types(&left_type, &right_type, right, mis_type)?;
 
             match operator {
                 BinaryOperator::Eq
@@ -298,16 +296,16 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 | BinaryOperator::LtEq
                 | BinaryOperator::Gt
                 | BinaryOperator::GtEq => VmType::Bool,
-                BinaryOperator::And | BinaryOperator::Or if left_type.eq(&VmType::Bool) => {
+                BinaryOperator::And | BinaryOperator::Or if operation_type == VmType::Bool => {
                     VmType::Bool
                 }
                 BinaryOperator::Plus
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                    if matches!(left_type, VmType::Number | VmType::Float) =>
+                    if matches!(operation_type, VmType::Number | VmType::Float) =>
                 {
-                    left_type
+                    operation_type
                 }
                 _ => Err(mis_type())?,
             }
@@ -425,6 +423,27 @@ fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
     }
 
     Ok(())
+}
+
+fn check_binop_types(
+    left_type: &VmType,
+    right_type: &VmType,
+    right: &Expression,
+    mis_type: impl Fn() -> SqlError,
+) -> Result<VmType, SqlError> {
+    use VmType::*;
+    match (left_type, right_type) {
+        // we don't need to cast
+        (a, b) if a == b => Ok(*a),
+        // safe casting, no information loss
+        (Number, Float) => Ok(Float),
+        (Float, Number) => match right {
+            // only allow implicit cast if the number is a literal constant
+            Expression::Value(Value::Number(_)) => Ok(Float),
+            _ => Err(mis_type()),
+        },
+        _ => Err(mis_type()),
+    }
 }
 
 impl Display for AnalyzerError {

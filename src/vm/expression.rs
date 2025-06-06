@@ -4,7 +4,7 @@ use crate::sql::statement::{BinaryOperator, Expression, Type, UnaryOperator, Val
 use std::fmt::{Display, Formatter};
 use std::mem;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum VmType {
     Bool,
     String,
