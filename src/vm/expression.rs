@@ -71,6 +71,8 @@ pub(crate) fn resolve_expression<'exp>(
             let left = resolve_expression(val, schema, left)?;
             let right = resolve_expression(val, schema, right)?;
 
+            let (left, right) = try_coerce(left, right);
+
             let mismatched_types = || {
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
@@ -143,6 +145,13 @@ pub(crate) fn evaluate_where(
             expected: VmType::Bool,
             found: Expression::Value(other),
         })),
+    }
+}
+
+fn try_coerce(left: Value, right: Value) -> (Value, Value) {
+    match (&left, &right) {
+        (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
+        _ => (left, right),
     }
 }
 
