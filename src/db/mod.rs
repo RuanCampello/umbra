@@ -2013,6 +2013,24 @@ mod tests {
         )?;
 
         let query = db.exec("SELECT * FROM scientific WHERE precise_temperature >= 23;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Serial),
+                    Column::new("precise_temperature", Type::DoublePrecision),
+                    Column::new("co2_levels", Type::DoublePrecision),
+                    Column::new("measurement_time", Type::DateTime),
+                ]),
+                tuples: vec![vec![
+                    Value::Number(1),
+                    Value::Float(23.456789),
+                    Value::Float(415.123456789),
+                    temporal!("2024-02-03 10:00:00").unwrap()
+                ]]
+            }
+        );
+
         Ok(())
     }
 }
