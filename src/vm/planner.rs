@@ -1,5 +1,7 @@
 //! Plan trees implementation to execute the actual queries.
 
+#![allow(dead_code)]
+
 use super::expression::{resolve_expression, resolve_only_expression};
 use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp};
@@ -7,7 +9,7 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, Exec, Relation, Schema, SqlError, TableMetadata};
+use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{join, Assignment, Expression, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;

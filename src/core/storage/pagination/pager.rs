@@ -1,4 +1,4 @@
-#![allow(private_bounds)]
+#![allow(private_bounds, elided_named_lifetimes)]
 
 use super::cache::{Cache, FrameId};
 use super::io::{BlockIo, FileOperations};
