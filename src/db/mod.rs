@@ -2100,16 +2100,38 @@ mod tests {
         "#,
         )?;
 
-        let query = db.exec("SELECT base_price FROM prices;")?;
-        println!("query {query:#?}");
-        //let query = db.exec(
-        //    r#"
-        //    SELECT
-        //        base_price - discount,
-        //        (base_price - discount) * (1.0 + tax_rate)
-        //        FROM prices;
-        //    "#,
-        //)?;
+        let query = db.exec(
+            r#"
+            SELECT
+                base_price - discount,
+                (base_price - discount) * (1.0 + tax_rate)
+                FROM prices;
+            "#,
+        )?;
+
+        let expected = vec![(80.00, 86.60), (44.99, 48.25), (199.95, 212.44)];
+        // we could just do move precise expected values, but this tolorance is fine
+        let threshold = 0.01;
+
+        query
+            .tuples
+            .iter()
+            .enumerate()
+            .for_each(|(idx, row)| match row[..] {
+                [Value::Float(a), Value::Float(b)] => {
+                    let (expected_a, expected_b) = expected[idx];
+
+                    assert!(
+                        (a - expected_a).abs() < threshold,
+                        "Expected {a} ≈ {expected_a}",
+                    );
+                    assert!(
+                        (b - expected_b).abs() < threshold,
+                        "Expected {b} ≈ {expected_b}",
+                    )
+                }
+                _ => panic!("Invalid row pattern"),
+            });
 
         Ok(())
     }
