@@ -378,12 +378,16 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         for (name, table, data_type) in serials_to_load {
-            println!("{name} {table} {data_type}");
-            // FIXME: columns with underline in the name
+            let column = name
+                .strip_prefix(&format!("{}_", table))
+                .expect("Sequence name doesn't start with table name")
+                .strip_suffix("_seq")
+                .expect("Sequence name doesn't end with '_seq'");
+
             let col_idx = metadata
                 .schema
-                .index_of(&name.split('_').nth(1).unwrap())
-                .unwrap();
+                .index_of(column)
+                .expect("No column found with this name");
 
             let mut pager = self.pager.borrow_mut();
             let mut btree = BTree::new(
@@ -391,6 +395,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 metadata.root,
                 FixedSizeCmp::try_from(&data_type).unwrap_or(FixedSizeCmp::new::<RowId>()),
             );
+
             let curr_val = match btree.max()? {
                 Some(max_row) => {
                     let row = tuple::deserialize(max_row.as_ref(), &metadata.schema);
@@ -2133,6 +2138,42 @@ mod tests {
                 _ => panic!("Invalid row pattern"),
             });
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_on_floats() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE temperature_readings (
+                reading_id SERIAL PRIMARY KEY,
+                sensor_a REAL,
+                sensor_b DOUBLE PRECISION
+            );"#,
+        )?;
+
+        db.exec(
+            r#"
+            INSERT INTO temperature_readings(sensor_a, sensor_b) VALUES
+                (25.5, 25.5000001),
+                (25.5, 25.5),
+                (0.3, 0.1 + 0.2),
+                (100.0, 99.9999999);
+        "#,
+        );
+
+        let query = db.exec(
+            r#"
+            SELECT 
+                reading_id,
+                sensor_a = sensor_b,
+                sensor_a > sensor_b,
+                sensor_a < sensor_b,
+                FROM temperature_readings;
+            "#,
+        )?;
         Ok(())
     }
 }
