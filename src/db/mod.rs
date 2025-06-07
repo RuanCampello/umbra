@@ -1,3 +1,6 @@
+//! This is where the code actually starts running.
+//! The [Database] structure owns everything and delegate it to the other modules.
+
 #![allow(unused)]
 
 mod metadata;

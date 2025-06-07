@@ -1181,6 +1181,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn test_deep_cursor() -> IOResult<()> {
         let pager = &mut Pager::from_order(6);
 

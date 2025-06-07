@@ -1,5 +1,6 @@
 //! This module provides a simple logging API.
 
+#![cfg(not(miri))]
 #![allow(static_mut_refs, dead_code)]
 
 use std::{
