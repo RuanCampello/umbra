@@ -46,14 +46,15 @@ Connects to the Umbra server running on port `8000`.
 
 > `usql` is your shadowy shell into the Umbra world. It understands SQL and the void.
 
+---
 
 ## Implementation Status
 
 ### 🧾 Types
 
-#### 🔢 **Numeric Types**
+#### :one: **Integer Types**
 
-Integers: the beating heart of databases—and poor life decisions.
+The beating heart of databases—and poor life decisions.
 
 Umbra supports both **signed** and **unsigned** integer types, as well as their attention-seeking cousins: the **serial** pseudo-types. These `SERIAL` types aren’t real—they're syntactic sugar that auto-magically generate sequences behind the scenes (just like PostgreSQL, but with fewer emotional boundaries).
 
@@ -85,6 +86,38 @@ CREATE TABLE cursed_items (
     darkness_level SMALLINT UNSIGNED,
     soul_count BIGINT UNSIGNED
 );
+```
+
+#### :1234: **Floating-Point Types**
+
+When integers just won’t cut it and you need *approximate truths*, floating-point types step in—like unreliable narrators in a numerical novel.
+
+| Type             | Precision              | Notes                                                                 |
+|------------------|-------------------------|-----------------------------------------------------------------------|
+| `REAL`             | ~7 decimal digits       | Single-precision daydreams. Fast, vague, and prone to making things up. |
+| `DOUBLE PRECISION` | ~15 decimal digits      | Double the bits, double the confidence. For those who still don’t trust `REAL`. |
+
+> [!WARNING]  
+> **Floating-Point Lies**  
+> They're fast. They're fun. They're wrong. Read more about that [here](https://medium.com/@Carl_Maxwell/understanding-f32-floating-point-9d7e3604ab97).
+> If you're just plotting wiggly shadows over time, `REAL` is your friend.
+
+```sql
+CREATE TABLE entropy_watch (
+    event_id SERIAL PRIMARY KEY,
+    time TIMESTAMP,
+    shadow_density REAL,
+    void_pressure DOUBLE PRECISION
+);
+```
+
+> [!TIP]  
+> **Casting Happens**  
+> Umbra will happily let you mix floats and integers. But you might want to think twice before comparing them for equality. That way lies madness.
+> Also, insert will **NOT** coerce types, it'll strictly verify the types based on the defined schema.
+
+```sql
+SELECT time FROM entropy_watch WHERE shadow_density > 69; -- here we implicitly cast 69 to a float, so you can query without hustle
 ```
 
 - [x] `VARCHAR`
