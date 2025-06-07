@@ -1,3 +1,9 @@
+//! This module is responsible for doing the semantic and context aware analysis over the
+//! parsed `SQL` [statements](crate::sql::statement::Statement).
+//!
+//! After this analysis, we should be able to handle the execution without almost no runtime error
+//! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
+
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{

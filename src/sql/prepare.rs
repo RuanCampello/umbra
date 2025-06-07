@@ -1,4 +1,4 @@
-//! Here we do the preparation for [plan](crate::vm::planner::Planner) generation.
+//! Here we do the final step preparation before [plan](crate::vm::planner::Planner) generation.
 
 use crate::db::{Ctx, DatabaseError, ROW_COL_ID};
 
