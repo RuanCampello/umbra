@@ -1,7 +1,7 @@
 [package]
 name = "umbra"
 description = "A blazingly fast (and hungry) database"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 
 [target.'cfg(unix)'.dependencies]
