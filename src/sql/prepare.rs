@@ -1,7 +1,34 @@
+//! Here we do the preparation for [plan](crate::vm::planner::Planner) generation.
+
 use crate::db::{Ctx, DatabaseError, ROW_COL_ID};
 
 use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 
+/// Takes a given [statement](crate::sql::statement::Statement) and prepares it to the plan
+/// generation.
+///
+/// Here we basic do three things:
+///
+/// 1.Remove wildcards for [select](crate::sql::statement::Select) statements.
+/// 2.Reorder the values in [insert](crate::sql::statement::Insert) statements to match the [schema](crate::db::Schema) ordering.
+/// 3.Increment `SERIAL` (and its variants) columns.
+///
+/// ```sql
+/// -- table
+/// CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(255), age INT UNSIGNED);
+///
+/// -- select
+/// SELECT * FROM employees;
+///
+/// -- prepared select statement
+/// SELECT id, name, age FROM employees;
+///
+/// -- insert
+/// INSERT INTO employees (age, name) VALUES (22, 'John Doe');
+///
+/// -- prepared select statement
+/// INSERT INTO employees (id, name, age) VALUES (x, 'John Doe', 22) -- where 'x' is the next_val() of this given `SERIAL`.
+/// ```
 pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
         Statement::Select(Select { columns, from, .. })
