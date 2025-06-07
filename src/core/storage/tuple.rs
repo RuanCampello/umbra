@@ -67,11 +67,14 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             let be_bytes = num.to_be_bytes();
             buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
         }
-        (float, Value::Float(num)) if float.is_float() => {
-            let b_len = byte_len_of_type(float);
-            let be_bytes = num.to_be_bytes();
-            buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
-        }
+        (float, Value::Float(num)) if float.is_float() => match float {
+            Type::Real => {
+                let num = *num as f32;
+                buff.extend_from_slice(&num.to_be_bytes());
+            }
+            Type::DoublePrecision => buff.extend_from_slice(&num.to_be_bytes()),
+            _ => unreachable!(),
+        },
         (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
         (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
         (Type::DateTime, Value::String(datetime)) => {
@@ -189,7 +192,9 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
         Type::Real => {
             let mut bytes = [0; byte_len_of_type(&Type::Real)];
             reader.read_exact(&mut bytes)?;
-            Ok(Value::Float(f32::from_be_bytes(bytes).into()))
+            let n = f32::from_be_bytes(bytes).into();
+            println!("number on real {n:#?}");
+            Ok(Value::Float(n))
         }
         Type::DoublePrecision => {
             let mut bytes = [0; byte_len_of_type(&Type::DoublePrecision)];

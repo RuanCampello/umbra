@@ -106,21 +106,33 @@ pub(crate) fn resolve_expression<'exp>(
                 }
 
                 arithmetic => {
-                    let (Value::Number(left), Value::Number(right)) = (&left, &right) else {
-                        return Err(mismatched_types());
-                    };
+                    let (left_value, right_value) = left
+                        .as_arithmetic_pair(&right)
+                        .ok_or_else(mismatched_types)?;
 
-                    if arithmetic == &BinaryOperator::Div && *right == 0 {
-                        return Err(VmError::DivisionByZero(*left, *right).into());
+                    if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
+                        // TODO: maybe we should do better here
+                        return Err(VmError::DivisionByZero(
+                            left_value as i128,
+                            right_value as i128,
+                        )
+                        .into());
                     }
 
-                    Value::Number(match arithmetic {
-                        BinaryOperator::Plus => left + right,
-                        BinaryOperator::Minus => left - right,
-                        BinaryOperator::Mul => left * right,
-                        BinaryOperator::Div => left / right,
+                    let result = match arithmetic {
+                        BinaryOperator::Plus => left_value + right_value,
+                        BinaryOperator::Minus => left_value - right_value,
+                        BinaryOperator::Mul => left_value * right_value,
+                        BinaryOperator::Div => left_value / right_value,
                         _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
-                    })
+                    };
+
+                    match (left, right) {
+                        (Value::Number(_), Value::Number(_)) if result.fract().eq(&0.0) => {
+                            Value::Number(result as i128)
+                        }
+                        _ => Value::Float(result),
+                    }
                 }
             })
         }

@@ -431,6 +431,18 @@ impl Default for Expression {
     }
 }
 
+impl Value {
+    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),
+            (Value::Float(a), Value::Float(b)) => Some((*a, *b)),
+            (Value::Number(a), Value::Float(b)) => Some((*a as f64, *b)),
+            (Value::Float(a), Value::Number(b)) => Some((*a, *b as f64)),
+            _ => None,
+        }
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {

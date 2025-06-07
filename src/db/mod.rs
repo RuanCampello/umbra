@@ -2075,4 +2075,42 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_arithmetic_op_on_floats() -> DatabaseResult {
+        let mut db = Database::default();
+
+        // TODO: correct sequence for underline table/column names
+        db.exec(
+            r#"
+           CREATE TABLE prices (
+                id SERIAL PRIMARY KEY,
+                base_price REAL,
+                discount REAL,
+                tax_rate DOUBLE PRECISION
+            );"#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO prices (base_price, discount, tax_rate) 
+            VALUES
+                (100.00, 20.00, 0.0825),
+                (49.99, 5.00, 0.0725),
+                (199.95, 0.00, 0.0625);
+        "#,
+        )?;
+
+        let query = db.exec("SELECT base_price FROM prices;")?;
+        println!("query {query:#?}");
+        //let query = db.exec(
+        //    r#"
+        //    SELECT
+        //        base_price - discount,
+        //        (base_price - discount) * (1.0 + tax_rate)
+        //        FROM prices;
+        //    "#,
+        //)?;
+
+        Ok(())
+    }
 }
