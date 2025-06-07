@@ -2167,13 +2167,39 @@ mod tests {
         let query = db.exec(
             r#"
             SELECT 
-                reading_id,
                 sensor_a = sensor_b,
                 sensor_a > sensor_b,
-                sensor_a < sensor_b,
+                sensor_a < sensor_b
                 FROM temperature_readings;
             "#,
         )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::Boolean(false),
+                    Value::Boolean(false),
+                    Value::Boolean(true)
+                ],
+                vec![
+                    Value::Boolean(true),
+                    Value::Boolean(false),
+                    Value::Boolean(false)
+                ],
+                vec![
+                    Value::Boolean(false),
+                    Value::Boolean(true),
+                    Value::Boolean(false)
+                ],
+                vec![
+                    Value::Boolean(false),
+                    Value::Boolean(true),
+                    Value::Boolean(false)
+                ]
+            ]
+        );
+
         Ok(())
     }
 }
