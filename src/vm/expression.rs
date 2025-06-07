@@ -4,21 +4,22 @@ use crate::sql::statement::{BinaryOperator, Expression, Type, UnaryOperator, Val
 use std::fmt::{Display, Formatter};
 use std::mem;
 
-#[derive(Debug, PartialEq)]
-pub(crate) enum VmType {
+#[derive(Debug, Clone, Copy)]
+pub enum VmType {
     Bool,
     String,
     Number,
+    Float,
     Date,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum VmError {
+pub enum VmError {
     DivisionByZero(i128, i128),
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum TypeError {
+pub enum TypeError {
     CannotApplyUnary {
         operator: UnaryOperator,
         value: Value,
@@ -70,6 +71,8 @@ pub(crate) fn resolve_expression<'exp>(
             let left = resolve_expression(val, schema, left)?;
             let right = resolve_expression(val, schema, right)?;
 
+            let (left, right) = try_coerce(left, right);
+
             let mismatched_types = || {
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
@@ -103,21 +106,33 @@ pub(crate) fn resolve_expression<'exp>(
                 }
 
                 arithmetic => {
-                    let (Value::Number(left), Value::Number(right)) = (&left, &right) else {
-                        return Err(mismatched_types());
-                    };
+                    let (left_value, right_value) = left
+                        .as_arithmetic_pair(&right)
+                        .ok_or_else(mismatched_types)?;
 
-                    if arithmetic == &BinaryOperator::Div && *right == 0 {
-                        return Err(VmError::DivisionByZero(*left, *right).into());
+                    if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
+                        // TODO: maybe we should do better here
+                        return Err(VmError::DivisionByZero(
+                            left_value as i128,
+                            right_value as i128,
+                        )
+                        .into());
                     }
 
-                    Value::Number(match arithmetic {
-                        BinaryOperator::Plus => left + right,
-                        BinaryOperator::Minus => left - right,
-                        BinaryOperator::Mul => left * right,
-                        BinaryOperator::Div => left / right,
+                    let result = match arithmetic {
+                        BinaryOperator::Plus => left_value + right_value,
+                        BinaryOperator::Minus => left_value - right_value,
+                        BinaryOperator::Mul => left_value * right_value,
+                        BinaryOperator::Div => left_value / right_value,
                         _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
-                    })
+                    };
+
+                    match (left, right) {
+                        (Value::Number(_), Value::Number(_)) if result.fract().eq(&0.0) => {
+                            Value::Number(result as i128)
+                        }
+                        _ => Value::Float(result),
+                    }
                 }
             })
         }
@@ -145,13 +160,32 @@ pub(crate) fn evaluate_where(
     }
 }
 
+fn try_coerce(left: Value, right: Value) -> (Value, Value) {
+    match (&left, &right) {
+        (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
+        (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
+        _ => (left, right),
+    }
+}
+
 impl From<&Type> for VmType {
     fn from(value: &Type) -> Self {
         match value {
             Type::Boolean => VmType::Bool,
             Type::Varchar(_) => VmType::String,
             Type::Time | Type::Date | Type::DateTime => VmType::Date,
+            Type::Real | Type::DoublePrecision => VmType::Float,
             _ => VmType::Number,
+        }
+    }
+}
+
+impl PartialEq for VmType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // we do this for coercion properties
+            (VmType::Float, VmType::Number) | (VmType::Number, VmType::Float) => true,
+            _ => mem::discriminant(self) == mem::discriminant(other),
         }
     }
 }

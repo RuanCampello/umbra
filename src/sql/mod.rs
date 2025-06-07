@@ -2,6 +2,7 @@ use parser::Parser;
 use statement::Statement;
 
 use crate::db::{Ctx, DatabaseError};
+pub use parser::Keyword;
 
 pub(crate) mod analyzer;
 pub(crate) mod optimiser;

@@ -15,8 +15,12 @@ use crate::{
 /// Returns the byte length of a given SQL [`Type`].
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
-        Type::BigInteger | Type::BigSerial | Type::UnsignedBigInteger | Type::DateTime => 8,
-        Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date => 4,
+        Type::BigInteger
+        | Type::BigSerial
+        | Type::UnsignedBigInteger
+        | Type::DateTime
+        | Type::DoublePrecision => 8,
+        Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date | Type::Real => 4,
         Type::Time => 3,
         Type::SmallInt | Type::SmallSerial | Type::UnsignedSmallInt => 2,
         Type::Boolean => 1,
@@ -63,6 +67,11 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             let be_bytes = num.to_be_bytes();
             buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
         }
+        (float, Value::Float(num)) if float.is_float() => match float {
+            Type::Real => buff.extend_from_slice(&(*num as f32).to_be_bytes()),
+            Type::DoublePrecision => buff.extend_from_slice(&num.to_be_bytes()),
+            _ => unreachable!("what kind of float is this?"),
+        },
         (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
         (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
         (Type::DateTime, Value::String(datetime)) => {
@@ -176,6 +185,16 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             reader.read_exact(&mut buf)?;
             let n = u64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
+        }
+        Type::Real => {
+            let mut bytes = [0; byte_len_of_type(&Type::Real)];
+            reader.read_exact(&mut bytes)?;
+            Ok(Value::Float(f32::from_be_bytes(bytes).into()))
+        }
+        Type::DoublePrecision => {
+            let mut bytes = [0; byte_len_of_type(&Type::DoublePrecision)];
+            reader.read_exact(&mut bytes)?;
+            Ok(Value::Float(f64::from_be_bytes(bytes)))
         }
         Type::Date => {
             let mut bytes = [0; byte_len_of_type(&Type::Date)];

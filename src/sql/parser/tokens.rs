@@ -2,7 +2,10 @@
 //!
 //! You may consider checking out [IBM documentation](https://www.ibm.com/docs/en/db2/11.5.0?topic=elements-tokens) on that.
 
-use std::fmt::{Display, Formatter, Write};
+use std::{
+    fmt::{Display, Formatter, Write},
+    str::FromStr,
+};
 
 /// SQL tokens.
 #[derive(Debug, PartialEq)]
@@ -41,7 +44,7 @@ pub(in crate::sql) enum Whitespace {
 ///
 /// [Here](https://www.ibm.com/docs/en/informix-servers/12.10.0?topic=appendixes-keywords-sql-informix) there are much more than that, if you want to check out.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::sql) enum Keyword {
+pub enum Keyword {
     Select,
     Create,
     Update,
@@ -69,6 +72,9 @@ pub(in crate::sql) enum Keyword {
     SmallInt,
     Int,
     BigInt,
+    Real,
+    Double,
+    Precision,
     Unsigned,
     Varchar,
     Bool,
@@ -152,7 +158,7 @@ impl Keyword {
         }
     }
 
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Select => "SELECT",
             Self::Create => "CREATE",
@@ -181,6 +187,9 @@ impl Keyword {
             Self::SmallInt => "SMALLINT",
             Self::Int => "INT",
             Self::BigInt => "BIGINT",
+            Self::Real => "REAL",
+            Self::Double => "DOUBLE",
+            Self::Precision => "PRECISION",
             Self::Unsigned => "UNSIGNED",
             Self::Varchar => "VARCHAR",
             Self::Bool => "BOOL",
@@ -200,6 +209,64 @@ impl Keyword {
             Self::Timestamp => "TIMESTAMP",
             Self::None => "_",
         }
+    }
+}
+
+impl FromStr for Keyword {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let keyword = match s.to_uppercase().as_str() {
+            "SELECT" => Keyword::Select,
+            "CREATE" => Keyword::Create,
+            "UPDATE" => Keyword::Update,
+            "DELETE" => Keyword::Delete,
+            "INSERT" => Keyword::Insert,
+            "VALUES" => Keyword::Values,
+            "INTO" => Keyword::Into,
+            "SET" => Keyword::Set,
+            "DROP" => Keyword::Drop,
+            "FROM" => Keyword::From,
+            "TABLE" => Keyword::Table,
+            "WHERE" => Keyword::Where,
+            "AND" => Keyword::And,
+            "OR" => Keyword::Or,
+            "TRUE" => Keyword::True,
+            "FALSE" => Keyword::False,
+            "PRIMARY" => Keyword::Primary,
+            "KEY" => Keyword::Key,
+            "UNIQUE" => Keyword::Unique,
+            "SMALLSERIAL" => Keyword::SmallSerial,
+            "SERIAL" => Keyword::Serial,
+            "BIGSERIAL" => Keyword::BigSerial,
+            "SMALLINT" => Keyword::SmallInt,
+            "INT" | "INTEGER" => Keyword::Int,
+            "BIGINT" => Keyword::BigInt,
+            "REAL" => Keyword::Real,
+            "DOUBLE" => Keyword::Double,
+            "PRECISION" => Keyword::Precision,
+            "BY" => Keyword::By,
+            "DATABASE" => Keyword::Database,
+            "SEQUENCE" => Keyword::Sequence,
+            "AS" => Keyword::As,
+            "OWNED" => Keyword::Owned,
+            "UNSIGNED" => Keyword::Unsigned,
+            "VARCHAR" => Keyword::Varchar,
+            "BOOLEAN" => Keyword::Bool,
+            "INDEX" => Keyword::Index,
+            "ORDER" => Keyword::Order,
+            "ON" => Keyword::On,
+            "BEGIN" => Keyword::Start,
+            "TRANSACTION" => Keyword::Transaction,
+            "ROLLBACK" => Keyword::Rollback,
+            "COMMIT" => Keyword::Commit,
+            "EXPLAIN" => Keyword::Explain,
+            "TIMESTAMP" => Keyword::Timestamp,
+            "DATE" => Keyword::Date,
+            "TIME" => Keyword::Time,
+            _ => Keyword::None,
+        };
+
+        Ok(keyword)
     }
 }
 

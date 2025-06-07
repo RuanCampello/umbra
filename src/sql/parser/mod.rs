@@ -21,7 +21,9 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::iter::Peekable;
 use tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
-use tokens::{Keyword, Token};
+use tokens::Token;
+
+pub use tokens::Keyword;
 
 use super::statement::{Delete, Insert, Select, Update};
 
@@ -180,11 +182,18 @@ impl<'input> Parser<'input> {
 
                 Ok(Expression::Nested(Box::new(expr)))
             }
-            Token::Number(number) => Ok(Expression::Value(Value::Number(
-                number
-                    .parse()
-                    .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
-            ))),
+            Token::Number(number) => match number.contains(".") {
+                true => Ok(Expression::Value(Value::Float(
+                    number
+                        .parse::<f64>()
+                        .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
+                ))),
+                _ => Ok(Expression::Value(Value::Number(
+                    number
+                        .parse()
+                        .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
+                ))),
+            },
             token @ (Token::Minus | Token::Plus) => {
                 let op = match token {
                     Token::Minus => UnaryOperator::Minus,
@@ -273,6 +282,11 @@ impl<'input> Parser<'input> {
                 self.expect_token(Token::RightParen)?;
                 Ok(Type::Varchar(len))
             }
+            Keyword::Double => {
+                self.expect_keyword(Keyword::Precision)?;
+                Ok(Type::DoublePrecision)
+            }
+            Keyword::Real => Ok(Type::Real),
             Keyword::Bool => Ok(Type::Boolean),
             Keyword::Timestamp => Ok(Type::DateTime),
             Keyword::Date => Ok(Type::Date),
@@ -489,7 +503,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 11] {
+    const fn supported_types() -> [Keyword; 13] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -497,6 +511,8 @@ impl<'input> Parser<'input> {
             Keyword::SmallInt,
             Keyword::Int,
             Keyword::BigInt,
+            Keyword::Real,
+            Keyword::Double,
             Keyword::Bool,
             Keyword::Varchar,
             Keyword::Time,
@@ -1093,6 +1109,71 @@ mod tests {
                     found: Token::Identifier("SOMETHING".into()),
                 }
             })
+        )
+    }
+
+    #[test]
+    fn test_parse_real_and_double() {
+        let sql = r#"
+            CREATE TABLE weather_data (
+                reading_id SERIAL PRIMARY KEY,
+                temperature REAL,
+                humidity DOUBLE PRECISION
+            );
+        "#;
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Table {
+                name: "weather_data".into(),
+                columns: vec![
+                    Column::primary_key("reading_id", Type::Serial),
+                    Column::new("temperature", Type::Real),
+                    Column::new("humidity", Type::DoublePrecision)
+                ]
+            }))
+        )
+    }
+
+    #[test]
+    fn test_insert_real_and_double() {
+        let sql = r#"
+            INSERT INTO scientific_data (precise_temperature, co2_levels, measurement_time)
+            VALUES
+                (23.456789, 415.123456789, '2024-02-03 10:00:00'),
+                (20.123456, 417.123789012, '2024-02-03 11:00:00'),
+                (22.789012, 418.456123789, '2024-02-03 12:00:00');
+        "#;
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Insert(Insert {
+                into: "scientific_data".into(),
+                columns: vec![
+                    "precise_temperature".into(),
+                    "co2_levels".into(),
+                    "measurement_time".into()
+                ],
+                values: vec![
+                    vec![
+                        Expression::Value(Value::Float(23.456789)),
+                        Expression::Value(Value::Float(415.123456789)),
+                        Expression::Value(Value::String("2024-02-03 10:00:00".into())),
+                    ],
+                    vec![
+                        Expression::Value(Value::Float(20.123456)),
+                        Expression::Value(Value::Float(417.123789012)),
+                        Expression::Value(Value::String("2024-02-03 11:00:00".into()))
+                    ],
+                    vec![
+                        Expression::Value(Value::Float(22.789012)),
+                        Expression::Value(Value::Float(418.456123789)),
+                        Expression::Value(Value::String("2024-02-03 12:00:00".into()))
+                    ]
+                ],
+            }))
         )
     }
 }

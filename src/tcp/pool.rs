@@ -2,7 +2,6 @@
 //! Would be better have a more robust implementation in the future.
 
 use std::{
-    num::NonZeroUsize,
     sync::{mpsc, Arc, Mutex},
     thread,
 };

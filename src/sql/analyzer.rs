@@ -1,3 +1,9 @@
+//! This module is responsible for doing the semantic and context aware analysis over the
+//! parsed `SQL` [statements](crate::sql::statement::Statement).
+//!
+//! After this analysis, we should be able to handle the execution without almost no runtime error
+//! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
+
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{
@@ -10,7 +16,7 @@ use std::fmt::Display;
 use super::statement::{Delete, Insert, Select, Update};
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum AnalyzerError {
+pub enum AnalyzerError {
     MissingCols,
     DuplicateCols(String),
     MultiplePrimaryKeys,
@@ -22,7 +28,7 @@ pub(crate) enum AnalyzerError {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum AlreadyExists {
+pub enum AlreadyExists {
     Table(String),
     Index(String),
 }
@@ -267,7 +273,9 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 Type::Boolean => VmType::Bool,
                 Type::Varchar(_) => VmType::String,
                 Type::Date | Type::DateTime | Type::Time => VmType::Date,
-                _ => VmType::Number,
+                float if float.is_float() => VmType::Float,
+                int if int.is_integer() => VmType::Number,
+                _ => unreachable!("this type is not defined for analyze_expression"),
             }
         }
         Expression::BinaryOperation {
@@ -278,16 +286,12 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             let left_type = analyze_expression(schema, col_type, left)?;
             let right_type = analyze_expression(schema, col_type, right)?;
 
-            let mis_type = || {
-                SqlError::Type(TypeError::CannotApplyBinary {
+            if left_type.ne(&right_type) {
+                return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
                     operator: *operator,
-                })
-            };
-
-            if left_type.ne(&right_type) {
-                return Err(mis_type());
+                }));
             }
 
             match operator {
@@ -304,23 +308,33 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                    if left_type.eq(&VmType::Number) =>
+                    if matches!(left_type, VmType::Number | VmType::Float) =>
                 {
-                    VmType::Number
+                    left_type
                 }
-                _ => Err(mis_type())?,
+                _ => unreachable!("unexpected operation state"),
             }
         }
         Expression::UnaryOperation { operator, expr } => {
-            if let (Some(data_type), UnaryOperator::Minus, Expression::Value(Value::Number(num))) =
+            if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
                 (col_type, operator, &**expr)
             {
-                analyze_number(&-num, data_type)?;
-                return Ok(VmType::Number);
+                match value {
+                    Value::Number(num) => {
+                        analyze_number(&-num, data_type)?;
+                        return Ok(VmType::Number);
+                    }
+                    Value::Float(float) => {
+                        analyze_float(&-float, data_type)?;
+                        return Ok(VmType::Float);
+                    }
+                    _ => unreachable!(),
+                }
             }
 
             match analyze_expression(schema, col_type, expr)? {
                 VmType::Number => VmType::Number,
+                VmType::Float => VmType::Float,
                 _ => Err(TypeError::ExpectedType {
                     expected: VmType::Number,
                     found: *expr.clone(),
@@ -342,6 +356,12 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
                 analyze_number(n, col_type)?;
             }
             Ok(VmType::Number)
+        }
+        Value::Float(f) => {
+            if let Some(col_type) = col_type {
+                analyze_float(f, col_type)?;
+            }
+            Ok(VmType::Float)
         }
         Value::String(s) => match col_type {
             // if the column has a type, delegate to analyze_string,
@@ -395,11 +415,16 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
 }
 
 fn analyze_number(integer: &i128, data_type: &Type) -> Result<(), AnalyzerError> {
-    if data_type.is_integer() {
-        if !data_type.is_integer_in_bounds(integer) {
-            // TODO: this is a bit hacky, we should probably have a better way to get the max size of the type
-            return Err(AnalyzerError::Overflow(*data_type, *integer as usize));
-        }
+    if data_type.is_integer() && !data_type.is_integer_in_bounds(integer) {
+        return Err(AnalyzerError::Overflow(*data_type, *integer as usize));
+    }
+
+    Ok(())
+}
+
+fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
+    if data_type.is_float() && !data_type.is_float_in_bounds(float) {
+        return Err(AnalyzerError::Overflow(*data_type, *float as usize));
     }
 
     Ok(())
@@ -647,12 +672,60 @@ mod tests {
         const CTX: &str = "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(120));";
 
         Analyze {
-            sql: "INSERT INTO users ('John Doe');",
+            sql: "INSERT INTO users (name) VALUES ('John Doe');",
             ctx: &[CTX],
             expected: Ok(()),
-        };
+        }
+        .assert()
+    }
 
-        Ok(())
+    #[test]
+    fn insert_float() -> AnalyzerResult {
+        const CTX: &str = r#"
+            CREATE TABLE weather_data (
+                reading_id SERIAL PRIMARY KEY,
+                temperature REAL,
+                humidity REAL
+            );
+        "#;
+
+        Analyze {
+            sql: r#"
+            INSERT INTO weather_data (temperature, humidity)
+            VALUES
+                (23.5, 60.2),
+                (20.1, 65.3),
+                (22.8, 58.1);
+            "#,
+            ctx: &[CTX],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn insert_double_precision() -> AnalyzerResult {
+        const CTX: &str = r#"
+            CREATE TABLE scientific_data (
+                measurement_id SERIAL PRIMARY KEY,
+                precise_temperature DOUBLE PRECISION,
+                co2_levels DOUBLE PRECISION,
+                measurement_time TIMESTAMP
+            );
+        "#;
+
+        Analyze {
+            sql: r#"
+            INSERT INTO scientific_data (precise_temperature, co2_levels, measurement_time)
+            VALUES
+                (23.456789, 415.123456789, '2024-02-03 10:00:00'),
+                (20.123456, 417.123789012, '2024-02-03 11:00:00'),
+                (22.789012, 418.456123789, '2024-02-03 12:00:00');
+            "#,
+            ctx: &[CTX],
+            expected: Ok(()),
+        }
+        .assert()
     }
 
     #[test]

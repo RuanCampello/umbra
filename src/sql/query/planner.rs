@@ -200,6 +200,7 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             schema.columns[index].data_type.clone()
         }
         _ => match analyzer::analyze_expression(schema, None, expr)? {
+            VmType::Float => Type::DoublePrecision,
             VmType::Bool => Type::Boolean,
             VmType::Number => Type::BigInteger,
             VmType::String => Type::Varchar(65535),

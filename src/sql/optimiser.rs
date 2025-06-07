@@ -1,5 +1,4 @@
 //! That's the very last part before execution, right after [`super::analyzer`].
-//!
 //! Here, we try to minimise the operations of a given statement.
 
 use crate::db::SqlError;

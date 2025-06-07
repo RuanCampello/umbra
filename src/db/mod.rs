@@ -1,3 +1,6 @@
+//! This is where the code actually starts running.
+//! The [Database] structure owns everything and delegate it to the other modules.
+
 #![allow(unused)]
 
 mod metadata;
@@ -378,10 +381,16 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         for (name, table, data_type) in serials_to_load {
+            let column = name
+                .strip_prefix(&format!("{}_", table))
+                .expect("Sequence name doesn't start with table name")
+                .strip_suffix("_seq")
+                .expect("Sequence name doesn't end with '_seq'");
+
             let col_idx = metadata
                 .schema
-                .index_of(&name.split('_').nth(1).unwrap())
-                .unwrap();
+                .index_of(column)
+                .expect("No column found with this name");
 
             let mut pager = self.pager.borrow_mut();
             let mut btree = BTree::new(
@@ -389,6 +398,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 metadata.root,
                 FixedSizeCmp::try_from(&data_type).unwrap_or(FixedSizeCmp::new::<RowId>()),
             );
+
             let curr_val = match btree.max()? {
                 Some(max_row) => {
                     let row = tuple::deserialize(max_row.as_ref(), &metadata.schema);
@@ -1981,6 +1991,217 @@ mod tests {
             .collect();
 
         assert_eq!(ids, vec![1, 3]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_float_types() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE scientific (
+                id SERIAL PRIMARY KEY,
+                precise_temperature DOUBLE PRECISION,
+                co2_levels DOUBLE PRECISION,
+                measurement_time TIMESTAMP
+            );
+        "#,
+        )?;
+
+        db.exec(
+            r#"
+            INSERT INTO scientific (precise_temperature, co2_levels, measurement_time)
+            VALUES
+                (23.456789, 415.123456789, '2024-02-03 10:00:00'),
+                (20.123456, 417.123789012, '2024-02-03 11:00:00'),
+                (22.789012, 418.456123789, '2024-02-03 12:00:00');
+        "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM scientific WHERE precise_temperature >= 23;")?;
+        assert_eq!(
+            query,
+            QuerySet {
+                schema: Schema::new(vec![
+                    Column::primary_key("id", Type::Serial),
+                    Column::new("precise_temperature", Type::DoublePrecision),
+                    Column::new("co2_levels", Type::DoublePrecision),
+                    Column::new("measurement_time", Type::DateTime),
+                ]),
+                tuples: vec![vec![
+                    Value::Number(1),
+                    Value::Float(23.456789),
+                    Value::Float(415.123456789),
+                    temporal!("2024-02-03 10:00:00").unwrap()
+                ]]
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_implicit_cast() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE measurements (
+                id SERIAL PRIMARY KEY,
+                reading DOUBLE PRECISION,
+                sensor_a INTEGER,
+                sensor_b SMALLINT
+            );
+        "#,
+        )?;
+
+        db.exec(
+            r#"
+            INSERT INTO measurements (reading, sensor_a, sensor_b)
+            VALUES
+                (25.7, 10, 15),
+                (20.0, 5, 12);
+        "#,
+        )?;
+
+        let query = db.exec("SELECT * FROM measurements WHERE sensor_a > reading;")?;
+        assert_eq!(
+            query.schema,
+            Schema::new(vec![
+                Column::primary_key("id", Type::Serial),
+                Column::new("reading", Type::DoublePrecision),
+                Column::new("sensor_a", Type::Integer),
+                Column::new("sensor_b", Type::SmallInt)
+            ]),
+        );
+        assert!(query.is_empty());
+
+        let query = db.exec("SELECT reading FROM measurements WHERE sensor_a <= sensor_b;")?;
+        assert_eq!(2, query.tuples.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_arithmetic_op_on_floats() -> DatabaseResult {
+        let mut db = Database::default();
+
+        // TODO: correct sequence for underline table/column names
+        db.exec(
+            r#"
+           CREATE TABLE prices (
+                id SERIAL PRIMARY KEY,
+                base_price REAL,
+                discount REAL,
+                tax_rate DOUBLE PRECISION
+            );"#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO prices (base_price, discount, tax_rate) 
+            VALUES
+                (100.00, 20.00, 0.0825),
+                (49.99, 5.00, 0.0725),
+                (199.95, 0.00, 0.0625);
+        "#,
+        )?;
+
+        let query = db.exec(
+            r#"
+            SELECT
+                base_price - discount,
+                (base_price - discount) * (1.0 + tax_rate)
+                FROM prices;
+            "#,
+        )?;
+
+        let expected = vec![(80.00, 86.60), (44.99, 48.25), (199.95, 212.44)];
+        // we could just do move precise expected values, but this tolorance is fine
+        let threshold = 0.01;
+
+        query
+            .tuples
+            .iter()
+            .enumerate()
+            .for_each(|(idx, row)| match row[..] {
+                [Value::Float(a), Value::Float(b)] => {
+                    let (expected_a, expected_b) = expected[idx];
+
+                    assert!(
+                        (a - expected_a).abs() < threshold,
+                        "Expected {a} ≈ {expected_a}",
+                    );
+                    assert!(
+                        (b - expected_b).abs() < threshold,
+                        "Expected {b} ≈ {expected_b}",
+                    )
+                }
+                _ => panic!("Invalid row pattern"),
+            });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_on_floats() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            r#"
+            CREATE TABLE temperature_readings (
+                reading_id SERIAL PRIMARY KEY,
+                sensor_a REAL,
+                sensor_b DOUBLE PRECISION
+            );"#,
+        )?;
+
+        db.exec(
+            r#"
+            INSERT INTO temperature_readings(sensor_a, sensor_b) VALUES
+                (25.5, 25.5000001),
+                (25.5, 25.5),
+                (0.3, 0.1 + 0.2),
+                (100.0, 99.9999999);
+        "#,
+        );
+
+        let query = db.exec(
+            r#"
+            SELECT 
+                sensor_a = sensor_b,
+                sensor_a > sensor_b,
+                sensor_a < sensor_b
+                FROM temperature_readings;
+            "#,
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::Boolean(false),
+                    Value::Boolean(false),
+                    Value::Boolean(true)
+                ],
+                vec![
+                    Value::Boolean(true),
+                    Value::Boolean(false),
+                    Value::Boolean(false)
+                ],
+                vec![
+                    Value::Boolean(false),
+                    Value::Boolean(true),
+                    Value::Boolean(false)
+                ],
+                vec![
+                    Value::Boolean(false),
+                    Value::Boolean(true),
+                    Value::Boolean(false)
+                ]
+            ]
+        );
 
         Ok(())
     }

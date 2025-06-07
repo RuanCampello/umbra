@@ -1,4 +1,4 @@
-use crate::sql::statement::{Create, Delete, Drop, Insert, Select, Type, Update};
+use crate::sql::statement::{Create, Delete, Drop, Insert, Select, Update};
 
 use super::{
     tokens::{Keyword, Token},

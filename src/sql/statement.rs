@@ -93,7 +93,7 @@ pub(crate) enum Drop {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub(crate) enum Expression {
+pub enum Expression {
     Identifier(String),
     Value(Value),
     Wildcard,
@@ -136,10 +136,30 @@ pub enum Temporal {
 /// - `Value` holds the *actual* data.
 ///
 /// This separation allows the system to validate values against schema definitions at runtime.
-#[derive(Debug, PartialEq, Clone)]
+///
+/// ## Equality semantics
+///
+/// `Value` implements [`PartialEq`] for deep equality:
+/// - Two values are equal only if they are the same variant and hold exactly equal contents.
+///   For example, `Value::Number(5) == Value::Number(5)` is true,  
+///   but `Value::Number(5) == Value::Float(5.0)` is also true, because they can be coerced
+///   losslessly from integer to float.
+///
+/// This enable coercing comparisons (e.g., treating `Number` and `Float` as “same kind”)
+/// during query planning.
+///
+/// ```rust
+/// use umbra::sql::statement::Value;
+///
+/// assert_eq!(Value::Number(5), Value::Number(5));
+/// assert_ne!(Value::Number(5), Value::Float(5.1));
+/// assert!(Value::Number(5).eq(&Value::Float(5.0))); // both numeric kinds and lossless coercible
+/// ```
+#[derive(Debug, Clone)]
 pub enum Value {
     String(String),
     Number(i128),
+    Float(f64),
     Boolean(bool),
     Temporal(Temporal),
 }
@@ -151,13 +171,13 @@ pub enum Constraint {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
-pub(crate) enum UnaryOperator {
+pub enum UnaryOperator {
     Plus,
     Minus,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
-pub(crate) enum BinaryOperator {
+pub enum BinaryOperator {
     Eq,
     Neq,
     Lt,
@@ -213,6 +233,10 @@ pub enum Type {
     Boolean,
     /// Variable length character type with a limit
     Varchar(usize),
+    /// 4-byte variable-precision floating point type.
+    Real,
+    /// 8-byte variable-precision floating point type.
+    DoublePrecision,
     Date,
     Time,
     DateTime,
@@ -240,6 +264,64 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::Unique],
+        }
+    }
+}
+
+impl Type {
+    pub fn is_integer_in_bounds(&self, int: &i128) -> bool {
+        let bound = match self {
+            Self::SmallInt => i16::MIN as i128..=i16::MAX as i128,
+            Self::UnsignedSmallInt => u16::MIN as i128..=u16::MAX as i128,
+            Self::Integer => i32::MIN as i128..=i32::MAX as i128,
+            Self::UnsignedInteger => 0..=u32::MAX as i128,
+            Self::BigInteger => i64::MIN as i128..=i64::MAX as i128,
+            Self::UnsignedBigInteger => 0..=u64::MAX as i128,
+            other => panic!("bound checking must be used only for integer: {other:#?}"),
+        };
+
+        bound.contains(int)
+    }
+    pub const fn is_float_in_bounds(&self, float: &f64) -> bool {
+        match self {
+            Self::Real => *float >= f32::MIN as f64 && *float <= f32::MAX as f64,
+            Self::DoublePrecision => float.is_finite(),
+            other => panic!("bound checking must be used only for floats"),
+        }
+    }
+
+    pub const fn is_integer(&self) -> bool {
+        match self {
+            Self::SmallInt
+            | Self::UnsignedSmallInt
+            | Self::Integer
+            | Self::UnsignedInteger
+            | Self::BigInteger
+            | Self::UnsignedBigInteger => true,
+            _ => self.is_serial(),
+        }
+    }
+
+    pub const fn is_serial(&self) -> bool {
+        match self {
+            Self::SmallSerial | Self::Serial | Self::BigSerial => true,
+            _ => false,
+        }
+    }
+
+    pub const fn is_float(&self) -> bool {
+        match self {
+            Self::Real | Self::DoublePrecision => true,
+            _ => false,
+        }
+    }
+
+    pub const fn max(&self) -> usize {
+        match self {
+            Self::SmallSerial => 32767usize,
+            Self::Serial => 2147483647usize,
+            Self::BigSerial => 9223372036854775807usize,
+            _ => panic!("MAX function is meant to be used only for serial types"),
         }
     }
 }
@@ -349,57 +431,43 @@ impl Default for Expression {
     }
 }
 
-impl PartialOrd for Value {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+impl Value {
+    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
         match (self, other) {
-            (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
-            (Value::String(a), Value::String(b)) => a.partial_cmp(b),
-            (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
+            (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),
+            (Value::Float(a), Value::Float(b)) => Some((*a, *b)),
+            (Value::Number(a), Value::Float(b)) => Some((*a as f64, *b)),
+            (Value::Float(a), Value::Number(b)) => Some((*a, *b as f64)),
             _ => None,
         }
     }
 }
 
-impl Type {
-    pub fn is_integer_in_bounds(&self, int: &i128) -> bool {
-        let bound = match self {
-            Self::SmallInt => i16::MIN as i128..=i16::MAX as i128,
-            Self::UnsignedSmallInt => u16::MIN as i128..=u16::MAX as i128,
-            Self::Integer => i32::MIN as i128..=i32::MAX as i128,
-            Self::UnsignedInteger => 0..=u32::MAX as i128,
-            Self::BigInteger => i64::MIN as i128..=i64::MAX as i128,
-            Self::UnsignedBigInteger => 0..=u64::MAX as i128,
-            other => panic!("bound checking must be used only for integer: {other:#?}"),
-        };
-
-        bound.contains(int)
-    }
-
-    pub const fn is_integer(&self) -> bool {
-        match self {
-            Self::SmallInt
-            | Self::UnsignedSmallInt
-            | Self::Integer
-            | Self::UnsignedInteger
-            | Self::BigInteger
-            | Self::UnsignedBigInteger => true,
-            _ => self.is_serial(),
-        }
-    }
-
-    pub const fn is_serial(&self) -> bool {
-        match self {
-            Self::SmallSerial | Self::Serial | Self::BigSerial => true,
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            // we do this because we can coerce them later to do a comparison between floats and
+            // integers
+            (Value::Number(a), Value::Float(b)) => (*a as f64) == *b,
+            (Value::Float(a), Value::Number(b)) => *a == (*b as f64),
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::Temporal(a), Value::Temporal(b)) => a == b,
             _ => false,
         }
     }
+}
 
-    pub const fn max(&self) -> usize {
-        match self {
-            Self::SmallSerial => 32767usize,
-            Self::Serial => 2147483647usize,
-            Self::BigSerial => 9223372036854775807usize,
-            _ => panic!("MAX function is meant to be used only for serial types"),
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
+            (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
+            (Value::String(a), Value::String(b)) => a.partial_cmp(b),
+            (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
+            _ => None,
         }
     }
 }
@@ -488,6 +556,8 @@ impl Display for Type {
             Type::SmallSerial => f.write_str("SMALLSERIAL"),
             Type::Serial => f.write_str("SERIAL"),
             Type::BigSerial => f.write_str("BIGSERIAL"),
+            Type::Real => f.write_str("REAL"),
+            Type::DoublePrecision => f.write_str("DOUBLE PRECISION"),
             Type::DateTime => f.write_str("TIMESTAMP"),
             Type::Time => f.write_str("TIME"),
             Type::Date => f.write_str("DATE"),
@@ -501,6 +571,7 @@ impl Display for Value {
         match self {
             Value::String(string) => write!(f, "\"{string}\""),
             Value::Number(number) => write!(f, "{number}"),
+            Value::Float(float) => write!(f, "{float}"),
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
         }

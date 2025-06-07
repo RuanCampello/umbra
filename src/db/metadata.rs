@@ -26,15 +26,18 @@ pub(crate) struct TableMetadata {
     pub(in crate::db) row_id: RowId,
 }
 
+/// The information we know about the table indexes during runtime.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct IndexMetadata {
     pub root: PageNumber,
     pub name: String,
     pub column: Column,
     pub schema: Schema,
+    /// This is an illusion because we only support `UNIQUE` indexes :)
     pub(crate) unique: bool,
 }
 
+/// The data we need to know about the table sequences during runtime.
 #[derive(Debug)]
 pub(crate) struct SequenceMetadata {
     pub root: PageNumber,
@@ -43,6 +46,8 @@ pub(crate) struct SequenceMetadata {
     pub data_type: Type,
 }
 
+/// That our dispatch for relation types.
+/// Some [planners](crate::vm::planner::Planner) need to deal with table Btrees and index Btrees but we only know which at runtime.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Relation {
     Index(IndexMetadata),

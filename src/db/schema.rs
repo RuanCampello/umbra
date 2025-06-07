@@ -2,6 +2,7 @@ use crate::db::ROW_COL_ID;
 use crate::sql::statement::{Column, Constraint, Type};
 use std::collections::HashMap;
 
+/// The representation of the table schema during runtime.
 #[derive(Debug, PartialEq, Clone)]
 pub struct Schema {
     pub columns: Vec<Column>,
