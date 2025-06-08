@@ -157,7 +157,7 @@ impl Database<File> {
 }
 
 impl<File: Seek + Read + Write + FileOperations> Database<File> {
-    pub(crate) fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
+    pub fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
         let (schema, mut prepared) = self.prepare(input)?;
         let mut query_set = QuerySet::new(schema, vec![]);
         let mut total_size = 0;

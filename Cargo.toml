@@ -12,4 +12,8 @@ members = ["usql"]
 
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["html_reports"] }
-fake = "4.3.0"
+fake = {version = "4.3.0", features = ["derive", "chrono"] }
+
+[[bench]]
+name = "db_benchmark"
+harness = false
