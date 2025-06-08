@@ -9,3 +9,7 @@ libc ="0.2.172"
 
 [workspace]
 members = ["usql"]
+
+[dev-dependencies]
+criterion = { version = "0.6.0", features = ["html_reports"] }
+fake = "4.3.0"

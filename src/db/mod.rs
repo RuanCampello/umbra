@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 
 #[derive(Debug)]
-pub(crate) struct Database<File> {
+pub struct Database<File> {
     pub(crate) pager: Rc<RefCell<Pager<File>>>,
     pub(crate) context: Context,
     pub(crate) work_dir: PathBuf,
