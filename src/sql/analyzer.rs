@@ -320,8 +320,6 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
                 (col_type, operator, &**expr)
             {
-                println!("operation {operator:#?}, value {value:#?}");
-
                 match value {
                     Value::Number(num) => {
                         analyze_number(&-num, data_type)?;

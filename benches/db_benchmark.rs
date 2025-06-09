@@ -98,6 +98,10 @@ where
 }
 
 fn insert_benchmark(c: &mut Criterion) {
+    fn escape_sql_string(input: &str) -> String {
+        input.replace('\'', "''")
+    }
+
     with_disk_database_mut(|db| {
         let mut group = c.benchmark_group("Insert");
         db.exec(CREATE_TABLE)
@@ -113,7 +117,7 @@ fn insert_benchmark(c: &mut Criterion) {
                     longitude,
                     latitude,
                     mac_address,
-                    country,
+                    mut country,
                     zip_code,
                     bio,
                     preferences,
@@ -123,6 +127,7 @@ fn insert_benchmark(c: &mut Criterion) {
                     signup_ts,
                     user_agent,
                 } = record;
+                country = country.replace("'", "");
 
                 let insert_query = format!(
                     "INSERT INTO records (
@@ -131,11 +136,10 @@ fn insert_benchmark(c: &mut Criterion) {
                     mac_address, user_agent, preferences, notes
                 ) VALUES (
                     '{username}', '{email}', '{signup_ts}', '{last_login_ts}', {is_active}, '{bio}',
-                    '{zip_code}', '{country}', {latitude}, {longitude:6}, '{ip_address:6}',
+                    '{zip_code}', '{country}', {latitude}, {longitude}, '{ip_address}',
                     '{mac_address}', '{user_agent}', '{preferences}', '{notes}'
                 );"
                 );
-                println!("insert query {insert_query}");
 
                 db.exec(insert_query.as_str())
                     .expect("Could not insert into database");
