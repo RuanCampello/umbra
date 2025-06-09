@@ -9,7 +9,7 @@ use fake::{
     },
     Dummy, Fake, Faker,
 };
-
+use rusqlite::Connection;
 use std::{cell::RefCell, fs::File};
 use umbra::db::Database;
 
@@ -88,7 +88,6 @@ where
     DISK_DB.with(|cell| {
         let mut borrowed = cell.borrow_mut();
         if borrowed.is_none() {
-            let _ = std::fs::remove_file("benchmark.db");
             *borrowed = Some(
                 Database::init("benchmark.db").expect("Could not initialise benchmark database"),
             );
@@ -98,39 +97,38 @@ where
 }
 
 fn insert_benchmark(c: &mut Criterion) {
-    fn escape_sql_string(input: &str) -> String {
-        input.replace('\'', "''")
-    }
-
     with_disk_database_mut(|db| {
         let mut group = c.benchmark_group("Insert");
+
         db.exec(CREATE_TABLE)
             .expect("Could not create the table for benchmark");
+        let conn = Connection::open("benchmark_sqlite.db")
+            .expect("Could not initialise benchmark database for sqlite");
+        conn.execute(CREATE_TABLE, [])
+            .expect("Could not create the table for sqlite benchmark");
 
-        group.bench_function("single_insert", |b| {
-            b.iter(|| {
-                let record: Record = Faker.fake();
-                let Record {
-                    username,
-                    email,
-                    ip_address,
-                    longitude,
-                    latitude,
-                    mac_address,
-                    mut country,
-                    zip_code,
-                    bio,
-                    preferences,
-                    is_active,
-                    notes,
-                    last_login_ts,
-                    signup_ts,
-                    user_agent,
-                } = record;
-                country = country.replace("'", "");
+        let record: Record = Faker.fake();
+        let Record {
+            username,
+            email,
+            ip_address,
+            longitude,
+            latitude,
+            mac_address,
+            mut country,
+            zip_code,
+            bio,
+            preferences,
+            is_active,
+            notes,
+            last_login_ts,
+            signup_ts,
+            user_agent,
+        } = record;
+        country = country.replace("'", "");
 
-                let insert_query = format!(
-                    "INSERT INTO records (
+        let insert_query = format!(
+            "INSERT INTO records (
                     username, email, signup_ts, last_login_ts, is_active, bio,
                     zip_code, country, latitude, longitude, ip_address,
                     mac_address, user_agent, preferences, notes
@@ -139,11 +137,20 @@ fn insert_benchmark(c: &mut Criterion) {
                     '{zip_code}', '{country}', {latitude}, {longitude}, '{ip_address}',
                     '{mac_address}', '{user_agent}', '{preferences}', '{notes}'
                 );"
-                );
+        );
 
+        group.bench_function("single_insert", |b| {
+            b.iter(|| {
                 db.exec(insert_query.as_str())
                     .expect("Could not insert into database");
             });
+        });
+
+        group.bench_function("single_insert_sqlite", |b| {
+            b.iter(|| {
+                conn.execute(insert_query.as_str(), [])
+                    .expect("Could not insert into sqlite database");
+            })
         });
     })
 }
