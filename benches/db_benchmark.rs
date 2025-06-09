@@ -104,22 +104,41 @@ fn insert_benchmark(c: &mut Criterion) {
             .expect("Could not create the table for benchmark");
 
         group.bench_function("single_insert", |b| {
-           b.iter(|| {
-               let record: Record = Faker.fake();
-               let Record { 
-                   username, email, ip_address, longitude, latitude, mac_address, country, zip_code, bio, preferences, is_active,notes, last_login_ts, signup_ts, user_agent
-               } = record;
+            b.iter(|| {
+                let record: Record = Faker.fake();
+                let Record {
+                    username,
+                    email,
+                    ip_address,
+                    longitude,
+                    latitude,
+                    mac_address,
+                    country,
+                    zip_code,
+                    bio,
+                    preferences,
+                    is_active,
+                    notes,
+                    last_login_ts,
+                    signup_ts,
+                    user_agent,
+                } = record;
 
-                let insert_query = format!(r#"
-                INSERT INTO records (
+                let insert_query = format!(
+                    "INSERT INTO records (
                     username, email, signup_ts, last_login_ts, is_active, bio,
                     zip_code, country, latitude, longitude, ip_address,
                     mac_address, user_agent, preferences, notes
-                ) VALUES ({username}, {email}, {signup_ts}, {last_login_ts}, {is_active}, {bio}, {zip_code}, {country}, {latitude}, {longitude}, {ip_address}, {mac_address}, {user_agent}, {preferences}, {notes});
-                "#);
+                ) VALUES (
+                    '{username}', '{email}', '{signup_ts}', '{last_login_ts}', {is_active}, '{bio}',
+                    '{zip_code}', '{country}', {latitude}, {longitude}, '{ip_address}',
+                    '{mac_address}', '{user_agent}', '{preferences}', '{notes}'
+                );"
+                );
 
-                db.exec(insert_query.as_str()).expect("Could not insert into database");
-           });
+                db.exec(insert_query.as_str())
+                    .expect("Could not insert into database");
+            });
         });
     })
 }

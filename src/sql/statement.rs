@@ -546,7 +546,7 @@ impl Display for Assignment {
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Boolean => f.write_str("BOOL"),
+            Type::Boolean => f.write_str("BOOLEAN"),
             Type::SmallInt => f.write_str("SMALLINT"),
             Type::UnsignedSmallInt => f.write_str("SMALLINT UNSIGNED"),
             Type::Integer => f.write_str("INT"),
