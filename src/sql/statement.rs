@@ -5,8 +5,10 @@
 #![allow(unused)]
 
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::vm::expression::TypeError;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
+use std::ops::Neg;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -468,6 +470,20 @@ impl PartialOrd for Value {
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             _ => None,
+        }
+    }
+}
+
+impl Neg for Value {
+    type Output = Result<Self, TypeError>;
+    fn neg(self) -> Self::Output {
+        match self {
+            Value::Number(num) => Ok(Value::Number(-num)),
+            Value::Float(float) => Ok(Value::Float(-float)),
+            v => Err(TypeError::CannotApplyUnary {
+                operator: UnaryOperator::Minus,
+                value: v,
+            }),
         }
     }
 }

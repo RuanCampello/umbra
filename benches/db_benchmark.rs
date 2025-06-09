@@ -131,10 +131,11 @@ fn insert_benchmark(c: &mut Criterion) {
                     mac_address, user_agent, preferences, notes
                 ) VALUES (
                     '{username}', '{email}', '{signup_ts}', '{last_login_ts}', {is_active}, '{bio}',
-                    '{zip_code}', '{country}', {latitude}, {longitude}, '{ip_address}',
+                    '{zip_code}', '{country}', {latitude}, {longitude:6}, '{ip_address:6}',
                     '{mac_address}', '{user_agent}', '{preferences}', '{notes}'
                 );"
                 );
+                println!("insert query {insert_query}");
 
                 db.exec(insert_query.as_str())
                     .expect("Could not insert into database");

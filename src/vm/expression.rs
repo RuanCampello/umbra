@@ -3,6 +3,7 @@ use crate::db::{Schema, SqlError};
 use crate::sql::statement::{BinaryOperator, Expression, Type, UnaryOperator, Value};
 use std::fmt::{Display, Formatter};
 use std::mem;
+use std::ops::Neg;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
@@ -48,20 +49,11 @@ pub(crate) fn resolve_expression<'exp>(
             None => Err(SqlError::InvalidColumn(ident.clone())),
         },
         Expression::UnaryOperation { operator, expr } => {
-            match resolve_expression(val, schema, expr)? {
-                Value::Number(mut num) => {
-                    if let UnaryOperator::Minus = operator {
-                        num = -num;
-                    }
-
-                    Ok(Value::Number(num))
-                }
-
-                value => Err(SqlError::Type(TypeError::CannotApplyUnary {
-                    operator: *operator,
-                    value,
-                })),
-            }
+            let value = resolve_expression(val, schema, expr)?;
+            Ok(match operator {
+                UnaryOperator::Minus => value.neg()?.into(),
+                _ => value,
+            })
         }
         Expression::BinaryOperation {
             left,

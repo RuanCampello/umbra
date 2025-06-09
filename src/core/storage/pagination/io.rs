@@ -17,7 +17,7 @@ pub(in crate::core::storage::pagination) struct BlockIo<IO> {
 const DEVELOPMENT_IO_LIMIT: usize = 150 << 20;
 
 /// Generic file-related operations that are not implemented by [`io`].
-pub(crate) trait FileOperations {
+pub trait FileOperations {
     fn create(path: impl AsRef<Path>) -> io::Result<Self>
     where
         Self: Sized;

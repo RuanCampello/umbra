@@ -2205,4 +2205,20 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn insert_negative_floats() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE location (id BIGSERIAL PRIMARY KEY, name VARCHAR(255), lat REAL, lon REAL);")?;
+
+        db.exec(
+            r#"
+            INSERT INTO location (name, lat, lon) VALUES
+            ('Rio de Janeiro, Brazil', -22.906847, -43.172897),
+            ('London, United Kingdom', 51.507351, -0.127758);
+        "#,
+        )?;
+
+        Ok(())
+    }
 }

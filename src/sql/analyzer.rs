@@ -278,6 +278,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 _ => unreachable!("this type is not defined for analyze_expression"),
             }
         }
+
         Expression::BinaryOperation {
             operator,
             left,
@@ -319,6 +320,8 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
                 (col_type, operator, &**expr)
             {
+                println!("operation {operator:#?}, value {value:#?}");
+
                 match value {
                     Value::Number(num) => {
                         analyze_number(&-num, data_type)?;
@@ -805,6 +808,28 @@ mod tests {
                 found,
             }
             .into()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn minus_uniary_operation() -> AnalyzerResult {
+        const CTX: &str =
+            "CREATE TABLE measurements ( id INT PRIMARY KEY, temperature REAL, altitude INT);";
+
+        let sql = r#"
+            INSERT INTO measurements (id, temperature, altitude) VALUES
+                (1, -12.5, -100),
+                (2, 0.0, 0),
+                (3, 23.7, 500),
+                (4, -22.906847, -43),
+                (5, 10.5, -250);
+            "#;
+
+        Analyze {
+            ctx: &[CTX],
+            sql,
+            expected: Ok(()),
         }
         .assert()
     }
