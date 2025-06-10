@@ -10,7 +10,7 @@ use fake::{
     Dummy, Fake, Faker,
 };
 use rusqlite::Connection;
-use std::{cell::RefCell, fs::File};
+use std::{cell::RefCell, fs::File, hint::black_box};
 use umbra::db::Database;
 
 thread_local! {
@@ -135,7 +135,7 @@ fn insert_benchmark(c: &mut Criterion) {
 
         group.bench_function("single_insert", |b| {
             b.iter(|| {
-                db.exec(&insert_query)
+                db.exec(black_box(&insert_query))
                     .expect("Could not insert into database")
             });
         });
@@ -153,7 +153,7 @@ fn insert_benchmark(c: &mut Criterion) {
     group.bench_function("single_insert_sqlite", |b| {
         b.iter(|| {
             connection
-                .execute(insert_query.as_str(), [])
+                .execute(black_box(&insert_query), [])
                 .expect("Could not insert into sqlite database")
         })
     });
