@@ -98,6 +98,7 @@ where
 
 fn insert_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("Insert");
+    group.throughput(criterion::Throughput::Elements(1));
 
     let record: Record = Faker.fake();
     let Record {
