@@ -9,7 +9,7 @@ use fake::{
     },
     Dummy, Fake, Faker,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, ToSql};
 use std::{cell::RefCell, fs::File, hint::black_box};
 use umbra::db::Database;
 
@@ -101,44 +101,11 @@ fn insert_benchmark(c: &mut Criterion) {
     group.throughput(criterion::Throughput::Elements(1));
 
     let record: Record = Faker.fake();
-    let Record {
-        username,
-        email,
-        ip_address,
-        longitude,
-        latitude,
-        mac_address,
-        mut country,
-        zip_code,
-        bio,
-        preferences,
-        is_active,
-        notes,
-        last_login_ts,
-        signup_ts,
-        user_agent,
-    } = record;
-    country = country.replace("'", "");
-    let insert_query = format!(
-        "INSERT INTO records (
-            username, email, signup_ts, last_login_ts, is_active, bio,
-            zip_code, country, latitude, longitude, ip_address,
-            mac_address, user_agent, preferences, notes
-        ) VALUES (
-            '{username}', '{email}', '{signup_ts}', '{last_login_ts}', {is_active}, '{bio}',
-            '{zip_code}', '{country}', {latitude}, {longitude}, '{ip_address}',
-            '{mac_address}', '{user_agent}', '{preferences}', '{notes}'
-        );"
-    );
-
     with_disk_database_mut(|db| {
         db.exec(CREATE_TABLE).expect("Could not create table");
 
         group.bench_function("single_insert", |b| {
-            b.iter(|| {
-                db.exec(black_box(&insert_query))
-                    .expect("Could not insert into database")
-            });
+            b.iter(|| insert_record(db, &record));
         });
 
         db.exec("DROP TABLE records;")
@@ -152,11 +119,7 @@ fn insert_benchmark(c: &mut Criterion) {
         .expect("Could not create sqlite table");
 
     group.bench_function("single_insert_sqlite", |b| {
-        b.iter(|| {
-            connection
-                .execute(black_box(&insert_query), [])
-                .expect("Could not insert into sqlite database")
-        })
+        b.iter(|| insert_record_sqlite(&connection, &record))
     });
 
     connection
@@ -164,5 +127,120 @@ fn insert_benchmark(c: &mut Criterion) {
         .expect("Could not drop table after benchmark");
 }
 
-criterion_group!(benches, insert_benchmark);
+fn select_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Select");
+    let records: Vec<Record> = (0..1000).map(|_| Faker.fake()).collect();
+
+    const QUERY: &str = r#"
+        SELECT * FROM records 
+        WHERE is_active = true 
+        AND (country = 'United States' OR country = 'Canada' OR country = 'United Kingdom')
+        AND signup_ts > '2023-01-01'
+        AND latitude > 20.0 AND latitude < 50.0;
+    "#;
+
+    with_disk_database_mut(|db| {
+        db.exec(CREATE_TABLE).expect("Table creation failed");
+        records.iter().for_each(|record| insert_record(db, record));
+
+        group.bench_function("select_with_filters", |b| {
+            b.iter(|| {
+                db.exec(black_box(QUERY))
+                    .expect("Failed to select from database");
+            });
+        });
+        db.exec("DROP TABLE records;").expect("Failed to cleanup");
+    });
+
+    let connection = Connection::open("benchmark-sqlite.db")
+        .expect("Could not initialise benchmark database for sqlite");
+    connection
+        .execute(CREATE_TABLE, [])
+        .expect("Could not create sqlite table");
+
+    records
+        .iter()
+        .for_each(|record| insert_record_sqlite(&connection, &record));
+
+    group.bench_function("select_with_filters_sqlite", |b| {
+        b.iter(|| {
+            connection
+                .execute(QUERY, [])
+                .expect("Failed to select from sqlite database");
+        });
+    });
+    connection
+        .execute("DORP TABLE records;", [])
+        .expect("Failed to cleanup");
+}
+
+fn insert_record(db: &mut Database<File>, record: &Record) {
+    let Record {
+        username,
+        email,
+        signup_ts,
+        last_login_ts,
+        is_active,
+        bio,
+        zip_code,
+        country,
+        latitude,
+        longitude,
+        ip_address,
+        mac_address,
+        user_agent,
+        preferences,
+        notes,
+    } = record;
+    let country = country.replace("'", "");
+
+    let input = format!(
+        "INSERT INTO records (
+            username, email, signup_ts, last_login_ts, is_active, bio,
+            zip_code, country, latitude, longitude, ip_address,
+            mac_address, user_agent, preferences, notes
+        ) VALUES (
+            '{username}', '{email}', '{signup_ts}', '{last_login_ts}', {is_active}, '{bio}',
+            '{zip_code}', '{country}', {latitude}, {longitude}, '{ip_address}',
+            '{mac_address}', '{user_agent}', '{preferences}', '{notes}'
+        );"
+    );
+
+    db.exec(input.as_str())
+        .expect("Failed to insert into database table");
+}
+
+fn insert_record_sqlite(conn: &Connection, record: &Record) {
+    conn.execute(
+        "INSERT INTO records (
+            username, email, signup_ts, last_login_ts, is_active, bio,
+            zip_code, country, latitude, longitude, ip_address,
+            mac_address, user_agent, preferences, notes
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6,
+            ?7, ?8, ?9, ?10, ?11,
+            ?12, ?13, ?14, ?15
+        )",
+        [
+            &record.username,
+            &record.email,
+            &record.signup_ts,
+            &record.last_login_ts,
+            &record.is_active.to_string(),
+            &record.bio,
+            &record.zip_code,
+            &record.country,
+            &record.latitude.to_string(),
+            &record.longitude.to_string(),
+            &record.ip_address,
+            &record.mac_address,
+            &record.user_agent,
+            &record.preferences,
+            &record.notes,
+        ],
+    )
+    .expect("Insert failed");
+}
+
+criterion_group!(benches, insert_benchmark, select_benchmark);
 criterion_main!(benches);
