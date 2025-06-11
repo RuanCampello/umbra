@@ -9,7 +9,7 @@ use fake::{
     },
     Dummy, Fake, Faker,
 };
-use rusqlite::{Connection, ToSql};
+use rusqlite::Connection;
 use std::{cell::RefCell, fs::File, hint::black_box};
 use umbra::db::Database;
 
