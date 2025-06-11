@@ -117,7 +117,7 @@ pub enum Expression {
 /// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level.
 ///
 /// Values of this type are stored in the `Value::Temporal` variant.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub enum Temporal {
     Date(NaiveDate),
     DateTime(NaiveDateTime),
@@ -469,7 +469,8 @@ impl PartialOrd for Value {
             (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
-            _ => None,
+            (Value::Temporal(a), Value::Temporal(b)) => a.partial_cmp(b),
+            _ => panic!("those values are not comparable"),
         }
     }
 }

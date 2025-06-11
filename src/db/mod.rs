@@ -2248,8 +2248,15 @@ mod tests {
             "#,
         )?;
 
-        let query = db.exec("SELECT id FROM temporal_data WHERE event_time > '00:00:00';")?;
-        assert_eq!(query.tuples, vec![vec![Value::Number(2), Value::Number(4)]]);
+        let query =
+            db.exec("SELECT event_name FROM temporal_data WHERE event_time > '00:00:00';")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("Future Event".into())],
+                vec![Value::String("Midday".into())]
+            ]
+        );
 
         Ok(())
     }

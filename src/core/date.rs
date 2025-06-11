@@ -554,14 +554,18 @@ mod tests {
 
     #[test]
     fn test_time_ordering() {
+        let time0 = NaiveTime::parse_str("00:00:00").unwrap();
         let time1 = NaiveTime::new(12, 0, 0).unwrap();
         let time2 = NaiveTime::new(13, 0, 0).unwrap();
         let time3 = NaiveTime::new(12, 0, 0).unwrap();
+        let time4 = NaiveTime::parse_str("10:01:23").unwrap();
 
+        assert!(time0 < time1);
         assert!(time1 < time2);
         assert!(time2 > time1);
         assert!(time1 <= time3);
         assert!(time1 >= time3);
+        assert!(time4 > time0);
         assert_eq!(time1.partial_cmp(&time2), Some(std::cmp::Ordering::Less));
         assert_eq!(time1.partial_cmp(&time3), Some(std::cmp::Ordering::Equal));
     }
