@@ -10,7 +10,7 @@ use fake::{
     Dummy, Fake, Faker,
 };
 use rusqlite::Connection;
-use std::{cell::RefCell, fs::File, hint::black_box};
+use std::{cell::RefCell, fs::File};
 use umbra::db::Database;
 
 thread_local! {
@@ -127,53 +127,57 @@ fn insert_benchmark(c: &mut Criterion) {
         .expect("Could not drop table after benchmark");
 }
 
-fn select_benchmark(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Select");
-    let records: Vec<Record> = (0..1000).map(|_| Faker.fake()).collect();
-
-    const QUERY: &str = r#"
-        SELECT * FROM records 
-        WHERE is_active = true 
-        AND (country = 'United States' OR country = 'Canada' OR country = 'United Kingdom')
-        AND signup_ts > '2023-01-01'
-        AND latitude > 20.0 AND latitude < 50.0;
-    "#;
-
-    with_disk_database_mut(|db| {
-        db.exec(CREATE_TABLE).expect("Table creation failed");
-        records.iter().for_each(|record| insert_record(db, record));
-
-        group.bench_function("select_with_filters", |b| {
-            b.iter(|| {
-                db.exec(black_box(QUERY))
-                    .expect("Failed to select from database");
-            });
-        });
-        db.exec("DROP TABLE records;").expect("Failed to cleanup");
-    });
-
-    let connection = Connection::open("benchmark-sqlite.db")
-        .expect("Could not initialise benchmark database for sqlite");
-    connection
-        .execute(CREATE_TABLE, [])
-        .expect("Could not create sqlite table");
-
-    records
-        .iter()
-        .for_each(|record| insert_record_sqlite(&connection, &record));
-
-    group.bench_function("select_with_filters_sqlite", |b| {
-        b.iter(|| {
-            connection
-                .execute(QUERY, [])
-                .expect("Failed to select from sqlite database");
-        });
-    });
-    connection
-        .execute("DROP TABLE records;", [])
-        .expect("Failed to cleanup");
-}
-
+// we must have a `COUNT` function to make it fair
+//fn select_benchmark(c: &mut Criterion) {
+//    let mut group = c.benchmark_group("Select");
+//    let records: Vec<Record> = (0..1000).map(|_| Faker.fake()).collect();
+//    let (mut umbra_len, mut sqlite_len) = (0, 0);
+//
+//    const QUERY: &str = r#"
+//        SELECT * FROM records
+//        WHERE is_active = true
+//        AND (country = 'United States' OR country = 'Canada' OR country = 'United Kingdom')
+//        AND signup_ts > '2023-01-01'
+//        AND latitude > 20.0 AND latitude < 50.0;
+//    "#;
+//
+//    with_disk_database_mut(|db| {
+//        db.exec(CREATE_TABLE).expect("Table creation failed");
+//        records.iter().for_each(|record| insert_record(db, record));
+//
+//        group.bench_function("select_with_filters", |b| {
+//            b.iter(|| {
+//                let query = db.exec(QUERY).expect("Failed to select from database");
+//                umbra_len = query.tuples.len();
+//            });
+//        });
+//        db.exec("DROP TABLE records;").expect("Failed to cleanup");
+//    });
+//
+//    let connection = Connection::open("benchmark-sqlite.db")
+//        .expect("Could not initialise benchmark database for sqlite");
+//    connection
+//        .execute(CREATE_TABLE, [])
+//        .expect("Could not create sqlite table");
+//
+//    records
+//        .iter()
+//        .for_each(|record| insert_record_sqlite(&connection, &record));
+//
+//    group.bench_function("select_with_filters_sqlite", |b| {
+//        b.iter(|| {
+//            sqlite_len = connection
+//                .execute(QUERY, [])
+//                .expect("Failed to select from sqlite database");
+//        });
+//    });
+//    connection
+//        .execute("DROP TABLE records;", [])
+//        .expect("Failed to cleanup");
+//
+//    assert_eq!(umbra_len, sqlite_len);
+//}
+//
 fn insert_record(db: &mut Database<File>, record: &Record) {
     let Record {
         username,
@@ -242,5 +246,5 @@ fn insert_record_sqlite(conn: &Connection, record: &Record) {
     .expect("Insert failed");
 }
 
-criterion_group!(benches, insert_benchmark, select_benchmark);
+criterion_group!(benches, insert_benchmark);
 criterion_main!(benches);
