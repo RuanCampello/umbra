@@ -2221,4 +2221,36 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn date_ordering() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE temporal_data (
+                id SERIAL PRIMARY KEY,
+                event_name VARCHAR(100),
+                event_datetime TIMESTAMP,
+                event_date DATE,
+                event_time TIME
+            );
+        "#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO temporal_data (event_name, event_datetime, event_date, event_time) 
+            VALUES
+                ('Unix Epoch', '1970-01-01 00:00:00', '1970-01-01', '00:00:00'),
+                ('Future Event', '2025-04-20 10:01:23', '2025-04-20', '10:01:23'),
+                ('WWI Start', '1914-06-28 00:00:00', '1914-06-28', '00:00:00'),
+                ('Midday', '2023-01-01 12:00:00', '2023-01-01', '12:00:00'),
+                ('Midnight', '2023-01-01 00:00:00', '2023-01-01', '00:00:00');
+            "#,
+        )?;
+
+        let query = db.exec("SELECT id FROM temporal_data WHERE event_time > '00:00:00';")?;
+        assert_eq!(query.tuples, vec![vec![Value::Number(2), Value::Number(4)]]);
+
+        Ok(())
+    }
 }
