@@ -170,7 +170,7 @@ fn select_benchmark(c: &mut Criterion) {
         });
     });
     connection
-        .execute("DORP TABLE records;", [])
+        .execute("DROP TABLE records;", [])
         .expect("Failed to cleanup");
 }
 
