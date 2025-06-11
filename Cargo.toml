@@ -9,3 +9,12 @@ libc ="0.2.172"
 
 [workspace]
 members = ["usql"]
+
+[dev-dependencies]
+criterion = { version = "0.6.0", features = ["html_reports"] }
+fake = {version = "4.3.0", features = ["derive", "chrono"] }
+rusqlite = "0.36.0"
+
+[[bench]]
+name = "db_benchmark"
+harness = false

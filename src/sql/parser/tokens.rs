@@ -192,7 +192,7 @@ impl Keyword {
             Self::Precision => "PRECISION",
             Self::Unsigned => "UNSIGNED",
             Self::Varchar => "VARCHAR",
-            Self::Bool => "BOOL",
+            Self::Bool => "BOOLEAN",
             Self::True => "TRUE",
             Self::False => "FALSE",
             Self::Index => "INDEX",

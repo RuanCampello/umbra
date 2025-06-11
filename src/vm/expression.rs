@@ -1,8 +1,9 @@
 use crate::core::date::DateParseError;
 use crate::db::{Schema, SqlError};
-use crate::sql::statement::{BinaryOperator, Expression, Type, UnaryOperator, Value};
+use crate::sql::statement::{BinaryOperator, Expression, Temporal, Type, UnaryOperator, Value};
 use std::fmt::{Display, Formatter};
 use std::mem;
+use std::ops::Neg;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
@@ -48,20 +49,11 @@ pub(crate) fn resolve_expression<'exp>(
             None => Err(SqlError::InvalidColumn(ident.clone())),
         },
         Expression::UnaryOperation { operator, expr } => {
-            match resolve_expression(val, schema, expr)? {
-                Value::Number(mut num) => {
-                    if let UnaryOperator::Minus = operator {
-                        num = -num;
-                    }
-
-                    Ok(Value::Number(num))
-                }
-
-                value => Err(SqlError::Type(TypeError::CannotApplyUnary {
-                    operator: *operator,
-                    value,
-                })),
-            }
+            let value = resolve_expression(val, schema, expr)?;
+            Ok(match operator {
+                UnaryOperator::Minus => value.neg()?.into(),
+                _ => value,
+            })
         }
         Expression::BinaryOperation {
             left,
@@ -164,6 +156,14 @@ fn try_coerce(left: Value, right: Value) -> (Value, Value) {
     match (&left, &right) {
         (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
         (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
+        (Value::String(string), Value::Temporal(_)) => match Temporal::try_from(string.as_str()) {
+            Ok(parsed) => (Value::Temporal(parsed), right),
+            Err(_) => (left, right),
+        },
+        (Value::Temporal(_), Value::String(string)) => match Temporal::try_from(string.as_str()) {
+            Ok(parsed) => (left, Value::Temporal(parsed)),
+            Err(_) => (left, right),
+        },
         _ => (left, right),
     }
 }
@@ -185,6 +185,7 @@ impl PartialEq for VmType {
         match (self, other) {
             // we do this for coercion properties
             (VmType::Float, VmType::Number) | (VmType::Number, VmType::Float) => true,
+            (VmType::String, VmType::Date) | (VmType::Date, VmType::String) => true,
             _ => mem::discriminant(self) == mem::discriminant(other),
         }
     }

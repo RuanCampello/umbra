@@ -5,8 +5,10 @@
 #![allow(unused)]
 
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::vm::expression::TypeError;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
+use std::ops::Neg;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -115,7 +117,7 @@ pub enum Expression {
 /// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level.
 ///
 /// Values of this type are stored in the `Value::Temporal` variant.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub enum Temporal {
     Date(NaiveDate),
     DateTime(NaiveDateTime),
@@ -467,7 +469,22 @@ impl PartialOrd for Value {
             (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
-            _ => None,
+            (Value::Temporal(a), Value::Temporal(b)) => a.partial_cmp(b),
+            _ => panic!("those values are not comparable"),
+        }
+    }
+}
+
+impl Neg for Value {
+    type Output = Result<Self, TypeError>;
+    fn neg(self) -> Self::Output {
+        match self {
+            Value::Number(num) => Ok(Value::Number(-num)),
+            Value::Float(float) => Ok(Value::Float(-float)),
+            v => Err(TypeError::CannotApplyUnary {
+                operator: UnaryOperator::Minus,
+                value: v,
+            }),
         }
     }
 }
@@ -546,7 +563,7 @@ impl Display for Assignment {
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Boolean => f.write_str("BOOL"),
+            Type::Boolean => f.write_str("BOOLEAN"),
             Type::SmallInt => f.write_str("SMALLINT"),
             Type::UnsignedSmallInt => f.write_str("SMALLINT UNSIGNED"),
             Type::Integer => f.write_str("INT"),

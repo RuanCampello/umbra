@@ -29,7 +29,7 @@ use std::num::NonZeroI32;
 /// 1. Rust's memory alignment requirements
 /// 2. The following field (`time: NaiveTime`) is 3 bytes
 /// 3. Natural padding added by the compiler for optimal access
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 pub struct NaiveDateTime {
     date: NaiveDate,
     time: NaiveTime,
@@ -45,21 +45,21 @@ pub struct NaiveDateTime {
 ///
 /// Enables efficient storage (four bytes) and operations while avoiding heap allocations.
 /// [`NonZeroI32`] allows [`Option<NaiveDate>`] to be space-optimised.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 pub struct NaiveDate {
     yof: NonZeroI32,
 }
 
 /// Packed time representation, stored in exactly three bytes.
 #[repr(transparent)]
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 pub struct NaiveTime {
     hms: u24,
 }
 
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 struct u24([u8; 3]);
 
 #[allow(clippy::enum_variant_names, dead_code)]
@@ -522,5 +522,51 @@ mod tests {
 
         let date = NaiveDate::parse_str("1914-06-28").unwrap();
         assert_eq!(date.timestamp(), -1751846400);
+    }
+
+    #[test]
+    fn test_datetime_ordering() {
+        let dt1 = NaiveDateTime::parse_str("2023-01-01T00:00:00").unwrap();
+        let dt2 = NaiveDateTime::parse_str("2023-01-02T00:00:00").unwrap();
+        let dt3 = NaiveDateTime::parse_str("2023-01-01T00:00:00").unwrap();
+
+        assert!(dt1 < dt2);
+        assert!(dt2 > dt1);
+        assert!(dt1 <= dt3);
+        assert!(dt1 >= dt3);
+        assert_eq!(dt1.partial_cmp(&dt2), Some(std::cmp::Ordering::Less));
+        assert_eq!(dt1.partial_cmp(&dt3), Some(std::cmp::Ordering::Equal));
+    }
+
+    #[test]
+    fn test_date_ordering() {
+        let date1 = NaiveDate::parse_str("2023-01-01").unwrap();
+        let date2 = NaiveDate::parse_str("2023-01-02").unwrap();
+        let date3 = NaiveDate::parse_str("2023-01-01").unwrap();
+
+        assert!(date1 < date2);
+        assert!(date2 > date1);
+        assert!(date1 <= date3);
+        assert!(date1 >= date3);
+        assert_eq!(date1.partial_cmp(&date2), Some(std::cmp::Ordering::Less));
+        assert_eq!(date1.partial_cmp(&date3), Some(std::cmp::Ordering::Equal));
+    }
+
+    #[test]
+    fn test_time_ordering() {
+        let time0 = NaiveTime::parse_str("00:00:00").unwrap();
+        let time1 = NaiveTime::new(12, 0, 0).unwrap();
+        let time2 = NaiveTime::new(13, 0, 0).unwrap();
+        let time3 = NaiveTime::new(12, 0, 0).unwrap();
+        let time4 = NaiveTime::parse_str("10:01:23").unwrap();
+
+        assert!(time0 < time1);
+        assert!(time1 < time2);
+        assert!(time2 > time1);
+        assert!(time1 <= time3);
+        assert!(time1 >= time3);
+        assert!(time4 > time0);
+        assert_eq!(time1.partial_cmp(&time2), Some(std::cmp::Ordering::Less));
+        assert_eq!(time1.partial_cmp(&time3), Some(std::cmp::Ordering::Equal));
     }
 }

@@ -278,6 +278,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 _ => unreachable!("this type is not defined for analyze_expression"),
             }
         }
+
         Expression::BinaryOperation {
             operator,
             left,
@@ -805,6 +806,50 @@ mod tests {
                 found,
             }
             .into()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn minus_uniary_operation() -> AnalyzerResult {
+        const CTX: &str =
+            "CREATE TABLE measurements (id INT PRIMARY KEY, temperature REAL, altitude INT);";
+
+        let sql = r#"
+            INSERT INTO measurements (id, temperature, altitude) VALUES
+                (1, -12.5, -100),
+                (2, 0.0, 0),
+                (3, 23.7, 500),
+                (4, -22.906847, -43),
+                (5, 10.5, -250);
+            "#;
+
+        Analyze {
+            ctx: &[CTX],
+            sql,
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn ordering_operation_on_temporal() -> AnalyzerResult {
+        const CTX: &str = r#"
+            CREATE TABLE temporal_data (
+                id SERIAL PRIMARY KEY,
+                event_name VARCHAR(100),
+                event_datetime TIMESTAMP,
+                event_date DATE,
+                event_time TIME
+            );
+        "#;
+
+        let sql = "SELECT * FROM temporal_data WHERE event_date < '1970-01-01';";
+
+        Analyze {
+            ctx: &[CTX],
+            sql,
+            expected: Ok(()),
         }
         .assert()
     }

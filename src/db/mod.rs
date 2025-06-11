@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 
 #[derive(Debug)]
-pub(crate) struct Database<File> {
+pub struct Database<File> {
     pub(crate) pager: Rc<RefCell<Pager<File>>>,
     pub(crate) context: Context,
     pub(crate) work_dir: PathBuf,
@@ -157,7 +157,7 @@ impl Database<File> {
 }
 
 impl<File: Seek + Read + Write + FileOperations> Database<File> {
-    pub(crate) fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
+    pub fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
         let (schema, mut prepared) = self.prepare(input)?;
         let mut query_set = QuerySet::new(schema, vec![]);
         let mut total_size = 0;
@@ -2200,6 +2200,61 @@ mod tests {
                     Value::Boolean(true),
                     Value::Boolean(false)
                 ]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_negative_floats() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE location (id BIGSERIAL PRIMARY KEY, name VARCHAR(255), lat REAL, lon REAL);")?;
+
+        db.exec(
+            r#"
+            INSERT INTO location (name, lat, lon) VALUES
+            ('Rio de Janeiro, Brazil', -22.906847, -43.172897),
+            ('London, United Kingdom', 51.507351, -0.127758);
+        "#,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn date_ordering() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE temporal_data (
+                id SERIAL PRIMARY KEY,
+                event_name VARCHAR(100),
+                event_datetime TIMESTAMP,
+                event_date DATE,
+                event_time TIME
+            );
+        "#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO temporal_data (event_name, event_datetime, event_date, event_time) 
+            VALUES
+                ('Unix Epoch', '1970-01-01 00:00:00', '1970-01-01', '00:00:00'),
+                ('Future Event', '2025-04-20 10:01:23', '2025-04-20', '10:01:23'),
+                ('WWI Start', '1914-06-28 00:00:00', '1914-06-28', '00:00:00'),
+                ('Midday', '2023-01-01 12:00:00', '2023-01-01', '12:00:00'),
+                ('Midnight', '2023-01-01 00:00:00', '2023-01-01', '00:00:00');
+            "#,
+        )?;
+
+        let query =
+            db.exec("SELECT event_name FROM temporal_data WHERE event_time > '00:00:00';")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("Future Event".into())],
+                vec![Value::String("Midday".into())]
             ]
         );
 
