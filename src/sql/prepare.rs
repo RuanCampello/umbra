@@ -2,7 +2,7 @@
 
 use crate::db::{Ctx, DatabaseError, ROW_COL_ID};
 
-use super::statement::{Expression, Insert, Select, Statement, Type, Value};
+use super::statement::{Expression, Insert, Select, Statement, Value};
 
 /// Takes a given [statement](crate::sql::statement::Statement) and prepares it to the plan
 /// generation.
@@ -86,11 +86,7 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 .iter()
                 .enumerate()
                 .filter_map(|(idx, col)| {
-                    match matches!(
-                        col.data_type,
-                        Type::SmallSerial | Type::Serial | Type::BigSerial
-                    ) && !columns.contains(&col.name)
-                    {
+                    match col.data_type.is_serial() && !columns.contains(&col.name) {
                         true => Some((idx, col.name.clone())),
                         false => None,
                     }

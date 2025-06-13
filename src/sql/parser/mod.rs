@@ -1202,4 +1202,22 @@ mod tests {
             }))
         )
     }
+
+    #[test]
+    fn test_invalid_between() {
+        let sql = "SELECT amount FROM payments WHERE payment_id BETWEEN 24;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap_err(),
+            ParserError {
+                input: sql.to_string(),
+                location: Location::new(1, 56),
+                kind: ErrorKind::Expected {
+                    expected: Token::Keyword(Keyword::And),
+                    found: Token::Semicolon
+                }
+            }
+        );
+    }
 }

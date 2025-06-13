@@ -2260,4 +2260,70 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn select_with_between() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE invoice (
+                invoice_id     SERIAL PRIMARY KEY,
+                client_id      INTEGER,
+                total          REAL,
+                invoice_date   TIMESTAMP
+            );
+            "#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO invoice (client_id, total, invoice_date) VALUES
+                (101, 55.20, '2023-08-01 09:15:00'),
+                (102, 12.75, '2023-08-02 11:30:45'),
+                (103, 89.90, '2023-08-03 14:05:10'),
+                (104, 10.00, '2023-08-04 10:20:00'),
+                (105, 33.30, '2023-08-05 16:45:30'),
+                (106, 75.00, '2023-08-06 13:55:15'),
+                (107, 9.99,  '2023-08-07 08:00:00');
+            "#,
+        )?;
+
+        let query = db.exec(
+            r#"
+            SELECT
+                client_id, invoice_id, total, invoice_date
+            FROM invoice
+            WHERE
+                invoice_date BETWEEN '2023-08-02' AND '2023-08-06' AND total >= 30
+            ORDER BY invoice_date;
+            "#,
+        )?;
+
+        println!("{query:#?}");
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::Number(103),
+                    Value::Number(3),
+                    Value::Float(89.90),
+                    temporal!("2023-08-03 14:05:10")?
+                ],
+                vec![
+                    Value::Number(105),
+                    Value::Number(5),
+                    Value::Float(33.30),
+                    temporal!("2023-08-05 16:45:30")?
+                ],
+                vec![
+                    Value::Number(106),
+                    Value::Number(6),
+                    Value::Float(75.00),
+                    temporal!("2023-08-06 13:55:15")?
+                ]
+            ]
+        );
+
+        Ok(())
+    }
 }
