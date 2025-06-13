@@ -160,8 +160,15 @@ fn try_coerce(left: Value, right: Value) -> (Value, Value) {
             Ok(parsed) => (Value::Temporal(parsed), right),
             Err(_) => (left, right),
         },
-        (Value::Temporal(_), Value::String(string)) => match Temporal::try_from(string.as_str()) {
-            Ok(parsed) => (left, Value::Temporal(parsed)),
+        (Value::Temporal(from), Value::String(string)) => match Temporal::try_from(string.as_str())
+        {
+            Ok(parsed) => match mem::discriminant(from) == mem::discriminant(&parsed) {
+                true => (left, Value::Temporal(parsed)),
+                false => {
+                    let (left, right) = Temporal::try_coerce(parsed, *from);
+                    (Value::Temporal(left), Value::Temporal(right))
+                }
+            },
             Err(_) => (left, right),
         },
         _ => (left, right),

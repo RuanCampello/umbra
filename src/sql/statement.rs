@@ -117,7 +117,7 @@ pub enum Expression {
 /// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level.
 ///
 /// Values of this type are stored in the `Value::Temporal` variant.
-#[derive(Debug, PartialEq, PartialOrd, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 pub enum Temporal {
     Date(NaiveDate),
     DateTime(NaiveDateTime),
@@ -441,6 +441,18 @@ impl Value {
             (Value::Number(a), Value::Float(b)) => Some((*a as f64, *b)),
             (Value::Float(a), Value::Number(b)) => Some((*a, *b as f64)),
             _ => None,
+        }
+    }
+}
+
+impl Temporal {
+    pub(crate) fn try_coerce(self, other: Self) -> (Self, Self) {
+        match (self, other) {
+            (Self::Time(_), Self::DateTime(timestamp)) => (self, Self::Time(timestamp.into())),
+            (Self::DateTime(timestamp), Self::Time(_)) => (Self::Time(timestamp.into()), other),
+            (Self::Date(_), Self::DateTime(timestamp)) => (self, Self::Date(timestamp.into())),
+            (Self::DateTime(timestamp), Self::Date(_)) => (Self::Date(timestamp.into()), other),
+            _ => (self, other),
         }
     }
 }

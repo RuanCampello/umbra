@@ -134,6 +134,18 @@ impl TryFrom<([u8; 4], [u8; 3])> for NaiveDateTime {
     }
 }
 
+impl From<NaiveDateTime> for NaiveDate {
+    fn from(value: NaiveDateTime) -> Self {
+        value.date
+    }
+}
+
+impl From<NaiveDateTime> for NaiveTime {
+    fn from(value: NaiveDateTime) -> Self {
+        value.time
+    }
+}
+
 impl Display for NaiveDateTime {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{} {}", self.date, self.time))
