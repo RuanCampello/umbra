@@ -149,6 +149,25 @@ impl<'input> Parser<'input> {
             Token::Div => BinaryOperator::Div,
             Token::Keyword(Keyword::And) => BinaryOperator::And,
             Token::Keyword(Keyword::Or) => BinaryOperator::Or,
+            Token::Keyword(Keyword::Between) => {
+                let start = self.parse_expr(Some(precedence))?;
+                self.expect_keyword(Keyword::And)?;
+                let end = self.parse_expr(Some(precedence))?;
+
+                return Ok(Expression::BinaryOperation {
+                    operator: BinaryOperator::And,
+                    left: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::GtEq,
+                        left: Box::new(left.clone()),
+                        right: Box::new(start),
+                    }),
+                    right: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::LtEq,
+                        left: Box::new(left),
+                        right: Box::new(end),
+                    }),
+                });
+            }
             token => {
                 return Err(self.error(ErrorKind::Expected {
                     expected: Token::Eq,
@@ -303,6 +322,7 @@ impl<'input> Parser<'input> {
         Ok(Assignment { identifier, value })
     }
 
+    /// Operator's precedence from the [PostgreSQL documentation](https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-PRECEDENCE)
     fn get_precedence(&mut self) -> u8 {
         let Some(Ok(token)) = self.peek_token() else {
             return 0;
@@ -311,7 +331,13 @@ impl<'input> Parser<'input> {
         match token {
             Token::Keyword(Keyword::Or) => 5,
             Token::Keyword(Keyword::And) => 10,
-            Token::Eq | Token::Neq | Token::Gt | Token::GtEq | Token::Lt | Token::LtEq => 20,
+            Token::Eq
+            | Token::Neq
+            | Token::Gt
+            | Token::GtEq
+            | Token::Lt
+            | Token::LtEq
+            | Token::Keyword(Keyword::Between) => 20,
             Token::Plus | Token::Minus => 30,
             Token::Mul | Token::Div => 40,
             _ => 0,
