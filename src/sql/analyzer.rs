@@ -833,6 +833,18 @@ mod tests {
     }
 
     #[test]
+    fn between_operation() -> AnalyzerResult {
+        const CTX: &str = "CREATE TABLE payments (payment_id SERIAL PRIMARY KEY, amount REAL);";
+
+        Analyze {
+            ctx: &[CTX],
+            sql: "SELECT amount FROM payments WHERE payment_id BETWEEN 24 AND 420;",
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
     fn ordering_operation_on_temporal() -> AnalyzerResult {
         const CTX: &str = r#"
             CREATE TABLE temporal_data (

@@ -84,6 +84,10 @@ pub(crate) fn resolve_expression<'exp>(
                 BinaryOperator::LtEq => Value::Boolean(left <= right),
                 BinaryOperator::Gt => Value::Boolean(left > right),
                 BinaryOperator::GtEq => Value::Boolean(left >= right),
+                BinaryOperator::Between => {
+                    println!("{left} {right}");
+                    Value::Boolean(true)
+                }
 
                 logical @ (BinaryOperator::And | BinaryOperator::Or) => {
                     let (Value::Boolean(left), Value::Boolean(right)) = (&left, &right) else {

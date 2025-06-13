@@ -192,6 +192,7 @@ pub enum BinaryOperator {
     Div,
     And,
     Or,
+    Between,
 }
 
 /// SQL data types.
@@ -541,6 +542,7 @@ impl Display for BinaryOperator {
             Self::LtEq => "<=",
             Self::And => "AND",
             Self::Or => "OR",
+            Self::Between => "BETWEEN",
         })
     }
 }
