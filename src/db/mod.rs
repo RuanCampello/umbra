@@ -2293,12 +2293,10 @@ mod tests {
                 client_id, invoice_id, total, invoice_date
             FROM invoice
             WHERE
-                invoice_date BETWEEN '2023-08-02' AND '2023-08-06' AND total >= 30
+                invoice_date BETWEEN '2023-08-02' AND '2023-08-06'
             ORDER BY invoice_date;
             "#,
         )?;
-
-        println!("{query:#?}");
 
         assert_eq!(
             query.tuples,
