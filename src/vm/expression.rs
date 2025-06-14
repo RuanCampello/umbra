@@ -145,10 +145,13 @@ pub(crate) fn evaluate_where(
     match resolve_expression(tuple, schema, expr)? {
         Value::Boolean(boolean) => Ok(boolean),
 
-        other => Err(SqlError::Type(TypeError::ExpectedType {
-            expected: VmType::Bool,
-            found: Expression::Value(other),
-        })),
+        other => {
+            println!("expected boolean, found {other}");
+            Err(SqlError::Type(TypeError::ExpectedType {
+                expected: VmType::Bool,
+                found: Expression::Value(other),
+            }))
+        }
     }
 }
 
