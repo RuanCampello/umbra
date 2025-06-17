@@ -2375,4 +2375,42 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn select_with_like() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE customer (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(50));")?;
+        db.exec(
+            r#"
+        INSERT INTO customer (name, last_name) VALUES 
+            ('Jennifer', 'Smith'),
+            ('Jenny', 'Johnson'),
+            ('Benjamin', 'Brown'),
+            ('Jessica', 'Jones'),
+            ('Jenifer', 'Miller'),
+            ('Michael', 'Davis');
+            "#,
+        )?;
+        let query = db.exec("SELECT name, last_name FROM customer WHERE name LIKE 'Jen%';")?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::String("Jennifer".into()),
+                    Value::String("Smith".into()),
+                ],
+                vec![
+                    Value::String("Jenny".into()),
+                    Value::String("Johnson".into())
+                ],
+                vec![
+                    Value::String("Jenifer".into()),
+                    Value::String("Miller".into())
+                ]
+            ],
+        );
+
+        Ok(())
+    }
 }
