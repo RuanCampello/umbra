@@ -287,6 +287,8 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             let left_type = analyze_expression(schema, col_type, left)?;
             let right_type = analyze_expression(schema, col_type, right)?;
 
+            println!("{left_type:#?}");
+
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
@@ -302,6 +304,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 | BinaryOperator::LtEq
                 | BinaryOperator::Gt
                 | BinaryOperator::GtEq => VmType::Bool,
+                BinaryOperator::Like if left_type.eq(&VmType::String) => VmType::Bool,
                 BinaryOperator::And | BinaryOperator::Or if left_type.eq(&VmType::Bool) => {
                     VmType::Bool
                 }
