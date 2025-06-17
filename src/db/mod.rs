@@ -2325,4 +2325,54 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn select_with_in() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            "CREATE TABLE actors (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(50));",
+        )?;
+        let names = [
+            ("Meryl", "Allen"),
+            ("Cuba", "Allen"),
+            ("Kim", "Allen"),
+            ("Jon", "Chase"),
+            ("Ed", "Chase"),
+            ("Susan", "Davis"),
+            ("Jennifer", "Davis"),
+            ("Susan", "Davis"),
+            ("Alex", "Johnson"),
+        ];
+
+        for (name, last_name) in names {
+            db.exec(
+                format!("INSERT INTO actors (name, last_name) VALUES ('{name}', '{last_name}');")
+                    .as_str(),
+            )?;
+        }
+
+        let query = db.exec(
+            "SELECT name, last_name FROM actors WHERE last_name IN ('Allen', 'Chase', 'Davis');",
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("Meryl".into()), Value::String("Allen".into())],
+                vec![Value::String("Cuba".into()), Value::String("Allen".into())],
+                vec![Value::String("Kim".into()), Value::String("Allen".into())],
+                vec![Value::String("Jon".into()), Value::String("Chase".into())],
+                vec![Value::String("Ed".into()), Value::String("Chase".into())],
+                vec![Value::String("Susan".into()), Value::String("Davis".into())],
+                vec![
+                    Value::String("Jennifer".into()),
+                    Value::String("Davis".into())
+                ],
+                vec![Value::String("Susan".into()), Value::String("Davis".into())],
+            ]
+        );
+
+        Ok(())
+    }
 }
