@@ -168,6 +168,32 @@ impl<'input> Parser<'input> {
                     }),
                 });
             }
+            Token::Keyword(Keyword::In) => {
+                self.next_token()?;
+                let values =
+                    self.parse_separated_tokens(|parser| parser.parse_expr(None), false)?;
+                self.expect_token(Token::RightParen)?;
+
+                let mut iter = values.into_iter();
+                let first = match iter.next() {
+                    Some(first) => Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(left.clone()),
+                        right: Box::new(first),
+                    },
+                    None => unreachable!(),
+                };
+
+                return Ok(iter.fold(first, |acc, value| Expression::BinaryOperation {
+                    operator: BinaryOperator::Or,
+                    left: Box::new(acc),
+                    right: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(left.clone()),
+                        right: Box::new(value),
+                    }),
+                }));
+            }
             token => {
                 return Err(self.error(ErrorKind::Expected {
                     expected: Token::Eq,
@@ -337,7 +363,8 @@ impl<'input> Parser<'input> {
             | Token::GtEq
             | Token::Lt
             | Token::LtEq
-            | Token::Keyword(Keyword::Between) => 20,
+            | Token::Keyword(Keyword::Between)
+            | Token::Keyword(Keyword::In) => 20,
             Token::Plus | Token::Minus => 30,
             Token::Mul | Token::Div => 40,
             _ => 0,
@@ -1218,6 +1245,45 @@ mod tests {
                     found: Token::Semicolon
                 }
             }
+        );
+    }
+
+    #[test]
+    fn test_in_operator() {
+        let sql = "SELECT film_id, title FROM film WHERE film_id IN (1, 2, 3);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                from: "film".to_string(),
+                order_by: vec![],
+                columns: vec![
+                    Expression::Identifier("film_id".into()),
+                    Expression::Identifier("title".into())
+                ],
+                r#where: Some(Expression::BinaryOperation {
+                    operator: BinaryOperator::Or,
+                    left: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::Or,
+                        left: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("film_id".to_string())),
+                            right: Box::new(Expression::Value(Value::Number(1))),
+                        }),
+                        right: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("film_id".to_string())),
+                            right: Box::new(Expression::Value(Value::Number(2))),
+                        }),
+                    }),
+                    right: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(Expression::Identifier("film_id".to_string())),
+                        right: Box::new(Expression::Value(Value::Number(3))),
+                    }),
+                }),
+            })
         );
     }
 }
