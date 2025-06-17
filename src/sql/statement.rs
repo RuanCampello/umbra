@@ -192,6 +192,7 @@ pub enum BinaryOperator {
     Div,
     And,
     Or,
+    Like,
 }
 
 /// SQL data types.
@@ -553,6 +554,7 @@ impl Display for BinaryOperator {
             Self::LtEq => "<=",
             Self::And => "AND",
             Self::Or => "OR",
+            Self::Like => "LIKE",
         })
     }
 }

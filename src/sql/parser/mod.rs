@@ -149,6 +149,7 @@ impl<'input> Parser<'input> {
             Token::Div => BinaryOperator::Div,
             Token::Keyword(Keyword::And) => BinaryOperator::And,
             Token::Keyword(Keyword::Or) => BinaryOperator::Or,
+            Token::Keyword(Keyword::Like) => BinaryOperator::Like,
             Token::Keyword(Keyword::Between) => {
                 let start = self.parse_expr(Some(precedence))?;
                 self.expect_keyword(Keyword::And)?;
@@ -364,7 +365,8 @@ impl<'input> Parser<'input> {
             | Token::Lt
             | Token::LtEq
             | Token::Keyword(Keyword::Between)
-            | Token::Keyword(Keyword::In) => 20,
+            | Token::Keyword(Keyword::In)
+            | Token::Keyword(Keyword::Like) => 20,
             Token::Plus | Token::Minus => 30,
             Token::Mul | Token::Div => 40,
             _ => 0,
@@ -1297,5 +1299,28 @@ mod tests {
         let equivalent_statement = Parser::new(equivalent_sql).parse_statement();
 
         assert_eq!(statement, equivalent_statement);
+    }
+
+    #[test]
+    fn test_like_operator() {
+        let sql = "SELECT name, last_name FROM customer WHERE name LIKE 'Jen%';";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                order_by: vec![],
+                from: "customer".into(),
+                columns: vec![
+                    Expression::Identifier("name".into()),
+                    Expression::Identifier("last_name".into())
+                ],
+                r#where: Some(Expression::BinaryOperation {
+                    operator: BinaryOperator::Like,
+                    left: Box::new(Expression::Identifier("name".into())),
+                    right: Box::new(Expression::Value(Value::String("Jen%".into())))
+                })
+            })
+        )
     }
 }
