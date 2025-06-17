@@ -1286,4 +1286,16 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn test_in_expansion() {
+        let sql = "SELECT film_id, title FROM films WHERE film_id IN (1, 2, 3);";
+        let equivalent_sql =
+            "SELECT film_id, title FROM films WHERE film_id = 1 OR film_id = 2 OR film_id = 3;";
+
+        let statement = Parser::new(sql).parse_statement();
+        let equivalent_statement = Parser::new(equivalent_sql).parse_statement();
+
+        assert_eq!(statement, equivalent_statement);
+    }
 }
