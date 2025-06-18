@@ -130,6 +130,13 @@ impl Rng {
         "Generates a random `i64` for this given range."
     );
 
+    /// Generates a random u128 using two u64 generations
+    pub fn u128(&mut self) -> u128 {
+        let high = self.gen_rand_u64() as u128;
+        let low = self.gen_rand_u64() as u128;
+        (high << 64) | low
+    }
+
     fn gen_rand_u64(&mut self) -> u64 {
         // Constants taken from: https://github.com/wangyi-fudan/wyhash/blob/master/wyhash.h#L151.
         const WY_CONST_0: u64 = 0x2d35_8dcc_aa6c_78a5;
