@@ -292,5 +292,9 @@ mod tests {
         assert!(!like("hello", "H%"));
         assert!(!like("a", ""));
         assert!(like("", ""));
+        assert!(like("Albert", "%er%"));
+        assert!(like("Bernard", "%er%"));
+        assert!(!like("Albert", "_er%"));
+        assert!(like("Cheryl", "_her%"));
     }
 }
