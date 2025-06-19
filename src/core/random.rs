@@ -130,12 +130,13 @@ impl Rng {
         "Generates a random `i64` for this given range."
     );
 
-    /// Generates a random u128 using two u64 generations
-    pub fn u128(&mut self) -> u128 {
-        let high = self.gen_rand_u64() as u128;
-        let low = self.gen_rand_u64() as u128;
-        (high << 64) | low
-    }
+    rng_int!(
+        u128,
+        u128,
+        gen_rand_u128,
+        gen_mod_u128,
+        "Generates a random `u128` for this given range"
+    );
 
     fn gen_rand_u64(&mut self) -> u64 {
         // Constants taken from: https://github.com/wangyi-fudan/wyhash/blob/master/wyhash.h#L151.
@@ -154,6 +155,7 @@ impl Rng {
         self.gen_rand_u64() as u32
     }
 
+    #[inline]
     fn gen_mod_u32(&mut self, number: u32) -> u32 {
         // Read more here: https://lemire.me/blog/2016/06/30/fast-random-shuffling
         let mut rand = self.gen_rand_u32();
@@ -172,6 +174,7 @@ impl Rng {
         high
     }
 
+    #[inline]
     fn gen_mod_u64(&mut self, number: u64) -> u64 {
         // Read more here: https://lemire.me/blog/2016/06/30/fast-random-shuffling/
         let mut rand = self.gen_rand_u64();
@@ -183,6 +186,29 @@ impl Rng {
             while lower < t {
                 rand = self.gen_rand_u64();
                 high = high_u64_bits(rand, number);
+                lower = rand.wrapping_mul(number);
+            }
+        }
+
+        high
+    }
+
+    #[inline]
+    fn gen_rand_u128(&mut self) -> u128 {
+        (u128::from(self.gen_rand_u64()) << 64) | u128::from(self.gen_rand_u64())
+    }
+
+    #[inline]
+    fn gen_mod_u128(&mut self, number: u128) -> u128 {
+        let mut rand = self.gen_rand_u128();
+        let mut high = high_u128_bits(rand, number);
+        let mut lower = rand.wrapping_mul(number);
+
+        if lower < number {
+            let t = number.wrapping_neg() % number;
+            while lower < t {
+                rand = self.gen_rand_u128();
+                high = high_u128_bits(rand, number);
                 lower = rand.wrapping_mul(number);
             }
         }
@@ -223,13 +249,27 @@ fn high_u32_bits(a: u32, b: u32) -> u32 {
 }
 
 /// The same as [`high_u32_bits`], but for [`u64`].
+#[inline]
 fn high_u64_bits(a: u64, b: u64) -> u64 {
     (((a as u128) * (b as u128)) >> 64) as u64
 }
 
+#[inline]
+fn high_u128_bits(a: u128, b: u128) -> u128 {
+    // Adapted from this: https://stackoverflow.com/a/28904636
+    let a_low = a as u64 as u128;
+    let a_high = (a >> 64) as u64 as u128;
+    let b_low = b as u64 as u128;
+    let b_high = (b >> 64) as u64 as u128;
+
+    let carry = (a_low * b_low) >> 64;
+    let carry = ((a_high * b_low) as u64 as u128 + (a_low * b_high) as u64 as u128 + carry) >> 64;
+    a_high * b_high + ((a_high * b_low) >> 64) + ((a_low * b_high) >> 64) + carry
+}
+
 /// Generates a random seed using [`std::collections::hash_map::HashMap`].
 /// For more information about random numbers' generation in rust, see the discussion [here](https://blog.orhun.dev/zero-deps-random-in-rust/).
-fn random_seed() -> Option<u64> {
+pub(in crate::core) fn random_seed() -> Option<u64> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hash;
     use std::thread;

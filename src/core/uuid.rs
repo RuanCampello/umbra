@@ -1,11 +1,12 @@
 //! UUID generation internal module.
 
 #![allow(dead_code)]
-use super::random::Rng;
+use super::random::{random_seed, Rng};
 use std::fmt::Display;
 
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A Universally Unique Identifier.
 pub(crate) struct Uuid([u8; 16]);
 
 impl Uuid {
@@ -18,8 +19,8 @@ impl Uuid {
 
     /// Creates a new random version 4 `UUID`.
     pub fn new_v4() -> Self {
-        let mut rng = Rng::new();
-        Self::from_u128(rng.u128() & Self::VERSION_MASK | Self::VARIANT_MASK)
+        let mut rng = Rng::with_seed(random_seed().unwrap_or_default());
+        Self::from_u128(rng.u128(u128::MIN..u128::MAX) & Self::VERSION_MASK | Self::VARIANT_MASK)
     }
 
     /// Creates a `UUID` from a 128 bit value.
@@ -27,6 +28,7 @@ impl Uuid {
         Self::from_bytes(value.to_be_bytes())
     }
 
+    #[inline(always)]
     const fn get_version(&self) -> usize {
         (self.0[6] >> 4) as usize
     }
@@ -76,6 +78,10 @@ impl Display for Uuid {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
+    use crate::core::random::Rng;
+
     use super::Uuid;
 
     #[test]
@@ -83,5 +89,21 @@ mod tests {
         let uuid = Uuid::new_v4();
 
         assert_eq!(uuid.get_version(), 4);
+    }
+
+    #[test]
+    fn test_v4_basic_randomness() {
+        let mut rng = Rng::new();
+        let range = rng.i32(0..1024);
+        let mut uuids = HashSet::with_capacity(range as usize);
+
+        for _ in 0..range {
+            let uuid = Uuid::new_v4();
+            assert!(!uuids.contains(&uuid), "Duplicated UUID found {uuid}");
+
+            uuids.insert(uuid);
+        }
+
+        assert_eq!(uuids.len(), range as usize);
     }
 }
