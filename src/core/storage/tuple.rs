@@ -19,7 +19,8 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
         | Type::BigSerial
         | Type::UnsignedBigInteger
         | Type::DateTime
-        | Type::DoublePrecision => 8,
+        | Type::DoublePrecision
+        | Type::Uuid => 8,
         Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date | Type::Real => 4,
         Type::Time => 3,
         Type::SmallInt | Type::SmallSerial | Type::UnsignedSmallInt => 2,

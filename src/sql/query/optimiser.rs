@@ -744,8 +744,8 @@ mod tests {
     fn test_multiple_indexes() {
         IndexPath {
             pk: "id",
-            indexes: &["email", "uuid"],
-            expr: "id = 5 OR email = 'johndoe@email.com' OR uuid <= 'something'",
+            indexes: &["email", "uid"],
+            expr: "id = 5 OR email = 'johndoe@email.com' OR uid <= 'something'",
             expected: HashMap::from([
                 (
                     "id",
@@ -762,7 +762,7 @@ mod tests {
                     )]),
                 ),
                 (
-                    "uuid",
+                    "uid",
                     VecDeque::from([(
                         Bound::Unbounded,
                         Bound::Included(&Value::String("something".into())),

@@ -332,6 +332,7 @@ impl<'input> Parser<'input> {
                 self.expect_keyword(Keyword::Precision)?;
                 Ok(Type::DoublePrecision)
             }
+            Keyword::Uuid => Ok(Type::Uuid),
             Keyword::Real => Ok(Type::Real),
             Keyword::Bool => Ok(Type::Boolean),
             Keyword::Timestamp => Ok(Type::DateTime),
@@ -558,7 +559,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 13] {
+    const fn supported_types() -> [Keyword; 14] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -568,6 +569,7 @@ impl<'input> Parser<'input> {
             Keyword::BigInt,
             Keyword::Real,
             Keyword::Double,
+            Keyword::Uuid,
             Keyword::Bool,
             Keyword::Varchar,
             Keyword::Time,
@@ -1320,6 +1322,23 @@ mod tests {
                     left: Box::new(Expression::Identifier("name".into())),
                     right: Box::new(Expression::Value(Value::String("Jen%".into())))
                 })
+            })
+        )
+    }
+
+    #[test]
+    fn test_uuid() {
+        let sql = "CREATE TABLE contracts (id UUID PRIMARY KEY, name VARCHAR(30));";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Table {
+                name: "contracts".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Uuid),
+                    Column::new("name", Type::Varchar(30))
+                ]
             })
         )
     }
