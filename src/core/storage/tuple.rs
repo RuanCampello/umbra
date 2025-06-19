@@ -180,7 +180,7 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             let n = i64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
-        Type::UnsignedBigInteger | Type::BigSerial => {
+        Type::UnsignedBigInteger | Type::BigSerial | Type::Uuid => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
             reader.read_exact(&mut buf)?;
             let n = u64::from_be_bytes(buf) as i128;

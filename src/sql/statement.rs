@@ -240,6 +240,8 @@ pub enum Type {
     Real,
     /// 8-byte variable-precision floating point type.
     DoublePrecision,
+    /// 8-byte Universal Unique Identifier defined by [RFC 4122](https://datatracker.ietf.org/doc/html/rfc4122).
+    Uuid,
     Date,
     Time,
     DateTime,
@@ -589,6 +591,7 @@ impl Display for Type {
             Type::BigSerial => f.write_str("BIGSERIAL"),
             Type::Real => f.write_str("REAL"),
             Type::DoublePrecision => f.write_str("DOUBLE PRECISION"),
+            Type::Uuid => f.write_str("UUID"),
             Type::DateTime => f.write_str("TIMESTAMP"),
             Type::Time => f.write_str("TIME"),
             Type::Date => f.write_str("DATE"),

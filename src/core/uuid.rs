@@ -7,6 +7,9 @@ use std::fmt::Display;
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// A Universally Unique Identifier.
+/// To learn more about UUIDs on databases,
+/// read [this](https://planetscale.com/blog/the-problem-with-using-a-uuid-primary-key-in-mysql) article about MySql
+/// and [this](https://supabase.com/blog/choosing-a-postgres-primary-key) on Postgres' side.
 pub(crate) struct Uuid([u8; 16]);
 
 impl Uuid {
