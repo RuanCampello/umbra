@@ -1,7 +1,6 @@
 //! UUID generation internal module.
 
 #![allow(dead_code)]
-use crate::sql::statement::Value;
 
 use super::random::{random_seed, Rng};
 use std::fmt::Display;
@@ -12,7 +11,7 @@ use std::fmt::Display;
 /// To learn more about UUIDs on databases,
 /// read [this](https://planetscale.com/blog/the-problem-with-using-a-uuid-primary-key-in-mysql) article about MySql
 /// and [this](https://supabase.com/blog/choosing-a-postgres-primary-key) on Postgres' side.
-pub(crate) struct Uuid([u8; 16]);
+pub struct Uuid([u8; 16]);
 
 impl Uuid {
     const VERSION_MASK: u128 = 0xFFFFFFFFFFFF0FFF3FFFFFFFFFFFFFFF;

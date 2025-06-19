@@ -346,9 +346,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
         Expression::Function { func, args } => match func {
             Function::UuidV4 => {
                 if !args.is_empty() {
-                    return Err(SqlError::Other(
-                        "UUID generation function does not take arguments".into(),
-                    ));
+                    return Err(SqlError::InvalidFuncArgs(0, args.len()));
                 }
                 VmType::Number
             }
@@ -873,6 +871,16 @@ mod tests {
             ctx: &[CTX],
             sql,
             expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn invalid_uuid_generation_function() -> AnalyzerResult {
+        Analyze {
+            sql: "CREATE TABLE contracts (id UUID DEFAULT v4(something), name VARCHAR(30));",
+            ctx: &[],
+            expected: Err(SqlError::InvalidFuncArgs(0, 1).into()),
         }
         .assert()
     }

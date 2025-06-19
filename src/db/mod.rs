@@ -96,6 +96,7 @@ pub enum SqlError {
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
+    InvalidFuncArgs(usize, usize),
     Type(TypeError),
     Vm(VmError),
     Other(String),
@@ -737,6 +738,10 @@ impl Display for SqlError {
             Self::Analyzer(err) => write!(f, "{err}"),
             Self::Vm(err) => write!(f, "{err}"),
             Self::Type(err) => write!(f, "{err}"),
+            Self::InvalidFuncArgs(expected, got) => write!(
+                f,
+                "Invalid number of arguments. Expected {expected}, got {got}"
+            ),
             Self::Other(other) => f.write_str(other),
         }
     }
