@@ -1,6 +1,9 @@
 use crate::core::date::DateParseError;
+use crate::core::uuid::Uuid;
 use crate::db::{Schema, SqlError};
-use crate::sql::statement::{BinaryOperator, Expression, Temporal, Type, UnaryOperator, Value};
+use crate::sql::statement::{
+    BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+};
 use std::fmt::{Display, Formatter};
 use std::mem;
 use std::ops::Neg;
@@ -134,6 +137,9 @@ pub(crate) fn resolve_expression<'exp>(
                 }
             })
         }
+        Expression::Function { func, .. } => match func {
+            Function::UuidV4 => Ok(Value::Uuid(Uuid::new_v4())),
+        },
         Expression::Nested(expr) => resolve_expression(val, schema, expr),
         Expression::Wildcard => unreachable!("Wildcards should have been resolved by now"),
     }

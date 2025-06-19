@@ -13,7 +13,7 @@ use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 
-use super::statement::{Delete, Insert, Select, Update};
+use super::statement::{Delete, Function, Insert, Select, Update};
 
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
@@ -287,8 +287,6 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             let left_type = analyze_expression(schema, col_type, left)?;
             let right_type = analyze_expression(schema, col_type, right)?;
 
-            println!("{left_type:#?}");
-
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
@@ -345,6 +343,16 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 })?,
             }
         }
+        Expression::Function { func, args } => match func {
+            Function::UuidV4 => {
+                if !args.is_empty() {
+                    return Err(SqlError::Other(
+                        "UUID generation function does not take arguments".into(),
+                    ));
+                }
+                VmType::Number
+            }
+        },
         Expression::Nested(expr) => analyze_expression(schema, col_type, expr)?,
         Expression::Wildcard => {
             return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))

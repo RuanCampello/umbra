@@ -5,6 +5,7 @@
 #![allow(unused)]
 
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::uuid::Uuid;
 use crate::vm::expression::TypeError;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
@@ -108,6 +109,10 @@ pub enum Expression {
         left: Box<Self>,
         right: Box<Self>,
     },
+    Function {
+        func: Function,
+        args: Vec<Self>,
+    },
     Nested(Box<Self>),
 }
 
@@ -164,6 +169,7 @@ pub enum Value {
     Float(f64),
     Boolean(bool),
     Temporal(Temporal),
+    Uuid(Uuid),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -245,6 +251,12 @@ pub enum Type {
     Date,
     Time,
     DateTime,
+}
+
+/// Subset of `SQL` functions.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum Function {
+    UuidV4,
 }
 
 impl Column {
@@ -536,6 +548,7 @@ impl Display for Expression {
             Self::UnaryOperation { operator, expr } => {
                 write!(f, "{operator}{expr}")
             }
+            Self::Function { func, args } => write!(f, "{func}"),
             Self::Nested(expr) => write!(f, "({expr})"),
         }
     }
@@ -608,6 +621,15 @@ impl Display for Value {
             Value::Float(float) => write!(f, "{float}"),
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
+            Value::Uuid(uuid) => write!(f, "{uuid}"),
+        }
+    }
+}
+
+impl Display for Function {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UuidV4 => f.write_str("u4()"),
         }
     }
 }

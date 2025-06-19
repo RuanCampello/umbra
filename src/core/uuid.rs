@@ -1,6 +1,8 @@
 //! UUID generation internal module.
 
 #![allow(dead_code)]
+use crate::sql::statement::Value;
+
 use super::random::{random_seed, Rng};
 use std::fmt::Display;
 
