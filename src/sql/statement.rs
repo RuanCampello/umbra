@@ -5,10 +5,12 @@
 #![allow(unused)]
 
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::uuid::Uuid;
 use crate::vm::expression::TypeError;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::ops::Neg;
+use std::str::FromStr;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -108,6 +110,10 @@ pub enum Expression {
         left: Box<Self>,
         right: Box<Self>,
     },
+    Function {
+        func: Function,
+        args: Vec<Self>,
+    },
     Nested(Box<Self>),
 }
 
@@ -164,12 +170,14 @@ pub enum Value {
     Float(f64),
     Boolean(bool),
     Temporal(Temporal),
+    Uuid(Uuid),
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Constraint {
     PrimaryKey,
     Unique,
+    Default(Expression),
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
@@ -247,6 +255,12 @@ pub enum Type {
     DateTime,
 }
 
+/// Subset of `SQL` functions.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum Function {
+    UuidV4,
+}
+
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
         Self {
@@ -302,7 +316,8 @@ impl Type {
             | Self::Integer
             | Self::UnsignedInteger
             | Self::BigInteger
-            | Self::UnsignedBigInteger => true,
+            | Self::UnsignedBigInteger
+            | Self::Uuid => true, // uuid in the end is just an integer number
             _ => self.is_serial(),
         }
     }
@@ -472,6 +487,7 @@ impl PartialEq for Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
+            // TODO: coerce string to uuid <->
             _ => false,
         }
     }
@@ -513,6 +529,7 @@ impl Display for Column {
             f.write_str(match constraint {
                 Constraint::PrimaryKey => "PRIMARY KEY",
                 Constraint::Unique => "UNIQUE",
+                Constraint::Default(value) => "DEFAULT {value}",
             })?;
         }
 
@@ -536,6 +553,7 @@ impl Display for Expression {
             Self::UnaryOperation { operator, expr } => {
                 write!(f, "{operator}{expr}")
             }
+            Self::Function { func, args } => write!(f, "{func}"),
             Self::Nested(expr) => write!(f, "({expr})"),
         }
     }
@@ -608,6 +626,25 @@ impl Display for Value {
             Value::Float(float) => write!(f, "{float}"),
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
+            Value::Uuid(uuid) => write!(f, "{uuid}"),
+        }
+    }
+}
+
+impl FromStr for Function {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "v4" => Ok(Function::UuidV4),
+            _ => panic!("Unknown function"),
+        }
+    }
+}
+
+impl Display for Function {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UuidV4 => f.write_str("u4()"),
         }
     }
 }

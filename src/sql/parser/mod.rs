@@ -271,7 +271,7 @@ impl<'input> Parser<'input> {
 
         let mut constraints = Vec::new();
         while let Some(constraint) = self
-            .consume_one(&[Keyword::Primary, Keyword::Unique])
+            .consume_one(&[Keyword::Primary, Keyword::Unique, Keyword::Default])
             .as_optional()
         {
             match constraint {
@@ -280,6 +280,12 @@ impl<'input> Parser<'input> {
                     constraints.push(Constraint::PrimaryKey);
                 }
                 Keyword::Unique => constraints.push(Constraint::Unique),
+                Keyword::Default => match data_type {
+                    Type::Uuid => {
+                        // TODO: expect function
+                    }
+                    _ => todo!("missing default implementation"),
+                },
                 _ => unreachable!(),
             }
         }
@@ -437,6 +443,12 @@ impl<'input> Parser<'input> {
         };
 
         Ok(Expression::Value(Value::String(value)))
+    }
+
+    fn parse_func(&mut self) -> ParserResult<Expression> {
+        let func = self.parse_ident()?;
+
+        todo!()
     }
 
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {

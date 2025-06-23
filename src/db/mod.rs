@@ -96,6 +96,7 @@ pub enum SqlError {
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
+    InvalidFuncArgs(usize, usize),
     Type(TypeError),
     Vm(VmError),
     Other(String),
@@ -534,6 +535,7 @@ impl TryFrom<&[&str]> for Context {
                             let index = match constraint {
                                 Constraint::Unique => index!(unique on name (col.name)),
                                 Constraint::PrimaryKey => index!(primary on (name)),
+                                _ => unreachable!("This ain't a index")
                             };
 
                             metadata.indexes.push(IndexMetadata {
@@ -737,6 +739,10 @@ impl Display for SqlError {
             Self::Analyzer(err) => write!(f, "{err}"),
             Self::Vm(err) => write!(f, "{err}"),
             Self::Type(err) => write!(f, "{err}"),
+            Self::InvalidFuncArgs(expected, got) => write!(
+                f,
+                "Invalid number of arguments. Expected {expected}, got {got}"
+            ),
             Self::Other(other) => f.write_str(other),
         }
     }
