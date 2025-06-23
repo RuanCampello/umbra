@@ -271,7 +271,7 @@ impl<'input> Parser<'input> {
 
         let mut constraints = Vec::new();
         while let Some(constraint) = self
-            .consume_one(&[Keyword::Primary, Keyword::Unique, Keyword::Default])
+            .consume_one(&[Keyword::Primary, Keyword::Unique])
             .as_optional()
         {
             match constraint {
@@ -280,12 +280,6 @@ impl<'input> Parser<'input> {
                     constraints.push(Constraint::PrimaryKey);
                 }
                 Keyword::Unique => constraints.push(Constraint::Unique),
-                Keyword::Default => match data_type {
-                    Type::Uuid => {
-                        // TODO: expect function
-                    }
-                    _ => todo!("missing default implementation"),
-                },
                 _ => unreachable!(),
             }
         }
@@ -312,6 +306,7 @@ impl<'input> Parser<'input> {
                     (Keyword::SmallSerial, _) => Ok(Type::SmallSerial),
                     (Keyword::Serial, _) => Ok(Type::Serial),
                     (Keyword::BigSerial, _) => Ok(Type::BigSerial),
+                    (Keyword::Uuid, _) => Ok(Type::Uuid),
                     _ => unreachable!("unknown integer"),
                 }
             }
@@ -338,7 +333,6 @@ impl<'input> Parser<'input> {
                 self.expect_keyword(Keyword::Precision)?;
                 Ok(Type::DoublePrecision)
             }
-            Keyword::Uuid => Ok(Type::Uuid),
             Keyword::Real => Ok(Type::Real),
             Keyword::Bool => Ok(Type::Boolean),
             Keyword::Timestamp => Ok(Type::DateTime),
