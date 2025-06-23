@@ -2425,7 +2425,7 @@ mod tests {
         let mut db = Database::default();
 
         db.exec("CREATE TABLE contracts (id UUID PRIMARY KEY, name VARCHAR(30));")?;
-        db.exec("INSERT INTO contracts (name) VALUES ('IT consulting', 'Market agency')")?;
+        db.exec("INSERT INTO contracts (name) VALUES ('IT consulting'), ('Market agency');")?;
         db.exec("INSERT INTO contracts (id, name) VALUES ('d111ff02-e19f-4e6c-ac44-5804f72f7e8d', 'Residency rental');")?;
 
         Ok(())

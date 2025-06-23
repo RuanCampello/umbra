@@ -1,8 +1,11 @@
 //! Here we do the final step preparation before [plan](crate::vm::planner::Planner) generation.
 
-use crate::db::{Ctx, DatabaseError, ROW_COL_ID};
+use crate::{
+    core::uuid::Uuid,
+    db::{Ctx, DatabaseError, ROW_COL_ID},
+};
 
-use super::statement::{Expression, Insert, Select, Statement, Value};
+use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 
 /// Takes a given [statement](crate::sql::statement::Statement) and prepares it to the plan
 /// generation.
@@ -77,32 +80,35 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 });
             }
 
-            // increment the `SERIAL` columns
-
-            // missing serial columns and their schema index
-            let serial_inserts: Vec<(usize, String)> = metadata
+            // columns needing auto generated values (UUID or SERIAl variants)
+            let auto_inserts: Vec<(usize, String, Type)> = metadata
                 .schema
                 .columns
                 .iter()
                 .enumerate()
                 .filter_map(|(idx, col)| {
-                    match col.data_type.is_serial() && !columns.contains(&col.name) {
-                        true => Some((idx, col.name.clone())),
+                    match col.data_type.can_be_autogen() && !columns.contains(&col.name) {
+                        true => Some((idx, col.name.clone(), col.data_type)),
                         false => None,
                     }
                 })
                 .collect();
 
-            // insert them into the columns list
-            for (idx, name) in &serial_inserts {
+            for (idx, name, _) in &auto_inserts {
                 columns.insert(*idx, name.clone());
             }
 
-            // insert generated serial values into EACH row of values
+            // insert generated values into EACH row of values
             for row in values.iter_mut() {
-                for (idx, name) in &serial_inserts {
-                    let next_val = metadata.next_val(into.as_ref(), name)?;
-                    row.insert(*idx, Expression::Value(Value::Number(next_val.into())));
+                for (idx, name, r#type) in &auto_inserts {
+                    let expr = match r#type {
+                        Type::Uuid => Expression::Value(Value::Uuid(Uuid::new_v4())),
+                        _ => Expression::Value(Value::Number(
+                            metadata.next_val(into.as_ref(), name)?.into(),
+                        )),
+                    };
+
+                    row.insert(*idx, expr);
                 }
             }
 

@@ -591,7 +591,8 @@ impl<'input> Parser<'input> {
             | Keyword::BigInt
             | Keyword::SmallSerial
             | Keyword::Serial
-            | Keyword::BigSerial => true,
+            | Keyword::BigSerial
+            | Keyword::Uuid => true,
             _ => false,
         }
     }

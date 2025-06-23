@@ -336,6 +336,11 @@ impl Type {
         }
     }
 
+    // Returns true if this `Type` can be auto-generated
+    pub const fn can_be_autogen(&self) -> bool {
+        matches!(self, Self::Uuid) || self.is_serial()
+    }
+
     pub const fn max(&self) -> usize {
         match self {
             Self::SmallSerial => 32767usize,

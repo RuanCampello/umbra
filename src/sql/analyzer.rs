@@ -13,7 +13,7 @@ use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 
-use super::statement::{Delete, Function, Insert, Select, Update};
+use super::statement::{Delete, Insert, Select, Update};
 
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
@@ -144,7 +144,7 @@ pub(in crate::sql) fn analyze<'s>(
                     if col.name == ROW_COL_ID {
                         continue;
                     }
-                    if col.data_type.is_serial() {
+                    if col.data_type.can_be_autogen() {
                         continue;
                     }
 
