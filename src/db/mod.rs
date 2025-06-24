@@ -817,6 +817,8 @@ impl From<ParserError> for DatabaseError {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use crate::core::{
         date::{NaiveDate, Parse},
         storage::{
@@ -827,6 +829,7 @@ mod tests {
             },
             MemoryBuffer,
         },
+        uuid::Uuid,
     };
 
     use super::*;
@@ -2435,8 +2438,15 @@ mod tests {
         db.exec("INSERT INTO contracts (name) VALUES ('IT consulting'), ('Market agency');")?;
         db.exec("INSERT INTO contracts (id, name) VALUES ('d111ff02-e19f-4e6c-ac44-5804f72f7e8d', 'Residency rental');")?;
 
-        let query = db.exec("SELECT id FROM contracts;")?;
+        let query = db.exec("SELECT id FROM contracts ORDER BY name;")?;
         assert_eq!(query.tuples.len(), 3);
+        assert_eq!(
+            query.tuples.last(),
+            Some(&vec![Value::Uuid(
+                Uuid::from_str("d111ff02-e19f-4e6c-ac44-5804f72f7e8d").unwrap()
+            )])
+        );
+
         Ok(())
     }
 }
