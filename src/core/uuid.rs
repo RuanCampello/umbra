@@ -13,6 +13,48 @@ use std::fmt::Display;
 /// and [this](https://supabase.com/blog/choosing-a-postgres-primary-key) on Postgres' side.
 pub struct Uuid([u8; 16]);
 
+pub enum UuidError {
+    InvalidLength,
+    InvalidUUID,
+}
+
+/// Hexadecimal table
+const HEX_TABLE: &[u8; 256] = &{
+    let mut buffer = [0; 256];
+    let mut idx: u8 = 0;
+
+    loop {
+        buffer[idx as usize] = match idx {
+            b'0'..=b'9' => idx - b'0',
+            b'a'..=b'f' => idx - b'a' + 10,
+            b'A'..=b'F' => idx - b'A' + 10,
+            _ => 0xff,
+        };
+
+        if idx == 255 {
+            break buffer;
+        }
+
+        idx += 1;
+    }
+};
+
+/// Bit-wise shift left by four table
+const SHL_TABLE: &[u8; 256] = &{
+    let mut buffer = [0; 256];
+    let mut idx: u8 = 0;
+
+    loop {
+        buffer[idx as usize] = idx.wrapping_shl(4);
+
+        if idx == 255 {
+            break buffer;
+        }
+
+        idx += 1;
+    }
+};
+
 impl Uuid {
     const VERSION_MASK: u128 = 0xFFFFFFFFFFFF0FFF3FFFFFFFFFFFFFFF;
     const VARIANT_MASK: u128 = 0x40008000000000000000;
@@ -25,6 +67,11 @@ impl Uuid {
     pub fn new_v4() -> Self {
         let mut rng = Rng::with_seed(random_seed().unwrap_or_default());
         Self::from_u128(rng.u128(u128::MIN..u128::MAX) & Self::VERSION_MASK | Self::VARIANT_MASK)
+    }
+
+    pub fn try_parse(input: &str) -> Result<Uuid, UuidError> {
+        let bytes = parse_hyphenated(input.as_bytes())?;
+        Ok(Self::from_bytes(bytes))
     }
 
     /// Creates a `UUID` from a 128 bit value.
@@ -70,6 +117,49 @@ impl Uuid {
     }
 }
 
+const fn try_parse(input: &[u8]) -> Result<[u8; 16], UuidError> {
+    match (input.len(), input) {
+        (45, [b'u', b'r', b'n', b':', b'u', b'u', b'i', b'd', b':', string @ ..]) => {
+            parse_hyphenated(string)
+        }
+        _ => Err(UuidError::InvalidUUID),
+    }
+}
+
+const fn parse_hyphenated(string: &[u8]) -> Result<[u8; 16], UuidError> {
+    if string.len() != 36 {
+        return Err(UuidError::InvalidLength);
+    }
+
+    match [string[8], string[13], string[18], string[23]] {
+        [b'-', b'-', b'-', b'-'] => {}
+        _ => return Err(UuidError::InvalidUUID),
+    }
+
+    let positions: [u8; 8] = [0, 4, 9, 14, 19, 24, 28, 32];
+    let mut buffer: [u8; 16] = [0; 16];
+    let mut cursor = 0;
+
+    while cursor < 8 {
+        let idx = positions[cursor];
+
+        let h1 = HEX_TABLE[string[idx as usize] as usize];
+        let h2 = HEX_TABLE[string[(idx + 1) as usize] as usize];
+        let h3 = HEX_TABLE[string[(idx + 2) as usize] as usize];
+        let h4 = HEX_TABLE[string[(idx + 3) as usize] as usize];
+
+        if h1 | h2 | h3 | h4 == 0xff {
+            return Err(UuidError::InvalidUUID);
+        }
+
+        buffer[cursor * 2] = SHL_TABLE[h1 as usize] | h2;
+        buffer[cursor * 2 + 1] = SHL_TABLE[h3 as usize] | h4;
+        cursor += 1;
+    }
+
+    Ok(buffer)
+}
+
 impl Display for Uuid {
     #[inline(always)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -77,6 +167,16 @@ impl Display for Uuid {
         let string = unsafe { std::str::from_utf8_unchecked(&formated) };
 
         f.write_str(string)
+    }
+}
+
+impl Display for UuidError {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidUUID => f.write_str("Unable to parse this UUID"),
+            Self::InvalidLength => f.write_str("This UUID does not have the correct length"),
+        }
     }
 }
 

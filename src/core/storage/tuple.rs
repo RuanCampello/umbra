@@ -78,6 +78,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         (Type::DateTime, Value::String(datetime)) => {
             NaiveDateTime::parse_str(datetime).unwrap().serialize(buff)
         }
+        (Type::Uuid, Value::Uuid(uuid)) => todo!(),
         _ => unimplemented!("Tried to call serialize from {value} into {type}"),
     }
 }
