@@ -1,26 +1,30 @@
 use std::{
     io::{self, Read},
     mem,
+    str::FromStr,
 };
 
 use crate::{
-    core::date::{NaiveDate, NaiveTime, Parse},
-    sql::statement::{Type, Value},
-};
-use crate::{
     core::date::{NaiveDateTime, Serialize},
     db::{RowId, Schema},
+};
+use crate::{
+    core::{
+        date::{NaiveDate, NaiveTime, Parse},
+        uuid::Uuid,
+    },
+    sql::statement::{Type, Value},
 };
 
 /// Returns the byte length of a given SQL [`Type`].
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
+        Type::Uuid => 16,
         Type::BigInteger
         | Type::BigSerial
         | Type::UnsignedBigInteger
         | Type::DateTime
-        | Type::DoublePrecision
-        | Type::Uuid => 8,
+        | Type::DoublePrecision => 8,
         Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date | Type::Real => 4,
         Type::Time => 3,
         Type::SmallInt | Type::SmallSerial | Type::UnsignedSmallInt => 2,
@@ -78,7 +82,11 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         (Type::DateTime, Value::String(datetime)) => {
             NaiveDateTime::parse_str(datetime).unwrap().serialize(buff)
         }
-        (Type::Uuid, Value::Uuid(uuid)) => todo!(),
+        (Type::Uuid, Value::Uuid(bytes)) => buff.extend_from_slice(bytes.as_ref()),
+        (Type::Uuid, Value::String(uuid)) => {
+            let uuid = Uuid::from_str(uuid).unwrap();
+            buff.extend_from_slice(uuid.as_ref())
+        }
         _ => unimplemented!("Tried to call serialize from {value} into {type}"),
     }
 }
@@ -182,11 +190,16 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             let n = i64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
-        Type::UnsignedBigInteger | Type::BigSerial | Type::Uuid => {
+        Type::UnsignedBigInteger | Type::BigSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
             reader.read_exact(&mut buf)?;
             let n = u64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
+        }
+        Type::Uuid => {
+            let mut buf = [0; byte_len_of_type(&Type::Uuid)];
+            reader.read_exact(&mut buf)?;
+            Ok(Value::Uuid(Uuid::from_bytes(buf)))
         }
         Type::Real => {
             let mut bytes = [0; byte_len_of_type(&Type::Real)];

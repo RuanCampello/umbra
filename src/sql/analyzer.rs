@@ -5,6 +5,7 @@
 //! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
 
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{
     BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
@@ -12,6 +13,7 @@ use crate::sql::statement::{
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
+use std::str::FromStr;
 
 use super::statement::{Delete, Insert, Select, Update};
 
@@ -33,7 +35,6 @@ pub enum AlreadyExists {
     Index(String),
 }
 
-// TODO: we'll actually have a database error for this later
 type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
 pub(in crate::sql) fn analyze<'s>(
@@ -343,7 +344,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 })?,
             }
         }
-        Expression::Function { func, args } => {
+        Expression::Function { .. } => {
             unimplemented!("function handling is not yet implemented")
         }
         Expression::Nested(expr) => analyze_expression(schema, col_type, expr)?,
@@ -414,6 +415,10 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
         Type::Time => {
             NaiveTime::parse_str(s)?;
             Ok(VmType::Date)
+        }
+        Type::Uuid => {
+            Uuid::from_str(s)?;
+            Ok(VmType::Number)
         }
         _ => Ok(VmType::String),
     }

@@ -16,6 +16,7 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
+use crate::core::uuid::UuidError;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
@@ -775,6 +776,12 @@ impl From<DateParseError> for SqlError {
 impl From<DateParseError> for DatabaseError {
     fn from(value: DateParseError) -> Self {
         value.into()
+    }
+}
+
+impl From<UuidError> for SqlError {
+    fn from(value: UuidError) -> Self {
+        TypeError::UuidError(value).into()
     }
 }
 
@@ -2428,6 +2435,8 @@ mod tests {
         db.exec("INSERT INTO contracts (name) VALUES ('IT consulting'), ('Market agency');")?;
         db.exec("INSERT INTO contracts (id, name) VALUES ('d111ff02-e19f-4e6c-ac44-5804f72f7e8d', 'Residency rental');")?;
 
+        let query = db.exec("SELECT id FROM contracts;")?;
+        assert_eq!(query.tuples.len(), 3);
         Ok(())
     }
 }

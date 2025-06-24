@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use super::random::{random_seed, Rng};
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -13,6 +13,7 @@ use std::fmt::Display;
 /// and [this](https://supabase.com/blog/choosing-a-postgres-primary-key) on Postgres' side.
 pub struct Uuid([u8; 16]);
 
+#[derive(Debug, PartialEq)]
 pub enum UuidError {
     InvalidLength,
     InvalidUUID,
@@ -177,6 +178,19 @@ impl Display for UuidError {
             Self::InvalidUUID => f.write_str("Unable to parse this UUID"),
             Self::InvalidLength => f.write_str("This UUID does not have the correct length"),
         }
+    }
+}
+
+impl FromStr for Uuid {
+    type Err = UuidError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_parse(s)
+    }
+}
+
+impl AsRef<[u8]> for Uuid {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 

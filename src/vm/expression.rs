@@ -1,9 +1,7 @@
 use crate::core::date::DateParseError;
-use crate::core::uuid::Uuid;
+use crate::core::uuid::UuidError;
 use crate::db::{Schema, SqlError};
-use crate::sql::statement::{
-    BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
-};
+use crate::sql::statement::{BinaryOperator, Expression, Temporal, Type, UnaryOperator, Value};
 use std::fmt::{Display, Formatter};
 use std::mem;
 use std::ops::Neg;
@@ -38,6 +36,7 @@ pub enum TypeError {
         found: Expression,
     },
     InvalidDate(DateParseError),
+    UuidError(UuidError),
 }
 
 pub(crate) fn resolve_expression<'exp>(
@@ -276,6 +275,7 @@ impl Display for TypeError {
                 write!(f, "Expected {expected:#?} but found {found:#?}")
             }
             TypeError::InvalidDate(err) => err.fmt(f),
+            TypeError::UuidError(err) => err.fmt(f),
         }
     }
 }
