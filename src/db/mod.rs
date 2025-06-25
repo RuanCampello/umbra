@@ -2433,20 +2433,23 @@ mod tests {
     #[test]
     fn insert_uuids() -> DatabaseResult {
         let mut db = Database::default();
+        let uuid = Uuid::from_str("d111ff02-e19f-4e6c-ac44-5804f72f7e8d").unwrap();
 
         db.exec("CREATE TABLE contracts (id UUID PRIMARY KEY, name VARCHAR(30));")?;
         db.exec("INSERT INTO contracts (name) VALUES ('IT consulting'), ('Market agency');")?;
-        db.exec("INSERT INTO contracts (id, name) VALUES ('d111ff02-e19f-4e6c-ac44-5804f72f7e8d', 'Residency rental');")?;
+        db.exec(&format!(
+            "INSERT INTO contracts (id, name) VALUES ('{uuid}', 'Residency rental');"
+        ))?;
 
         let query = db.exec("SELECT id FROM contracts ORDER BY name;")?;
         assert_eq!(query.tuples.len(), 3);
-        assert_eq!(
-            query.tuples.last(),
-            Some(&vec![Value::Uuid(
-                Uuid::from_str("d111ff02-e19f-4e6c-ac44-5804f72f7e8d").unwrap()
-            )])
-        );
+        assert_eq!(query.tuples.last(), Some(&vec![Value::Uuid(uuid)]));
 
+        let query = db.exec(&format!("SELECT name FROM contracts WHERE id = '{uuid}';"))?;
+        assert_eq!(
+            query.tuples,
+            vec![vec![Value::String("Residency rental".into())]]
+        );
         Ok(())
     }
 }

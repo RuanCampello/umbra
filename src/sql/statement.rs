@@ -493,7 +493,6 @@ impl PartialEq for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
-            // TODO: coerce string to uuid <->
             _ => false,
         }
     }

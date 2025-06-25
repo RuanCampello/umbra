@@ -1,10 +1,11 @@
 use crate::core::date::DateParseError;
-use crate::core::uuid::UuidError;
+use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{BinaryOperator, Expression, Temporal, Type, UnaryOperator, Value};
 use std::fmt::{Display, Formatter};
 use std::mem;
 use std::ops::Neg;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
@@ -181,6 +182,14 @@ fn try_coerce(left: Value, right: Value) -> (Value, Value) {
                 }
             },
             Err(_) => (left, right),
+        },
+        (Value::Uuid(_), Value::String(s)) => match Uuid::from_str(s) {
+            Ok(parsed) => (left, Value::Uuid(parsed)),
+            _ => (left, right),
+        },
+        (Value::String(s), Value::Uuid(_)) => match Uuid::from_str(s) {
+            Ok(parsed) => (Value::Uuid(parsed), right),
+            _ => (left, right),
         },
         _ => (left, right),
     }
