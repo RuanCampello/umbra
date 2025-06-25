@@ -224,4 +224,7 @@ mod tests {
 
         assert_eq!(uuids.len(), range as usize);
     }
+
+    #[test]
+    fn test_uuid_parsing() {}
 }

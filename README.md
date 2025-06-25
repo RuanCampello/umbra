@@ -58,17 +58,17 @@ The beating heart of databases—and poor life decisions.
 
 Umbra supports both **signed** and **unsigned** integer types, as well as their attention-seeking cousins: the **serial** pseudo-types. These `SERIAL` types aren’t real—they're syntactic sugar that auto-magically generate sequences behind the scenes (just like PostgreSQL, but with fewer emotional boundaries).
 
-| Type                 | Status | Range       | Notes                                         |
-|----------------------|--------|-------------|-----------------------------------------------|
-| `SMALLINT`           | ✅     | ±2¹⁵        | Petite regrets                                |
-| `INTEGER`          | ✅     | ±2³¹      | Standard regret capacity                      |
-| `BIGINT`             | ✅     | ±2⁶³        | When regular regrets aren't enough                             |
-| `SMALLINT UNSIGNED`  | ✅     | 0 → 2¹⁶−1   | For when you're cautiously hopeful            |
-| `INTEGER UNSIGNED`   | ✅     | 0 → 2³²−1   | Delusional optimism                           |
-| `BIGINT UNSIGNED`    | ✅     | 0 → 2⁶⁴−1   | Sheer madness                                 |
-| `SMALLSERIAL`        | ✅     | 1 → 2¹⁵−1   | Small but permanent mistakes    |
-| `SERIAL`             | ✅     | 1 → 2³¹−1   | Commitment issues               |
-| `BIGSERIAL`          | ✅     | 1 → 2⁶³−1   | Lifelong consequences            |
+| Type                 | Range       | Notes                                         |
+|----------------------|-------------|-----------------------------------------------|
+| `SMALLINT`           | ±2¹⁵        | Petite regrets                                |
+| `INTEGER`          | ±2³¹      | Standard regret capacity                      |
+| `BIGINT`             | ±2⁶³        | When regular regrets aren't enough                             |
+| `SMALLINT UNSIGNED`  | 0 → 2¹⁶−1   | For when you're cautiously hopeful            |
+| `INTEGER UNSIGNED`   | 0 → 2³²−1   | Delusional optimism                           |
+| `BIGINT UNSIGNED`    | 0 → 2⁶⁴−1   | Sheer madness                                 |
+| `SMALLSERIAL`        | 1 → 2¹⁵−1   | Small but permanent mistakes    |
+| `SERIAL`             | 1 → 2³¹−1   | Commitment issues               |
+| `BIGSERIAL`          | 1 → 2⁶³−1   | Lifelong consequences            |
 
 > [!NOTE]  
 > **Unsigned Integers**  
