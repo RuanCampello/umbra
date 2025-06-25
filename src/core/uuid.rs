@@ -196,7 +196,7 @@ impl AsRef<[u8]> for Uuid {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, str::FromStr};
 
     use crate::core::random::Rng;
 
@@ -226,5 +226,24 @@ mod tests {
     }
 
     #[test]
-    fn test_uuid_parsing() {}
+    fn test_uuid_parsing() {
+        assert!(Uuid::from_str("00000000-0000-0000-0000-000000000000").is_ok());
+        assert!(Uuid::from_str("123e4567-e89b-12d3-a456-426614174000").is_ok());
+        assert!(Uuid::from_str("550e8400-e29b-41d4-a716-446655440000").is_ok());
+        assert!(Uuid::from_str("f47ac10b-58cc-4372-a567-0e02b2c3d479").is_ok());
+
+        assert_eq!(
+            Uuid::from_str("F47AC10B-58CC-4372-A567-0E02B2C3D479"),
+            Uuid::from_str("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+        );
+    }
+
+    #[test]
+    fn test_invalid_uuid_parsing() {
+        assert!(Uuid::from_str("123e4567-e89b-12d3-a456-42661417400").is_err());
+        assert!(Uuid::from_str("123e4567-e89b-12d3-a456-4266141740000").is_err());
+        assert!(Uuid::from_str("123e4567-e89b-12d3-a456-42661417400g").is_err());
+        assert!(Uuid::from_str("123e4567e89b-12d3-a456-426614174000").is_err());
+        assert!(Uuid::from_str("").is_err());
+    }
 }
