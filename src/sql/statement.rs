@@ -506,6 +506,7 @@ impl PartialOrd for Value {
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
+            (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
             _ => panic!("those values are not comparable"),
         }
     }

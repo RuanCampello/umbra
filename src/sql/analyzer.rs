@@ -477,6 +477,7 @@ impl Display for AlreadyExists {
 mod tests {
     use super::*;
     use crate::core::date::DateParseError;
+    use crate::core::uuid::UuidError;
     use crate::db::*;
     use crate::sql::parser::*;
 
@@ -877,10 +878,19 @@ mod tests {
 
     #[test]
     fn uuid_column() -> AnalyzerResult {
+        let create_stmt = "CREATE TABLE contracts (id UUID, name VARCHAR(30));";
+
         Analyze {
-            sql: "CREATE TABLE contracts (id UUID, name VARCHAR(30));",
+            sql: create_stmt,
             ctx: &[],
             expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "INSERT INTO contracts (id, name) VALUES ('not-a-uuid', 'really-good-name');",
+            ctx: &[create_stmt],
+            expected: Err(TypeError::UuidError(UuidError::InvalidLength).into()),
         }
         .assert()
     }
