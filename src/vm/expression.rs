@@ -7,6 +7,8 @@ use std::mem;
 use std::ops::Neg;
 use std::str::FromStr;
 
+use super::functions;
+
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
     Bool,
@@ -89,7 +91,7 @@ pub(crate) fn resolve_expression<'exp>(
                 BinaryOperator::GtEq => Value::Boolean(left >= right),
                 BinaryOperator::Like => match (left, right) {
                     (Value::String(left), Value::String(right)) => {
-                        Value::Boolean(like(&left, &right))
+                        Value::Boolean(functions::like(&left, &right))
                     }
                     _ => Value::Boolean(false),
                 },
@@ -137,9 +139,9 @@ pub(crate) fn resolve_expression<'exp>(
                 }
             })
         }
-        Expression::Function { .. } => {
-            unimplemented!("function handling is not yet implemented")
-        }
+        Expression::Function { func, args } => match func {
+            _ => unimplemented!("function handling is not yet implemented"),
+        },
         Expression::Nested(expr) => resolve_expression(val, schema, expr),
         Expression::Wildcard => unreachable!("Wildcards should have been resolved by now"),
     }
@@ -193,52 +195,6 @@ fn try_coerce(left: Value, right: Value) -> (Value, Value) {
         },
         _ => (left, right),
     }
-}
-
-fn like(left: &str, right: &str) -> bool {
-    fn helper(left: &str, left_idx: usize, right: &str, right_idx: usize) -> bool {
-        let mut left_chars = left[left_idx..].chars();
-        let mut right_chars = right[right_idx..].chars();
-
-        while let Some(pattern_char) = right_chars.next() {
-            match pattern_char {
-                '%' => {
-                    // trailing % matches everything
-                    if right_chars.as_str().is_empty() {
-                        return true;
-                    }
-                    let remaining_pattern = right_chars.as_str();
-                    let mut remaining_left = left_chars.as_str();
-
-                    while !remaining_left.is_empty() {
-                        if helper(remaining_left, 0, remaining_pattern, 0) {
-                            return true;
-                        }
-                        if let Some(c) = remaining_left.chars().next() {
-                            remaining_left = &remaining_left[c.len_utf8()..];
-                        }
-                    }
-                    return false;
-                }
-                '_' => {
-                    // _ matches exactly one character
-                    if left_chars.next().is_none() {
-                        return false;
-                    }
-                }
-                _ => {
-                    // exact match
-                    if left_chars.next() != Some(pattern_char) {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        left_chars.next().is_none()
-    }
-
-    helper(left, 0, right, 0)
 }
 
 impl From<&Type> for VmType {
@@ -295,23 +251,5 @@ impl Display for VmError {
         match self {
             Self::DivisionByZero(left, right) => write!(f, "Division by zero: {left} / {right}"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::vm::expression::like;
-
-    #[test]
-    fn test_like() {
-        assert!(like("hello", "h%"));
-        assert!(!like("hello", "H%"));
-        assert!(!like("a", ""));
-        assert!(like("", ""));
-        assert!(like("Albert", "%er%"));
-        assert!(like("Bernard", "%er%"));
-        assert!(!like("Albert", "_er%"));
-        assert!(like("Cheryl", "_her%"));
-        assert!(!like("abc", "c"));
     }
 }
