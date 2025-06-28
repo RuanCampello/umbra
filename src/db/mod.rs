@@ -2522,6 +2522,39 @@ mod tests {
             ]
         );
 
+        let query = db.exec("SELECT SUBSTRING(name FROM 100 FOR 2) FROM customers;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+            ]
+        );
+
+        let query = db.exec("SELECT SUBSTRING(name FROM 2 FOR 0) FROM customers;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+            ]
+        );
+
+        let query = db.exec("SELECT SUBSTRING(name FROM 3) FROM customers;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("red".into())],
+                vec![Value::String("ry".into())],
+                vec![Value::String("tricia".into())],
+                vec![Value::String("nda".into())],
+            ]
+        );
+
         Ok(())
     }
 }
