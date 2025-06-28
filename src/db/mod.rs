@@ -2507,13 +2507,13 @@ mod tests {
         db.exec(
             r#"
             INSERT INTO customers (name) VALUES
-            ('Jared', 'Mary', 'Patricia', 'Linda');
+            ('Jared'), ('Mary'), ('Patricia'), ('Linda');
             "#,
         )?;
 
-        let query = db.exec("SELECT SUBSTRING(name, 1, 1) FROM customers;")?;
+        let query = db.exec("SELECT SUBSTRING(name FROM 1 FOR 1) FROM customers;");
         assert_eq!(
-            query.tuples,
+            query.unwrap().tuples,
             vec![
                 vec![Value::String("J".into())],
                 vec![Value::String("M".into())],
