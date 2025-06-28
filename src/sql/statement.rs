@@ -6,7 +6,7 @@
 
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
-use crate::vm::expression::TypeError;
+use crate::vm::expression::{TypeError, VmType};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::ops::Neg;
@@ -258,6 +258,7 @@ pub enum Type {
 /// Subset of `SQL` functions.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Function {
+    Substring,
     UuidV4,
 }
 
@@ -641,11 +642,29 @@ impl Display for Value {
     }
 }
 
+impl Function {
+    /// Returns respectvly the minimum and the maximum (if there's any) of this function arguments.
+    pub const fn size_of_args(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::Substring => Some((2, 3)),
+            _ => None,
+        }
+    }
+
+    pub const fn return_type(&self) -> VmType {
+        match self {
+            Self::Substring => VmType::String,
+            Self::UuidV4 => VmType::Number,
+        }
+    }
+}
+
 impl FromStr for Function {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "v4" => Ok(Function::UuidV4),
+            "SUBSTRING" => Ok(Function::Substring),
             _ => panic!("Unknown function"),
         }
     }
@@ -654,6 +673,7 @@ impl FromStr for Function {
 impl Display for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Substring => f.write_str("SUBSTRING"),
             Self::UuidV4 => f.write_str("u4()"),
         }
     }

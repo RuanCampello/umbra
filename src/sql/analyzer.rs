@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use super::statement::{Delete, Insert, Select, Update};
+use super::statement::{Delete, Function, Insert, Select, Update};
 
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
@@ -344,8 +344,18 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 })?,
             }
         }
-        Expression::Function { .. } => {
-            unimplemented!("function handling is not yet implemented")
+        Expression::Function { func, args } => {
+            if let Some((min_args, max_args)) = func.size_of_args() {
+                if args.len() < min_args || args.len() > max_args {
+                    return Err(SqlError::InvalidFuncArgs(min_args, args.len()));
+                }
+            }
+
+            for arg in args {
+                analyze_expression(schema, col_type, arg)?;
+            }
+
+            func.return_type()
         }
         Expression::Nested(expr) => analyze_expression(schema, col_type, expr)?,
         Expression::Wildcard => {

@@ -14,8 +14,8 @@ mod tokens;
 
 use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
 use crate::sql::statement::{
-    Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Statement, Type,
-    UnaryOperator, Value,
+    Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, Statement,
+    Type, UnaryOperator, Value,
 };
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -219,6 +219,10 @@ impl<'input> Parser<'input> {
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
+            }
+            Token::Keyword(func) if Self::supported_functions().contains(&func) => {
+                self.expect_token(Token::LeftParen)?;
+                self.parse_func(func)
             }
 
             Token::Mul => Ok(Expression::Wildcard),
@@ -439,10 +443,37 @@ impl<'input> Parser<'input> {
         Ok(Expression::Value(Value::String(value)))
     }
 
-    fn parse_func(&mut self) -> ParserResult<Expression> {
-        let func = self.parse_ident()?;
+    fn parse_func(&mut self, function: Keyword) -> ParserResult<Expression> {
+        match function {
+            Keyword::Substring => {
+                let expr = self.parse_expr(None)?;
+                let from = match self.consume_optional(Token::Keyword(Keyword::From)) {
+                    true => Some(self.parse_expr(None)?),
+                    _ => None,
+                };
+                let r#for = match self.consume_optional(Token::Keyword(Keyword::For)) {
+                    true => Some(self.parse_expr(None)?),
+                    _ => None,
+                };
 
-        todo!()
+                if r#for.is_none() && from.is_none() {
+                    return Err(self.error(ErrorKind::FormatError(
+                        "SUBSTRING requires at least FROM or FOR arguments".into(),
+                    )));
+                }
+
+                self.expect_token(Token::RightParen)?;
+                Ok(Expression::Function {
+                    func: Function::Substring,
+                    args: vec![
+                        expr,
+                        from.unwrap_or(Expression::Value(Value::Number(0))),
+                        r#for.unwrap_or(Expression::Value(Value::Number(-1))),
+                    ],
+                })
+            }
+            _ => unreachable!("invalid function"),
+        }
     }
 
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
@@ -548,6 +579,10 @@ impl<'input> Parser<'input> {
         &'key K: IntoIterator<Item = &'key Keyword>,
     {
         keywords.into_iter().map(From::from).collect()
+    }
+
+    const fn supported_functions() -> [Keyword; 1] {
+        [Keyword::Substring]
     }
 
     const fn supported_statements() -> [Keyword; 10] {
@@ -1346,6 +1381,29 @@ mod tests {
                     Column::primary_key("id", Type::Uuid),
                     Column::new("name", Type::Varchar(30))
                 ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_substring_func() {
+        let sql = "SELECT SUBSTRING(name FROM 1 FOR 8) FROM users;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Substring,
+                    args: vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Value(Value::Number(1)),
+                        Expression::Value(Value::Number(8)),
+                    ]
+                }],
+                from: "users".into(),
+                order_by: vec![],
+                r#where: None,
             })
         )
     }

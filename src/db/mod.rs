@@ -97,6 +97,7 @@ pub enum SqlError {
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
+    /// Invalid function arguments. Expected x but found y.
     InvalidFuncArgs(usize, usize),
     Type(TypeError),
     Vm(VmError),
