@@ -2511,9 +2511,9 @@ mod tests {
             "#,
         )?;
 
-        let query = db.exec("SELECT SUBSTRING(name FROM 1 FOR 1) FROM customers;");
+        let query = db.exec("SELECT SUBSTRING(name FROM 1 FOR 1) FROM customers;")?;
         assert_eq!(
-            query.unwrap().tuples,
+            query.tuples,
             vec![
                 vec![Value::String("J".into())],
                 vec![Value::String("M".into())],

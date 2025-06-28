@@ -1,7 +1,9 @@
 use crate::core::date::DateParseError;
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
-use crate::sql::statement::{BinaryOperator, Expression, Temporal, Type, UnaryOperator, Value};
+use crate::sql::statement::{
+    BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+};
 use std::fmt::{Display, Formatter};
 use std::mem;
 use std::ops::Neg;
@@ -140,6 +142,23 @@ pub(crate) fn resolve_expression<'exp>(
             })
         }
         Expression::Function { func, args } => match func {
+            Function::Substring => {
+                let string = match resolve_expression(val, schema, &args[0])? {
+                    Value::String(string) => string,
+                    _ => unreachable!(),
+                };
+
+                let start = match resolve_expression(val, schema, &args[1])? {
+                    Value::Number(num) => Some(num as usize),
+                    _ => None,
+                };
+                let count = match resolve_expression(val, schema, &args[2])? {
+                    Value::Number(num) => Some(num as isize),
+                    _ => None,
+                };
+
+                Ok(Value::String(functions::substring(&string, start, count)))
+            }
             _ => unimplemented!("function handling is not yet implemented"),
         },
         Expression::Nested(expr) => resolve_expression(val, schema, expr),
