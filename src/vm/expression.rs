@@ -259,7 +259,7 @@ impl PartialEq for VmType {
             // we do this for coercion properties
             (VmType::Float, VmType::Number) | (VmType::Number, VmType::Float) => true,
             (VmType::String, VmType::Date) | (VmType::Date, VmType::String) => true,
-            // (VmType::String, VmType::Number) | (VmType::Number, VmType::String) => true,
+            //(VmType::String, VmType::Number) | (VmType::Number, VmType::String) => true,
             _ => mem::discriminant(self) == mem::discriminant(other),
         }
     }

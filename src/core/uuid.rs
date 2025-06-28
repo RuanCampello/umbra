@@ -194,6 +194,12 @@ impl AsRef<[u8]> for Uuid {
     }
 }
 
+impl From<Uuid> for u128 {
+    fn from(value: Uuid) -> Self {
+        u128::from_be_bytes(value.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, str::FromStr};

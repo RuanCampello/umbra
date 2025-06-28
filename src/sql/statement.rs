@@ -316,8 +316,7 @@ impl Type {
             | Self::Integer
             | Self::UnsignedInteger
             | Self::BigInteger
-            | Self::UnsignedBigInteger
-            | Self::Uuid => true, // uuid in the end is just an integer number
+            | Self::UnsignedBigInteger => true, // uuid in the end is just an integer number
             _ => self.is_serial(),
         }
     }
@@ -334,6 +333,11 @@ impl Type {
             Self::Real | Self::DoublePrecision => true,
             _ => false,
         }
+    }
+
+    /// Returns true if is any numeric type.
+    pub const fn is_number(&self) -> bool {
+        matches!(self, Self::Uuid) || self.is_serial() || self.is_integer()
     }
 
     // Returns true if this `Type` can be auto-generated

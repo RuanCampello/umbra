@@ -272,10 +272,10 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
 
             match schema.columns[idx].data_type {
                 Type::Boolean => VmType::Bool,
-                Type::Varchar(_) => VmType::String,
+                Type::Varchar(_) | Type::Uuid => VmType::String,
                 Type::Date | Type::DateTime | Type::Time => VmType::Date,
                 float if float.is_float() => VmType::Float,
-                int if int.is_integer() => VmType::Number,
+                number if number.is_integer() => VmType::Number,
                 _ => unreachable!("this type is not defined for analyze_expression"),
             }
         }
@@ -891,6 +891,13 @@ mod tests {
             sql: "INSERT INTO contracts (id, name) VALUES ('not-a-uuid', 'really-good-name');",
             ctx: &[create_stmt],
             expected: Err(TypeError::UuidError(UuidError::InvalidLength).into()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "INSERT INTO contracts (id, name) VALUES (1234, 'other-really-good-name');",
+            ctx: &[create_stmt],
+            expected: Ok(()),
         }
         .assert()
     }
