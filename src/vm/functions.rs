@@ -57,6 +57,14 @@ pub(super) fn substring(string: &str, start: Option<usize>, count: Option<isize>
     string.chars().skip(start).take(length).collect()
 }
 
+pub(super) fn ascii(string: &str) -> usize {
+    string
+        .chars()
+        .next()
+        .map(|ch| ch as usize)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +86,13 @@ mod tests {
     fn test_substring() {
         assert_eq!(substring("PostgreSQL", None, Some(8)), "PostgreS");
         assert_eq!(substring("PostgreSQL", Some(8), None), "SQL");
+    }
+
+    #[test]
+    fn test_ascii() {
+        assert_eq!(ascii("A"), 65);
+        assert_eq!(ascii("a"), 97);
+        assert_eq!(ascii("ABC"), ascii("A"));
+        assert_eq!(ascii("Ω"), 937);
     }
 }
