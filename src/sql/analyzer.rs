@@ -911,4 +911,30 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn substring_function() -> AnalyzerResult {
+        let table = "CREATE TABLE customers (id SERIAL PRIMARY KEY, name VARCHAR(70));";
+
+        Analyze {
+            sql: "SELECT name, SUBSTRING(name FROM 1 FOR 1) FROM customers;",
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT SUBSTRING(name FROM 1) FROM customers;",
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT SUBSTRING(name FOR 8) FROM customers;",
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }
