@@ -2499,4 +2499,29 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn substring_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE customers (id SERIAL PRIMARY KEY, name VARCHAR(70));")?;
+        db.exec(
+            r#"
+            INSERT INTO customers (name) VALUES
+            ('Jared', 'Mary', 'Patricia', 'Linda');
+            "#,
+        )?;
+
+        let query = db.exec("SELECT SUBSTRING(name, 1, 1) FROM customers;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("J".into())],
+                vec![Value::String("M".into())],
+                vec![Value::String("P".into())],
+                vec![Value::String("L".into())],
+            ]
+        );
+
+        Ok(())
+    }
 }

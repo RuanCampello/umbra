@@ -4,6 +4,7 @@
 //! After this analysis, we should be able to handle the execution without almost no runtime error
 //! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
 
+use super::statement::{Delete, Insert, Select, Update};
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
@@ -14,8 +15,6 @@ use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::str::FromStr;
-
-use super::statement::{Delete, Function, Insert, Select, Update};
 
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
