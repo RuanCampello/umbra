@@ -2452,4 +2452,50 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn sort_uuids() -> DatabaseResult {
+        let mut db = Database::default();
+
+        let uuids: [Uuid; 3] = [
+            Uuid::from_str("d111ff02-e19f-4e6c-ac44-5804f72f7e8d").unwrap(),
+            Uuid::from_str("a0000000-0000-0000-0000-000000000000").unwrap(),
+            Uuid::from_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+        ];
+
+        db.exec("CREATE TABLE users (id UUID PRIMARY KEY, name VARCHAR(30), age INT UNSIGNED);")?;
+        db.exec(&format!(
+            r#"
+            INSERT INTO users (id, name, age) VALUES
+            ('{}', 'John Doe', 30),
+            ('{}', 'Mary Dove', 27),
+            ('{}', 'Richard Dahmer', 31);
+        "#,
+            uuids[0], uuids[1], uuids[2]
+        ))?;
+
+        let query = db.exec("SELECT id, name, age FROM users ORDER BY id;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::Uuid(uuids[1]),
+                    Value::String("Mary Dove".into()),
+                    Value::Number(27)
+                ],
+                vec![
+                    Value::Uuid(uuids[0]),
+                    Value::String("John Doe".into()),
+                    Value::Number(30)
+                ],
+                vec![
+                    Value::Uuid(uuids[2]),
+                    Value::String("Richard Dahmer".into()),
+                    Value::Number(31)
+                ]
+            ]
+        );
+
+        Ok(())
+    }
 }
