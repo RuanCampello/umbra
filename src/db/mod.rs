@@ -2557,4 +2557,30 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn ascii_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30));")?;
+        db.exec(
+            r#"
+            INSERT INTO users (name) VALUES
+            ('Alice'), ('Αλέξανδρος'), ('Zoe'), ('Émile'), ('Chloé');
+            "#,
+        )?;
+
+        let query = db.exec("SELECT ASCII(name) FROM users ORDER BY name;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::Number(65)],
+                vec![Value::Number(67)],
+                vec![Value::Number(90)],
+                vec![Value::Number(201)],
+                vec![Value::Number(913)],
+            ]
+        );
+
+        Ok(())
+    }
 }

@@ -655,8 +655,8 @@ impl Function {
 
     pub const fn return_type(&self) -> VmType {
         match self {
-            Self::Substring | Self::Ascii => VmType::String,
-            Self::UuidV4 => VmType::Number,
+            Self::Substring => VmType::String,
+            Self::UuidV4 | Self::Ascii => VmType::Number,
         }
     }
 }
