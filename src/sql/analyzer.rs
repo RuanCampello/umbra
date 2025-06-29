@@ -936,4 +936,14 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn ascii_function() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT ASCII(name) FROM users ORDER BY name;",
+            ctx: &["CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50));"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }
