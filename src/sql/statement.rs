@@ -648,6 +648,7 @@ impl Function {
     pub const fn size_of_args(&self) -> Option<(usize, usize)> {
         match self {
             Self::Substring => Some((2, 3)),
+            Self::Ascii => Some((1, 1)),
             _ => None,
         }
     }
@@ -666,6 +667,7 @@ impl FromStr for Function {
         match s.to_lowercase().as_str() {
             "v4" => Ok(Function::UuidV4),
             "SUBSTRING" => Ok(Function::Substring),
+            "ASCII" => Ok(Function::Ascii),
             _ => panic!("Unknown function"),
         }
     }

@@ -472,6 +472,15 @@ impl<'input> Parser<'input> {
                     ],
                 })
             }
+            Keyword::Ascii => {
+                let expr = self.parse_expr(None)?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Ascii,
+                    args: vec![expr],
+                })
+            }
             _ => unreachable!("invalid function"),
         }
     }
@@ -581,8 +590,8 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_functions() -> [Keyword; 1] {
-        [Keyword::Substring]
+    const fn supported_functions() -> [Keyword; 2] {
+        [Keyword::Substring, Keyword::Ascii]
     }
 
     const fn supported_statements() -> [Keyword; 10] {
@@ -1404,6 +1413,25 @@ mod tests {
                 from: "users".into(),
                 order_by: vec![],
                 r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_ascii_func() {
+        let sql = "SELECT name FROM users ORDER BY ASCII(name);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Identifier("name".into())],
+                from: "users".into(),
+                r#where: None,
+                order_by: vec![Expression::Function {
+                    func: Function::Ascii,
+                    args: vec![Expression::Identifier("name".into())]
+                }]
             })
         )
     }
