@@ -259,6 +259,7 @@ pub enum Type {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Function {
     Substring,
+    Ascii,
     UuidV4,
 }
 
@@ -653,7 +654,7 @@ impl Function {
 
     pub const fn return_type(&self) -> VmType {
         match self {
-            Self::Substring => VmType::String,
+            Self::Substring | Self::Ascii => VmType::String,
             Self::UuidV4 => VmType::Number,
         }
     }
@@ -674,6 +675,7 @@ impl Display for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Substring => f.write_str("SUBSTRING"),
+            Self::Ascii => f.write_str("ASCII"),
             Self::UuidV4 => f.write_str("u4()"),
         }
     }

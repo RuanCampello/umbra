@@ -141,26 +141,38 @@ pub(crate) fn resolve_expression<'exp>(
                 }
             })
         }
-        Expression::Function { func, args } => match func {
-            Function::Substring => {
-                let string = match resolve_expression(val, schema, &args[0])? {
-                    Value::String(string) => string,
+        Expression::Function { func, args } => {
+            let get_string = |argument: &Expression| -> Result<String, SqlError> {
+                match resolve_expression(val, schema, argument)? {
+                    Value::String(string) => return Ok(string),
                     _ => unreachable!(),
-                };
+                }
+            };
 
-                let start = match resolve_expression(val, schema, &args[1])? {
-                    Value::Number(num) => Some(num as usize),
-                    _ => None,
-                };
-                let count = match resolve_expression(val, schema, &args[2])? {
-                    Value::Number(num) => Some(num as isize),
-                    _ => None,
-                };
+            match func {
+                Function::Substring => {
+                    let string = get_string(&args[0])?;
 
-                Ok(Value::String(functions::substring(&string, start, count)))
+                    let start = match resolve_expression(val, schema, &args[1])? {
+                        Value::Number(num) => Some(num as usize),
+                        _ => None,
+                    };
+                    let count = match resolve_expression(val, schema, &args[2])? {
+                        Value::Number(num) => Some(num as isize),
+                        _ => None,
+                    };
+
+                    Ok(Value::String(functions::substring(&string, start, count)))
+                }
+                Function::Ascii => {
+                    let string = get_string(&args[0])?;
+                    println!("string {string}");
+
+                    Ok(Value::Number(functions::ascii(&string) as i128))
+                }
+                _ => unimplemented!("function handling is not yet implemented"),
             }
-            _ => unimplemented!("function handling is not yet implemented"),
-        },
+        }
         Expression::Nested(expr) => resolve_expression(val, schema, expr),
         Expression::Wildcard => unreachable!("Wildcards should have been resolved by now"),
     }
