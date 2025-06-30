@@ -2583,4 +2583,56 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn concat_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE contacts (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255),
+                email VARCHAR(255),
+                phone VARCHAR(15)
+            );
+        "#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO contacts (name, email, phone)
+            VALUES
+                ('John Doe', 'john.doe@example.com', '123-456-7890'),
+                ('Jane Smith', 'jane.smith@example.com', '987-654-3210'),
+                ('Bob Johnson', 'bob.johnson@example.com', '555-1234'),
+                ('Alice Brown', 'alice.brown@example.com', '555-1235'),
+                ('Charlie Davis', 'charlie.davis@example.com', '987-654-3210');
+        "#,
+        )?;
+
+        let query =
+            db.exec("SELECT CONCAT(name, ' ', '(', email, ')', ' ', phone) FROM contacts;")?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String(
+                    "John Doe (john.doe@example.com) 123-456-7890".into()
+                )],
+                vec![Value::String(
+                    "Jane Smith (jane.smith@example.com) 987-654-3210".into()
+                )],
+                vec![Value::String(
+                    "Bob Johnson (bob.johnson@example.com) 555-1234".into()
+                )],
+                vec![Value::String(
+                    "Alice Brown (alice.brown@example.com) 555-1235".into()
+                )],
+                vec![Value::String(
+                    "Charlie Davis (charlie.davis@example.com) 987-654-3210".into()
+                )]
+            ]
+        );
+
+        Ok(())
+    }
 }
