@@ -946,4 +946,14 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn concat_function() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT CONCAT(name, last_name) FROM users;",
+            ctx: &["CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(100));"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }

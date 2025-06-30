@@ -166,9 +166,15 @@ pub(crate) fn resolve_expression<'exp>(
                 }
                 Function::Ascii => {
                     let string = get_string(&args[0])?;
-                    println!("string {string}");
 
                     Ok(Value::Number(functions::ascii(&string) as i128))
+                }
+                Function::Concat => {
+                    let strings: Vec<String> =
+                        args.iter().map(get_string).collect::<Result<Vec<_>, _>>()?;
+
+                    println!("{:#?}", strings);
+                    todo!()
                 }
                 _ => unimplemented!("function handling is not yet implemented"),
             }

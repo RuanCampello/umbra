@@ -481,6 +481,12 @@ impl<'input> Parser<'input> {
                     args: vec![expr],
                 })
             }
+            Keyword::Concat => {
+                let arguments = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
+                println!("{:#?}", arguments);
+
+                todo!()
+            }
             _ => unreachable!("invalid function"),
         }
     }
@@ -590,8 +596,8 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_functions() -> [Keyword; 2] {
-        [Keyword::Substring, Keyword::Ascii]
+    const fn supported_functions() -> [Keyword; 3] {
+        [Keyword::Substring, Keyword::Ascii, Keyword::Concat]
     }
 
     const fn supported_statements() -> [Keyword; 10] {
@@ -1432,6 +1438,28 @@ mod tests {
                     func: Function::Ascii,
                     args: vec![Expression::Identifier("name".into())]
                 }]
+            })
+        )
+    }
+
+    #[test]
+    fn test_concat_func() {
+        let sql = "SELECT CONCAT(name, middle_name) FROM users;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Concat,
+                    args: vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Identifier("middle_name".into()),
+                    ]
+                }],
+                from: "users".into(),
+                order_by: vec![],
+                r#where: None,
             })
         )
     }

@@ -259,6 +259,7 @@ pub enum Type {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Function {
     Substring,
+    Concat,
     Ascii,
     UuidV4,
 }
@@ -649,13 +650,15 @@ impl Function {
         match self {
             Self::Substring => Some((2, 3)),
             Self::Ascii => Some((1, 1)),
+            Self::Concat => Some((2, usize::MAX)),
             _ => None,
         }
     }
 
+    /// Returns the `VmType` that this function returns.
     pub const fn return_type(&self) -> VmType {
         match self {
-            Self::Substring => VmType::String,
+            Self::Substring | Self::Concat => VmType::String,
             Self::UuidV4 | Self::Ascii => VmType::Number,
         }
     }
@@ -668,6 +671,7 @@ impl FromStr for Function {
             "v4" => Ok(Function::UuidV4),
             "SUBSTRING" => Ok(Function::Substring),
             "ASCII" => Ok(Function::Ascii),
+            "CONCAT" => Ok(Function::Concat),
             _ => panic!("Unknown function"),
         }
     }
@@ -677,6 +681,7 @@ impl Display for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Substring => f.write_str("SUBSTRING"),
+            Self::Concat => f.write_str("CONCAT"),
             Self::Ascii => f.write_str("ASCII"),
             Self::UuidV4 => f.write_str("u4()"),
         }

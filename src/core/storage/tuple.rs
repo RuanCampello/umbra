@@ -116,28 +116,26 @@ pub(crate) fn serialize_tuple<'value>(
     buff
 }
 
+// FIXME: use of sorting with different type from schema
 pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
     schema
         .columns
         .iter()
         .enumerate()
-        .map(|(idx, col)| {
-            // println!("column {col:#?}");
-            match col.data_type {
-                Type::Boolean => 1,
-                Type::Varchar(max) => {
-                    let Value::String(string) = &tuple[idx] else {
-                        panic!(
-                            "Expected data type {} but found {}",
-                            Type::Varchar(max),
-                            tuple[idx]
-                        );
-                    };
+        .map(|(idx, col)| match col.data_type {
+            Type::Boolean => 1,
+            Type::Varchar(max) => {
+                let Value::String(string) = &tuple[idx] else {
+                    panic!(
+                        "Expected data type {} but found {}",
+                        Type::Varchar(max),
+                        tuple[idx]
+                    );
+                };
 
-                    utf_8_length_bytes(max) + string.as_bytes().len()
-                }
-                other => byte_len_of_type(&other),
+                utf_8_length_bytes(max) + string.as_bytes().len()
             }
+            other => byte_len_of_type(&other),
         })
         .sum()
 }
