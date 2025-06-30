@@ -949,9 +949,19 @@ mod tests {
 
     #[test]
     fn concat_function() -> AnalyzerResult {
+        let table =
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(100));";
+
         Analyze {
             sql: "SELECT CONCAT(name, last_name) FROM users;",
-            ctx: &["CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(100));"],
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT CONCAT(name) FROM users;",
+            ctx: &[table],
             expected: Ok(()),
         }
         .assert()

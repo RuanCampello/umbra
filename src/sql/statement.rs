@@ -650,7 +650,7 @@ impl Function {
         match self {
             Self::Substring => Some((2, 3)),
             Self::Ascii => Some((1, 1)),
-            Self::Concat => Some((2, usize::MAX)),
+            Self::Concat => Some((1, usize::MAX)),
             _ => None,
         }
     }
