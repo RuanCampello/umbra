@@ -261,6 +261,7 @@ pub enum Function {
     Substring,
     Concat,
     Ascii,
+    Position,
     UuidV4,
 }
 
@@ -659,7 +660,7 @@ impl Function {
     pub const fn return_type(&self) -> VmType {
         match self {
             Self::Substring | Self::Concat => VmType::String,
-            Self::UuidV4 | Self::Ascii => VmType::Number,
+            Self::UuidV4 | Self::Ascii | Self::Position => VmType::Number,
         }
     }
 }
@@ -683,6 +684,7 @@ impl Display for Function {
             Self::Substring => f.write_str("SUBSTRING"),
             Self::Concat => f.write_str("CONCAT"),
             Self::Ascii => f.write_str("ASCII"),
+            Self::Position => f.write_str("POSITION"),
             Self::UuidV4 => f.write_str("u4()"),
         }
     }

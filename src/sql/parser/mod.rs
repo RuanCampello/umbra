@@ -1466,4 +1466,26 @@ mod tests {
             })
         )
     }
+
+    #[test]
+    fn test_position_func() {
+        let sql = "SELECT POSITION('fateful' IN description) FROM films;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Position,
+                    args: vec![
+                        Expression::Value(Value::String("fateful".into())),
+                        Expression::Identifier("description".into()),
+                    ]
+                }],
+                from: "films".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
 }
