@@ -65,6 +65,10 @@ pub(super) fn ascii(string: &str) -> usize {
         .unwrap_or_default()
 }
 
+pub(super) fn concat(strings: &[String]) -> String {
+    strings.concat()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

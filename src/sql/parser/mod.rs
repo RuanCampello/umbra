@@ -482,10 +482,13 @@ impl<'input> Parser<'input> {
                 })
             }
             Keyword::Concat => {
-                let arguments = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
-                println!("{:#?}", arguments);
+                let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
+                self.expect_token(Token::RightParen)?;
 
-                todo!()
+                Ok(Expression::Function {
+                    func: Function::Concat,
+                    args,
+                })
             }
             _ => unreachable!("invalid function"),
         }

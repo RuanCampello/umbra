@@ -173,8 +173,7 @@ pub(crate) fn resolve_expression<'exp>(
                     let strings: Vec<String> =
                         args.iter().map(get_string).collect::<Result<Vec<_>, _>>()?;
 
-                    println!("{:#?}", strings);
-                    todo!()
+                    Ok(Value::String(functions::concat(&strings)))
                 }
                 _ => unimplemented!("function handling is not yet implemented"),
             }
