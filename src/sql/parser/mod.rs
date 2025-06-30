@@ -221,7 +221,6 @@ impl<'input> Parser<'input> {
                 self.parse_datetime(keyword)
             }
             Token::Keyword(func) if Self::supported_functions().contains(&func) => {
-                println!("func {func}");
                 self.expect_token(Token::LeftParen)?;
                 self.parse_func(func)
             }

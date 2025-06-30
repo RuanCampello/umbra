@@ -966,4 +966,13 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn position_function() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT POSITION('ab' IN last_name) FROM users;",
+            ctx: &["CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(100));"],
+            expected: Ok(())
+        }.assert()
+    }
 }

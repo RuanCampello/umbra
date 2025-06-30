@@ -69,6 +69,13 @@ pub(super) fn concat(strings: &[String]) -> String {
     strings.concat()
 }
 
+pub(super) fn position(string: &str, pat: &str) -> usize {
+    string
+        .find(pat)
+        .map(|pos| pos.saturating_add(1))
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +105,12 @@ mod tests {
         assert_eq!(ascii("a"), 97);
         assert_eq!(ascii("ABC"), ascii("A"));
         assert_eq!(ascii("Ω"), 937);
+    }
+
+    #[test]
+    fn test_position() {
+        assert_eq!(position("PostgreSQL Tutorial", "Tutorial"), 12);
+        assert_eq!(position("This is a cat", "is"), 3);
+        assert_eq!(position("PostgreSQL Tutorial", "tutorial"), 0);
     }
 }
