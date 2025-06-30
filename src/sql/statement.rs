@@ -652,6 +652,7 @@ impl Function {
             Self::Substring => Some((2, 3)),
             Self::Ascii => Some((1, 1)),
             Self::Concat => Some((1, usize::MAX)),
+            Self::Position => Some((2, 2)),
             _ => None,
         }
     }
@@ -661,19 +662,6 @@ impl Function {
         match self {
             Self::Substring | Self::Concat => VmType::String,
             Self::UuidV4 | Self::Ascii | Self::Position => VmType::Number,
-        }
-    }
-}
-
-impl FromStr for Function {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "v4" => Ok(Function::UuidV4),
-            "SUBSTRING" => Ok(Function::Substring),
-            "ASCII" => Ok(Function::Ascii),
-            "CONCAT" => Ok(Function::Concat),
-            _ => panic!("Unknown function"),
         }
     }
 }

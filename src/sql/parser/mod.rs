@@ -221,6 +221,7 @@ impl<'input> Parser<'input> {
                 self.parse_datetime(keyword)
             }
             Token::Keyword(func) if Self::supported_functions().contains(&func) => {
+                println!("func {func}");
                 self.expect_token(Token::LeftParen)?;
                 self.parse_func(func)
             }
@@ -490,6 +491,17 @@ impl<'input> Parser<'input> {
                     args,
                 })
             }
+            Keyword::Position => {
+                let needle = self.parse_pref()?;
+                self.expect_keyword(Keyword::In)?;
+                let haystack = self.parse_pref()?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Position,
+                    args: vec![needle, haystack],
+                })
+            }
             _ => unreachable!("invalid function"),
         }
     }
@@ -599,8 +611,13 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_functions() -> [Keyword; 3] {
-        [Keyword::Substring, Keyword::Ascii, Keyword::Concat]
+    const fn supported_functions() -> [Keyword; 4] {
+        [
+            Keyword::Substring,
+            Keyword::Ascii,
+            Keyword::Concat,
+            Keyword::Position,
+        ]
     }
 
     const fn supported_statements() -> [Keyword; 10] {
