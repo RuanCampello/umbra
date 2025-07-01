@@ -1375,6 +1375,8 @@ impl TupleComparator {
             tuple.len().eq(&other_tuple.len()),
             "Comp called for mismatch size tuples"
         );
+        println!("tuple {tuple:#?} schema {:#?}", self.schema);
+
         debug_assert!(
             tuple.len().eq(&self.schema.len()),
             "Comp called for mismatch tuple with schema"
@@ -1389,8 +1391,8 @@ impl TupleComparator {
                     if std::mem::discriminant(v1).ne(&std::mem::discriminant(v2)) {
                         unreachable!("This should be impossible, but type {v1} in memory is different from {v2}");
                     }
-
-                    None                }
+                    None
+                }
                 _ => None,
             }).unwrap_or(Ordering::Equal)
     }

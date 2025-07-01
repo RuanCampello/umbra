@@ -14,8 +14,8 @@ mod tokens;
 
 use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
 use crate::sql::statement::{
-    Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Statement, Type,
-    UnaryOperator, Value,
+    Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, Statement,
+    Type, UnaryOperator, Value,
 };
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -149,6 +149,7 @@ impl<'input> Parser<'input> {
             Token::Div => BinaryOperator::Div,
             Token::Keyword(Keyword::And) => BinaryOperator::And,
             Token::Keyword(Keyword::Or) => BinaryOperator::Or,
+            Token::Keyword(Keyword::Like) => BinaryOperator::Like,
             Token::Keyword(Keyword::Between) => {
                 let start = self.parse_expr(Some(precedence))?;
                 self.expect_keyword(Keyword::And)?;
@@ -167,6 +168,32 @@ impl<'input> Parser<'input> {
                         right: Box::new(end),
                     }),
                 });
+            }
+            Token::Keyword(Keyword::In) => {
+                self.next_token()?;
+                let values =
+                    self.parse_separated_tokens(|parser| parser.parse_expr(None), false)?;
+                self.expect_token(Token::RightParen)?;
+
+                let mut iter = values.into_iter();
+                let first = match iter.next() {
+                    Some(first) => Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(left.clone()),
+                        right: Box::new(first),
+                    },
+                    None => unreachable!(),
+                };
+
+                return Ok(iter.fold(first, |acc, value| Expression::BinaryOperation {
+                    operator: BinaryOperator::Or,
+                    left: Box::new(acc),
+                    right: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(left.clone()),
+                        right: Box::new(value),
+                    }),
+                }));
             }
             token => {
                 return Err(self.error(ErrorKind::Expected {
@@ -192,6 +219,10 @@ impl<'input> Parser<'input> {
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
+            }
+            Token::Keyword(func) if Self::supported_functions().contains(&func) => {
+                self.expect_token(Token::LeftParen)?;
+                self.parse_func(func)
             }
 
             Token::Mul => Ok(Expression::Wildcard),
@@ -279,6 +310,7 @@ impl<'input> Parser<'input> {
                     (Keyword::SmallSerial, _) => Ok(Type::SmallSerial),
                     (Keyword::Serial, _) => Ok(Type::Serial),
                     (Keyword::BigSerial, _) => Ok(Type::BigSerial),
+                    (Keyword::Uuid, _) => Ok(Type::Uuid),
                     _ => unreachable!("unknown integer"),
                 }
             }
@@ -337,7 +369,9 @@ impl<'input> Parser<'input> {
             | Token::GtEq
             | Token::Lt
             | Token::LtEq
-            | Token::Keyword(Keyword::Between) => 20,
+            | Token::Keyword(Keyword::Between)
+            | Token::Keyword(Keyword::In)
+            | Token::Keyword(Keyword::Like) => 20,
             Token::Plus | Token::Minus => 30,
             Token::Mul | Token::Div => 40,
             _ => 0,
@@ -407,6 +441,68 @@ impl<'input> Parser<'input> {
         };
 
         Ok(Expression::Value(Value::String(value)))
+    }
+
+    fn parse_func(&mut self, function: Keyword) -> ParserResult<Expression> {
+        match function {
+            Keyword::Substring => {
+                let expr = self.parse_expr(None)?;
+                let from = match self.consume_optional(Token::Keyword(Keyword::From)) {
+                    true => Some(self.parse_expr(None)?),
+                    _ => None,
+                };
+                let r#for = match self.consume_optional(Token::Keyword(Keyword::For)) {
+                    true => Some(self.parse_expr(None)?),
+                    _ => None,
+                };
+
+                if r#for.is_none() && from.is_none() {
+                    return Err(self.error(ErrorKind::FormatError(
+                        "SUBSTRING requires at least FROM or FOR arguments".into(),
+                    )));
+                }
+
+                self.expect_token(Token::RightParen)?;
+                Ok(Expression::Function {
+                    func: Function::Substring,
+                    args: vec![
+                        expr,
+                        from.unwrap_or(Expression::Value(Value::Number(0))),
+                        r#for.unwrap_or(Expression::Value(Value::Number(-1))),
+                    ],
+                })
+            }
+            Keyword::Ascii => {
+                let expr = self.parse_expr(None)?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Ascii,
+                    args: vec![expr],
+                })
+            }
+            Keyword::Concat => {
+                let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Concat,
+                    args,
+                })
+            }
+            Keyword::Position => {
+                let needle = self.parse_pref()?;
+                self.expect_keyword(Keyword::In)?;
+                let haystack = self.parse_pref()?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Position,
+                    args: vec![needle, haystack],
+                })
+            }
+            _ => unreachable!("invalid function"),
+        }
     }
 
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
@@ -514,6 +610,15 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
+    const fn supported_functions() -> [Keyword; 4] {
+        [
+            Keyword::Substring,
+            Keyword::Ascii,
+            Keyword::Concat,
+            Keyword::Position,
+        ]
+    }
+
     const fn supported_statements() -> [Keyword; 10] {
         [
             Keyword::Select,
@@ -529,7 +634,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 13] {
+    const fn supported_types() -> [Keyword; 14] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -539,6 +644,7 @@ impl<'input> Parser<'input> {
             Keyword::BigInt,
             Keyword::Real,
             Keyword::Double,
+            Keyword::Uuid,
             Keyword::Bool,
             Keyword::Varchar,
             Keyword::Time,
@@ -554,7 +660,8 @@ impl<'input> Parser<'input> {
             | Keyword::BigInt
             | Keyword::SmallSerial
             | Keyword::Serial
-            | Keyword::BigSerial => true,
+            | Keyword::BigSerial
+            | Keyword::Uuid => true,
             _ => false,
         }
     }
@@ -1219,5 +1326,182 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn test_in_operator() {
+        let sql = "SELECT film_id, title FROM film WHERE film_id IN (1, 2, 3);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                from: "film".to_string(),
+                order_by: vec![],
+                columns: vec![
+                    Expression::Identifier("film_id".into()),
+                    Expression::Identifier("title".into())
+                ],
+                r#where: Some(Expression::BinaryOperation {
+                    operator: BinaryOperator::Or,
+                    left: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::Or,
+                        left: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("film_id".to_string())),
+                            right: Box::new(Expression::Value(Value::Number(1))),
+                        }),
+                        right: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("film_id".to_string())),
+                            right: Box::new(Expression::Value(Value::Number(2))),
+                        }),
+                    }),
+                    right: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(Expression::Identifier("film_id".to_string())),
+                        right: Box::new(Expression::Value(Value::Number(3))),
+                    }),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn test_in_expansion() {
+        let sql = "SELECT film_id, title FROM films WHERE film_id IN (1, 2, 3);";
+        let equivalent_sql =
+            "SELECT film_id, title FROM films WHERE film_id = 1 OR film_id = 2 OR film_id = 3;";
+
+        let statement = Parser::new(sql).parse_statement();
+        let equivalent_statement = Parser::new(equivalent_sql).parse_statement();
+
+        assert_eq!(statement, equivalent_statement);
+    }
+
+    #[test]
+    fn test_like_operator() {
+        let sql = "SELECT name, last_name FROM customer WHERE name LIKE 'Jen%';";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                order_by: vec![],
+                from: "customer".into(),
+                columns: vec![
+                    Expression::Identifier("name".into()),
+                    Expression::Identifier("last_name".into())
+                ],
+                r#where: Some(Expression::BinaryOperation {
+                    operator: BinaryOperator::Like,
+                    left: Box::new(Expression::Identifier("name".into())),
+                    right: Box::new(Expression::Value(Value::String("Jen%".into())))
+                })
+            })
+        )
+    }
+
+    #[test]
+    fn test_uuid() {
+        let sql = "CREATE TABLE contracts (id UUID PRIMARY KEY, name VARCHAR(30));";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Table {
+                name: "contracts".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Uuid),
+                    Column::new("name", Type::Varchar(30))
+                ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_substring_func() {
+        let sql = "SELECT SUBSTRING(name FROM 1 FOR 8) FROM users;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Substring,
+                    args: vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Value(Value::Number(1)),
+                        Expression::Value(Value::Number(8)),
+                    ]
+                }],
+                from: "users".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_ascii_func() {
+        let sql = "SELECT name FROM users ORDER BY ASCII(name);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Identifier("name".into())],
+                from: "users".into(),
+                r#where: None,
+                order_by: vec![Expression::Function {
+                    func: Function::Ascii,
+                    args: vec![Expression::Identifier("name".into())]
+                }]
+            })
+        )
+    }
+
+    #[test]
+    fn test_concat_func() {
+        let sql = "SELECT CONCAT(name, middle_name) FROM users;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Concat,
+                    args: vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Identifier("middle_name".into()),
+                    ]
+                }],
+                from: "users".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_position_func() {
+        let sql = "SELECT POSITION('fateful' IN description) FROM films;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Position,
+                    args: vec![
+                        Expression::Value(Value::String("fateful".into())),
+                        Expression::Identifier("description".into()),
+                    ]
+                }],
+                from: "films".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        )
     }
 }

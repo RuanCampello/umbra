@@ -71,6 +71,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                         let name = match constraint {
                             Constraint::PrimaryKey => index!(primary on (table)),
                             Constraint::Unique => index!(unique on (table) (col.name)),
+                            _ => unreachable!("This ain't a index"),
                         };
 
                         Create::Index {

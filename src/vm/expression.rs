@@ -1,9 +1,15 @@
 use crate::core::date::DateParseError;
+use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
-use crate::sql::statement::{BinaryOperator, Expression, Temporal, Type, UnaryOperator, Value};
+use crate::sql::statement::{
+    BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+};
 use std::fmt::{Display, Formatter};
 use std::mem;
 use std::ops::Neg;
+use std::str::FromStr;
+
+use super::functions;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
@@ -35,6 +41,7 @@ pub enum TypeError {
         found: Expression,
     },
     InvalidDate(DateParseError),
+    UuidError(UuidError),
 }
 
 pub(crate) fn resolve_expression<'exp>(
@@ -84,6 +91,12 @@ pub(crate) fn resolve_expression<'exp>(
                 BinaryOperator::LtEq => Value::Boolean(left <= right),
                 BinaryOperator::Gt => Value::Boolean(left > right),
                 BinaryOperator::GtEq => Value::Boolean(left >= right),
+                BinaryOperator::Like => match (left, right) {
+                    (Value::String(left), Value::String(right)) => {
+                        Value::Boolean(functions::like(&left, &right))
+                    }
+                    _ => Value::Boolean(false),
+                },
 
                 logical @ (BinaryOperator::And | BinaryOperator::Or) => {
                     let (Value::Boolean(left), Value::Boolean(right)) = (&left, &right) else {
@@ -128,6 +141,49 @@ pub(crate) fn resolve_expression<'exp>(
                 }
             })
         }
+        Expression::Function { func, args } => {
+            let get_string = |argument: &Expression| -> Result<String, SqlError> {
+                match resolve_expression(val, schema, argument)? {
+                    Value::String(string) => return Ok(string),
+                    _ => unreachable!(),
+                }
+            };
+
+            match func {
+                Function::Substring => {
+                    let string = get_string(&args[0])?;
+
+                    let start = match resolve_expression(val, schema, &args[1])? {
+                        Value::Number(num) => Some(num as usize),
+                        _ => None,
+                    };
+                    let count = match resolve_expression(val, schema, &args[2])? {
+                        Value::Number(num) => Some(num as isize),
+                        _ => None,
+                    };
+
+                    Ok(Value::String(functions::substring(&string, start, count)))
+                }
+                Function::Ascii => {
+                    let string = get_string(&args[0])?;
+
+                    Ok(Value::Number(functions::ascii(&string) as i128))
+                }
+                Function::Concat => {
+                    let strings: Vec<String> =
+                        args.iter().map(get_string).collect::<Result<Vec<_>, _>>()?;
+
+                    Ok(Value::String(functions::concat(&strings)))
+                }
+                Function::Position => {
+                    let pat = get_string(&args[0])?;
+                    let string = get_string(&args[1])?;
+
+                    Ok(Value::Number(functions::position(&string, &pat) as i128))
+                }
+                _ => unimplemented!("function handling is not yet implemented"),
+            }
+        }
         Expression::Nested(expr) => resolve_expression(val, schema, expr),
         Expression::Wildcard => unreachable!("Wildcards should have been resolved by now"),
     }
@@ -171,6 +227,14 @@ fn try_coerce(left: Value, right: Value) -> (Value, Value) {
             },
             Err(_) => (left, right),
         },
+        (Value::Uuid(_), Value::String(s)) => match Uuid::from_str(s) {
+            Ok(parsed) => (left, Value::Uuid(parsed)),
+            _ => (left, right),
+        },
+        (Value::String(s), Value::Uuid(_)) => match Uuid::from_str(s) {
+            Ok(parsed) => (Value::Uuid(parsed), right),
+            _ => (left, right),
+        },
         _ => (left, right),
     }
 }
@@ -193,6 +257,7 @@ impl PartialEq for VmType {
             // we do this for coercion properties
             (VmType::Float, VmType::Number) | (VmType::Number, VmType::Float) => true,
             (VmType::String, VmType::Date) | (VmType::Date, VmType::String) => true,
+            //(VmType::String, VmType::Number) | (VmType::Number, VmType::String) => true,
             _ => mem::discriminant(self) == mem::discriminant(other),
         }
     }
@@ -218,6 +283,7 @@ impl Display for TypeError {
                 write!(f, "Expected {expected:#?} but found {found:#?}")
             }
             TypeError::InvalidDate(err) => err.fmt(f),
+            TypeError::UuidError(err) => err.fmt(f),
         }
     }
 }

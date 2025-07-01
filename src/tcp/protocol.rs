@@ -147,6 +147,7 @@ impl From<&Type> for u8 {
             Type::SmallSerial => INTEGER_CATEGORY | 0x06,
             Type::Serial => INTEGER_CATEGORY | 0x07,
             Type::BigSerial => INTEGER_CATEGORY | 0x08,
+            Type::Uuid => INTEGER_CATEGORY | 0x10,
 
             Type::Real => FLOAT_CATEGORY | 0x0,
             Type::DoublePrecision => FLOAT_CATEGORY | 0x1,

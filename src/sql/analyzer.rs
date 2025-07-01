@@ -4,7 +4,9 @@
 //! After this analysis, we should be able to handle the execution without almost no runtime error
 //! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
 
+use super::statement::{Delete, Insert, Select, Update};
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{
     BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
@@ -12,8 +14,7 @@ use crate::sql::statement::{
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::HashSet;
 use std::fmt::Display;
-
-use super::statement::{Delete, Insert, Select, Update};
+use std::str::FromStr;
 
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
@@ -33,7 +34,6 @@ pub enum AlreadyExists {
     Index(String),
 }
 
-// TODO: we'll actually have a database error for this later
 type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
 pub(in crate::sql) fn analyze<'s>(
@@ -144,7 +144,7 @@ pub(in crate::sql) fn analyze<'s>(
                     if col.name == ROW_COL_ID {
                         continue;
                     }
-                    if col.data_type.is_serial() {
+                    if col.data_type.can_be_autogen() {
                         continue;
                     }
 
@@ -271,10 +271,10 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
 
             match schema.columns[idx].data_type {
                 Type::Boolean => VmType::Bool,
-                Type::Varchar(_) => VmType::String,
+                Type::Varchar(_) | Type::Uuid => VmType::String,
                 Type::Date | Type::DateTime | Type::Time => VmType::Date,
                 float if float.is_float() => VmType::Float,
-                int if int.is_integer() => VmType::Number,
+                number if number.is_integer() => VmType::Number,
                 _ => unreachable!("this type is not defined for analyze_expression"),
             }
         }
@@ -302,6 +302,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 | BinaryOperator::LtEq
                 | BinaryOperator::Gt
                 | BinaryOperator::GtEq => VmType::Bool,
+                BinaryOperator::Like if left_type.eq(&VmType::String) => VmType::Bool,
                 BinaryOperator::And | BinaryOperator::Or if left_type.eq(&VmType::Bool) => {
                     VmType::Bool
                 }
@@ -341,6 +342,19 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                     found: *expr.clone(),
                 })?,
             }
+        }
+        Expression::Function { func, args } => {
+            if let Some((min_args, max_args)) = func.size_of_args() {
+                if args.len() < min_args || args.len() > max_args {
+                    return Err(SqlError::InvalidFuncArgs(min_args, args.len()));
+                }
+            }
+
+            for arg in args {
+                analyze_expression(schema, col_type, arg)?;
+            }
+
+            func.return_type()
         }
         Expression::Nested(expr) => analyze_expression(schema, col_type, expr)?,
         Expression::Wildcard => {
@@ -411,6 +425,10 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
             NaiveTime::parse_str(s)?;
             Ok(VmType::Date)
         }
+        Type::Uuid => {
+            Uuid::from_str(s)?;
+            Ok(VmType::Number)
+        }
         _ => Ok(VmType::String),
     }
 }
@@ -468,6 +486,7 @@ impl Display for AlreadyExists {
 mod tests {
     use super::*;
     use crate::core::date::DateParseError;
+    use crate::core::uuid::UuidError;
     use crate::db::*;
     use crate::sql::parser::*;
 
@@ -864,5 +883,96 @@ mod tests {
             expected: Ok(()),
         }
         .assert()
+    }
+
+    #[test]
+    fn uuid_column() -> AnalyzerResult {
+        let create_stmt = "CREATE TABLE contracts (id UUID, name VARCHAR(30));";
+
+        Analyze {
+            sql: create_stmt,
+            ctx: &[],
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "INSERT INTO contracts (id, name) VALUES ('not-a-uuid', 'really-good-name');",
+            ctx: &[create_stmt],
+            expected: Err(TypeError::UuidError(UuidError::InvalidLength).into()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "INSERT INTO contracts (id, name) VALUES (1234, 'other-really-good-name');",
+            ctx: &[create_stmt],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn substring_function() -> AnalyzerResult {
+        let table = "CREATE TABLE customers (id SERIAL PRIMARY KEY, name VARCHAR(70));";
+
+        Analyze {
+            sql: "SELECT name, SUBSTRING(name FROM 1 FOR 1) FROM customers;",
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT SUBSTRING(name FROM 1) FROM customers;",
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT SUBSTRING(name FOR 8) FROM customers;",
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn ascii_function() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT ASCII(name) FROM users ORDER BY name;",
+            ctx: &["CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50));"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn concat_function() -> AnalyzerResult {
+        let table =
+            "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(100));";
+
+        Analyze {
+            sql: "SELECT CONCAT(name, last_name) FROM users;",
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT CONCAT(name) FROM users;",
+            ctx: &[table],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn position_function() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT POSITION('ab' IN last_name) FROM users;",
+            ctx: &["CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(100));"],
+            expected: Ok(())
+        }.assert()
     }
 }

@@ -16,6 +16,7 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
+use crate::core::uuid::UuidError;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
@@ -96,6 +97,8 @@ pub enum SqlError {
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
+    /// Invalid function arguments. Expected x but found y.
+    InvalidFuncArgs(usize, usize),
     Type(TypeError),
     Vm(VmError),
     Other(String),
@@ -534,6 +537,7 @@ impl TryFrom<&[&str]> for Context {
                             let index = match constraint {
                                 Constraint::Unique => index!(unique on name (col.name)),
                                 Constraint::PrimaryKey => index!(primary on (name)),
+                                _ => unreachable!("This ain't a index")
                             };
 
                             metadata.indexes.push(IndexMetadata {
@@ -737,6 +741,10 @@ impl Display for SqlError {
             Self::Analyzer(err) => write!(f, "{err}"),
             Self::Vm(err) => write!(f, "{err}"),
             Self::Type(err) => write!(f, "{err}"),
+            Self::InvalidFuncArgs(expected, got) => write!(
+                f,
+                "Invalid number of arguments. Expected {expected}, got {got}"
+            ),
             Self::Other(other) => f.write_str(other),
         }
     }
@@ -772,6 +780,12 @@ impl From<DateParseError> for DatabaseError {
     }
 }
 
+impl From<UuidError> for SqlError {
+    fn from(value: UuidError) -> Self {
+        TypeError::UuidError(value).into()
+    }
+}
+
 impl From<SqlError> for DatabaseError {
     fn from(value: SqlError) -> Self {
         DatabaseError::Sql(value)
@@ -804,6 +818,8 @@ impl From<ParserError> for DatabaseError {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use crate::core::{
         date::{NaiveDate, Parse},
         storage::{
@@ -814,6 +830,7 @@ mod tests {
             },
             MemoryBuffer,
         },
+        uuid::Uuid,
     };
 
     use super::*;
@@ -2320,6 +2337,339 @@ mod tests {
                     Value::Float(75.00),
                     temporal!("2023-08-06 13:55:15")?
                 ]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_with_in() -> DatabaseResult {
+        let mut db = Database::default();
+
+        db.exec(
+            "CREATE TABLE actors (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(50));",
+        )?;
+        let names = [
+            ("Meryl", "Allen"),
+            ("Cuba", "Allen"),
+            ("Kim", "Allen"),
+            ("Jon", "Chase"),
+            ("Ed", "Chase"),
+            ("Susan", "Davis"),
+            ("Jennifer", "Davis"),
+            ("Susan", "Davis"),
+            ("Alex", "Johnson"),
+        ];
+
+        for (name, last_name) in names {
+            db.exec(
+                format!("INSERT INTO actors (name, last_name) VALUES ('{name}', '{last_name}');")
+                    .as_str(),
+            )?;
+        }
+
+        let query = db.exec(
+            "SELECT name, last_name FROM actors WHERE last_name IN ('Allen', 'Chase', 'Davis');",
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("Meryl".into()), Value::String("Allen".into())],
+                vec![Value::String("Cuba".into()), Value::String("Allen".into())],
+                vec![Value::String("Kim".into()), Value::String("Allen".into())],
+                vec![Value::String("Jon".into()), Value::String("Chase".into())],
+                vec![Value::String("Ed".into()), Value::String("Chase".into())],
+                vec![Value::String("Susan".into()), Value::String("Davis".into())],
+                vec![
+                    Value::String("Jennifer".into()),
+                    Value::String("Davis".into())
+                ],
+                vec![Value::String("Susan".into()), Value::String("Davis".into())],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_with_like() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE customer (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(50));")?;
+        db.exec(
+            r#"
+        INSERT INTO customer (name, last_name) VALUES 
+            ('Jennifer', 'Smith'),
+            ('Jenny', 'Johnson'),
+            ('Benjamin', 'Brown'),
+            ('Jessica', 'Jones'),
+            ('Jenifer', 'Miller'),
+            ('Michael', 'Davis');
+            "#,
+        )?;
+        let query = db.exec("SELECT name, last_name FROM customer WHERE name LIKE 'Jen%';")?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::String("Jennifer".into()),
+                    Value::String("Smith".into()),
+                ],
+                vec![
+                    Value::String("Jenny".into()),
+                    Value::String("Johnson".into())
+                ],
+                vec![
+                    Value::String("Jenifer".into()),
+                    Value::String("Miller".into())
+                ]
+            ],
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_uuids() -> DatabaseResult {
+        let mut db = Database::default();
+        let uuid = Uuid::from_str("d111ff02-e19f-4e6c-ac44-5804f72f7e8d").unwrap();
+
+        db.exec("CREATE TABLE contracts (id UUID PRIMARY KEY, name VARCHAR(30));")?;
+        db.exec("INSERT INTO contracts (name) VALUES ('IT consulting'), ('Market agency');")?;
+        db.exec(&format!(
+            "INSERT INTO contracts (id, name) VALUES ('{uuid}', 'Residency rental');"
+        ))?;
+
+        let query = db.exec("SELECT id FROM contracts ORDER BY name;")?;
+        assert_eq!(query.tuples.len(), 3);
+        assert_eq!(query.tuples.last(), Some(&vec![Value::Uuid(uuid)]));
+
+        let query = db.exec(&format!("SELECT name FROM contracts WHERE id = '{uuid}';"))?;
+        assert_eq!(
+            query.tuples,
+            vec![vec![Value::String("Residency rental".into())]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sort_uuids() -> DatabaseResult {
+        let mut db = Database::default();
+
+        let uuids: [Uuid; 3] = [
+            Uuid::from_str("d111ff02-e19f-4e6c-ac44-5804f72f7e8d").unwrap(),
+            Uuid::from_str("a0000000-0000-0000-0000-000000000000").unwrap(),
+            Uuid::from_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+        ];
+
+        db.exec("CREATE TABLE users (id UUID PRIMARY KEY, name VARCHAR(30), age INT UNSIGNED);")?;
+        db.exec(&format!(
+            r#"
+            INSERT INTO users (id, name, age) VALUES
+            ('{}', 'John Doe', 30),
+            ('{}', 'Mary Dove', 27),
+            ('{}', 'Richard Dahmer', 31);
+        "#,
+            uuids[0], uuids[1], uuids[2]
+        ))?;
+
+        let query = db.exec("SELECT id, name, age FROM users ORDER BY id;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::Uuid(uuids[1]),
+                    Value::String("Mary Dove".into()),
+                    Value::Number(27)
+                ],
+                vec![
+                    Value::Uuid(uuids[0]),
+                    Value::String("John Doe".into()),
+                    Value::Number(30)
+                ],
+                vec![
+                    Value::Uuid(uuids[2]),
+                    Value::String("Richard Dahmer".into()),
+                    Value::Number(31)
+                ]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn substring_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE customers (id SERIAL PRIMARY KEY, name VARCHAR(70));")?;
+        db.exec(
+            r#"
+            INSERT INTO customers (name) VALUES
+            ('Jared'), ('Mary'), ('Patricia'), ('Linda');
+            "#,
+        )?;
+
+        let query = db.exec("SELECT SUBSTRING(name FROM 1 FOR 1) FROM customers;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("J".into())],
+                vec![Value::String("M".into())],
+                vec![Value::String("P".into())],
+                vec![Value::String("L".into())],
+            ]
+        );
+
+        let query = db.exec("SELECT SUBSTRING(name FROM 100 FOR 2) FROM customers;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+            ]
+        );
+
+        let query = db.exec("SELECT SUBSTRING(name FROM 2 FOR 0) FROM customers;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+                vec![Value::String("".into())],
+            ]
+        );
+
+        let query = db.exec("SELECT SUBSTRING(name FROM 3) FROM customers;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("red".into())],
+                vec![Value::String("ry".into())],
+                vec![Value::String("tricia".into())],
+                vec![Value::String("nda".into())],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn ascii_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30));")?;
+        db.exec(
+            r#"
+            INSERT INTO users (name) VALUES
+            ('Alice'), ('Αλέξανδρος'), ('Zoe'), ('Émile'), ('Chloé');
+            "#,
+        )?;
+
+        let query = db.exec("SELECT ASCII(name) FROM users ORDER BY name;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::Number(65)],
+                vec![Value::Number(67)],
+                vec![Value::Number(90)],
+                vec![Value::Number(201)],
+                vec![Value::Number(913)],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn concat_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE contacts (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255),
+                email VARCHAR(255),
+                phone VARCHAR(15)
+            );
+        "#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO contacts (name, email, phone)
+            VALUES
+                ('John Doe', 'john.doe@example.com', '123-456-7890'),
+                ('Jane Smith', 'jane.smith@example.com', '987-654-3210'),
+                ('Bob Johnson', 'bob.johnson@example.com', '555-1234'),
+                ('Alice Brown', 'alice.brown@example.com', '555-1235'),
+                ('Charlie Davis', 'charlie.davis@example.com', '987-654-3210');
+        "#,
+        )?;
+
+        let query =
+            db.exec("SELECT CONCAT(name, ' ', '(', email, ')', ' ', phone) FROM contacts;")?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String(
+                    "John Doe (john.doe@example.com) 123-456-7890".into()
+                )],
+                vec![Value::String(
+                    "Jane Smith (jane.smith@example.com) 987-654-3210".into()
+                )],
+                vec![Value::String(
+                    "Bob Johnson (bob.johnson@example.com) 555-1234".into()
+                )],
+                vec![Value::String(
+                    "Alice Brown (alice.brown@example.com) 555-1235".into()
+                )],
+                vec![Value::String(
+                    "Charlie Davis (charlie.davis@example.com) 987-654-3210".into()
+                )]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn position_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE films (
+                id SERIAL PRIMARY KEY,
+                title VARCHAR(100),
+                description VARCHAR(255)
+            );
+        "#,
+        )?;
+
+        let inserts = [
+            "INSERT INTO films (title, description) VALUES ('The Matrix', 'A computer hacker learns about the true nature of reality.');",
+            "INSERT INTO films (title, description) VALUES ('Inception', 'A thief who steals corporate secrets through dream-sharing technology.');",
+            "INSERT INTO films (title, description) VALUES ('Interstellar', 'A team of explorers travel through a wormhole in space.');",
+            "INSERT INTO films (title, description) VALUES ('The Prestige', 'Two stage magicians engage in a battle to create the ultimate illusion.');",
+            "INSERT INTO films (title, description) VALUES ('Memento', 'A man with short-term memory loss attempts to track down his wifes murderer.');"
+        ];
+
+        for insert in inserts {
+            db.exec(insert)?;
+        }
+
+        let query = db.exec("SELECT title, POSITION('the' IN description) FROM films;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("The Matrix".into()), Value::Number(32)],
+                vec![Value::String("Inception".into()), Value::Number(0)],
+                vec![Value::String("Interstellar".into()), Value::Number(0)],
+                vec![Value::String("The Prestige".into()), Value::Number(50)],
+                vec![Value::String("Memento".into()), Value::Number(0)],
             ]
         );
 

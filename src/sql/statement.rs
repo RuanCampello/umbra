@@ -5,10 +5,12 @@
 #![allow(unused)]
 
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
-use crate::vm::expression::TypeError;
+use crate::core::uuid::Uuid;
+use crate::vm::expression::{TypeError, VmType};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::ops::Neg;
+use std::str::FromStr;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -108,6 +110,10 @@ pub enum Expression {
         left: Box<Self>,
         right: Box<Self>,
     },
+    Function {
+        func: Function,
+        args: Vec<Self>,
+    },
     Nested(Box<Self>),
 }
 
@@ -164,12 +170,14 @@ pub enum Value {
     Float(f64),
     Boolean(bool),
     Temporal(Temporal),
+    Uuid(Uuid),
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Constraint {
     PrimaryKey,
     Unique,
+    Default(Expression),
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
@@ -192,6 +200,7 @@ pub enum BinaryOperator {
     Div,
     And,
     Or,
+    Like,
 }
 
 /// SQL data types.
@@ -239,9 +248,21 @@ pub enum Type {
     Real,
     /// 8-byte variable-precision floating point type.
     DoublePrecision,
+    /// 8-byte Universal Unique Identifier defined by [RFC 4122](https://datatracker.ietf.org/doc/html/rfc4122).
+    Uuid,
     Date,
     Time,
     DateTime,
+}
+
+/// Subset of `SQL` functions.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum Function {
+    Substring,
+    Concat,
+    Ascii,
+    Position,
+    UuidV4,
 }
 
 impl Column {
@@ -299,7 +320,7 @@ impl Type {
             | Self::Integer
             | Self::UnsignedInteger
             | Self::BigInteger
-            | Self::UnsignedBigInteger => true,
+            | Self::UnsignedBigInteger => true, // uuid in the end is just an integer number
             _ => self.is_serial(),
         }
     }
@@ -316,6 +337,16 @@ impl Type {
             Self::Real | Self::DoublePrecision => true,
             _ => false,
         }
+    }
+
+    /// Returns true if is any numeric type.
+    pub const fn is_number(&self) -> bool {
+        matches!(self, Self::Uuid) || self.is_serial() || self.is_integer()
+    }
+
+    // Returns true if this `Type` can be auto-generated
+    pub const fn can_be_autogen(&self) -> bool {
+        matches!(self, Self::Uuid) || self.is_serial()
     }
 
     pub const fn max(&self) -> usize {
@@ -469,6 +500,7 @@ impl PartialEq for Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
+            (Value::Uuid(a), Value::Uuid(b)) => a == b,
             _ => false,
         }
     }
@@ -482,6 +514,7 @@ impl PartialOrd for Value {
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
+            (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
             _ => panic!("those values are not comparable"),
         }
     }
@@ -510,6 +543,7 @@ impl Display for Column {
             f.write_str(match constraint {
                 Constraint::PrimaryKey => "PRIMARY KEY",
                 Constraint::Unique => "UNIQUE",
+                Constraint::Default(value) => "DEFAULT {value}",
             })?;
         }
 
@@ -533,6 +567,7 @@ impl Display for Expression {
             Self::UnaryOperation { operator, expr } => {
                 write!(f, "{operator}{expr}")
             }
+            Self::Function { func, args } => write!(f, "{func}"),
             Self::Nested(expr) => write!(f, "({expr})"),
         }
     }
@@ -553,6 +588,7 @@ impl Display for BinaryOperator {
             Self::LtEq => "<=",
             Self::And => "AND",
             Self::Or => "OR",
+            Self::Like => "LIKE",
         })
     }
 }
@@ -587,6 +623,7 @@ impl Display for Type {
             Type::BigSerial => f.write_str("BIGSERIAL"),
             Type::Real => f.write_str("REAL"),
             Type::DoublePrecision => f.write_str("DOUBLE PRECISION"),
+            Type::Uuid => f.write_str("UUID"),
             Type::DateTime => f.write_str("TIMESTAMP"),
             Type::Time => f.write_str("TIME"),
             Type::Date => f.write_str("DATE"),
@@ -603,6 +640,40 @@ impl Display for Value {
             Value::Float(float) => write!(f, "{float}"),
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
+            Value::Uuid(uuid) => write!(f, "{uuid}"),
+        }
+    }
+}
+
+impl Function {
+    /// Returns respectvly the minimum and the maximum (if there's any) of this function arguments.
+    pub const fn size_of_args(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::Substring => Some((2, 3)),
+            Self::Ascii => Some((1, 1)),
+            Self::Concat => Some((1, usize::MAX)),
+            Self::Position => Some((2, 2)),
+            _ => None,
+        }
+    }
+
+    /// Returns the `VmType` that this function returns.
+    pub const fn return_type(&self) -> VmType {
+        match self {
+            Self::Substring | Self::Concat => VmType::String,
+            Self::UuidV4 | Self::Ascii | Self::Position => VmType::Number,
+        }
+    }
+}
+
+impl Display for Function {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Substring => f.write_str("SUBSTRING"),
+            Self::Concat => f.write_str("CONCAT"),
+            Self::Ascii => f.write_str("ASCII"),
+            Self::Position => f.write_str("POSITION"),
+            Self::UuidV4 => f.write_str("u4()"),
         }
     }
 }
