@@ -120,6 +120,22 @@ CREATE TABLE entropy_watch (
 SELECT time FROM entropy_watch WHERE shadow_density > 69; -- here we implicitly cast 69 to a float, so you can query without hustle
 ```
 
+#### 🧬 **UUID Type**
+
+When numbers aren't _unique_ enough and strings are too _sincere_, you reach for the `UUID`. Specifically: **version 4**, because determinism is for spreadsheets.
+
+| Type   | Description                              | Notes                                             |
+|--------|------------------------------------------|---------------------------------------------------|
+| `UUID` | Universally Unique Identifier (v4 only)  | Random, stateless, and perfect for plausible deniability. |
+
+```sql
+CREATE TABLE shadow_agents (
+    agent_id UUID PRIMARY KEY,
+    codename VARCHAR(255),
+    clearance_level SMALLINT
+);
+```
+
 - [x] `VARCHAR`
 - [x] `BOOLEAN`
 - [ ] `DECIMAL`
@@ -146,6 +162,7 @@ SELECT time FROM entropy_watch WHERE shadow_density > 69; -- here we implicitly 
 #### 🔍 SELECT Operations
 - [x] `WHERE` (basic filtering, no existential crises)
 - [x] `ORDER BY` (implemented after herding literal bats)
+- [x] `BETWEEN` (for when life exists within bounds)
 - [ ] `LIMIT`/`OFFSET` (self-restraint coming soon™)
 - [ ] Table aliases (`FROM crypts AS c` - naming things is hard)
 - [ ] `JOIN` (relationships require couples therapy)
@@ -166,6 +183,36 @@ SELECT time FROM entropy_watch WHERE shadow_density > 69; -- here we implicitly 
 - [ ] `COUNT`
 - [ ] `AVG`
 - [ ] `SUM`
+
+### 🔤 **String Functions**
+
+Words are powerful. Here they’re _dangerous_.
+
+| Function                   | Description                                              | Example                                                   |
+|----------------------------|----------------------------------------------------------|-----------------------------------------------------------|
+| `LIKE`                     | Pattern matching with `%` and `_`                        | `WHERE name LIKE 'Umb%'`                                  |
+| `CONCAT(a, b)`             | Smashes values into one long string                      | `CONCAT('bat', 'man') → 'batman'`                         |
+| `SUBSTRING(str FROM x FOR y)` | Extracts a slice, PostgreSQL-style                  | `SUBSTRING(name FROM 1 FOR 1) → first letter of name`     |
+| `POSITION(substr IN str)` | Finds the starting index of a substring                  | `POSITION('e' IN 'shadow') → 2`                           |
+| `ASCII(char)`              | Returns the ASCII code of a single character             | `ASCII('A') → 65`                                         |
+
+> [!NOTE]  
+> **SUBSTRING Syntax**  
+> Umbra uses PostgreSQL-style `SUBSTRING(string FROM start FOR length)`.  
+> - `FROM` and `FOR` are both optional, but at least one must be present.  
+> - Positions are 1-based (because zero-based indexing is for the living).
+
+```sql
+-- give me just the first letter of each name
+SELECT name, SUBSTRING(name FROM 1 FOR 1) FROM customers;
+
+-- or everything after the third character
+SELECT SUBSTRING(name FROM 4) FROM customers;
+
+-- or only the first 3 characters, starting from the beginning
+SELECT SUBSTRING(name FOR 3) FROM customers;
+```
+
 
 ### *✨ Just So You Know*
 
