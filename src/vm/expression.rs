@@ -142,10 +142,17 @@ pub(crate) fn resolve_expression<'exp>(
             })
         }
         Expression::Function { func, args } => {
+            let unexpected_type = |t: VmType, expr: Expression| {
+                SqlError::Type(TypeError::ExpectedType {
+                    expected: t,
+                    found: expr,
+                })
+            };
+
             let get_string = |argument: &Expression| -> Result<String, SqlError> {
                 match resolve_expression(val, schema, argument)? {
                     Value::String(string) => return Ok(string),
-                    _ => unreachable!(),
+                    _ => Err(unexpected_type(VmType::String, argument.clone())),
                 }
             };
 
