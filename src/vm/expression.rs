@@ -166,14 +166,14 @@ pub(crate) fn resolve_expression<'exp>(
         Expression::Function { func, args } => match func {
             Function::Substring => {
                 let string: String = get_value(val, schema, &args[0])?;
-                let start = match resolve_expression(val, schema, &args[1])? {
-                    Value::Number(num) => Some(num as usize),
-                    _ => None,
-                };
-                let count = match resolve_expression(val, schema, &args[2])? {
-                    Value::Number(num) => Some(num as isize),
-                    _ => None,
-                };
+
+                let start = get_value::<i128>(val, schema, &args[1])
+                    .ok()
+                    .map(|num| num as usize);
+
+                let count = get_value::<i128>(val, schema, &args[1])
+                    .ok()
+                    .map(|num| num as isize);
 
                 Ok(Value::String(functions::substring(&string, start, count)))
             }
