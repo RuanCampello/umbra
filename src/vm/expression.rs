@@ -176,8 +176,8 @@ pub(crate) fn resolve_expression<'exp>(
                     Ok(Value::String(functions::concat(&strings)))
                 }
                 Function::Position => {
-                    let string = get_string(&args[0])?;
-                    let pat = get_string(&args[1])?;
+                    let pat = get_string(&args[0])?;
+                    let string = get_string(&args[1])?;
 
                     Ok(Value::Number(functions::position(&string, &pat) as i128))
                 }

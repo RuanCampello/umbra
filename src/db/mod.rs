@@ -2635,4 +2635,44 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn position_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE films (
+                id SERIAL PRIMARY KEY,
+                title VARCHAR(100),
+                description VARCHAR(255)
+            );
+        "#,
+        )?;
+
+        let inserts = [
+            "INSERT INTO films (title, description) VALUES ('The Matrix', 'A computer hacker learns about the true nature of reality.');",
+            "INSERT INTO films (title, description) VALUES ('Inception', 'A thief who steals corporate secrets through dream-sharing technology.');",
+            "INSERT INTO films (title, description) VALUES ('Interstellar', 'A team of explorers travel through a wormhole in space.');",
+            "INSERT INTO films (title, description) VALUES ('The Prestige', 'Two stage magicians engage in a battle to create the ultimate illusion.');",
+            "INSERT INTO films (title, description) VALUES ('Memento', 'A man with short-term memory loss attempts to track down his wifes murderer.');"
+        ];
+
+        for insert in inserts {
+            db.exec(insert)?;
+        }
+
+        let query = db.exec("SELECT title, POSITION('the' IN description) FROM films;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("The Matrix".into()), Value::Number(32)],
+                vec![Value::String("Inception".into()), Value::Number(0)],
+                vec![Value::String("Interstellar".into()), Value::Number(0)],
+                vec![Value::String("The Prestige".into()), Value::Number(50)],
+                vec![Value::String("Memento".into()), Value::Number(0)],
+            ]
+        );
+
+        Ok(())
+    }
 }
