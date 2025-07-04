@@ -258,9 +258,15 @@ pub enum Type {
 /// Subset of `SQL` functions.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Function {
+    /// Extracts the `string` to the `length` at the `start`th character (if specified) and stop
+    /// after the `count` character. Must provide at least of of `start` and `count`.
     Substring,
+    /// Concatenates the string representation of all arguments.
     Concat,
+    /// Returns the numeric representation of argument's first character.
     Ascii,
+    /// Returns the first index of the specified `substring` within the given `string`. Returns
+    /// zero if it's not present.
     Position,
     UuidV4,
 }
