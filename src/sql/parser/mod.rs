@@ -501,6 +501,15 @@ impl<'input> Parser<'input> {
                     args: vec![needle, haystack],
                 })
             }
+            Keyword::Count => {
+                let expr = self.parse_expr(None)?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Position,
+                    args: vec![expr],
+                })
+            }
             _ => unreachable!("invalid function"),
         }
     }
@@ -610,12 +619,13 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_functions() -> [Keyword; 4] {
+    const fn supported_functions() -> [Keyword; 5] {
         [
             Keyword::Substring,
             Keyword::Ascii,
             Keyword::Concat,
             Keyword::Position,
+            Keyword::Count,
         ]
     }
 
