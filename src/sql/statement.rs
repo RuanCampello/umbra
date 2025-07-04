@@ -662,11 +662,13 @@ impl Display for Value {
 impl Function {
     /// Returns respectvly the minimum and the maximum (if there's any) of this function arguments.
     pub const fn size_of_args(&self) -> Option<(usize, usize)> {
+        const UNARY: Option<(usize, usize)> = Some((1, 1));
+
         match self {
             Self::Substring => Some((2, 3)),
-            Self::Ascii => Some((1, 1)),
             Self::Concat => Some((1, usize::MAX)),
             Self::Position => Some((2, 2)),
+            Self::Count | Self::Ascii => UNARY,
             _ => None,
         }
     }

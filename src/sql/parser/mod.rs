@@ -506,7 +506,7 @@ impl<'input> Parser<'input> {
                 self.expect_token(Token::RightParen)?;
 
                 Ok(Expression::Function {
-                    func: Function::Position,
+                    func: Function::Count,
                     args: vec![expr],
                 })
             }
