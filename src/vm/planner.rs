@@ -1112,7 +1112,20 @@ impl<File: PlanExecutor> Execute for Project<File> {
 
 impl<File: PlanExecutor> Execute for Aggregate<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        todo!()
+        if self.done {
+            return Ok(None);
+        }
+
+        self.count = 0;
+        while let Some(_) = self.source.try_next()? {
+            // maybe we will need to evaluate this when implementing NULL values
+            // let value = resolve_expression(&tuple, &self.source.schema().unwrap(), &self.expr)?;
+
+            self.count += 1;
+        }
+
+        self.done = true;
+        Ok(Some(vec![Value::Number(self.count as i128)]))
     }
 }
 
