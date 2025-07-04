@@ -1504,4 +1504,23 @@ mod tests {
             })
         )
     }
+
+    #[test]
+    fn test_count_func() {
+        let sql = "SELECT COUNT(*) FROM payments;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Count,
+                    args: vec![Expression::Wildcard]
+                }],
+                from: "payments".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
 }

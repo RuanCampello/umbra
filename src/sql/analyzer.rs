@@ -975,4 +975,14 @@ mod tests {
             expected: Ok(())
         }.assert()
     }
+
+    #[test]
+    fn count_function() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT COUNT(amount) FROM payments;",
+            ctx: &["CREATE TABLE payments (id SERIAL PRIMARY KEY, amount REAL);"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }
