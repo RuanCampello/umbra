@@ -260,6 +260,9 @@ pub enum Type {
 pub enum Function {
     /// Extracts the `string` to the `length` at the `start`th character (if specified) and stop
     /// after the `count` character. Must provide at least of of `start` and `count`.
+    /// ```sql
+    /// SUBSTRING(string text [FROM start text][FOR count int]) -> text;
+    /// ```
     Substring,
     /// Concatenates the string representation of all arguments.
     Concat,
@@ -267,7 +270,12 @@ pub enum Function {
     Ascii,
     /// Returns the first index of the specified `substring` within the given `string`. Returns
     /// zero if it's not present.
+    /// ```sql
+    /// POSITION(substring text IN string text) -> int;
+    /// ```
     Position,
+    /// Computes the number of input rows.
+    Count,
     UuidV4,
 }
 
@@ -667,7 +675,7 @@ impl Function {
     pub const fn return_type(&self) -> VmType {
         match self {
             Self::Substring | Self::Concat => VmType::String,
-            Self::UuidV4 | Self::Ascii | Self::Position => VmType::Number,
+            Self::UuidV4 | Self::Ascii | Self::Position | Self::Count => VmType::Number,
         }
     }
 }
@@ -679,6 +687,7 @@ impl Display for Function {
             Self::Concat => f.write_str("CONCAT"),
             Self::Ascii => f.write_str("ASCII"),
             Self::Position => f.write_str("POSITION"),
+            Self::Count => f.write_str("COUNT"),
             Self::UuidV4 => f.write_str("u4()"),
         }
     }
