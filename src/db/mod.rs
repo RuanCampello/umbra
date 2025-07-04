@@ -2675,4 +2675,25 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn count_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE customer (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(50));")?;
+        db.exec(
+            r#"
+        INSERT INTO customer (name, last_name) VALUES 
+            ('Jennifer', 'Smith'),
+            ('Jenny', 'Johnson'),
+            ('Benjamin', 'Brown'),
+            ('Jessica', 'Jones'),
+            ('Jenifer', 'Miller'),
+            ('Michael', 'Davis');
+            "#,
+        )?;
+        let query = db.exec("SELECT COUNT(id) FROM customer;")?;
+        assert_eq!(query.tuples, vec![vec![Value::Number(6)]]);
+
+        Ok(())
+    }
 }

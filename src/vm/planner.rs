@@ -10,7 +10,7 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{join, Assignment, Expression, Value};
+use crate::sql::statement::{join, Assignment, Expression, Function, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
@@ -46,6 +46,8 @@ pub(crate) enum Planner<File: FileOperations> {
     Update(Update<File>),
     Delete(Delete<File>),
     SortKeys(SortKeys<File>),
+    /// Used for aggregate functions like `COUNT` or `AVG`.
+    Aggregate(Aggregate<File>),
     Project(Project<File>),
     Collect(Collect<File>),
     /// Handles literal values from INSERT statements.
@@ -173,6 +175,15 @@ pub(crate) struct Project<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct Aggregate<File: FileOperations> {
+    source: Box<Planner<File>>,
+    function: Function,
+    expr: Expression,
+    count: usize,
+    done: bool,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
@@ -259,6 +270,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Delete(delete) => delete.try_next(),
             Self::SortKeys(keys) => keys.try_next(),
             Self::Project(projection) => projection.try_next(),
+            Self::Aggregate(aggr) => aggr.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
@@ -276,6 +288,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Delete(delete) => &delete.source,
             Self::SortKeys(keys) => &keys.source,
             Self::Collect(collection) => &collection.source,
+            Self::Aggregate(aggr) => &aggr.source,
             _ => return None,
         })
     }
@@ -298,6 +311,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Project(projection) => format!("{projection}"),
             Self::Collect(collection) => format!("{collection}"),
             Self::Values(values) => format!("{values}"),
+            Self::Aggregate(aggr) => format!("{aggr}"),
         };
 
         format!("{prefix}{display}")
@@ -1096,6 +1110,12 @@ impl<File: PlanExecutor> Execute for Project<File> {
     }
 }
 
+impl<File: PlanExecutor> Execute for Aggregate<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        todo!()
+    }
+}
+
 impl Execute for Values {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         let Some(mut values) = self.values.pop_front() else {
@@ -1548,6 +1568,12 @@ impl<File: FileOperations> Display for Collect<File> {
             "Collect {}",
             join(self.schema.columns.iter().map(|col| &col.name), ", ")
         )
+    }
+}
+
+impl<File: FileOperations> Display for Aggregate<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Aggregate {} with {}", self.function, self.expr)
     }
 }
 
