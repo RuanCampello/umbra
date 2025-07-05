@@ -2693,7 +2693,26 @@ mod tests {
         )?;
         let query = db.exec("SELECT COUNT(*) FROM customer;")?;
         assert_eq!(query.tuples, vec![vec![Value::Number(6)]]);
+        assert_eq!(
+            db.exec("SELECT COUNT(name) FROM customer;"),
+            db.exec("SELECT COUNT(last_name) FROM customer;")
+        );
 
+        Ok(())
+    }
+
+    #[test]
+    fn count_function_on_empty() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE product (id INT PRIMARY KEY, name VARCHAR(50));")?;
+
+        let query = db.exec("SELECT COUNT(*) FROM product;")?;
+        assert_eq!(query.tuples, vec![vec![Value::Number(0)]]);
+
+        assert_eq!(
+            db.exec("SELECT COUNT(id) FROM product;")?.tuples,
+            vec![vec![Value::Number(0)]]
+        );
         Ok(())
     }
 }
