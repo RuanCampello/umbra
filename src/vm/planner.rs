@@ -1128,9 +1128,13 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 
         self.count = 0;
         while let Some(tuple) = self.source.try_next()? {
+            if let Function::Count = self.function {
+                self.count += 1;
+                continue;
+            }
+
             let value = resolve_expression(&tuple, &self.source.schema().unwrap(), &self.expr)?;
             match self.function {
-                Function::Count => self.count += 1,
                 Function::Avg | Function::Sum => {
                     self.count += 1;
                     match value {
