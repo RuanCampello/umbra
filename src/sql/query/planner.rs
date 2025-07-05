@@ -729,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_count_plan() -> PlannerResult {
+    fn test_simple_aggr_plan() -> PlannerResult {
         let mut db = new_db(&["CREATE TABLE payments (id SERIAL PRIMARY KEY, amount REAL);"])?;
 
         assert_eq!(
@@ -752,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn test_count_applying_filter() -> PlannerResult {
+    fn test_aggr_applying_filter() -> PlannerResult {
         let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, active BOOLEAN);"])?;
 
         assert_eq!(
@@ -779,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn test_count_when_sorting() -> PlannerResult {
+    fn test_aggr_when_sorting() -> PlannerResult {
         let mut db =
             new_db(&["CREATE TABLE sales (id INT PRIMARY KEY, region VARCHAR(30), price REAL);"])?;
         let page_size = db.db.pager.borrow().page_size;
@@ -842,6 +842,38 @@ mod tests {
                         key: serialize(&Type::UnsignedInteger, &Value::Number(24)),
                         relation: Relation::Table(db.tables["products"].clone())
                     }))
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggr_with_range_scan() -> PlannerResult {
+        let mut db =
+            new_db(&["CREATE TABLE sensors (id INT PRIMARY KEY, value REAL, stamp INT);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT SUM(value) FROM sensors WHERE id BETWEEN 1000 AND 2000;")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: parse_expr("value"),
+                    function: Function::Sum,
+                    source: Box::new(Planner::RangeScan(
+                        RangeScanBuilder {
+                            emit_only_key: false,
+                            pager: db.pager(),
+                            expr: parse_expr("id BETWEEN 1000 AND 2000"),
+                            relation: Relation::Table(db.tables["sensors"].to_owned()),
+                            range: (
+                                Bound::Included(serialize(&Type::Integer, &Value::Number(1000))),
+                                Bound::Included(serialize(&Type::Integer, &Value::Number(2000)))
+                            )
+                        }
+                        .into()
+                    ))
                 }
                 .into()
             )

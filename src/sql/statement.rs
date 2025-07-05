@@ -691,7 +691,10 @@ impl Function {
     }
 
     pub(in crate::sql) const fn is_aggr(&self) -> bool {
-        matches!(self, Self::Count | Self::Avg | Self::Min | Self::Max)
+        matches!(
+            self,
+            Self::Count | Self::Sum | Self::Avg | Self::Min | Self::Max
+        )
     }
 
     pub(in crate::sql) const fn is_unary(&self) -> bool {
