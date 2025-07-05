@@ -54,19 +54,6 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from)?;
 
-            if let Some(Expression::Function { func, args }) = &columns.first() {
-                if func.is_aggr() {
-                    let expr = args.first().cloned().unwrap_or(Expression::Wildcard);
-                    return Ok(Planner::Aggregate(Aggregate {
-                        done: false,
-                        count: 0,
-                        expr,
-                        function: Function::Count,
-                        source: Box::new(source),
-                    }));
-                }
-            }
-
             if !order_by.is_empty()
                 && order_by != [Expression::Identifier(table.schema.columns[0].name.clone())]
             {
@@ -129,6 +116,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         expr.to_string().as_str(),
                         resolve_type(&table.schema, expr)?,
                     )),
+                }
+            }
+
+            if let Some(Expression::Function { func, args }) = &columns.first() {
+                if func.is_aggr() {
+                    let expr = args.first().cloned().unwrap_or(Expression::Wildcard);
+                    return Ok(Planner::Aggregate(Aggregate {
+                        done: false,
+                        count: 0,
+                        expr,
+                        function: Function::Count,
+                        source: Box::new(source),
+                    }));
                 }
             }
 
@@ -768,6 +768,47 @@ mod tests {
                         table: db.tables["users"].to_owned(),
                     }))
                 })),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_count_when_sorting() -> PlannerResult {
+        let mut db =
+            new_db(&["CREATE TABLE sales (id INT PRIMARY KEY, region VARCHAR(30), price REAL);"])?;
+        let page_size = db.db.pager.borrow().page_size;
+        let work_dir = db.db.work_dir.to_owned();
+        let schema = db.tables["sales"].schema.to_owned();
+
+        assert_eq!(
+            db.gen_plan("SELECT COUNT(price) FROM sales ORDER BY region;")?,
+            Planner::Aggregate(Aggregate {
+                count: 0,
+                done: false,
+                expr: Expression::Identifier("price".into()),
+                function: Function::Count,
+                source: Box::new(Planner::Sort(
+                    SortBuilder {
+                        page_size,
+                        work_dir: work_dir.clone(),
+                        comparator: TupleComparator::new(schema.clone(), schema.clone(), vec![1]),
+                        input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                        collection: CollectBuilder {
+                            work_dir,
+                            mem_buff_size: page_size,
+                            schema: schema.clone(),
+                            source: Box::new(Planner::SeqScan(SeqScan {
+                                pager: db.pager(),
+                                table: db.tables["sales"].clone(),
+                                cursor: Cursor::new(db.tables["sales"].root, 0)
+                            }))
+                        }
+                        .into()
+                    }
+                    .into()
+                ))
             })
         );
 
