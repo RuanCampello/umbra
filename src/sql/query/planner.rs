@@ -725,4 +725,26 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_simple_count_plan() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE payments (id SERIAL PRIMARY KEY, amount REAL);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT COUNT(amount) FROM payments;")?,
+            Planner::Aggregate(Aggregate {
+                done: false,
+                count: 0,
+                expr: Expression::Identifier("amount".into()),
+                function: Function::Count,
+                source: Box::new(Planner::SeqScan(SeqScan {
+                    pager: db.pager(),
+                    table: db.tables["payments"].to_owned(),
+                    cursor: Cursor::new(db.tables["payments"].root, 0)
+                }))
+            })
+        );
+
+        Ok(())
+    }
 }
