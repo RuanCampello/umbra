@@ -472,15 +472,7 @@ impl<'input> Parser<'input> {
                     ],
                 })
             }
-            Keyword::Ascii => {
-                let expr = self.parse_expr(None)?;
-                self.expect_token(Token::RightParen)?;
-
-                Ok(Expression::Function {
-                    func: Function::Ascii,
-                    args: vec![expr],
-                })
-            }
+            Keyword::Ascii => self.parse_unary_func(Function::Ascii),
             Keyword::Concat => {
                 let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
@@ -501,17 +493,23 @@ impl<'input> Parser<'input> {
                     args: vec![needle, haystack],
                 })
             }
-            Keyword::Count => {
-                let expr = self.parse_expr(None)?;
-                self.expect_token(Token::RightParen)?;
+            Keyword::Count => self.parse_unary_func(Function::Count),
+            Keyword::Sum => self.parse_unary_func(Function::Sum),
+            Keyword::Avg => self.parse_unary_func(Function::Avg),
+            Keyword::Min => self.parse_unary_func(Function::Min),
+            Keyword::Max => self.parse_unary_func(Function::Max),
 
-                Ok(Expression::Function {
-                    func: Function::Count,
-                    args: vec![expr],
-                })
-            }
             _ => unreachable!("invalid function"),
         }
+    }
+
+    fn parse_unary_func(&mut self, func: Function) -> ParserResult<Expression> {
+        let expr = self.parse_expr(None)?;
+        self.expect_token(Token::RightParen)?;
+        Ok(Expression::Function {
+            func,
+            args: vec![expr],
+        })
     }
 
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
@@ -619,13 +617,17 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_functions() -> [Keyword; 5] {
+    const fn supported_functions() -> [Keyword; 9] {
         [
             Keyword::Substring,
             Keyword::Ascii,
             Keyword::Concat,
             Keyword::Position,
             Keyword::Count,
+            Keyword::Avg,
+            Keyword::Sum,
+            Keyword::Max,
+            Keyword::Min,
         ]
     }
 
@@ -1528,6 +1530,25 @@ mod tests {
                     args: vec![Expression::Wildcard]
                 }],
                 from: "payments".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_avg_func() {
+        let sql = "SELECT AVG(price) FROM products;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Avg,
+                    args: vec![Expression::Identifier("price".into())]
+                }],
+                from: "products".into(),
                 order_by: vec![],
                 r#where: None,
             })

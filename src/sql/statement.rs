@@ -676,7 +676,7 @@ impl Function {
             Self::Substring => Some((2, 3)),
             Self::Concat => Some((1, usize::MAX)),
             Self::Position => Some((2, 2)),
-            Self::Count | Self::Ascii => UNARY,
+            func if func.is_unary() => UNARY,
             _ => None,
         }
     }
@@ -690,8 +690,12 @@ impl Function {
         }
     }
 
-    pub const fn is_aggr(&self) -> bool {
-        matches!(self, Self::Count)
+    pub(in crate::sql) const fn is_aggr(&self) -> bool {
+        matches!(self, Self::Count | Self::Avg | Self::Min | Self::Max)
+    }
+
+    pub(in crate::sql) const fn is_unary(&self) -> bool {
+        matches!(self, Self::Ascii) || self.is_aggr()
     }
 }
 
