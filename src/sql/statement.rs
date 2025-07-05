@@ -276,6 +276,14 @@ pub enum Function {
     Position,
     /// Computes the number of input rows.
     Count,
+    /// Computes the average (arithmetic mean) of all input values.
+    Avg,
+    /// Computes the sum of the input values.
+    Sum,
+    /// Computes the minimum of the input values.
+    Min,
+    /// Computes the maximum of the input values.
+    Max,
     UuidV4,
 }
 
@@ -677,6 +685,7 @@ impl Function {
     pub const fn return_type(&self) -> VmType {
         match self {
             Self::Substring | Self::Concat => VmType::String,
+            Self::Avg | Self::Min | Self::Max | Self::Sum => VmType::Float,
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Count => VmType::Number,
         }
     }
@@ -694,6 +703,10 @@ impl Display for Function {
             Self::Ascii => f.write_str("ASCII"),
             Self::Position => f.write_str("POSITION"),
             Self::Count => f.write_str("COUNT"),
+            Self::Max => f.write_str("MAX"),
+            Self::Min => f.write_str("MIN"),
+            Self::Sum => f.write_str("SUM"),
+            Self::Avg => f.write_str("AVG"),
             Self::UuidV4 => f.write_str("u4()"),
         }
     }
