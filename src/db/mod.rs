@@ -2691,7 +2691,7 @@ mod tests {
             ('Michael', 'Davis');
             "#,
         )?;
-        let query = db.exec("SELECT COUNT(id) FROM customer;")?;
+        let query = db.exec("SELECT COUNT(*) FROM customer;")?;
         assert_eq!(query.tuples, vec![vec![Value::Number(6)]]);
 
         Ok(())

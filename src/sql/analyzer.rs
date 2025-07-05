@@ -351,7 +351,9 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             }
 
             for arg in args {
-                analyze_expression(schema, col_type, arg)?;
+                if arg.ne(&Expression::Wildcard) {
+                    analyze_expression(schema, col_type, arg)?;
+                }
             }
 
             func.return_type()
