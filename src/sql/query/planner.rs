@@ -881,4 +881,67 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_aggr_with_key_scan() -> PlannerResult {
+        let mut db =
+            new_db(&["CREATE TABLE users (id SERIAL PRIMARY KEY, age INT UNSIGNED, email VARCHAR(30) UNIQUE);"])?;
+
+        // we need first to index over the qualified keys (email <= ...)
+        let range_scan = Planner::RangeScan(RangeScan::from(RangeScanBuilder {
+            emit_only_key: true,
+            pager: db.pager(),
+            expr: parse_expr("email <= 'johndoe@email.com'"),
+            relation: Relation::Index(db.indexes[&index!(unique on users (email))].to_owned()),
+            range: (
+                Bound::Unbounded,
+                Bound::Included(serialize(
+                    &Type::Varchar(30),
+                    &Value::String("johndoe@email.com".into()),
+                )),
+            ),
+        }));
+
+        // then we collect the results
+        let collect = Collect::from(CollectBuilder {
+            source: Box::new(range_scan),
+            schema: Schema::new(vec![Column::primary_key("id", Type::Serial)]),
+            work_dir: db.db.work_dir.clone(),
+            mem_buff_size: db.db.pager.borrow().page_size,
+        });
+
+        // and sort to garantee PK order
+        let sort = Sort::from(SortBuilder {
+            page_size: db.db.pager.borrow().page_size,
+            work_dir: db.db.work_dir.clone(),
+            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+            comparator: TupleComparator::new(
+                Schema::new(vec![Column::primary_key("id", Type::Serial)]),
+                Schema::new(vec![Column::primary_key("id", Type::Serial)]),
+                vec![0],
+            ),
+            collection: collect,
+        });
+
+        // and finally scan the main table using the keys from the index
+        // and calculate the minimum over the results
+        assert_eq!(
+            db.gen_plan("SELECT MIN(age) FROM users WHERE email <= 'johndoe@email.com';")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: parse_expr("age"),
+                    function: Function::Min,
+                    source: Box::new(Planner::KeyScan(KeyScan {
+                        pager: db.pager(),
+                        table: db.tables["users"].to_owned(),
+                        comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                        source: Box::new(Planner::Sort(sort))
+                    }))
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
 }
