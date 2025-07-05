@@ -1127,15 +1127,44 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
         }
 
         self.count = 0;
-        while let Some(_) = self.source.try_next()? {
-            // maybe we will need to evaluate this when implementing NULL values
-            // let value = resolve_expression(&tuple, &self.source.schema().unwrap(), &self.expr)?;
-
-            self.count += 1;
+        while let Some(tuple) = self.source.try_next()? {
+            let value = resolve_expression(&tuple, &self.source.schema().unwrap(), &self.expr)?;
+            match self.function {
+                Function::Count => self.count += 1,
+                Function::Avg | Function::Sum => {
+                    self.count += 1;
+                    match value {
+                        Value::Float(f) => self.sum += f,
+                        Value::Number(n) => self.sum += n as f64,
+                        // maybe we should to a better handling of types here
+                        _ => {}
+                    }
+                }
+                Function::Min => {
+                    if self.min.as_ref().map_or(true, |min| &value < min) {
+                        self.min = Some(value);
+                    }
+                }
+                Function::Max => {
+                    if self.max.as_ref().map_or(true, |max| &value > max) {
+                        self.max = Some(value);
+                    }
+                }
+                _ => todo!(),
+            }
         }
 
+        let result = match self.function {
+            Function::Count => Value::Number(self.count as i128),
+            Function::Sum => Value::Float(self.sum),
+            Function::Avg => Value::Float(self.sum / self.count as f64),
+            Function::Min => self.min.clone().unwrap(),
+            Function::Max => self.max.clone().unwrap(),
+            _ => unreachable!(),
+        };
+
         self.done = true;
-        Ok(Some(vec![Value::Number(self.count as i128)]))
+        Ok(Some(vec![result]))
     }
 }
 
