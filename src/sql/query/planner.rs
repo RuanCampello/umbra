@@ -747,4 +747,30 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_count_applying_filter() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, active BOOLEAN);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT COUNT(*) FROM users WHERE active = TRUE;")?,
+            Planner::Aggregate(Aggregate {
+                done: false,
+                count: 0,
+                expr: Expression::Wildcard,
+                function: Function::Count,
+                source: Box::new(Planner::Filter(Filter {
+                    filter: parse_expr("active = TRUE"),
+                    schema: db.tables["users"].schema.to_owned(),
+                    source: Box::new(Planner::SeqScan(SeqScan {
+                        pager: db.pager(),
+                        cursor: Cursor::new(db.tables["users"].root, 0),
+                        table: db.tables["users"].to_owned(),
+                    }))
+                })),
+            })
+        );
+
+        Ok(())
+    }
 }
