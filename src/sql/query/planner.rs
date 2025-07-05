@@ -10,12 +10,12 @@ use crate::{
     sql::{
         analyzer,
         query::optimiser,
-        statement::{Column, Delete, Expression, Function, Select, Type, Update},
+        statement::{Column, Delete, Expression, Select, Type, Update},
         Statement,
     },
     vm::{
         expression::VmType,
-        planner::{Aggregate, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+        planner::{AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
     },
 };
 use crate::{
@@ -122,13 +122,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             if let Some(Expression::Function { func, args }) = &columns.first() {
                 if func.is_aggr() {
                     let expr = args.first().cloned().unwrap_or(Expression::Wildcard);
-                    return Ok(Planner::Aggregate(Aggregate {
-                        done: false,
-                        count: 0,
-                        expr,
-                        function: Function::Count,
-                        source: Box::new(source),
-                    }));
+                    return Ok(Planner::Aggregate(
+                        AggregateBuilder {
+                            expr,
+                            function: *func,
+                            source: Box::new(source),
+                        }
+                        .into(),
+                    ));
                 }
             }
 
@@ -233,6 +234,7 @@ fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::sql::statement::Function;
     use std::{cell::RefCell, collections::HashMap, ops::Bound, path::PathBuf};
 
     use super::*;
@@ -732,17 +734,18 @@ mod tests {
 
         assert_eq!(
             db.gen_plan("SELECT COUNT(amount) FROM payments;")?,
-            Planner::Aggregate(Aggregate {
-                done: false,
-                count: 0,
-                expr: Expression::Identifier("amount".into()),
-                function: Function::Count,
-                source: Box::new(Planner::SeqScan(SeqScan {
-                    pager: db.pager(),
-                    table: db.tables["payments"].to_owned(),
-                    cursor: Cursor::new(db.tables["payments"].root, 0)
-                }))
-            })
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: Expression::Identifier("amount".into()),
+                    function: Function::Count,
+                    source: Box::new(Planner::SeqScan(SeqScan {
+                        pager: db.pager(),
+                        table: db.tables["payments"].to_owned(),
+                        cursor: Cursor::new(db.tables["payments"].root, 0)
+                    }))
+                }
+                .into()
+            )
         );
 
         Ok(())
@@ -754,21 +757,22 @@ mod tests {
 
         assert_eq!(
             db.gen_plan("SELECT COUNT(*) FROM users WHERE active = TRUE;")?,
-            Planner::Aggregate(Aggregate {
-                done: false,
-                count: 0,
-                expr: Expression::Wildcard,
-                function: Function::Count,
-                source: Box::new(Planner::Filter(Filter {
-                    filter: parse_expr("active = TRUE"),
-                    schema: db.tables["users"].schema.to_owned(),
-                    source: Box::new(Planner::SeqScan(SeqScan {
-                        pager: db.pager(),
-                        cursor: Cursor::new(db.tables["users"].root, 0),
-                        table: db.tables["users"].to_owned(),
-                    }))
-                })),
-            })
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: Expression::Wildcard,
+                    function: Function::Count,
+                    source: Box::new(Planner::Filter(Filter {
+                        filter: parse_expr("active = TRUE"),
+                        schema: db.tables["users"].schema.to_owned(),
+                        source: Box::new(Planner::SeqScan(SeqScan {
+                            pager: db.pager(),
+                            cursor: Cursor::new(db.tables["users"].root, 0),
+                            table: db.tables["users"].to_owned(),
+                        }))
+                    })),
+                }
+                .into()
+            )
         );
 
         Ok(())
@@ -784,32 +788,37 @@ mod tests {
 
         assert_eq!(
             db.gen_plan("SELECT COUNT(price) FROM sales ORDER BY region;")?,
-            Planner::Aggregate(Aggregate {
-                count: 0,
-                done: false,
-                expr: Expression::Identifier("price".into()),
-                function: Function::Count,
-                source: Box::new(Planner::Sort(
-                    SortBuilder {
-                        page_size,
-                        work_dir: work_dir.clone(),
-                        comparator: TupleComparator::new(schema.clone(), schema.clone(), vec![1]),
-                        input_buffers: DEFAULT_SORT_BUFFER_SIZE,
-                        collection: CollectBuilder {
-                            work_dir,
-                            mem_buff_size: page_size,
-                            schema: schema.clone(),
-                            source: Box::new(Planner::SeqScan(SeqScan {
-                                pager: db.pager(),
-                                table: db.tables["sales"].clone(),
-                                cursor: Cursor::new(db.tables["sales"].root, 0)
-                            }))
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: Expression::Identifier("price".into()),
+                    function: Function::Count,
+                    source: Box::new(Planner::Sort(
+                        SortBuilder {
+                            page_size,
+                            work_dir: work_dir.clone(),
+                            comparator: TupleComparator::new(
+                                schema.clone(),
+                                schema.clone(),
+                                vec![1]
+                            ),
+                            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                            collection: CollectBuilder {
+                                work_dir,
+                                mem_buff_size: page_size,
+                                schema: schema.clone(),
+                                source: Box::new(Planner::SeqScan(SeqScan {
+                                    pager: db.pager(),
+                                    table: db.tables["sales"].clone(),
+                                    cursor: Cursor::new(db.tables["sales"].root, 0)
+                                }))
+                            }
+                            .into()
                         }
                         .into()
-                    }
-                    .into()
-                ))
-            })
+                    ))
+                }
+                .into()
+            )
         );
 
         Ok(())
@@ -821,20 +830,21 @@ mod tests {
 
         assert_eq!(
             db.gen_plan("SELECT COUNT(*) FROM products WHERE id = 24;")?,
-            Planner::Aggregate(Aggregate {
-                count: 0,
-                done: false,
-                expr: Expression::Wildcard,
-                function: Function::Count,
-                source: Box::new(Planner::ExactMatch(ExactMatch {
-                    done: false,
-                    emit_only_key: false,
-                    pager: db.pager(),
-                    expr: parse_expr("id = 24"),
-                    key: serialize(&Type::UnsignedInteger, &Value::Number(24)),
-                    relation: Relation::Table(db.tables["products"].clone())
-                }))
-            })
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: Expression::Wildcard,
+                    function: Function::Count,
+                    source: Box::new(Planner::ExactMatch(ExactMatch {
+                        done: false,
+                        emit_only_key: false,
+                        pager: db.pager(),
+                        expr: parse_expr("id = 24"),
+                        key: serialize(&Type::UnsignedInteger, &Value::Number(24)),
+                        relation: Relation::Table(db.tables["products"].clone())
+                    }))
+                }
+                .into()
+            )
         );
 
         Ok(())

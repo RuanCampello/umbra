@@ -180,6 +180,9 @@ pub(crate) struct Aggregate<File: FileOperations> {
     pub function: Function,
     pub expr: Expression,
     pub count: usize,
+    pub sum: f64,
+    pub min: Option<Value>,
+    pub max: Option<Value>,
     pub done: bool,
 }
 
@@ -242,6 +245,13 @@ pub(crate) struct CollectBuilder<File: FileOperations> {
     pub schema: Schema,
     pub work_dir: PathBuf,
     pub mem_buff_size: usize,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct AggregateBuilder<File: FileOperations> {
+    pub source: Box<Planner<File>>,
+    pub expr: Expression,
+    pub function: Function,
 }
 
 pub(crate) type Tuple = Vec<Value>;
@@ -1126,6 +1136,27 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 
         self.done = true;
         Ok(Some(vec![Value::Number(self.count as i128)]))
+    }
+}
+
+impl<File: FileOperations> From<AggregateBuilder<File>> for Aggregate<File> {
+    fn from(value: AggregateBuilder<File>) -> Self {
+        let AggregateBuilder {
+            expr,
+            function,
+            source,
+        } = value;
+
+        Self {
+            source,
+            expr,
+            function,
+            count: 0,
+            sum: 0.0,
+            min: None,
+            max: None,
+            done: false,
+        }
     }
 }
 
