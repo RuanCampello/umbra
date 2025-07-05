@@ -814,4 +814,29 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_aggregate_over_exact_match() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE products (id INT PRIMARY KEY, stock INT UNSIGNED);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT COUNT(*) FROM products WHERE id = 24;")?,
+            Planner::Aggregate(Aggregate {
+                count: 0,
+                done: false,
+                expr: Expression::Wildcard,
+                function: Function::Count,
+                source: Box::new(Planner::ExactMatch(ExactMatch {
+                    done: false,
+                    emit_only_key: false,
+                    pager: db.pager(),
+                    expr: parse_expr("id = 24"),
+                    key: serialize(&Type::UnsignedInteger, &Value::Number(24)),
+                    relation: Relation::Table(db.tables["products"].clone())
+                }))
+            })
+        );
+
+        Ok(())
+    }
 }
