@@ -10,12 +10,12 @@ use crate::{
     sql::{
         analyzer,
         query::optimiser,
-        statement::{Column, Delete, Expression, Select, Type, Update},
+        statement::{Column, Delete, Expression, Function, Select, Type, Update},
         Statement,
     },
     vm::{
         expression::VmType,
-        planner::{Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+        planner::{Aggregate, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
     },
 };
 use crate::{
@@ -53,6 +53,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from)?;
+
+            if let Some(Expression::Function { func, args }) = &columns.first() {
+                if func.is_aggr() {
+                    let expr = args.first().cloned().unwrap_or(Expression::Wildcard);
+                    return Ok(Planner::Aggregate(Aggregate {
+                        done: false,
+                        count: 0,
+                        expr,
+                        function: Function::Count,
+                        source: Box::new(source),
+                    }));
+                }
+            }
 
             if !order_by.is_empty()
                 && order_by != [Expression::Identifier(table.schema.columns[0].name.clone())]

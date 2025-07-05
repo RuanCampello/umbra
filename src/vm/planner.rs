@@ -176,11 +176,11 @@ pub(crate) struct Project<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
-    source: Box<Planner<File>>,
-    function: Function,
-    expr: Expression,
-    count: usize,
-    done: bool,
+    pub source: Box<Planner<File>>,
+    pub function: Function,
+    pub expr: Expression,
+    pub count: usize,
+    pub done: bool,
 }
 
 #[derive(Debug, PartialEq)]

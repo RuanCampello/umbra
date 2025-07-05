@@ -680,6 +680,10 @@ impl Function {
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Count => VmType::Number,
         }
     }
+
+    pub const fn is_aggr(&self) -> bool {
+        matches!(self, Self::Count)
+    }
 }
 
 impl Display for Function {
