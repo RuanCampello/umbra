@@ -120,9 +120,10 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }
             }
 
-            let has_aggregate = columns
-                .iter()
-                .any(|expr| matches!(expr, Expression::Function { .. }));
+            let has_aggregate = columns.iter().any(|expr| match expr {
+                Expression::Function { func, .. } => func.is_aggr(),
+                _ => false,
+            });
 
             if !group_by.is_empty() || has_aggregate {
                 let mut output_schema = Schema::empty();
