@@ -15,10 +15,7 @@ use crate::{
     },
     vm::{
         expression::VmType,
-        planner::{
-            Aggregate, AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys,
-            TupleBuffer, Values,
-        },
+        planner::{AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
     },
 };
 use crate::{
@@ -161,17 +158,16 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     ));
                 }
 
-                let output_buffer = TupleBuffer::new(page_size, output_schema.clone(), false);
-
-                return Ok(Planner::Aggregate(Aggregate {
-                    source: Box::new(source),
-                    aggr_exprs,
-                    filled: false,
-                    page_size,
-                    group_by,
-                    output: output_schema,
-                    output_buffer,
-                }));
+                return Ok(Planner::Aggregate(
+                    AggregateBuilder {
+                        source: Box::new(source),
+                        aggr_exprs,
+                        page_size,
+                        group_by,
+                        output: output_schema,
+                    }
+                    .into(),
+                ));
             }
 
             if table.schema == output {
@@ -788,7 +784,7 @@ mod tests {
                         func: Function::Count,
                         args: vec![Expression::Identifier("amount".into())]
                     }],
-                    output: Schema::new(vec![Column::new("COUNT(amount)", Type::DoublePrecision)]),
+                    output: Schema::new(vec![Column::new("COUNT", Type::BigInteger)]),
                     page_size,
                 }
                 .into()
@@ -821,7 +817,7 @@ mod tests {
                         func: Function::Count,
                         args: vec![Expression::Wildcard]
                     }],
-                    output: Schema::new(vec![Column::new("COUNT(*)", Type::DoublePrecision)]),
+                    output: Schema::new(vec![Column::new("COUNT", Type::BigInteger)]),
                     page_size,
                 }
                 .into()
@@ -867,7 +863,7 @@ mod tests {
                         func: Function::Count,
                         args: vec![Expression::Identifier("price".into())]
                     }],
-                    output: Schema::new(vec![Column::new("COUNT(price)", Type::DoublePrecision)]),
+                    output: Schema::new(vec![Column::new("COUNT", Type::BigInteger)]),
                     page_size,
                 }
                 .into()
@@ -899,7 +895,7 @@ mod tests {
                         func: Function::Count,
                         args: vec![Expression::Wildcard]
                     }],
-                    output: Schema::new(vec![Column::new("COUNT(*)", Type::DoublePrecision)]),
+                    output: Schema::new(vec![Column::new("COUNT", Type::BigInteger)]),
                     page_size,
                 }
                 .into()
@@ -937,7 +933,7 @@ mod tests {
                         func: Function::Sum,
                         args: vec![parse_expr("value")]
                     }],
-                    output: Schema::new(vec![Column::new("SUM(value)", Type::DoublePrecision)]),
+                    output: Schema::new(vec![Column::new("SUM", Type::DoublePrecision)]),
                     page_size,
                 }
                 .into()
@@ -1006,7 +1002,7 @@ mod tests {
                         func: Function::Min,
                         args: vec![parse_expr("age")]
                     }],
-                    output: Schema::new(vec![Column::new("MIN(age)", Type::DoublePrecision)]),
+                    output: Schema::new(vec![Column::new("MIN", Type::DoublePrecision)]),
                     page_size,
                 }
                 .into()

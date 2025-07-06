@@ -176,13 +176,13 @@ pub(crate) struct Project<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
-    pub source: Box<Planner<File>>,
-    pub group_by: Vec<Expression>,
-    pub aggr_exprs: Vec<Expression>,
-    pub output: Schema,
-    pub output_buffer: TupleBuffer,
-    pub filled: bool,
-    pub page_size: usize,
+    source: Box<Planner<File>>,
+    group_by: Vec<Expression>,
+    aggr_exprs: Vec<Expression>,
+    output: Schema,
+    output_buffer: TupleBuffer,
+    filled: bool,
+    page_size: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -191,7 +191,7 @@ pub(crate) struct Values {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct TupleBuffer {
+struct TupleBuffer {
     page_size: usize,
     current_size: usize,
     largest_size: usize,
@@ -1260,7 +1260,7 @@ impl Execute for Values {
 }
 
 impl TupleBuffer {
-    pub fn new(page_size: usize, schema: Schema, packed: bool) -> Self {
+    fn new(page_size: usize, schema: Schema, packed: bool) -> Self {
         Self {
             page_size,
             schema,
