@@ -1,5 +1,5 @@
-// ! Random numbers implementation for identifiers without dependencies.
-// ! This is a simplified version of https://github.com/smol-rs/fastrand implementation.
+//! Random numbers implementation for identifiers without dependencies.
+//! This is a simplified version of [fastrand](https://github.com/smol-rs/fastrand) implementation.
 
 #![allow(dead_code)]
 

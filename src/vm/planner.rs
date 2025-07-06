@@ -176,14 +176,22 @@ pub(crate) struct Project<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
-    pub source: Box<Planner<File>>,
-    pub function: Function,
-    pub expr: Expression,
-    pub count: usize,
-    pub sum: f64,
-    pub min: Option<Value>,
-    pub max: Option<Value>,
-    pub done: bool,
+    source: Box<Planner<File>>,
+    function: Function,
+    expr: Expression,
+    count: usize,
+    sum: f64,
+    min: Option<Value>,
+    max: Option<Value>,
+    done: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Group<File: FileOperations> {
+    keys: Vec<Expression>,
+    aggregates: Vec<(Function, Expression)>,
+    source: Box<Planner<File>>,
+    output: Schema,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1651,6 +1659,12 @@ impl<File: FileOperations> Display for Collect<File> {
 impl<File: FileOperations> Display for Aggregate<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Aggregate {} with {}", self.function, self.expr)
+    }
+}
+
+impl<File: FileOperations> Display for Group<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Group by {}", join(&self.keys, ", "))
     }
 }
 
