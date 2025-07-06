@@ -10,7 +10,7 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{join, Assignment, Expression, Value};
+use crate::sql::statement::{join, Assignment, Expression, Function, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
@@ -46,6 +46,8 @@ pub(crate) enum Planner<File: FileOperations> {
     Update(Update<File>),
     Delete(Delete<File>),
     SortKeys(SortKeys<File>),
+    /// Used for aggregate functions like `COUNT` or `AVG`.
+    Aggregate(Aggregate<File>),
     Project(Project<File>),
     Collect(Collect<File>),
     /// Handles literal values from INSERT statements.
@@ -173,6 +175,18 @@ pub(crate) struct Project<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct Aggregate<File: FileOperations> {
+    pub source: Box<Planner<File>>,
+    pub function: Function,
+    pub expr: Expression,
+    pub count: usize,
+    pub sum: f64,
+    pub min: Option<Value>,
+    pub max: Option<Value>,
+    pub done: bool,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
@@ -233,6 +247,13 @@ pub(crate) struct CollectBuilder<File: FileOperations> {
     pub mem_buff_size: usize,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) struct AggregateBuilder<File: FileOperations> {
+    pub source: Box<Planner<File>>,
+    pub expr: Expression,
+    pub function: Function,
+}
+
 pub(crate) type Tuple = Vec<Value>;
 
 pub(crate) const DEFAULT_SORT_BUFFER_SIZE: usize = 4;
@@ -259,6 +280,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Delete(delete) => delete.try_next(),
             Self::SortKeys(keys) => keys.try_next(),
             Self::Project(projection) => projection.try_next(),
+            Self::Aggregate(aggr) => aggr.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
@@ -276,6 +298,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Delete(delete) => &delete.source,
             Self::SortKeys(keys) => &keys.source,
             Self::Collect(collection) => &collection.source,
+            Self::Aggregate(aggr) => &aggr.source,
             _ => return None,
         })
     }
@@ -298,6 +321,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Project(projection) => format!("{projection}"),
             Self::Collect(collection) => format!("{collection}"),
             Self::Values(values) => format!("{values}"),
+            Self::Aggregate(aggr) => format!("{aggr}"),
         };
 
         format!("{prefix}{display}")
@@ -1096,6 +1120,79 @@ impl<File: PlanExecutor> Execute for Project<File> {
     }
 }
 
+impl<File: PlanExecutor> Execute for Aggregate<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if self.done {
+            return Ok(None);
+        }
+
+        self.count = 0;
+        while let Some(tuple) = self.source.try_next()? {
+            if let Function::Count = self.function {
+                self.count += 1;
+                continue;
+            }
+
+            let value = resolve_expression(&tuple, &self.source.schema().unwrap(), &self.expr)?;
+            match self.function {
+                Function::Avg | Function::Sum => {
+                    self.count += 1;
+                    match value {
+                        Value::Float(f) => self.sum += f,
+                        Value::Number(n) => self.sum += n as f64,
+                        // maybe we should to a better handling of types here
+                        _ => {}
+                    }
+                }
+                Function::Min => {
+                    if self.min.as_ref().map_or(true, |min| &value < min) {
+                        self.min = Some(value);
+                    }
+                }
+                Function::Max => {
+                    if self.max.as_ref().map_or(true, |max| &value > max) {
+                        self.max = Some(value);
+                    }
+                }
+                _ => todo!(),
+            }
+        }
+
+        let result = match self.function {
+            Function::Count => Value::Number(self.count as i128),
+            Function::Sum => Value::Float(self.sum),
+            Function::Avg => Value::Float(self.sum / self.count as f64),
+            Function::Min => self.min.clone().unwrap(),
+            Function::Max => self.max.clone().unwrap(),
+            _ => unreachable!(),
+        };
+
+        self.done = true;
+        Ok(Some(vec![result]))
+    }
+}
+
+impl<File: FileOperations> From<AggregateBuilder<File>> for Aggregate<File> {
+    fn from(value: AggregateBuilder<File>) -> Self {
+        let AggregateBuilder {
+            expr,
+            function,
+            source,
+        } = value;
+
+        Self {
+            source,
+            expr,
+            function,
+            count: 0,
+            sum: 0.0,
+            min: None,
+            max: None,
+            done: false,
+        }
+    }
+}
+
 impl Execute for Values {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         let Some(mut values) = self.values.pop_front() else {
@@ -1548,6 +1645,12 @@ impl<File: FileOperations> Display for Collect<File> {
             "Collect {}",
             join(self.schema.columns.iter().map(|col| &col.name), ", ")
         )
+    }
+}
+
+impl<File: FileOperations> Display for Aggregate<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Aggregate {} with {}", self.function, self.expr)
     }
 }
 

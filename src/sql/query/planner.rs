@@ -15,7 +15,7 @@ use crate::{
     },
     vm::{
         expression::VmType,
-        planner::{Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+        planner::{AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
     },
 };
 use crate::{
@@ -48,6 +48,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             from,
             r#where,
             order_by,
+            group_by,
         }) => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
             let page_size = db.pager.borrow().page_size;
@@ -116,6 +117,20 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         expr.to_string().as_str(),
                         resolve_type(&table.schema, expr)?,
                     )),
+                }
+            }
+
+            if let Some(Expression::Function { func, args }) = &columns.first() {
+                if func.is_aggr() {
+                    let expr = args.first().cloned().unwrap_or(Expression::Wildcard);
+                    return Ok(Planner::Aggregate(
+                        AggregateBuilder {
+                            expr,
+                            function: *func,
+                            source: Box::new(source),
+                        }
+                        .into(),
+                    ));
                 }
             }
 
@@ -220,6 +235,7 @@ fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::sql::statement::Function;
     use std::{cell::RefCell, collections::HashMap, ops::Bound, path::PathBuf};
 
     use super::*;
@@ -708,6 +724,223 @@ mod tests {
                 table: db.tables["users"].to_owned(),
                 cursor: Cursor::new(db.tables["users"].root, 0),
             })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_aggr_plan() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE payments (id SERIAL PRIMARY KEY, amount REAL);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT COUNT(amount) FROM payments;")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: Expression::Identifier("amount".into()),
+                    function: Function::Count,
+                    source: Box::new(Planner::SeqScan(SeqScan {
+                        pager: db.pager(),
+                        table: db.tables["payments"].to_owned(),
+                        cursor: Cursor::new(db.tables["payments"].root, 0)
+                    }))
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggr_applying_filter() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, active BOOLEAN);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT COUNT(*) FROM users WHERE active = TRUE;")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: Expression::Wildcard,
+                    function: Function::Count,
+                    source: Box::new(Planner::Filter(Filter {
+                        filter: parse_expr("active = TRUE"),
+                        schema: db.tables["users"].schema.to_owned(),
+                        source: Box::new(Planner::SeqScan(SeqScan {
+                            pager: db.pager(),
+                            cursor: Cursor::new(db.tables["users"].root, 0),
+                            table: db.tables["users"].to_owned(),
+                        }))
+                    })),
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggr_when_sorting() -> PlannerResult {
+        let mut db =
+            new_db(&["CREATE TABLE sales (id INT PRIMARY KEY, region VARCHAR(30), price REAL);"])?;
+        let page_size = db.db.pager.borrow().page_size;
+        let work_dir = db.db.work_dir.to_owned();
+        let schema = db.tables["sales"].schema.to_owned();
+
+        assert_eq!(
+            db.gen_plan("SELECT COUNT(price) FROM sales ORDER BY region;")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: Expression::Identifier("price".into()),
+                    function: Function::Count,
+                    source: Box::new(Planner::Sort(
+                        SortBuilder {
+                            page_size,
+                            work_dir: work_dir.clone(),
+                            comparator: TupleComparator::new(
+                                schema.clone(),
+                                schema.clone(),
+                                vec![1]
+                            ),
+                            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                            collection: CollectBuilder {
+                                work_dir,
+                                mem_buff_size: page_size,
+                                schema: schema.clone(),
+                                source: Box::new(Planner::SeqScan(SeqScan {
+                                    pager: db.pager(),
+                                    table: db.tables["sales"].clone(),
+                                    cursor: Cursor::new(db.tables["sales"].root, 0)
+                                }))
+                            }
+                            .into()
+                        }
+                        .into()
+                    ))
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_over_exact_match() -> PlannerResult {
+        let mut db = new_db(&["CREATE TABLE products (id INT PRIMARY KEY, stock INT UNSIGNED);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT COUNT(*) FROM products WHERE id = 24;")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: Expression::Wildcard,
+                    function: Function::Count,
+                    source: Box::new(Planner::ExactMatch(ExactMatch {
+                        done: false,
+                        emit_only_key: false,
+                        pager: db.pager(),
+                        expr: parse_expr("id = 24"),
+                        key: serialize(&Type::UnsignedInteger, &Value::Number(24)),
+                        relation: Relation::Table(db.tables["products"].clone())
+                    }))
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggr_with_range_scan() -> PlannerResult {
+        let mut db =
+            new_db(&["CREATE TABLE sensors (id INT PRIMARY KEY, value REAL, stamp INT);"])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT SUM(value) FROM sensors WHERE id BETWEEN 1000 AND 2000;")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: parse_expr("value"),
+                    function: Function::Sum,
+                    source: Box::new(Planner::RangeScan(
+                        RangeScanBuilder {
+                            emit_only_key: false,
+                            pager: db.pager(),
+                            expr: parse_expr("id BETWEEN 1000 AND 2000"),
+                            relation: Relation::Table(db.tables["sensors"].to_owned()),
+                            range: (
+                                Bound::Included(serialize(&Type::Integer, &Value::Number(1000))),
+                                Bound::Included(serialize(&Type::Integer, &Value::Number(2000)))
+                            )
+                        }
+                        .into()
+                    ))
+                }
+                .into()
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggr_with_key_scan() -> PlannerResult {
+        let mut db =
+            new_db(&["CREATE TABLE users (id SERIAL PRIMARY KEY, age INT UNSIGNED, email VARCHAR(30) UNIQUE);"])?;
+
+        // we need first to index over the qualified keys (email <= ...)
+        let range_scan = Planner::RangeScan(RangeScan::from(RangeScanBuilder {
+            emit_only_key: true,
+            pager: db.pager(),
+            expr: parse_expr("email <= 'johndoe@email.com'"),
+            relation: Relation::Index(db.indexes[&index!(unique on users (email))].to_owned()),
+            range: (
+                Bound::Unbounded,
+                Bound::Included(serialize(
+                    &Type::Varchar(30),
+                    &Value::String("johndoe@email.com".into()),
+                )),
+            ),
+        }));
+
+        // then we collect the results
+        let collect = Collect::from(CollectBuilder {
+            source: Box::new(range_scan),
+            schema: Schema::new(vec![Column::primary_key("id", Type::Serial)]),
+            work_dir: db.db.work_dir.clone(),
+            mem_buff_size: db.db.pager.borrow().page_size,
+        });
+
+        // and sort to garantee PK order
+        let sort = Sort::from(SortBuilder {
+            page_size: db.db.pager.borrow().page_size,
+            work_dir: db.db.work_dir.clone(),
+            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+            comparator: TupleComparator::new(
+                Schema::new(vec![Column::primary_key("id", Type::Serial)]),
+                Schema::new(vec![Column::primary_key("id", Type::Serial)]),
+                vec![0],
+            ),
+            collection: collect,
+        });
+
+        // and finally scan the main table using the keys from the index
+        // and calculate the minimum over the results
+        assert_eq!(
+            db.gen_plan("SELECT MIN(age) FROM users WHERE email <= 'johndoe@email.com';")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    expr: parse_expr("age"),
+                    function: Function::Min,
+                    source: Box::new(Planner::KeyScan(KeyScan {
+                        pager: db.pager(),
+                        table: db.tables["users"].to_owned(),
+                        comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                        source: Box::new(Planner::Sort(sort))
+                    }))
+                }
+                .into()
+            )
         );
 
         Ok(())

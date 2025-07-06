@@ -2675,4 +2675,78 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn count_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE customer (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(50));")?;
+        db.exec(
+            r#"
+        INSERT INTO customer (name, last_name) VALUES 
+            ('Jennifer', 'Smith'),
+            ('Jenny', 'Johnson'),
+            ('Benjamin', 'Brown'),
+            ('Jessica', 'Jones'),
+            ('Jenifer', 'Miller'),
+            ('Michael', 'Davis');
+            "#,
+        )?;
+        let query = db.exec("SELECT COUNT(*) FROM customer;")?;
+        assert_eq!(query.tuples, vec![vec![Value::Number(6)]]);
+        assert_eq!(
+            db.exec("SELECT COUNT(name) FROM customer;"),
+            db.exec("SELECT COUNT(last_name) FROM customer;")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn count_function_on_empty() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE product (id INT PRIMARY KEY, name VARCHAR(50));")?;
+
+        let query = db.exec("SELECT COUNT(*) FROM product;")?;
+        assert_eq!(query.tuples, vec![vec![Value::Number(0)]]);
+
+        assert_eq!(
+            db.exec("SELECT COUNT(id) FROM product;")?.tuples,
+            vec![vec![Value::Number(0)]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_functions() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE sales (id SERIAL PRIMARY KEY, price DOUBLE PRECISION, quantity INT, category VARCHAR(30));")?;
+
+        db.exec(
+            "INSERT INTO sales (id, price, quantity, category) VALUES
+            (1, 10.0, 2, 'books'),
+            (2, 20.5, 1, 'books'),
+            (3, 5.0, 5, 'stationery'),
+            (4, 8.2, 3, 'stationery'),
+            (5, 100.0, 1, 'electronics');",
+        )?;
+
+        assert_eq!(
+            db.exec("SELECT SUM(price) FROM sales;")?.tuples,
+            vec![vec![Value::Float(143.7)]]
+        );
+        assert_eq!(
+            db.exec("SELECT AVG(price) FROM sales;")?.tuples,
+            vec![vec![Value::Float(28.74)]]
+        );
+        assert_eq!(
+            db.exec("SELECT MIN(price) FROM sales;")?.tuples,
+            vec![vec![Value::Float(5.0)]]
+        );
+        assert_eq!(
+            db.exec("SELECT MAX(price) FROM sales;")?.tuples,
+            vec![vec![Value::Float(100.00)]]
+        );
+
+        Ok(())
+    }
 }

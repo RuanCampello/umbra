@@ -163,6 +163,7 @@ pub(in crate::sql) fn analyze<'s>(
             columns,
             from,
             order_by,
+            group_by,
             r#where,
         }) => {
             let metadata = ctx.metadata(from)?;
@@ -175,7 +176,12 @@ pub(in crate::sql) fn analyze<'s>(
 
             analyze_where(&metadata.schema, r#where)?;
 
+            // FIXME: we probably can do this in parallel
             for expr in order_by {
+                analyze_expression(&metadata.schema, None, expr)?;
+            }
+
+            for expr in group_by {
                 analyze_expression(&metadata.schema, None, expr)?;
             }
         }
@@ -351,7 +357,9 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             }
 
             for arg in args {
-                analyze_expression(schema, col_type, arg)?;
+                if arg.ne(&Expression::Wildcard) {
+                    analyze_expression(schema, col_type, arg)?;
+                }
             }
 
             func.return_type()
@@ -974,5 +982,15 @@ mod tests {
             ctx: &["CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(100));"],
             expected: Ok(())
         }.assert()
+    }
+
+    #[test]
+    fn count_function() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT COUNT(amount) FROM payments;",
+            ctx: &["CREATE TABLE payments (id SERIAL PRIMARY KEY, amount REAL);"],
+            expected: Ok(()),
+        }
+        .assert()
     }
 }

@@ -67,6 +67,7 @@ pub(crate) struct Select {
     pub from: String,
     pub r#where: Option<Expression>,
     pub order_by: Vec<Expression>,
+    pub group_by: Vec<Expression>,
     // TODO: limit
 }
 
@@ -258,10 +259,32 @@ pub enum Type {
 /// Subset of `SQL` functions.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Function {
+    /// Extracts the `string` to the `length` at the `start`th character (if specified) and stop
+    /// after the `count` character. Must provide at least of of `start` and `count`.
+    /// ```sql
+    /// SUBSTRING(string text [FROM start text][FOR count int]) -> text;
+    /// ```
     Substring,
+    /// Concatenates the string representation of all arguments.
     Concat,
+    /// Returns the numeric representation of argument's first character.
     Ascii,
+    /// Returns the first index of the specified `substring` within the given `string`. Returns
+    /// zero if it's not present.
+    /// ```sql
+    /// POSITION(substring text IN string text) -> int;
+    /// ```
     Position,
+    /// Computes the number of input rows.
+    Count,
+    /// Computes the average (arithmetic mean) of all input values.
+    Avg,
+    /// Computes the sum of the input values.
+    Sum,
+    /// Computes the minimum of the input values.
+    Min,
+    /// Computes the maximum of the input values.
+    Max,
     UuidV4,
 }
 
@@ -296,15 +319,19 @@ impl Type {
         let bound = match self {
             Self::SmallInt => i16::MIN as i128..=i16::MAX as i128,
             Self::UnsignedSmallInt => u16::MIN as i128..=u16::MAX as i128,
+            Self::SmallSerial => 1..=(i16::MAX as i128),
             Self::Integer => i32::MIN as i128..=i32::MAX as i128,
             Self::UnsignedInteger => 0..=u32::MAX as i128,
+            Self::Serial => 1..=(i32::MAX as i128),
             Self::BigInteger => i64::MIN as i128..=i64::MAX as i128,
             Self::UnsignedBigInteger => 0..=u64::MAX as i128,
+            Self::BigSerial => 1..=(i64::MAX as i128),
             other => panic!("bound checking must be used only for integer: {other:#?}"),
         };
 
         bound.contains(int)
     }
+
     pub const fn is_float_in_bounds(&self, float: &f64) -> bool {
         match self {
             Self::Real => *float >= f32::MIN as f64 && *float <= f32::MAX as f64,
@@ -392,13 +419,19 @@ impl Display for Statement {
                 from,
                 r#where,
                 order_by,
+                group_by,
             }) => {
                 write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
+
                 if !order_by.is_empty() {
                     write!(f, " ORDER BY {}", join(order_by, ", "))?;
+                }
+
+                if !group_by.is_empty() {
+                    write!(f, " GROUP BY {}", join(group_by, ", "))?;
                 }
             }
 
@@ -648,11 +681,13 @@ impl Display for Value {
 impl Function {
     /// Returns respectvly the minimum and the maximum (if there's any) of this function arguments.
     pub const fn size_of_args(&self) -> Option<(usize, usize)> {
+        const UNARY: Option<(usize, usize)> = Some((1, 1));
+
         match self {
             Self::Substring => Some((2, 3)),
-            Self::Ascii => Some((1, 1)),
             Self::Concat => Some((1, usize::MAX)),
             Self::Position => Some((2, 2)),
+            func if func.is_unary() => UNARY,
             _ => None,
         }
     }
@@ -661,8 +696,20 @@ impl Function {
     pub const fn return_type(&self) -> VmType {
         match self {
             Self::Substring | Self::Concat => VmType::String,
-            Self::UuidV4 | Self::Ascii | Self::Position => VmType::Number,
+            Self::Avg | Self::Min | Self::Max | Self::Sum => VmType::Float,
+            Self::UuidV4 | Self::Ascii | Self::Position | Self::Count => VmType::Number,
         }
+    }
+
+    pub(in crate::sql) const fn is_aggr(&self) -> bool {
+        matches!(
+            self,
+            Self::Count | Self::Sum | Self::Avg | Self::Min | Self::Max
+        )
+    }
+
+    pub(in crate::sql) const fn is_unary(&self) -> bool {
+        matches!(self, Self::Ascii) || self.is_aggr()
     }
 }
 
@@ -673,6 +720,11 @@ impl Display for Function {
             Self::Concat => f.write_str("CONCAT"),
             Self::Ascii => f.write_str("ASCII"),
             Self::Position => f.write_str("POSITION"),
+            Self::Count => f.write_str("COUNT"),
+            Self::Max => f.write_str("MAX"),
+            Self::Min => f.write_str("MIN"),
+            Self::Sum => f.write_str("SUM"),
+            Self::Avg => f.write_str("AVG"),
             Self::UuidV4 => f.write_str("u4()"),
         }
     }
