@@ -18,6 +18,7 @@ impl<'sql> Sql<'sql> for Select {
             from,
             r#where,
             order_by,
+            group_by: vec![],
         })
     }
 }

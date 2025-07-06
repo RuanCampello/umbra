@@ -48,6 +48,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             from,
             r#where,
             order_by,
+            group_by,
         }) => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
             let page_size = db.pager.borrow().page_size;

@@ -67,6 +67,7 @@ pub(crate) struct Select {
     pub from: String,
     pub r#where: Option<Expression>,
     pub order_by: Vec<Expression>,
+    pub group_by: Vec<Expression>,
     // TODO: limit
 }
 
@@ -418,13 +419,19 @@ impl Display for Statement {
                 from,
                 r#where,
                 order_by,
+                group_by,
             }) => {
                 write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
+
                 if !order_by.is_empty() {
                     write!(f, " ORDER BY {}", join(order_by, ", "))?;
+                }
+
+                if !group_by.is_empty() {
+                    write!(f, " GROUP BY {}", join(group_by, ", "))?;
                 }
             }
 

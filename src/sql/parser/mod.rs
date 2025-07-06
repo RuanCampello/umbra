@@ -784,6 +784,7 @@ mod tests {
                 from: "bills".to_string(),
                 r#where: None,
                 order_by: vec![],
+                group_by: vec![],
             }))
         );
     }
@@ -809,6 +810,7 @@ mod tests {
                     ))),
                 }),
                 order_by: vec![],
+                group_by: vec![],
             }))
         );
     }
@@ -825,6 +827,7 @@ mod tests {
                 from: "users".to_string(),
                 r#where: None,
                 order_by: vec![],
+                group_by: vec![],
             }))
         );
     }
@@ -1037,6 +1040,7 @@ mod tests {
                     from: "employees".to_string(),
                     r#where: None,
                     order_by: vec![],
+                    group_by: vec![],
                 })
             ]
         );
@@ -1062,6 +1066,7 @@ mod tests {
                     right: Box::new(Expression::Value(Value::String("12:00:00".into()))),
                 }),
                 order_by: vec![],
+                group_by: vec![],
             }))
         );
     }
@@ -1350,6 +1355,7 @@ mod tests {
             Statement::Select(Select {
                 from: "film".to_string(),
                 order_by: vec![],
+                group_by: vec![],
                 columns: vec![
                     Expression::Identifier("film_id".into()),
                     Expression::Identifier("title".into())
@@ -1400,6 +1406,7 @@ mod tests {
             statement.unwrap(),
             Statement::Select(Select {
                 order_by: vec![],
+                group_by: vec![],
                 from: "customer".into(),
                 columns: vec![
                     Expression::Identifier("name".into()),
@@ -1449,6 +1456,7 @@ mod tests {
                 }],
                 from: "users".into(),
                 order_by: vec![],
+                group_by: vec![],
                 r#where: None,
             })
         )
@@ -1468,7 +1476,8 @@ mod tests {
                 order_by: vec![Expression::Function {
                     func: Function::Ascii,
                     args: vec![Expression::Identifier("name".into())]
-                }]
+                }],
+                group_by: vec![],
             })
         )
     }
@@ -1490,6 +1499,7 @@ mod tests {
                 }],
                 from: "users".into(),
                 order_by: vec![],
+                group_by: vec![],
                 r#where: None,
             })
         )
@@ -1512,6 +1522,7 @@ mod tests {
                 }],
                 from: "films".into(),
                 order_by: vec![],
+                group_by: vec![],
                 r#where: None,
             })
         )
@@ -1531,6 +1542,7 @@ mod tests {
                 }],
                 from: "payments".into(),
                 order_by: vec![],
+                group_by: vec![],
                 r#where: None,
             })
         )
@@ -1550,6 +1562,7 @@ mod tests {
                 }],
                 from: "products".into(),
                 order_by: vec![],
+                group_by: vec![],
                 r#where: None,
             })
         )
