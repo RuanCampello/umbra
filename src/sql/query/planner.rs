@@ -1012,4 +1012,40 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_group_by_with_sum() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE sales (region VARCHAR(2), price INT);",
+            "INSERT INTO sales (region, price) VALUES ('N', 10);",
+            "INSERT INTO sales (region, price) VALUES ('S', 20);",
+            "INSERT INTO sales (region, price) VALUES ('N', 15);",
+            "INSERT INTO sales (region, price) VALUES ('S', 30);",
+        ])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT region, SUM(price) FROM sales GROUP BY region;")?,
+            Planner::Aggregate(
+                AggregateBuilder {
+                    source: Box::new(Planner::SeqScan(SeqScan {
+                        pager: db.pager(),
+                        table: db.tables["sales"].to_owned(),
+                        cursor: Cursor::new(db.tables["sales"].root, 0)
+                    })),
+                    group_by: vec![Expression::Identifier("region".into())],
+                    aggr_exprs: vec![Expression::Function {
+                        func: Function::Sum,
+                        args: vec![Expression::Identifier("price".into())]
+                    }],
+                    output: Schema::new(vec![
+                        Column::new("region", Type::Varchar(2)),
+                        Column::new("SUM", Type::DoublePrecision)
+                    ]),
+                    page_size: db.db.pager.borrow().page_size,
+                }
+                .into()
+            )
+        );
+        Ok(())
+    }
 }
