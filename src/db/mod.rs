@@ -2749,4 +2749,42 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn group_by() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            "CREATE TABLE sales (id SERIAL PRIMARY KEY, region VARCHAR(2), price INT, qty INT UNSIGNED);",
+        )?;
+
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('N', 10, 1);")?;
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('S', 20, 2);")?;
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('N', 15, 3);")?;
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('S', 30, 4);")?;
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('X', 40, 5);")?;
+
+        let query =
+            db.exec("SELECT region, SUM(price) FROM sales GROUP BY region ORDER BY region;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("N".into()), Value::Float(25.0)],
+                vec![Value::String("S".into()), Value::Float(50.0)],
+                vec![Value::String("X".into()), Value::Float(40.0)],
+            ]
+        );
+
+        let query =
+            db.exec("SELECT region, COUNT(*) FROM sales GROUP BY region ORDER BY region;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("N".into()), Value::Number(2)],
+                vec![Value::String("S".into()), Value::Number(2)],
+                vec![Value::String("X".into()), Value::Number(1)],
+            ]
+        );
+
+        Ok(())
+    }
 }
