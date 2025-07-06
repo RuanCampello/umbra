@@ -1567,4 +1567,27 @@ mod tests {
             })
         )
     }
+
+    #[test]
+    fn test_group_by() {
+        let sql = "SELECT id, SUM(price) FROM sales GROUP BY id;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![
+                    Expression::Identifier("id".into()),
+                    Expression::Function {
+                        func: Function::Sum,
+                        args: vec![Expression::Identifier("price".into())]
+                    }
+                ],
+                from: "sales".into(),
+                group_by: vec![Expression::Identifier("id".into())],
+                order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
 }
