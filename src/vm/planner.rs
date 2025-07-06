@@ -176,22 +176,13 @@ pub(crate) struct Project<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
-    source: Box<Planner<File>>,
-    function: Function,
-    expr: Expression,
-    count: usize,
-    sum: f64,
-    min: Option<Value>,
-    max: Option<Value>,
-    done: bool,
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct Group<File: FileOperations> {
-    keys: Vec<Expression>,
-    aggregates: Vec<(Function, Expression)>,
-    source: Box<Planner<File>>,
-    output: Schema,
+    pub source: Box<Planner<File>>,
+    pub group_by: Vec<Expression>,
+    pub aggr_exprs: Vec<Expression>,
+    pub output: Schema,
+    pub output_buffer: TupleBuffer,
+    pub filled: bool,
+    pub page_size: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1130,73 +1121,101 @@ impl<File: PlanExecutor> Execute for Project<File> {
 
 impl<File: PlanExecutor> Execute for Aggregate<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        if self.done {
+        if self.filled {
+            return Ok(self.output_buffer.pop_front());
+        }
+
+        self.output_buffer.clear();
+
+        let input_schema = self.source.schema().unwrap();
+        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> = HashMap::new();
+
+        while let Some(row) = self.source.try_next()? {
+            let key = self
+                .group_by
+                .iter()
+                .map(|expr| resolve_expression(&row, &input_schema, &expr))
+                .collect::<Result<Vec<_>, _>>()?;
+            groups.entry(key).or_default().push(row)
+        }
+
+        // no rows? no output
+        if groups.is_empty() {
+            self.filled = true;
             return Ok(None);
         }
 
-        self.count = 0;
-        while let Some(tuple) = self.source.try_next()? {
-            if let Function::Count = self.function {
-                self.count += 1;
-                continue;
+        for (key, rows) in groups.into_iter() {
+            let mut tuple = key;
+
+            for aggr_expr in &self.aggr_exprs {
+                let (func, args) = match aggr_expr {
+                    Expression::Function { func, args } => (func, args.as_slice()),
+                    _ => {
+                        return Err(SqlError::Other(format!(
+                            "Invalid aggregate function expression: {aggr_expr}"
+                        ))
+                        .into());
+                    }
+                };
+
+                let value = self.apply_aggr(func, args, &rows, &input_schema)?;
+                tuple.push(value)
             }
 
-            let value = resolve_expression(&tuple, &self.source.schema().unwrap(), &self.expr)?;
-            match self.function {
-                Function::Avg | Function::Sum => {
-                    self.count += 1;
-                    match value {
-                        Value::Float(f) => self.sum += f,
-                        Value::Number(n) => self.sum += n as f64,
-                        // maybe we should to a better handling of types here
-                        _ => {}
-                    }
-                }
-                Function::Min => {
-                    if self.min.as_ref().map_or(true, |min| &value < min) {
-                        self.min = Some(value);
-                    }
-                }
-                Function::Max => {
-                    if self.max.as_ref().map_or(true, |max| &value > max) {
-                        self.max = Some(value);
-                    }
-                }
-                _ => todo!(),
-            }
+            self.output_buffer.push(tuple);
         }
 
-        let result = match self.function {
-            Function::Count => Value::Number(self.count as i128),
-            Function::Sum => Value::Float(self.sum),
-            Function::Avg => Value::Float(self.sum / self.count as f64),
-            Function::Min => self.min.clone().unwrap(),
-            Function::Max => self.max.clone().unwrap(),
-            _ => unreachable!(),
-        };
-
-        self.done = true;
-        Ok(Some(vec![result]))
+        self.filled = true;
+        Ok(self.output_buffer.pop_front())
     }
 }
 
-impl<File: FileOperations> From<AggregateBuilder<File>> for Aggregate<File> {
-    fn from(value: AggregateBuilder<File>) -> Self {
-        let AggregateBuilder {
-            expr,
-            function,
-            source,
-        } = value;
+impl<File: PlanExecutor> Aggregate<File> {
+    fn apply_aggr(
+        &self,
+        func: &Function,
+        args: &[Expression],
+        rows: &[Tuple],
+        schema: &Schema,
+    ) -> Result<Value, DatabaseError> {
+        let values = match args.first() {
+            None => vec![],
+            Some(Expression::Wildcard) => vec![Value::Number(1); rows.len()],
+            Some(arg) => rows
+                .iter()
+                .map(|row| resolve_expression(row, schema, arg))
+                .collect::<Result<Vec<_>, _>>()?,
+        };
 
-        Self {
-            source,
-            expr,
-            function,
-            count: 0,
-            sum: 0.0,
-            min: None,
-            max: None,
-            done: false,
+        match func {
+            Function::Count => Ok(Value::Number(values.len() as _)),
+            Function::Sum | Function::Avg => {
+                let sum = values.iter().fold(0.0, |acc, v| {
+                    acc + match v {
+                        Value::Float(f) => *f,
+                        Value::Number(n) => *n as f64,
+                        _ => 0.0,
+                    }
+                });
+
+                match func.eq(&Function::Sum) {
+                    true => Ok(Value::Float(sum)),
+                    _ => Ok(Value::Float(sum / values.len() as f64)),
+                }
+            }
+            Function::Min => Ok(values
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Number(0))),
+            Function::Max => Ok(values
+                .iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Number(0))),
+
+            _ => unreachable!("this ain't a aggregate function"),
         }
     }
 }
@@ -1658,13 +1677,7 @@ impl<File: FileOperations> Display for Collect<File> {
 
 impl<File: FileOperations> Display for Aggregate<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Aggregate {} with {}", self.function, self.expr)
-    }
-}
-
-impl<File: FileOperations> Display for Group<File> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Group by {}", join(&self.keys, ", "))
+        write!(f, "Aggregate {}", join(&self.group_by, ", "))
     }
 }
 

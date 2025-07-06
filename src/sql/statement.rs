@@ -9,6 +9,7 @@ use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
+use std::hash::Hash;
 use std::ops::Neg;
 use std::str::FromStr;
 
@@ -124,7 +125,7 @@ pub enum Expression {
 /// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level.
 ///
 /// Values of this type are stored in the `Value::Temporal` variant.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum Temporal {
     Date(NaiveDate),
     DateTime(NaiveDateTime),
@@ -539,6 +540,8 @@ impl PartialEq for Value {
     }
 }
 
+impl Eq for Value {}
+
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
@@ -549,6 +552,36 @@ impl PartialOrd for Value {
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
             _ => panic!("those values are not comparable"),
+        }
+    }
+}
+
+impl Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        fn encode_float(f: &f64) -> u64 {
+            // normalize -0.0 and 0.0 to the same bits, and treat all nans the same.
+            let mut bits = f.to_bits();
+            if bits == (-0.0f64).to_bits() {
+                bits = 0.0f64.to_bits();
+            }
+            if f.is_nan() {
+                // all nans are hashed as the same.
+                bits = 0x7ff8000000000000u64;
+            } else if bits >> 63 != 0 {
+                // for negatives, flip all bits for total ordering.
+                bits = !bits;
+            }
+
+            bits
+        }
+
+        match self {
+            Self::Float(f) => encode_float(f).hash(state),
+            Value::Number(n) => n.hash(state),
+            Value::String(s) => s.hash(state),
+            Value::Boolean(b) => b.hash(state),
+            Value::Temporal(t) => t.hash(state),
+            Value::Uuid(u) => u.hash(state),
         }
     }
 }
