@@ -125,8 +125,8 @@ impl<'input> Parser<'input> {
         Ok(expr)
     }
 
-    fn parse_order_by(&mut self) -> ParserResult<Vec<Expression>> {
-        match self.consume_optional(Token::Keyword(Keyword::Order)) {
+    fn parse_by_separated_keyword(&mut self, keyword: Keyword) -> ParserResult<Vec<Expression>> {
+        match self.consume_optional(Token::Keyword(keyword)) {
             true => {
                 self.expect_keyword(Keyword::By)?;
                 self.parse_separated_tokens(|p| p.parse_expr(None), false)

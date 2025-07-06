@@ -11,14 +11,15 @@ impl<'sql> Sql<'sql> for Select {
         parser.expect_keyword(Keyword::From)?;
         let (from, r#where) = parser.parse_from_and_where()?;
 
-        let order_by = parser.parse_order_by()?;
+        let order_by = parser.parse_by_separated_keyword(Keyword::Order)?;
+        let group_by = parser.parse_by_separated_keyword(Keyword::Group)?;
 
         Ok(Select {
             columns,
             from,
             r#where,
             order_by,
-            group_by: vec![],
+            group_by,
         })
     }
 }
