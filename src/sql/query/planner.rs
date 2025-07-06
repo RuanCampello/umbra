@@ -15,7 +15,10 @@ use crate::{
     },
     vm::{
         expression::VmType,
-        planner::{AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+        planner::{
+            Aggregate, AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys,
+            TupleBuffer, Values,
+        },
     },
 };
 use crate::{
@@ -120,18 +123,55 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }
             }
 
-            if let Some(Expression::Function { func, args }) = &columns.first() {
-                if func.is_aggr() {
-                    let expr = args.first().cloned().unwrap_or(Expression::Wildcard);
-                    return Ok(Planner::Aggregate(
-                        AggregateBuilder {
-                            expr,
-                            function: *func,
-                            source: Box::new(source),
+            let has_aggregate = columns
+                .iter()
+                .any(|expr| matches!(expr, Expression::Function { .. }));
+
+            if !group_by.is_empty() || has_aggregate {
+                let mut output_schema = Schema::empty();
+
+                for expr in &group_by {
+                    match expr {
+                        Expression::Identifier(ident) => {
+                            let idx = table.schema.index_of(&ident).unwrap();
+                            output_schema.push(table.schema.columns[idx].clone());
                         }
-                        .into(),
+                        _ => output_schema.push(Column::new(
+                            expr.to_string().as_str(),
+                            resolve_type(&table.schema, expr)?,
+                        )),
+                    }
+                }
+
+                let aggr_exprs = columns
+                    .iter()
+                    .flat_map(|expr| match expr {
+                        Expression::Function { .. } => Some(expr.clone()),
+                        Expression::Identifier(_) if group_by.iter().any(|group| group == expr) => {
+                            None
+                        }
+                        _ => Some(expr.clone()),
+                    })
+                    .collect::<Vec<_>>();
+
+                for expr in &aggr_exprs {
+                    output_schema.push(Column::new(
+                        expr.to_string().as_str(),
+                        resolve_type(&table.schema, expr)?,
                     ));
                 }
+
+                let output_buffer = TupleBuffer::new(page_size, output_schema.clone(), false);
+
+                return Ok(Planner::Aggregate(Aggregate {
+                    source: Box::new(source),
+                    aggr_exprs,
+                    filled: false,
+                    page_size,
+                    group_by,
+                    output: output_schema,
+                    output_buffer,
+                }));
             }
 
             if table.schema == output {
@@ -732,18 +772,24 @@ mod tests {
     #[test]
     fn test_simple_aggr_plan() -> PlannerResult {
         let mut db = new_db(&["CREATE TABLE payments (id SERIAL PRIMARY KEY, amount REAL);"])?;
+        let page_size = db.db.pager.borrow().page_size;
 
         assert_eq!(
             db.gen_plan("SELECT COUNT(amount) FROM payments;")?,
             Planner::Aggregate(
                 AggregateBuilder {
-                    expr: Expression::Identifier("amount".into()),
-                    function: Function::Count,
                     source: Box::new(Planner::SeqScan(SeqScan {
                         pager: db.pager(),
                         table: db.tables["payments"].to_owned(),
                         cursor: Cursor::new(db.tables["payments"].root, 0)
-                    }))
+                    })),
+                    group_by: vec![],
+                    aggr_exprs: vec![Expression::Function {
+                        func: Function::Count,
+                        args: vec![Expression::Identifier("amount".into())]
+                    }],
+                    output: Schema::new(vec![Column::new("COUNT(amount)", Type::DoublePrecision)]),
+                    page_size,
                 }
                 .into()
             )
@@ -755,13 +801,12 @@ mod tests {
     #[test]
     fn test_aggr_applying_filter() -> PlannerResult {
         let mut db = new_db(&["CREATE TABLE users (id INT PRIMARY KEY, active BOOLEAN);"])?;
+        let page_size = db.db.pager.borrow().page_size;
 
         assert_eq!(
             db.gen_plan("SELECT COUNT(*) FROM users WHERE active = TRUE;")?,
             Planner::Aggregate(
                 AggregateBuilder {
-                    expr: Expression::Wildcard,
-                    function: Function::Count,
                     source: Box::new(Planner::Filter(Filter {
                         filter: parse_expr("active = TRUE"),
                         schema: db.tables["users"].schema.to_owned(),
@@ -771,6 +816,13 @@ mod tests {
                             table: db.tables["users"].to_owned(),
                         }))
                     })),
+                    group_by: vec![],
+                    aggr_exprs: vec![Expression::Function {
+                        func: Function::Count,
+                        args: vec![Expression::Wildcard]
+                    }],
+                    output: Schema::new(vec![Column::new("COUNT(*)", Type::DoublePrecision)]),
+                    page_size,
                 }
                 .into()
             )
@@ -787,36 +839,36 @@ mod tests {
         let work_dir = db.db.work_dir.to_owned();
         let schema = db.tables["sales"].schema.to_owned();
 
+        let sort = SortBuilder {
+            page_size,
+            work_dir: work_dir.clone(),
+            comparator: TupleComparator::new(schema.clone(), schema.clone(), vec![1]),
+            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+            collection: CollectBuilder {
+                work_dir,
+                mem_buff_size: page_size,
+                schema: schema.clone(),
+                source: Box::new(Planner::SeqScan(SeqScan {
+                    pager: db.pager(),
+                    table: db.tables["sales"].clone(),
+                    cursor: Cursor::new(db.tables["sales"].root, 0),
+                })),
+            }
+            .into(),
+        };
+
         assert_eq!(
             db.gen_plan("SELECT COUNT(price) FROM sales ORDER BY region;")?,
             Planner::Aggregate(
                 AggregateBuilder {
-                    expr: Expression::Identifier("price".into()),
-                    function: Function::Count,
-                    source: Box::new(Planner::Sort(
-                        SortBuilder {
-                            page_size,
-                            work_dir: work_dir.clone(),
-                            comparator: TupleComparator::new(
-                                schema.clone(),
-                                schema.clone(),
-                                vec![1]
-                            ),
-                            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
-                            collection: CollectBuilder {
-                                work_dir,
-                                mem_buff_size: page_size,
-                                schema: schema.clone(),
-                                source: Box::new(Planner::SeqScan(SeqScan {
-                                    pager: db.pager(),
-                                    table: db.tables["sales"].clone(),
-                                    cursor: Cursor::new(db.tables["sales"].root, 0)
-                                }))
-                            }
-                            .into()
-                        }
-                        .into()
-                    ))
+                    source: Box::new(Planner::Sort(sort.into())),
+                    group_by: vec![],
+                    aggr_exprs: vec![Expression::Function {
+                        func: Function::Count,
+                        args: vec![Expression::Identifier("price".into())]
+                    }],
+                    output: Schema::new(vec![Column::new("COUNT(price)", Type::DoublePrecision)]),
+                    page_size,
                 }
                 .into()
             )
@@ -828,13 +880,12 @@ mod tests {
     #[test]
     fn test_aggregate_over_exact_match() -> PlannerResult {
         let mut db = new_db(&["CREATE TABLE products (id INT PRIMARY KEY, stock INT UNSIGNED);"])?;
+        let page_size = db.db.pager.borrow().page_size;
 
         assert_eq!(
             db.gen_plan("SELECT COUNT(*) FROM products WHERE id = 24;")?,
             Planner::Aggregate(
                 AggregateBuilder {
-                    expr: Expression::Wildcard,
-                    function: Function::Count,
                     source: Box::new(Planner::ExactMatch(ExactMatch {
                         done: false,
                         emit_only_key: false,
@@ -842,7 +893,14 @@ mod tests {
                         expr: parse_expr("id = 24"),
                         key: serialize(&Type::UnsignedInteger, &Value::Number(24)),
                         relation: Relation::Table(db.tables["products"].clone())
-                    }))
+                    })),
+                    group_by: vec![],
+                    aggr_exprs: vec![Expression::Function {
+                        func: Function::Count,
+                        args: vec![Expression::Wildcard]
+                    }],
+                    output: Schema::new(vec![Column::new("COUNT(*)", Type::DoublePrecision)]),
+                    page_size,
                 }
                 .into()
             )
@@ -855,13 +913,12 @@ mod tests {
     fn test_aggr_with_range_scan() -> PlannerResult {
         let mut db =
             new_db(&["CREATE TABLE sensors (id INT PRIMARY KEY, value REAL, stamp INT);"])?;
+        let page_size = db.db.pager.borrow().page_size;
 
         assert_eq!(
             db.gen_plan("SELECT SUM(value) FROM sensors WHERE id BETWEEN 1000 AND 2000;")?,
             Planner::Aggregate(
                 AggregateBuilder {
-                    expr: parse_expr("value"),
-                    function: Function::Sum,
                     source: Box::new(Planner::RangeScan(
                         RangeScanBuilder {
                             emit_only_key: false,
@@ -874,7 +931,14 @@ mod tests {
                             )
                         }
                         .into()
-                    ))
+                    )),
+                    group_by: vec![],
+                    aggr_exprs: vec![Expression::Function {
+                        func: Function::Sum,
+                        args: vec![parse_expr("value")]
+                    }],
+                    output: Schema::new(vec![Column::new("SUM(value)", Type::DoublePrecision)]),
+                    page_size,
                 }
                 .into()
             )
@@ -887,6 +951,7 @@ mod tests {
     fn test_aggr_with_key_scan() -> PlannerResult {
         let mut db =
             new_db(&["CREATE TABLE users (id SERIAL PRIMARY KEY, age INT UNSIGNED, email VARCHAR(30) UNIQUE);"])?;
+        let page_size = db.db.pager.borrow().page_size;
 
         // we need first to index over the qualified keys (email <= ...)
         let range_scan = Planner::RangeScan(RangeScan::from(RangeScanBuilder {
@@ -930,14 +995,19 @@ mod tests {
             db.gen_plan("SELECT MIN(age) FROM users WHERE email <= 'johndoe@email.com';")?,
             Planner::Aggregate(
                 AggregateBuilder {
-                    expr: parse_expr("age"),
-                    function: Function::Min,
                     source: Box::new(Planner::KeyScan(KeyScan {
                         pager: db.pager(),
                         table: db.tables["users"].to_owned(),
                         comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
                         source: Box::new(Planner::Sort(sort))
-                    }))
+                    })),
+                    group_by: vec![],
+                    aggr_exprs: vec![Expression::Function {
+                        func: Function::Min,
+                        args: vec![parse_expr("age")]
+                    }],
+                    output: Schema::new(vec![Column::new("MIN(age)", Type::DoublePrecision)]),
+                    page_size,
                 }
                 .into()
             )

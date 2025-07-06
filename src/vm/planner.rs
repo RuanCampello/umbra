@@ -191,7 +191,7 @@ pub(crate) struct Values {
 }
 
 #[derive(Debug, PartialEq)]
-struct TupleBuffer {
+pub struct TupleBuffer {
     page_size: usize,
     current_size: usize,
     largest_size: usize,
@@ -249,8 +249,10 @@ pub(crate) struct CollectBuilder<File: FileOperations> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct AggregateBuilder<File: FileOperations> {
     pub source: Box<Planner<File>>,
-    pub expr: Expression,
-    pub function: Function,
+    pub group_by: Vec<Expression>,
+    pub aggr_exprs: Vec<Expression>,
+    pub output: Schema,
+    pub page_size: usize,
 }
 
 pub(crate) type Tuple = Vec<Value>;
@@ -1220,6 +1222,28 @@ impl<File: PlanExecutor> Aggregate<File> {
     }
 }
 
+impl<File: FileOperations> From<AggregateBuilder<File>> for Aggregate<File> {
+    fn from(value: AggregateBuilder<File>) -> Self {
+        let AggregateBuilder {
+            aggr_exprs,
+            page_size,
+            group_by,
+            source,
+            output,
+        } = value;
+
+        Self {
+            source,
+            group_by,
+            aggr_exprs,
+            output,
+            page_size,
+            output_buffer: TupleBuffer::empty(),
+            filled: false,
+        }
+    }
+}
+
 impl Execute for Values {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         let Some(mut values) = self.values.pop_front() else {
@@ -1236,7 +1260,7 @@ impl Execute for Values {
 }
 
 impl TupleBuffer {
-    fn new(page_size: usize, schema: Schema, packed: bool) -> Self {
+    pub fn new(page_size: usize, schema: Schema, packed: bool) -> Self {
         Self {
             page_size,
             schema,
