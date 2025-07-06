@@ -1144,7 +1144,7 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
         // no rows? no output
         if groups.is_empty() {
             self.filled = true;
-            return Ok(None);
+            return Ok(Some(vec![Value::Number(0)]));
         }
 
         for (key, rows) in groups.into_iter() {
