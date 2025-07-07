@@ -55,6 +55,136 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from)?;
 
+            let mut output = Schema::empty();
+            for expr in &columns {
+                match expr {
+                    Expression::Identifier(ident) => output
+                        .push(table.schema.columns[table.schema.index_of(ident).unwrap()].clone()),
+                    _ => output.push(Column::new(
+                        expr.to_string().as_str(),
+                        resolve_type(&table.schema, expr)?,
+                    )),
+                }
+            }
+
+            let has_aggregate = columns.iter().any(|expr| match expr {
+                Expression::Function { func, .. } => func.is_aggr(),
+                _ => false,
+            });
+            let is_grouped = !group_by.is_empty();
+
+            if is_grouped || has_aggregate {
+                let mut output_schema = Schema::empty();
+                for expr in &group_by {
+                    match expr {
+                        Expression::Identifier(ident) => {
+                            let idx = table.schema.index_of(&ident).unwrap();
+                            output_schema.push(table.schema.columns[idx].clone());
+                        }
+                        _ => output_schema.push(Column::new(
+                            expr.to_string().as_str(),
+                            resolve_type(&table.schema, expr)?,
+                        )),
+                    }
+                }
+
+                let aggr_exprs = columns
+                    .iter()
+                    .filter(
+                        |expr| matches!(expr, Expression::Function { func, .. } if func.is_aggr()),
+                    )
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                for expr in &aggr_exprs {
+                    output_schema.push(Column::new(
+                        expr.to_string().as_str(),
+                        resolve_type(&table.schema, expr)?,
+                    ));
+                }
+
+                if group_by.is_empty() && !order_by.is_empty() {
+                    let sorted_indexes = order_by
+                        .iter()
+                        .map(|expr| match expr {
+                            Expression::Identifier(ident) => {
+                                table.schema.index_of(ident).unwrap_or_else(|| {
+                                    panic!("ORDER BY column {ident} not found in input schema")
+                                })
+                            }
+                            _ => panic!("ORDER BY with expression not supported in this context"),
+                        })
+                        .collect::<Vec<_>>();
+
+                    let sort_schema = table.schema.clone();
+
+                    let sort = Planner::Sort(Sort::from(SortBuilder {
+                        page_size,
+                        work_dir: work_dir.clone(),
+                        input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                        collection: Collect::from(CollectBuilder {
+                            source: Box::new(source),
+                            schema: sort_schema.clone(),
+                            work_dir: work_dir.clone(),
+                            mem_buff_size: page_size,
+                        }),
+                        comparator: TupleComparator::new(
+                            sort_schema.clone(),
+                            sort_schema,
+                            sorted_indexes,
+                        ),
+                    }));
+
+                    source = sort;
+                }
+
+                let mut planner = Planner::Aggregate(
+                    AggregateBuilder {
+                        source: Box::new(source),
+                        aggr_exprs: aggr_exprs.clone(),
+                        page_size,
+                        group_by: group_by.clone(),
+                        output: output_schema.clone(),
+                    }
+                    .into(),
+                );
+
+                if !group_by.is_empty() && !order_by.is_empty() {
+                    let sorted_indexes = order_by
+                        .iter()
+                        .map(|expr| match expr {
+                            Expression::Identifier(ident) => {
+                                output_schema.index_of(ident).unwrap_or_else(|| {
+                                    panic!("ORDER BY column {ident} not found in aggregate output")
+                                })
+                            }
+                            _ => output_schema
+                                .index_of(&expr.to_string())
+                                .expect("ORDER BY column not found in aggregate output"),
+                        })
+                        .collect::<Vec<_>>();
+
+                    planner = Planner::Sort(Sort::from(SortBuilder {
+                        page_size,
+                        work_dir: work_dir.clone(),
+                        input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+                        collection: Collect::from(CollectBuilder {
+                            source: Box::new(planner),
+                            schema: output_schema.clone(),
+                            work_dir: work_dir.clone(),
+                            mem_buff_size: page_size,
+                        }),
+                        comparator: TupleComparator::new(
+                            output_schema.clone(),
+                            output_schema,
+                            sorted_indexes,
+                        ),
+                    }));
+                }
+
+                return Ok(planner);
+            }
+
             if !order_by.is_empty()
                 && order_by != [Expression::Identifier(table.schema.columns[0].name.clone())]
             {
@@ -69,17 +199,16 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             let r#type = resolve_type(&table.schema, expr)?;
                             let col = Column::new(&format!("{expr}"), r#type);
                             sorted_schema.push(col);
-
                             index
                         }
                     };
-
                     sorted_indexes.push(index)
                 }
 
                 let collect_source = match sorted_schema.len() > table.schema.len() {
                     true => Planner::SortKeys(SortKeys {
                         expressions: order_by
+                            .clone()
                             .into_iter()
                             .filter(|expr| !matches!(expr, Expression::Identifier(_)))
                             .collect(),
@@ -105,70 +234,6 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         sorted_indexes,
                     ),
                 }));
-            }
-
-            let mut output = Schema::empty();
-
-            for expr in &columns {
-                match expr {
-                    Expression::Identifier(ident) => output
-                        .push(table.schema.columns[table.schema.index_of(ident).unwrap()].clone()),
-                    _ => output.push(Column::new(
-                        expr.to_string().as_str(),
-                        resolve_type(&table.schema, expr)?,
-                    )),
-                }
-            }
-
-            let has_aggregate = columns.iter().any(|expr| match expr {
-                Expression::Function { func, .. } => func.is_aggr(),
-                _ => false,
-            });
-
-            if !group_by.is_empty() || has_aggregate {
-                let mut output_schema = Schema::empty();
-
-                for expr in &group_by {
-                    match expr {
-                        Expression::Identifier(ident) => {
-                            let idx = table.schema.index_of(&ident).unwrap();
-                            output_schema.push(table.schema.columns[idx].clone());
-                        }
-                        _ => output_schema.push(Column::new(
-                            expr.to_string().as_str(),
-                            resolve_type(&table.schema, expr)?,
-                        )),
-                    }
-                }
-
-                let aggr_exprs = columns
-                    .iter()
-                    .flat_map(|expr| match expr {
-                        Expression::Function { .. } => Some(expr.clone()),
-                        Expression::Identifier(_) if group_by.iter().any(|group| group == expr) => {
-                            None
-                        }
-                        _ => Some(expr.clone()),
-                    })
-                    .collect::<Vec<_>>();
-
-                for expr in &aggr_exprs {
-                    output_schema.push(Column::new(
-                        expr.to_string().as_str(),
-                        resolve_type(&table.schema, expr)?,
-                    ));
-                }
-
-                return Ok(Planner::Aggregate(
-                    AggregateBuilder {
-                        source: Box::new(source),
-                        aggr_exprs,
-                        page_size,
-                        group_by,
-                        output: output_schema,
-                    }
-                    .into(),
-                ));
             }
 
             if table.schema == output {

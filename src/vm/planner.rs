@@ -1524,6 +1524,11 @@ impl TupleComparator {
             "Comp called for mismatch size tuples"
         );
 
+        println!(
+            "tuple {tuple:#?} other_tuple {other_tuple:#?} schema {:#?}",
+            self.schema
+        );
+
         debug_assert!(
             tuple.len().eq(&self.schema.len()),
             "Comp called for mismatch tuple with schema"
