@@ -1141,10 +1141,14 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
             groups.entry(key).or_default().push(row)
         }
 
-        // no rows? no output
         if groups.is_empty() {
             self.filled = true;
-            return Ok(Some(vec![Value::Number(0)]));
+
+            let is_count = |expr: &Expression| matches!(expr, Expression::Function { func, .. } if *func == Function::Count);
+            if self.group_by.is_empty() && self.aggr_exprs.iter().all(|expr| is_count(expr)) {
+                return Ok(Some(vec![Value::Number(0); self.aggr_exprs.len()]));
+            }
+            return Ok(None);
         }
 
         for (key, rows) in groups.into_iter() {

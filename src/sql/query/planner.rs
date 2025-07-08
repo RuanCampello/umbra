@@ -162,10 +162,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             indexes.push(schema.index_of(ident).unwrap());
                         }
                         _ => {
-                            let idx = sorted_schema.len();
                             let ty = resolve_type(schema, expr)?;
+                            indexes.push(sorted_schema.len());
                             sorted_schema.push(Column::new(&expr.to_string(), ty));
-                            indexes.push(idx);
                             extra_exprs.push(expr.clone());
                         }
                     }
@@ -193,7 +192,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }));
             }
 
-            if *schema == output {
+            if schema.eq(&output) {
                 return Ok(source);
             }
 

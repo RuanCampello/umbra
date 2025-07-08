@@ -820,6 +820,8 @@ impl From<ParserError> for DatabaseError {
 mod tests {
     use std::str::FromStr;
 
+    use rusqlite::fallible_iterator::empty;
+
     use crate::core::{
         date::{NaiveDate, Parse},
         storage::{
@@ -2784,6 +2786,10 @@ mod tests {
                 vec![Value::String("X".into()), Value::Number(1)],
             ]
         );
+
+        let empty: Vec<Vec<Value>> = Vec::new();
+        let query = db.exec("SELECT region, SUM(price) FROM sales WHERE price > 100 GROUP BY region ORDER BY region;")?;
+        assert_eq!(query.tuples, empty);
 
         Ok(())
     }
