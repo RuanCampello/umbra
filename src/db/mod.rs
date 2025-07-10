@@ -2793,4 +2793,24 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn group_by_distinct_behaviour() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INT);")?;
+        db.exec("INSERT INTO payment (customer_id) VALUES (1), (2), (1), (3), (2), (2);")?;
+
+        let query =
+            db.exec("SELECT customer_id FROM payment GROUP BY customer_id ORDER BY customer_id;")?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::Number(1)],
+                vec![Value::Number(2)],
+                vec![Value::Number(3)]
+            ]
+        );
+        Ok(())
+    }
 }
