@@ -2811,6 +2811,48 @@ mod tests {
                 vec![Value::Number(3)]
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn group_by_with_multiple_cols() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INT, staff_id INT, amount INT);")?;
+        db.exec(
+            r#"
+        INSERT INTO payment (customer_id, staff_id, amount) VALUES
+            (1, 2, 100),
+            (2, 2, 200),
+            (1, 2, 150),
+            (1, 3, 80),
+            (2, 2, 120),
+            (3, 3, 50),
+            (2, 3, 90),
+            (1, 2, 60);
+        "#,
+        )?;
+
+        let query = db.exec(
+            r#"
+        SELECT customer_id, staff_id, SUM(amount)
+        FROM payment 
+        GROUP BY staff_id, customer_id
+        ORDER BY customer_id, staff_id;
+        "#,
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::Number(1), Value::Number(2), Value::Float(310.0)],
+                vec![Value::Number(1), Value::Number(3), Value::Float(80.0)],
+                vec![Value::Number(2), Value::Number(2), Value::Float(320.0)],
+                vec![Value::Number(2), Value::Number(3), Value::Float(90.0)],
+                vec![Value::Number(3), Value::Number(3), Value::Float(50.0)],
+            ]
+        );
+
         Ok(())
     }
 }
