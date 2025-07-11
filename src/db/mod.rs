@@ -2857,21 +2857,22 @@ mod tests {
 
         let query = db.exec(
             r#"
-        SELECT customer_id, staff_id, SUM(amount)
+        SELECT customer_id, staff_id, SUM(amount), AVG(amount)
         FROM payment 
         GROUP BY staff_id, customer_id
         ORDER BY customer_id, staff_id;
         "#,
         )?;
 
+        #[rustfmt::skip]
         assert_eq!(
             query.tuples,
             vec![
-                vec![Value::Number(1), Value::Number(2), Value::Float(310.0)],
-                vec![Value::Number(1), Value::Number(3), Value::Float(80.0)],
-                vec![Value::Number(2), Value::Number(2), Value::Float(320.0)],
-                vec![Value::Number(2), Value::Number(3), Value::Float(90.0)],
-                vec![Value::Number(3), Value::Number(3), Value::Float(50.0)],
+                vec![Value::Number(1), Value::Number(2), Value::Float(310.0), Value::Float(103.33333333333333)],
+                vec![Value::Number(1), Value::Number(3), Value::Float(80.0), Value::Float(80.0)],
+                vec![Value::Number(2), Value::Number(2), Value::Float(320.0), Value::Float(160.0)],
+                vec![Value::Number(2), Value::Number(3), Value::Float(90.0), Value::Float(90.0)],
+                vec![Value::Number(3), Value::Number(3), Value::Float(50.0), Value::Float(50.0)],
             ]
         );
 

@@ -142,8 +142,31 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             work_dir: work_dir.clone(),
                             mem_buff_size: page_size,
                         }),
-                        comparator: TupleComparator::new(aggr_schema.clone(), aggr_schema, indexes),
+                        comparator: TupleComparator::new(
+                            aggr_schema.clone(),
+                            aggr_schema.clone(),
+                            indexes,
+                        ),
                     }));
+                }
+
+                if output != aggr_schema {
+                    let projection: Vec<Expression> = columns
+                        .iter()
+                        .map(|expr| match expr {
+                            Expression::Function { func, .. } => {
+                                Expression::Identifier(format!("{func}"))
+                            }
+                            other => other.clone(),
+                        })
+                        .collect();
+
+                    plan = Planner::Project(Project {
+                        output,
+                        projection,
+                        input: aggr_schema,
+                        source: Box::new(plan),
+                    });
                 }
 
                 return Ok(plan);
