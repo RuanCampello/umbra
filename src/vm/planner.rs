@@ -1646,7 +1646,7 @@ impl<File: FileOperations> Display for Sort<File> {
             .iter()
             .map(|idx| &self.comparator.sort_schema.columns[*idx].name);
 
-        write!(f, "Sort {}", join(col_names, ", "))
+        write!(f, "Sort by {}", join(col_names, ", "))
     }
 }
 
@@ -1703,7 +1703,7 @@ impl<File: FileOperations> Display for Collect<File> {
 
 impl<File: FileOperations> Display for Aggregate<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Aggregate {}", join(&self.group_by, ", "))
+        write!(f, "Aggregate on {}", join(&self.group_by, ", "))
     }
 }
 
