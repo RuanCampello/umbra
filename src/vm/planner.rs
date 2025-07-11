@@ -337,9 +337,9 @@ impl<File: FileOperations> Planner<File> {
             Self::Sort(sort) => &sort.collection.schema,
             Self::Collect(collection) => &collection.schema,
             Self::Project(project) => &project.output,
+            Self::Aggregate(aggr) => &aggr.output,
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
-            Self::Aggregate(aggr) => return Some(aggr.output.to_owned()),
             _ => return None,
         };
 
