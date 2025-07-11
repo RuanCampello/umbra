@@ -201,7 +201,19 @@ pub(crate) fn resolve_expression<'exp>(
                 Ok(Value::Number(functions::position(&string, &pat) as i128))
             }
             Function::TypeOf => {
-                todo!()
+                let type_of = match &args[0] {
+                    Expression::Identifier(name) => {
+                        let idx = schema
+                            .index_of(name)
+                            .ok_or_else(|| SqlError::InvalidColumn(name.into()))?;
+                        Ok(schema.columns[idx].data_type.to_string())
+                    }
+                    _ => Err(SqlError::Other(
+                        "Expected identifier for typeof function".into(),
+                    )),
+                }?;
+
+                Ok(Value::String(type_of))
             }
             _ => unimplemented!("function handling is not yet implemented"),
         },

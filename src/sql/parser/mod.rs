@@ -498,7 +498,7 @@ impl<'input> Parser<'input> {
             Keyword::Avg => self.parse_unary_func(Function::Avg),
             Keyword::Min => self.parse_unary_func(Function::Min),
             Keyword::Max => self.parse_unary_func(Function::Max),
-
+            Keyword::TypeOf => self.parse_unary_func(Function::TypeOf),
             _ => unreachable!("invalid function"),
         }
     }

@@ -714,7 +714,7 @@ impl Display for Value {
 }
 
 impl Function {
-    /// Returns respectvly the minimum and the maximum (if there's any) of this function arguments.
+    /// Returns respectively the minimum and the maximum (if there's any) number of function's arguments.
     pub const fn size_of_args(&self) -> Option<(usize, usize)> {
         const UNARY: Option<(usize, usize)> = Some((1, 1));
 

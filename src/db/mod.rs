@@ -2753,6 +2753,28 @@ mod tests {
     }
 
     #[test]
+    fn typeof_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(25), active BOOLEAN, salary REAL, hire_date DATE);")?;
+        db.exec("INSERT INTO employees (id, name, active, salary, hire_date) VALUES (1, 'Alice', TRUE, 1000.0, '2020-01-01');")?;
+
+        let cases = vec![
+            ("id", Type::Integer),
+            ("name", Type::Varchar(25)),
+            ("active", Type::Boolean),
+            ("salary", Type::Real),
+            ("hire_date", Type::Date),
+        ];
+
+        for (column, r#type) in cases {
+            let query = db.exec(&format!("SELECT typeof({column}) FROM employees;"))?;
+            assert_eq!(query.tuples, vec![vec![Value::String(r#type.to_string())]])
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn group_by() -> DatabaseResult {
         let mut db = Database::default();
         db.exec(
