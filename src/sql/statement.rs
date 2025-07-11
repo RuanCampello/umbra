@@ -734,7 +734,7 @@ impl Function {
         }
     }
 
-    pub(in crate::sql) const fn is_aggr(&self) -> bool {
+    pub const fn is_aggr(&self) -> bool {
         matches!(
             self,
             Self::Count | Self::Sum | Self::Avg | Self::Min | Self::Max

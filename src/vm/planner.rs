@@ -1155,18 +1155,16 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
             let mut tuple = key;
 
             for aggr_expr in &self.aggr_exprs {
-                let (func, args) = match aggr_expr {
-                    Expression::Function { func, args } => (func, args.as_slice()),
+                match aggr_expr {
+                    Expression::Function { func, args } if func.is_aggr() => {
+                        let value = self.apply_aggr(func, args, &rows, &input_schema)?;
+                        tuple.push(value)
+                    }
                     _ => {
-                        return Err(SqlError::Other(format!(
-                            "Invalid aggregate function expression: {aggr_expr}"
-                        ))
-                        .into());
+                        let value = resolve_expression(&rows[0], &input_schema, aggr_expr)?;
+                        tuple.push(value)
                     }
                 };
-
-                let value = self.apply_aggr(func, args, &rows, &input_schema)?;
-                tuple.push(value)
             }
 
             self.output_buffer.push(tuple);
@@ -1526,11 +1524,6 @@ impl TupleComparator {
         debug_assert!(
             tuple.len().eq(&other_tuple.len()),
             "Comp called for mismatch size tuples"
-        );
-
-        println!(
-            "tuple {tuple:#?} other_tuple {other_tuple:#?} schema {:#?}",
-            self.schema
         );
 
         debug_assert!(
