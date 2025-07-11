@@ -744,7 +744,7 @@ impl Function {
     }
 
     pub(in crate::sql) const fn is_unary(&self) -> bool {
-        matches!(self, Self::Ascii) || self.is_aggr()
+        matches!(self, Self::Ascii | Self::TypeOf) || self.is_aggr()
     }
 }
 

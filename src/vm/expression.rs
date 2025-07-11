@@ -200,6 +200,9 @@ pub(crate) fn resolve_expression<'exp>(
 
                 Ok(Value::Number(functions::position(&string, &pat) as i128))
             }
+            Function::TypeOf => {
+                todo!()
+            }
             _ => unimplemented!("function handling is not yet implemented"),
         },
         Expression::Nested(expr) => resolve_expression(val, schema, expr),
@@ -220,7 +223,6 @@ where
     Value: ValueExtractor<T>,
 {
     let value = resolve_expression(val, schema, argument)?;
-
     Value::extract(value, argument)
 }
 
