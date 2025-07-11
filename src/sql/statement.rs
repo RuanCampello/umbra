@@ -286,6 +286,8 @@ pub enum Function {
     Min,
     /// Computes the maximum of the input values.
     Max,
+    /// Returns the data type of any value.
+    TypeOf,
     UuidV4,
 }
 
@@ -728,7 +730,7 @@ impl Function {
     /// Returns the `VmType` that this function returns.
     pub const fn return_type(&self) -> VmType {
         match self {
-            Self::Substring | Self::Concat => VmType::String,
+            Self::Substring | Self::Concat | Self::TypeOf => VmType::String,
             Self::Avg | Self::Min | Self::Max | Self::Sum => VmType::Float,
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Count => VmType::Number,
         }
@@ -758,6 +760,7 @@ impl Display for Function {
             Self::Min => f.write_str("MIN"),
             Self::Sum => f.write_str("SUM"),
             Self::Avg => f.write_str("AVG"),
+            Self::TypeOf => f.write_str("TYPEOF"),
             Self::UuidV4 => f.write_str("u4()"),
         }
     }
