@@ -1012,6 +1012,13 @@ mod tests {
             ctx: &[context],
             expected: Err(SqlError::InvalidGroupBy("customer_id".into()).into()),
         }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT customer_id, SUM(amount) FROM payment GROUP BY customer_id;",
+            ctx: &[context],
+            expected: Ok(()),
+        }
         .assert()
     }
 }
