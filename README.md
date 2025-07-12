@@ -166,7 +166,7 @@ CREATE TABLE shadow_agents (
 - [ ] `LIMIT`/`OFFSET` (self-restraint coming soon™)
 - [ ] Table aliases (`FROM crypts AS c` - naming things is hard)
 - [ ] `JOIN` (relationships require couples therapy)
-- [ ] `GROUP BY` (aggregation is a social construct)
+- [x] `GROUP BY` (aggregation is a social construct)
 - [ ] `HAVING` 
 
 #### 💸 **Transactions**

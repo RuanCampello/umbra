@@ -93,6 +93,8 @@ pub enum SqlError {
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
     InvalidColumn(String),
+    /// Column does not appear in `group by` or isn't used in aggregation.
+    InvalidGroupBy(String),
     /// Duplicated UNIQUE or PRIMARY KEY col.
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
@@ -737,6 +739,7 @@ impl Display for SqlError {
         match self {
             Self::InvalidTable(table) => write!(f, "Invalid table '{table}'"),
             Self::InvalidColumn(column) => write!(f, "Invalid column '{column}'"),
+            Self::InvalidGroupBy(column) => write!(f, "Column '{column}' must appear in GROUP BY clause or be used in an aggregate function"),
             Self::DuplicatedKey(key) => write!(f, "Duplicated key {key}"),
             Self::Analyzer(err) => write!(f, "{err}"),
             Self::Vm(err) => write!(f, "{err}"),
