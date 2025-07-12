@@ -1,4 +1,6 @@
-use crate::sql::statement::{Create, Delete, Drop, Insert, Select, Update};
+use crate::sql::statement::{
+    Create, Delete, Drop, Insert, OrderBy, OrderDirection, Select, Update,
+};
 
 use super::{
     tokens::{Keyword, Token},
@@ -11,8 +13,15 @@ impl<'sql> Sql<'sql> for Select {
         parser.expect_keyword(Keyword::From)?;
         let (from, r#where) = parser.parse_from_and_where()?;
 
-        let group_by = parser.parse_by_separated_keyword(Keyword::Group)?;
-        let order_by = parser.parse_by_separated_keyword(Keyword::Order)?;
+        let group_by = parser.parse_by_separated_keyword(Keyword::Group, |p| p.parse_expr(None))?;
+        let order_by = parser.parse_by_separated_keyword(Keyword::Order, |p| {
+            let expr = p.parse_expr(None)?;
+            let direction = match p.consume_optional(Token::Keyword(Keyword::Desc)) {
+                true => OrderDirection::Desc,
+                _ => OrderDirection::Asc,
+            };
+            Ok(OrderBy { expr, direction })
+        })?;
 
         Ok(Select {
             columns,

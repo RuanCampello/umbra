@@ -107,7 +107,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 if group_by.is_empty() && !order_by.is_empty() {
                     let indexes = order_by
                         .iter()
-                        .map(|expr| match expr {
+                        .map(|order| match &order.expr {
                             Expression::Identifier(ident) => schema.index_of(ident).unwrap(),
                             _ => panic!("ORDER BY exprs without GROUP BY must be identifiers"),
                         })
@@ -141,9 +141,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 if is_grouped && !order_by.is_empty() {
                     let indexes = order_by
                         .iter()
-                        .map(|expr| match expr {
+                        .map(|order| match &order.expr {
                             Expression::Identifier(ident) => aggr_schema.index_of(ident).unwrap(),
-                            _ => aggr_schema.index_of(&expr.to_string()).unwrap(),
+                            _ => aggr_schema.index_of(&order.expr.to_string()).unwrap(),
                         })
                         .collect();
 
@@ -188,22 +188,22 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             }
 
             if !order_by.is_empty()
-                && order_by != [Expression::Identifier(schema.columns[0].name.clone())]
+                && order_by != [Expression::Identifier(schema.columns[0].name.clone()).into()]
             {
                 let mut sorted_schema = schema.clone();
                 let mut indexes = Vec::new();
                 let mut extra_exprs = Vec::new();
 
-                for expr in &order_by {
-                    match expr {
-                        Expression::Identifier(ident) => {
+                for order in &order_by {
+                    match order.expr {
+                        Expression::Identifier(ref ident) => {
                             indexes.push(schema.index_of(ident).unwrap());
                         }
                         _ => {
-                            let ty = resolve_type(schema, expr)?;
+                            let ty = resolve_type(schema, &order.expr)?;
                             indexes.push(sorted_schema.len());
-                            sorted_schema.push(Column::new(&expr.to_string(), ty));
-                            extra_exprs.push(expr.clone());
+                            sorted_schema.push(Column::new(&order.expr.to_string(), ty));
+                            extra_exprs.push(order.expr.clone());
                         }
                     }
                 }

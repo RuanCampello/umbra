@@ -67,7 +67,7 @@ pub(crate) struct Select {
     pub columns: Vec<Expression>,
     pub from: String,
     pub r#where: Option<Expression>,
-    pub order_by: Vec<Expression>,
+    pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
     // TODO: limit
 }
@@ -117,6 +117,19 @@ pub enum Expression {
         args: Vec<Self>,
     },
     Nested(Box<Self>),
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+pub(crate) struct OrderBy {
+    pub expr: Expression,
+    pub direction: OrderDirection,
+}
+
+#[derive(Debug, Default, PartialEq, PartialOrd, Clone, Copy)]
+pub(crate) enum OrderDirection {
+    #[default]
+    Asc,
+    Desc,
 }
 
 /// Date/Time related types.
@@ -772,6 +785,24 @@ impl Display for Temporal {
             Self::DateTime(datetime) => Display::fmt(datetime, f),
             Self::Date(date) => Display::fmt(date, f),
             Self::Time(time) => Display::fmt(time, f),
+        }
+    }
+}
+
+impl Display for OrderBy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.direction {
+            OrderDirection::Asc => write!(f, "{} ASC", self.expr),
+            OrderDirection::Desc => write!(f, "{} DESC", self.expr),
+        }
+    }
+}
+
+impl From<Expression> for OrderBy {
+    fn from(expr: Expression) -> Self {
+        Self {
+            expr,
+            direction: Default::default(),
         }
     }
 }

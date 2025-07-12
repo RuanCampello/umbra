@@ -125,14 +125,16 @@ impl<'input> Parser<'input> {
         Ok(expr)
     }
 
-    fn parse_by_separated_keyword(&mut self, keyword: Keyword) -> ParserResult<Vec<Expression>> {
-        match self.consume_optional(Token::Keyword(keyword)) {
-            true => {
-                self.expect_keyword(Keyword::By)?;
-                self.parse_separated_tokens(|p| p.parse_expr(None), false)
-            }
-            false => Ok(vec![]),
+    fn parse_by_separated_keyword<T>(
+        &mut self,
+        keyword: Keyword,
+        mut parse_elem: impl FnMut(&mut Self) -> ParserResult<T>,
+    ) -> ParserResult<Vec<T>> {
+        if !self.consume_optional(Token::Keyword(keyword)) {
+            return Ok(vec![]);
         }
+        self.expect_keyword(Keyword::By)?;
+        self.parse_separated_tokens(|p| parse_elem(p), false)
     }
 
     fn parse_infix(&mut self, left: Expression, precedence: u8) -> ParserResult<Expression> {
@@ -768,7 +770,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::Expression;
+    use crate::sql::statement::{Expression, OrderBy};
 
     #[test]
     fn test_parse_select() {
@@ -1474,9 +1476,12 @@ mod tests {
                 columns: vec![Expression::Identifier("name".into())],
                 from: "users".into(),
                 r#where: None,
-                order_by: vec![Expression::Function {
-                    func: Function::Ascii,
-                    args: vec![Expression::Identifier("name".into())]
+                order_by: vec![OrderBy {
+                    expr: Expression::Function {
+                        func: Function::Ascii,
+                        args: vec![Expression::Identifier("name".into())]
+                    },
+                    direction: Default::default(),
                 }],
                 group_by: vec![],
             })

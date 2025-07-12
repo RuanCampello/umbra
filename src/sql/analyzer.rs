@@ -186,8 +186,8 @@ pub(in crate::sql) fn analyze<'s>(
             analyze_where(&metadata.schema, r#where)?;
 
             // FIXME: we probably can do this in parallel
-            for expr in order_by {
-                analyze_expression(&metadata.schema, None, expr)?;
+            for order in order_by {
+                analyze_expression(&metadata.schema, None, &order.expr)?;
             }
 
             for expr in group_by {
