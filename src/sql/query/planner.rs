@@ -50,11 +50,26 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             order_by,
             group_by,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
+            let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from)?;
             let schema = &table.schema;
+
+            // this is a special case for `type_of` function
+            if let Some((col_name, type_of)) = single_typeof_column(&columns, &schema) {
+                use crate::sql::statement::Value;
+
+                return Ok(Planner::Project(Project {
+                    output: Schema::new(vec![Column::new(&col_name, Type::Varchar(50))]),
+                    input: Schema::empty(),
+                    source: Box::new(Planner::Values(Values {
+                        values: vec![vec![Expression::Value(Value::String(type_of.clone()))]]
+                            .into(),
+                    })),
+                    projection: vec![Expression::Value(Value::String(type_of))],
+                }));
+            }
 
             let mut output = Schema::empty();
             for expr in &columns {
@@ -312,6 +327,27 @@ fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
         Planner::SeqScan(_) | Planner::LogicalScan(_) | Planner::RangeScan(_) => true,
         _ => unreachable!("needs_collection() must be called only for a scan planner"),
     }
+}
+
+fn single_typeof_column<'a>(
+    columns: &'a [Expression],
+    schema: &'a Schema,
+) -> Option<(String, String)> {
+    use crate::sql::statement::Function;
+
+    if let [Expression::Function {
+        func: Function::TypeOf,
+        args,
+    }] = columns
+    {
+        if let [Expression::Identifier(ref ident)] = args.as_slice() {
+            let idx = schema.index_of(ident)?;
+            let type_of = schema.columns[idx].data_type.to_string();
+            return Some((format!("typeof({ident})"), type_of));
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
