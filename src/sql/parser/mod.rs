@@ -498,7 +498,7 @@ impl<'input> Parser<'input> {
             Keyword::Avg => self.parse_unary_func(Function::Avg),
             Keyword::Min => self.parse_unary_func(Function::Min),
             Keyword::Max => self.parse_unary_func(Function::Max),
-
+            Keyword::TypeOf => self.parse_unary_func(Function::TypeOf),
             _ => unreachable!("invalid function"),
         }
     }
@@ -617,7 +617,7 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_functions() -> [Keyword; 9] {
+    const fn supported_functions() -> [Keyword; 10] {
         [
             Keyword::Substring,
             Keyword::Ascii,
@@ -628,6 +628,7 @@ impl<'input> Parser<'input> {
             Keyword::Sum,
             Keyword::Max,
             Keyword::Min,
+            Keyword::TypeOf,
         ]
     }
 
@@ -1585,6 +1586,29 @@ mod tests {
                 ],
                 from: "sales".into(),
                 group_by: vec![Expression::Identifier("id".into())],
+                order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_typeof() {
+        let sql = "SELECT name, TYPEOF(id) FROM users;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![
+                    Expression::Identifier("name".into()),
+                    Expression::Function {
+                        func: Function::TypeOf,
+                        args: vec![Expression::Identifier("id".into())]
+                    }
+                ],
+                from: "users".into(),
+                group_by: vec![],
                 order_by: vec![],
                 r#where: None,
             })

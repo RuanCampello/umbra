@@ -44,6 +44,32 @@ pub enum TypeError {
     UuidError(UuidError),
 }
 
+trait ValueExtractor<T> {
+    fn extract(value: Value, argument: &Expression) -> Result<T, SqlError>;
+}
+
+macro_rules! impl_value_extractor {
+    (
+        $(
+            $value_variant:ident => ($type:ty, $vm_type:ident)
+        ),* $(,)?
+    ) => {
+        $(
+            impl ValueExtractor<$type> for Value {
+                fn extract(value: Value, argument: &Expression) -> Result<$type, SqlError> {
+                    match value {
+                        Value::$value_variant(x) => Ok(x),
+                        _ => Err(SqlError::Type(TypeError::ExpectedType {
+                            expected: VmType::$vm_type,
+                            found: argument.clone(),
+                        })),
+                    }
+                }
+            }
+        )*
+    };
+}
+
 pub(crate) fn resolve_expression<'exp>(
     val: &[Value],
     schema: &Schema,
@@ -141,52 +167,75 @@ pub(crate) fn resolve_expression<'exp>(
                 }
             })
         }
-        Expression::Function { func, args } => {
-            let get_string = |argument: &Expression| -> Result<String, SqlError> {
-                match resolve_expression(val, schema, argument)? {
-                    Value::String(string) => return Ok(string),
-                    _ => unreachable!(),
-                }
-            };
+        Expression::Function { func, args } => match func {
+            Function::Substring => {
+                let string: String = get_value(val, schema, &args[0])?;
 
-            match func {
-                Function::Substring => {
-                    let string = get_string(&args[0])?;
+                let start = get_value::<i128>(val, schema, &args[1])
+                    .ok()
+                    .map(|num| num as usize);
 
-                    let start = match resolve_expression(val, schema, &args[1])? {
-                        Value::Number(num) => Some(num as usize),
-                        _ => None,
-                    };
-                    let count = match resolve_expression(val, schema, &args[2])? {
-                        Value::Number(num) => Some(num as isize),
-                        _ => None,
-                    };
+                let count = get_value::<i128>(val, schema, &args[2])
+                    .ok()
+                    .map(|num| num as isize);
 
-                    Ok(Value::String(functions::substring(&string, start, count)))
-                }
-                Function::Ascii => {
-                    let string = get_string(&args[0])?;
-
-                    Ok(Value::Number(functions::ascii(&string) as i128))
-                }
-                Function::Concat => {
-                    let strings: Vec<String> =
-                        args.iter().map(get_string).collect::<Result<Vec<_>, _>>()?;
-
-                    Ok(Value::String(functions::concat(&strings)))
-                }
-                Function::Position => {
-                    let pat = get_string(&args[0])?;
-                    let string = get_string(&args[1])?;
-
-                    Ok(Value::Number(functions::position(&string, &pat) as i128))
-                }
-                _ => unimplemented!("function handling is not yet implemented"),
+                Ok(Value::String(functions::substring(&string, start, count)))
             }
-        }
+            Function::Ascii => {
+                let string: String = get_value(val, schema, &args[0])?;
+
+                Ok(Value::Number(functions::ascii(&string) as i128))
+            }
+            Function::Concat => {
+                let strings: Vec<String> = args
+                    .iter()
+                    .map(|expr| get_value(val, schema, expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok(Value::String(functions::concat(&strings)))
+            }
+            Function::Position => {
+                let pat: String = get_value(val, schema, &args[0])?;
+                let string: String = get_value(val, schema, &args[1])?;
+
+                Ok(Value::Number(functions::position(&string, &pat) as i128))
+            }
+            Function::TypeOf => {
+                let type_of = match &args[0] {
+                    Expression::Identifier(name) => {
+                        let idx = schema
+                            .index_of(name)
+                            .ok_or_else(|| SqlError::InvalidColumn(name.into()))?;
+                        Ok(schema.columns[idx].data_type.to_string())
+                    }
+                    _ => Err(SqlError::Other(
+                        "Expected identifier for typeof function".into(),
+                    )),
+                }?;
+
+                Ok(Value::String(type_of))
+            }
+            _ => unimplemented!("function handling is not yet implemented"),
+        },
         Expression::Nested(expr) => resolve_expression(val, schema, expr),
         Expression::Wildcard => unreachable!("Wildcards should have been resolved by now"),
     }
+}
+
+impl_value_extractor! {
+    String => (String, String),
+    Number => (i128, Number),
+    Float => (f64, Float),
+    Boolean => (bool, Bool),
+    Temporal => (Temporal, Date)
+}
+
+fn get_value<T>(val: &[Value], schema: &Schema, argument: &Expression) -> Result<T, SqlError>
+where
+    Value: ValueExtractor<T>,
+{
+    let value = resolve_expression(val, schema, argument)?;
+    Value::extract(value, argument)
 }
 
 pub(crate) fn resolve_only_expression(expr: &Expression) -> Result<Value, SqlError> {

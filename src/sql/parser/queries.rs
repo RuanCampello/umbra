@@ -11,8 +11,8 @@ impl<'sql> Sql<'sql> for Select {
         parser.expect_keyword(Keyword::From)?;
         let (from, r#where) = parser.parse_from_and_where()?;
 
-        let order_by = parser.parse_by_separated_keyword(Keyword::Order)?;
         let group_by = parser.parse_by_separated_keyword(Keyword::Group)?;
+        let order_by = parser.parse_by_separated_keyword(Keyword::Order)?;
 
         Ok(Select {
             columns,

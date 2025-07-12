@@ -9,6 +9,7 @@ use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
+use std::hash::Hash;
 use std::ops::Neg;
 use std::str::FromStr;
 
@@ -124,7 +125,7 @@ pub enum Expression {
 /// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level.
 ///
 /// Values of this type are stored in the `Value::Temporal` variant.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum Temporal {
     Date(NaiveDate),
     DateTime(NaiveDateTime),
@@ -285,6 +286,8 @@ pub enum Function {
     Min,
     /// Computes the maximum of the input values.
     Max,
+    /// Returns the data type of any value.
+    TypeOf,
     UuidV4,
 }
 
@@ -539,6 +542,8 @@ impl PartialEq for Value {
     }
 }
 
+impl Eq for Value {}
+
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
@@ -549,6 +554,36 @@ impl PartialOrd for Value {
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
             _ => panic!("those values are not comparable"),
+        }
+    }
+}
+
+impl Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        fn encode_float(f: &f64) -> u64 {
+            // normalize -0.0 and 0.0 to the same bits, and treat all nans the same.
+            let mut bits = f.to_bits();
+            if bits == (-0.0f64).to_bits() {
+                bits = 0.0f64.to_bits();
+            }
+            if f.is_nan() {
+                // all nans are hashed as the same.
+                bits = 0x7ff8000000000000u64;
+            } else if bits >> 63 != 0 {
+                // for negatives, flip all bits for total ordering.
+                bits = !bits;
+            }
+
+            bits
+        }
+
+        match self {
+            Self::Float(f) => encode_float(f).hash(state),
+            Value::Number(n) => n.hash(state),
+            Value::String(s) => s.hash(state),
+            Value::Boolean(b) => b.hash(state),
+            Value::Temporal(t) => t.hash(state),
+            Value::Uuid(u) => u.hash(state),
         }
     }
 }
@@ -679,7 +714,7 @@ impl Display for Value {
 }
 
 impl Function {
-    /// Returns respectvly the minimum and the maximum (if there's any) of this function arguments.
+    /// Returns respectively the minimum and the maximum (if there's any) number of function's arguments.
     pub const fn size_of_args(&self) -> Option<(usize, usize)> {
         const UNARY: Option<(usize, usize)> = Some((1, 1));
 
@@ -695,13 +730,13 @@ impl Function {
     /// Returns the `VmType` that this function returns.
     pub const fn return_type(&self) -> VmType {
         match self {
-            Self::Substring | Self::Concat => VmType::String,
+            Self::Substring | Self::Concat | Self::TypeOf => VmType::String,
             Self::Avg | Self::Min | Self::Max | Self::Sum => VmType::Float,
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Count => VmType::Number,
         }
     }
 
-    pub(in crate::sql) const fn is_aggr(&self) -> bool {
+    pub const fn is_aggr(&self) -> bool {
         matches!(
             self,
             Self::Count | Self::Sum | Self::Avg | Self::Min | Self::Max
@@ -709,7 +744,7 @@ impl Function {
     }
 
     pub(in crate::sql) const fn is_unary(&self) -> bool {
-        matches!(self, Self::Ascii) || self.is_aggr()
+        matches!(self, Self::Ascii | Self::TypeOf) || self.is_aggr()
     }
 }
 
@@ -725,6 +760,7 @@ impl Display for Function {
             Self::Min => f.write_str("MIN"),
             Self::Sum => f.write_str("SUM"),
             Self::Avg => f.write_str("AVG"),
+            Self::TypeOf => f.write_str("TYPEOF"),
             Self::UuidV4 => f.write_str("u4()"),
         }
     }

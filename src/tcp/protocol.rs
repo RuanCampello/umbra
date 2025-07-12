@@ -180,6 +180,10 @@ impl TryFrom<&u8> for Type {
             (INTEGER_CATEGORY, 0x6) => Ok(Type::SmallSerial),
             (INTEGER_CATEGORY, 0x7) => Ok(Type::Serial),
             (INTEGER_CATEGORY, 0x8) => Ok(Type::BigSerial),
+            (INTEGER_CATEGORY, 0x10) => Ok(Type::Uuid),
+
+            (FLOAT_CATEGORY, 0x0) => Ok(Type::Real),
+            (FLOAT_CATEGORY, 0x1) => Ok(Type::DoublePrecision),
 
             (TEMPORAL_CATEGORY, 0x0) => Ok(Type::Date),
             (TEMPORAL_CATEGORY, 0x1) => Ok(Type::Time),

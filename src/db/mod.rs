@@ -93,6 +93,8 @@ pub enum SqlError {
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
     InvalidColumn(String),
+    /// Column does not appear in `group by` or isn't used in aggregation.
+    InvalidGroupBy(String),
     /// Duplicated UNIQUE or PRIMARY KEY col.
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
@@ -737,6 +739,7 @@ impl Display for SqlError {
         match self {
             Self::InvalidTable(table) => write!(f, "Invalid table '{table}'"),
             Self::InvalidColumn(column) => write!(f, "Invalid column '{column}'"),
+            Self::InvalidGroupBy(column) => write!(f, "Column '{column}' must appear in GROUP BY clause or be used in an aggregate function"),
             Self::DuplicatedKey(key) => write!(f, "Duplicated key {key}"),
             Self::Analyzer(err) => write!(f, "{err}"),
             Self::Vm(err) => write!(f, "{err}"),
@@ -819,6 +822,8 @@ impl From<ParserError> for DatabaseError {
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+
+    use rusqlite::fallible_iterator::empty;
 
     use crate::core::{
         date::{NaiveDate, Parse},
@@ -2745,6 +2750,133 @@ mod tests {
         assert_eq!(
             db.exec("SELECT MAX(price) FROM sales;")?.tuples,
             vec![vec![Value::Float(100.00)]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn typeof_function() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(25), active BOOLEAN, salary REAL, hire_date DATE);")?;
+        db.exec("INSERT INTO employees (id, name, active, salary, hire_date) VALUES (1, 'Alice', TRUE, 1000.0, '2020-01-01');")?;
+
+        let cases = vec![
+            ("id", Type::Integer),
+            ("name", Type::Varchar(25)),
+            ("active", Type::Boolean),
+            ("salary", Type::Real),
+            ("hire_date", Type::Date),
+        ];
+
+        for (column, r#type) in cases {
+            let query = db.exec(&format!("SELECT typeof({column}) FROM employees;"))?;
+            assert_eq!(query.tuples, vec![vec![Value::String(r#type.to_string())]])
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn group_by() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            "CREATE TABLE sales (id SERIAL PRIMARY KEY, region VARCHAR(2), price INT, qty INT UNSIGNED);",
+        )?;
+
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('N', 10, 1);")?;
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('S', 20, 2);")?;
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('N', 15, 3);")?;
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('S', 30, 4);")?;
+        db.exec("INSERT INTO sales (region, price, qty) VALUES ('X', 40, 5);")?;
+
+        let query =
+            db.exec("SELECT region, SUM(price) FROM sales GROUP BY region ORDER BY region;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("N".into()), Value::Float(25.0)],
+                vec![Value::String("S".into()), Value::Float(50.0)],
+                vec![Value::String("X".into()), Value::Float(40.0)],
+            ]
+        );
+
+        let query =
+            db.exec("SELECT region, COUNT(*) FROM sales GROUP BY region ORDER BY region;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("N".into()), Value::Number(2)],
+                vec![Value::String("S".into()), Value::Number(2)],
+                vec![Value::String("X".into()), Value::Number(1)],
+            ]
+        );
+
+        let empty: Vec<Vec<Value>> = Vec::new();
+        let query = db.exec("SELECT region, SUM(price) FROM sales WHERE price > 100 GROUP BY region ORDER BY region;")?;
+        assert_eq!(query.tuples, empty);
+
+        Ok(())
+    }
+
+    #[test]
+    fn group_by_distinct_behaviour() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INT);")?;
+        db.exec("INSERT INTO payment (customer_id) VALUES (1), (2), (1), (3), (2), (2);")?;
+
+        let query =
+            db.exec("SELECT customer_id FROM payment GROUP BY customer_id ORDER BY customer_id;")?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::Number(1)],
+                vec![Value::Number(2)],
+                vec![Value::Number(3)]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn group_by_with_multiple_cols() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INT, staff_id INT, amount INT);")?;
+        db.exec(
+            r#"
+        INSERT INTO payment (customer_id, staff_id, amount) VALUES
+            (1, 2, 100),
+            (2, 2, 200),
+            (1, 2, 150),
+            (1, 3, 80),
+            (2, 2, 120),
+            (3, 3, 50),
+            (2, 3, 90),
+            (1, 2, 60);
+        "#,
+        )?;
+
+        let query = db.exec(
+            r#"
+        SELECT customer_id, staff_id, SUM(amount), AVG(amount)
+        FROM payment 
+        GROUP BY staff_id, customer_id
+        ORDER BY customer_id, staff_id;
+        "#,
+        )?;
+
+        #[rustfmt::skip]
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::Number(1), Value::Number(2), Value::Float(310.0), Value::Float(103.33333333333333)],
+                vec![Value::Number(1), Value::Number(3), Value::Float(80.0), Value::Float(80.0)],
+                vec![Value::Number(2), Value::Number(2), Value::Float(320.0), Value::Float(160.0)],
+                vec![Value::Number(2), Value::Number(3), Value::Float(90.0), Value::Float(90.0)],
+                vec![Value::Number(3), Value::Number(3), Value::Float(50.0), Value::Float(50.0)],
+            ]
         );
 
         Ok(())

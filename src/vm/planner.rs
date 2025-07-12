@@ -176,14 +176,13 @@ pub(crate) struct Project<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
-    pub source: Box<Planner<File>>,
-    pub function: Function,
-    pub expr: Expression,
-    pub count: usize,
-    pub sum: f64,
-    pub min: Option<Value>,
-    pub max: Option<Value>,
-    pub done: bool,
+    source: Box<Planner<File>>,
+    group_by: Vec<Expression>,
+    aggr_exprs: Vec<Expression>,
+    output: Schema,
+    output_buffer: TupleBuffer,
+    filled: bool,
+    page_size: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -250,8 +249,10 @@ pub(crate) struct CollectBuilder<File: FileOperations> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct AggregateBuilder<File: FileOperations> {
     pub source: Box<Planner<File>>,
-    pub expr: Expression,
-    pub function: Function,
+    pub group_by: Vec<Expression>,
+    pub aggr_exprs: Vec<Expression>,
+    pub output: Schema,
+    pub page_size: usize,
 }
 
 pub(crate) type Tuple = Vec<Value>;
@@ -336,6 +337,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Sort(sort) => &sort.collection.schema,
             Self::Collect(collection) => &collection.schema,
             Self::Project(project) => &project.output,
+            Self::Aggregate(aggr) => &aggr.output,
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
             _ => return None,
@@ -1122,73 +1124,125 @@ impl<File: PlanExecutor> Execute for Project<File> {
 
 impl<File: PlanExecutor> Execute for Aggregate<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        if self.done {
+        if self.filled {
+            return Ok(self.output_buffer.pop_front());
+        }
+
+        self.output_buffer.clear();
+
+        let input_schema = self.source.schema().unwrap();
+        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> = HashMap::new();
+
+        while let Some(row) = self.source.try_next()? {
+            let key = self
+                .group_by
+                .iter()
+                .map(|expr| resolve_expression(&row, &input_schema, &expr))
+                .collect::<Result<Vec<_>, _>>()?;
+            groups.entry(key).or_default().push(row)
+        }
+
+        if groups.is_empty() {
+            self.filled = true;
+
+            let is_count = |expr: &Expression| matches!(expr, Expression::Function { func, .. } if *func == Function::Count);
+            if self.group_by.is_empty() && self.aggr_exprs.iter().all(|expr| is_count(expr)) {
+                return Ok(Some(vec![Value::Number(0); self.aggr_exprs.len()]));
+            }
             return Ok(None);
         }
 
-        self.count = 0;
-        while let Some(tuple) = self.source.try_next()? {
-            if let Function::Count = self.function {
-                self.count += 1;
-                continue;
+        for (key, rows) in groups.into_iter() {
+            let mut tuple = key;
+
+            for aggr_expr in &self.aggr_exprs {
+                match aggr_expr {
+                    Expression::Function { func, args } if func.is_aggr() => {
+                        let value = self.apply_aggr(func, args, &rows, &input_schema)?;
+                        tuple.push(value)
+                    }
+                    _ => {
+                        let value = resolve_expression(&rows[0], &input_schema, aggr_expr)?;
+                        tuple.push(value)
+                    }
+                };
             }
 
-            let value = resolve_expression(&tuple, &self.source.schema().unwrap(), &self.expr)?;
-            match self.function {
-                Function::Avg | Function::Sum => {
-                    self.count += 1;
-                    match value {
-                        Value::Float(f) => self.sum += f,
-                        Value::Number(n) => self.sum += n as f64,
-                        // maybe we should to a better handling of types here
-                        _ => {}
-                    }
-                }
-                Function::Min => {
-                    if self.min.as_ref().map_or(true, |min| &value < min) {
-                        self.min = Some(value);
-                    }
-                }
-                Function::Max => {
-                    if self.max.as_ref().map_or(true, |max| &value > max) {
-                        self.max = Some(value);
-                    }
-                }
-                _ => todo!(),
-            }
+            self.output_buffer.push(tuple);
         }
 
-        let result = match self.function {
-            Function::Count => Value::Number(self.count as i128),
-            Function::Sum => Value::Float(self.sum),
-            Function::Avg => Value::Float(self.sum / self.count as f64),
-            Function::Min => self.min.clone().unwrap(),
-            Function::Max => self.max.clone().unwrap(),
-            _ => unreachable!(),
+        self.filled = true;
+        Ok(self.output_buffer.pop_front())
+    }
+}
+
+impl<File: PlanExecutor> Aggregate<File> {
+    fn apply_aggr(
+        &self,
+        func: &Function,
+        args: &[Expression],
+        rows: &[Tuple],
+        schema: &Schema,
+    ) -> Result<Value, DatabaseError> {
+        let values = match args.first() {
+            None => vec![],
+            Some(Expression::Wildcard) => vec![Value::Number(1); rows.len()],
+            Some(arg) => rows
+                .iter()
+                .map(|row| resolve_expression(row, schema, arg))
+                .collect::<Result<Vec<_>, _>>()?,
         };
 
-        self.done = true;
-        Ok(Some(vec![result]))
+        match func {
+            Function::Count => Ok(Value::Number(values.len() as _)),
+            Function::Sum | Function::Avg => {
+                let sum = values.iter().fold(0.0, |acc, v| {
+                    acc + match v {
+                        Value::Float(f) => *f,
+                        Value::Number(n) => *n as f64,
+                        _ => 0.0,
+                    }
+                });
+
+                match func.eq(&Function::Sum) {
+                    true => Ok(Value::Float(sum)),
+                    _ => Ok(Value::Float(sum / values.len() as f64)),
+                }
+            }
+            Function::Min => Ok(values
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Number(0))),
+            Function::Max => Ok(values
+                .iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Number(0))),
+
+            _ => unreachable!("this ain't a aggregate function"),
+        }
     }
 }
 
 impl<File: FileOperations> From<AggregateBuilder<File>> for Aggregate<File> {
     fn from(value: AggregateBuilder<File>) -> Self {
         let AggregateBuilder {
-            expr,
-            function,
+            aggr_exprs,
+            page_size,
+            group_by,
             source,
+            output,
         } = value;
 
         Self {
             source,
-            expr,
-            function,
-            count: 0,
-            sum: 0.0,
-            min: None,
-            max: None,
-            done: false,
+            group_by,
+            aggr_exprs,
+            output,
+            page_size,
+            output_buffer: TupleBuffer::empty(),
+            filled: false,
         }
     }
 }
@@ -1472,7 +1526,6 @@ impl TupleComparator {
             tuple.len().eq(&other_tuple.len()),
             "Comp called for mismatch size tuples"
         );
-        println!("tuple {tuple:#?} schema {:#?}", self.schema);
 
         debug_assert!(
             tuple.len().eq(&self.schema.len()),
@@ -1593,7 +1646,7 @@ impl<File: FileOperations> Display for Sort<File> {
             .iter()
             .map(|idx| &self.comparator.sort_schema.columns[*idx].name);
 
-        write!(f, "Sort {}", join(col_names, ", "))
+        write!(f, "Sort by {}", join(col_names, ", "))
     }
 }
 
@@ -1650,7 +1703,7 @@ impl<File: FileOperations> Display for Collect<File> {
 
 impl<File: FileOperations> Display for Aggregate<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Aggregate {} with {}", self.function, self.expr)
+        write!(f, "Aggregate on {}", join(&self.group_by, ", "))
     }
 }
 
