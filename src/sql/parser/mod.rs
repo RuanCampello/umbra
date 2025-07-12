@@ -770,7 +770,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::{Expression, OrderBy};
+    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
 
     #[test]
     fn test_parse_select() {
@@ -1615,6 +1615,34 @@ mod tests {
                 from: "users".into(),
                 group_by: vec![],
                 order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_explicit_order_by() {
+        let sql = "SELECT CONCAT(first_name, ' ', last_name) FROM users ORDER BY last_name DESC;";
+        let statement = Parser::new(sql).parse_statement();
+
+        println!("statement {statement:#?}");
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Concat,
+                    args: vec![
+                        Expression::Identifier("first_name".into()),
+                        Expression::Value(Value::String(" ".into())),
+                        Expression::Identifier("last_name".into()),
+                    ]
+                }],
+                from: "users".into(),
+                group_by: vec![],
+                order_by: vec![OrderBy {
+                    direction: OrderDirection::Desc,
+                    expr: Expression::Identifier("last_name".into())
+                }],
                 r#where: None,
             })
         )

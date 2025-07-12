@@ -308,6 +308,8 @@ impl FromStr for Keyword {
             "BOOLEAN" => Keyword::Bool,
             "INDEX" => Keyword::Index,
             "ORDER" => Keyword::Order,
+            "ASC" => Keyword::Asc,
+            "DESC" => Keyword::Desc,
             "GROUP" => Keyword::Group,
             "ON" => Keyword::On,
             "BEGIN" => Keyword::Start,

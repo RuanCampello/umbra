@@ -16,10 +16,11 @@ impl<'sql> Sql<'sql> for Select {
         let group_by = parser.parse_by_separated_keyword(Keyword::Group, |p| p.parse_expr(None))?;
         let order_by = parser.parse_by_separated_keyword(Keyword::Order, |p| {
             let expr = p.parse_expr(None)?;
-            let direction = match p.consume_optional(Token::Keyword(Keyword::Desc)) {
-                true => OrderDirection::Desc,
+            let direction = match p.consume_one(&[Keyword::Asc, Keyword::Desc]) {
+                Keyword::Desc => OrderDirection::Desc,
                 _ => OrderDirection::Asc,
             };
+
             Ok(OrderBy { expr, direction })
         })?;
 
