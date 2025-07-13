@@ -2905,4 +2905,61 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn order_by_desc_multiple_columns() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE people (id SERIAL PRIMARY KEY, first_name VARCHAR(20), last_name VARCHAR(20));")?;
+        db.exec(
+            r#"
+        INSERT INTO people (first_name, last_name)
+        VALUES
+            ('John', 'Smith'),
+            ('Alice', 'Smith'),
+            ('Bob', 'Adams'),
+            ('Mary', 'Baker'),
+            ('Jane', 'Adams');
+        "#,
+        )?;
+
+        let query = db.exec(
+            "SELECT first_name, last_name FROM people ORDER BY last_name DESC, first_name DESC;",
+        )?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("John".into()), Value::String("Smith".into())],
+                vec![Value::String("Alice".into()), Value::String("Smith".into())],
+                vec![Value::String("Mary".into()), Value::String("Baker".into())],
+                vec![Value::String("Jane".into()), Value::String("Adams".into())],
+                vec![Value::String("Bob".into()), Value::String("Adams".into())],
+            ]
+        );
+
+        let query = db.exec(
+            "SELECT first_name, last_name FROM people ORDER BY last_name ASC, first_name DESC;",
+        )?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("Jane".into()), Value::String("Adams".into())],
+                vec![Value::String("Bob".into()), Value::String("Adams".into())],
+                vec![Value::String("Mary".into()), Value::String("Baker".into())],
+                vec![Value::String("John".into()), Value::String("Smith".into())],
+                vec![Value::String("Alice".into()), Value::String("Smith".into())],
+            ]
+        );
+
+        // assert `ASC` and `DESC` parity
+        let query =
+            db.exec("SELECT first_name, last_name FROM people ORDER BY last_name, first_name;")?;
+        let mut reverse_query = db.exec(
+            "SELECT first_name, last_name FROM people ORDER BY last_name DESC, first_name DESC;",
+        )?;
+        reverse_query.tuples.reverse();
+
+        assert_eq!(query.tuples, reverse_query.tuples);
+
+        Ok(())
+    }
 }
