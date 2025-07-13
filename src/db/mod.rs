@@ -2881,4 +2881,28 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn order_by_desc() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, price INT, name VARCHAR(20));")?;
+        db.exec(
+            r#"
+            INSERT INTO items (price, name)
+            VALUES (50, 'banana'), (10, 'apple'), (30, 'cherry');
+        "#,
+        )?;
+
+        let query = db.exec("SELECT name FROM items ORDER BY name DESC;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("cherry".into())],
+                vec![Value::String("banana".into())],
+                vec![Value::String("apple".into())]
+            ]
+        );
+
+        Ok(())
+    }
 }
