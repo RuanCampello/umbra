@@ -2,7 +2,6 @@ use std::{
     collections::VecDeque,
     io::{Read, Seek, Write},
     rc::Rc,
-    thread,
 };
 
 use crate::{
@@ -664,7 +663,12 @@ mod tests {
                     page_size,
                     work_dir: work_dir.clone(),
                     input_buffers: DEFAULT_SORT_BUFFER_SIZE,
-                    comparator: TupleComparator::new(keys.clone(), keys.clone(), vec![0], vec![]),
+                    comparator: TupleComparator::new(
+                        keys.clone(),
+                        keys.clone(),
+                        vec![0],
+                        vec![Default::default()]
+                    ),
                     collection: Collect::from(CollectBuilder {
                         mem_buff_size: page_size,
                         schema: keys,
@@ -784,7 +788,7 @@ mod tests {
                         db.tables["users"].schema.to_owned(),
                         db.tables["users"].schema.to_owned(),
                         vec![1, 2],
-                        vec![]
+                        vec![Default::default(), Default::default()]
                     ),
                     collection: CollectBuilder {
                         mem_buff_size: page_size,
@@ -828,7 +832,7 @@ mod tests {
                         db.tables["users"].schema.clone(),
                         sort_schema.clone(),
                         vec![1, 4, 5],
-                        vec![]
+                        vec![Default::default(), Default::default(), Default::default()]
                     ),
                     collection: CollectBuilder {
                         mem_buff_size: page_size,
@@ -946,7 +950,7 @@ mod tests {
                 schema.clone(),
                 schema.clone(),
                 vec![1],
-                vec![OrderDirection::Asc],
+                vec![Default::default()],
             ),
             input_buffers: DEFAULT_SORT_BUFFER_SIZE,
             collection: CollectBuilder {
@@ -1090,7 +1094,7 @@ mod tests {
                 Schema::new(vec![Column::primary_key("id", Type::Serial)]),
                 Schema::new(vec![Column::primary_key("id", Type::Serial)]),
                 vec![0],
-                vec![],
+                vec![Default::default()],
             ),
             collection: collect,
         });
