@@ -116,6 +116,10 @@ pub enum Expression {
         func: Function,
         args: Vec<Self>,
     },
+    Alias {
+        expr: Box<Self>,
+        alias: String,
+    },
     Nested(Box<Self>),
 }
 
@@ -649,6 +653,7 @@ impl Display for Expression {
                 write!(f, "{operator}{expr}")
             }
             Self::Function { func, args } => write!(f, "{func}"),
+            Self::Alias { expr, alias } => write!(f, "{expr} AS {alias}"),
             Self::Nested(expr) => write!(f, "({expr})"),
         }
     }

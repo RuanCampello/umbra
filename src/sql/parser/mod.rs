@@ -214,7 +214,7 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_pref(&mut self) -> ParserResult<Expression> {
-        match self.next_token()? {
+        let mut expr = match self.next_token()? {
             Token::Identifier(identifier) => Ok(Expression::Identifier(identifier)),
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
@@ -268,7 +268,17 @@ impl<'input> Parser<'input> {
                 ],
                 found: token,
             })),
+        }?;
+
+        if self.consume_optional(Token::Keyword(Keyword::As)) {
+            let alias = self.parse_ident()?;
+            expr = Expression::Alias {
+                expr: Box::new(expr),
+                alias,
+            }
         }
+
+        Ok(expr)
     }
 
     fn parse_col(&mut self) -> ParserResult<Column> {
