@@ -106,7 +106,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 if group_by.is_empty() && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(schema, &order_by);
+                        extract_order_indexes_and_directions(schema, &order_by)?;
 
                     source = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -140,7 +140,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 if is_grouped && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(&aggr_schema, &order_by);
+                        extract_order_indexes_and_directions(&aggr_schema, &order_by)?;
 
                     plan = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -327,17 +327,22 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
 fn extract_order_indexes_and_directions(
     schema: &Schema,
     order_by: &[OrderBy],
-) -> (Vec<usize>, Vec<OrderDirection>) {
+) -> Result<(Vec<usize>, Vec<OrderDirection>), DatabaseError> {
     order_by
         .iter()
         .map(|order| {
             let idx = match &order.expr {
-                Expression::Identifier(ident) => schema.index_of(ident).unwrap(),
-                _ => panic!("ORDER BY exprs without GROUP BY must be identifiers"),
-            };
-            (idx, order.direction)
+                Expression::Identifier(ident) => schema
+                    .index_of(ident)
+                    .ok_or(SqlError::InvalidGroupBy(ident.into())),
+                _ => Err(SqlError::Other(
+                    "ORDER BY exprs without GROUP BY must be identifiers".into(),
+                )),
+            }?;
+            Ok((idx, order.direction))
         })
-        .unzip()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|p| p.into_iter().unzip())
 }
 
 fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
