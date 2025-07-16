@@ -335,9 +335,12 @@ fn extract_order_indexes_and_directions(
                 Expression::Identifier(ident) => schema
                     .index_of(ident)
                     .ok_or(SqlError::InvalidGroupBy(ident.into())),
-                _ => Err(SqlError::Other(
-                    "ORDER BY exprs without GROUP BY must be identifiers".into(),
-                )),
+                _ => schema
+                    .index_of(&order.expr.to_string())
+                    .ok_or(SqlError::Other(format!(
+                        "ORDER BY expression `{}` not found in output columns",
+                        order.expr.to_string()
+                    ))),
             }?;
             Ok((idx, order.direction))
         })
