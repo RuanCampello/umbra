@@ -1676,4 +1676,61 @@ mod tests {
             })
         )
     }
+
+    #[test]
+    fn test_nested_aliases() {
+        let sql = "SELECT (salary * 2) + (bonus / 2) as value FROM employees;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Alias {
+                    expr: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::Plus,
+                        left: Box::new(Expression::Nested(Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Mul,
+                            left: Box::new(Expression::Identifier("salary".into())),
+                            right: Box::new(Expression::Value(Value::Number(2)))
+                        }))),
+                        right: Box::new(Expression::Nested(Box::new(
+                            Expression::BinaryOperation {
+                                operator: BinaryOperator::Div,
+                                left: Box::new(Expression::Identifier("bonus".into())),
+                                right: Box::new(Expression::Value(Value::Number(2)))
+                            }
+                        )))
+                    }),
+                    alias: "value".into()
+                }],
+                from: "employees".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn test_named_function_alias() {
+        let sql = "SELECT COUNT(*) as user_count FROM users;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Alias {
+                    alias: "user_count".into(),
+                    expr: Box::new(Expression::Function {
+                        func: Function::Count,
+                        args: vec![Expression::Wildcard]
+                    })
+                }],
+                from: "users".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
+            })
+        )
+    }
 }
