@@ -1023,4 +1023,16 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn alias() -> AnalyzerResult {
+        Analyze {
+            ctx: &[
+                "CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(30), salary REAL, bonus REAL);",
+            ],
+            sql: "SELECT salary + bonus AS total, name AS employee_name FROM employees;",
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }

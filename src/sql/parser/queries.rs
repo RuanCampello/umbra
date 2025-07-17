@@ -9,7 +9,20 @@ use super::{
 
 impl<'sql> Sql<'sql> for Select {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
-        let columns = parser.parse_separated_tokens(|parser| parser.parse_expr(None), false)?;
+        let columns = parser.parse_separated_tokens(
+            |parser| {
+                let expr = parser.parse_expr(None)?;
+                match parser.consume_optional(Token::Keyword(Keyword::As)) {
+                    false => Ok(expr),
+                    _ => Ok(super::Expression::Alias {
+                        alias: parser.parse_ident()?,
+                        expr: Box::new(expr),
+                    }),
+                }
+            },
+            false,
+        )?;
+
         parser.expect_keyword(Keyword::From)?;
         let (from, r#where) = parser.parse_from_and_where()?;
 

@@ -214,7 +214,7 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_pref(&mut self) -> ParserResult<Expression> {
-        let mut expr = match self.next_token()? {
+        match self.next_token()? {
             Token::Identifier(identifier) => Ok(Expression::Identifier(identifier)),
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
@@ -268,17 +268,7 @@ impl<'input> Parser<'input> {
                 ],
                 found: token,
             })),
-        }?;
-
-        if self.consume_optional(Token::Keyword(Keyword::As)) {
-            let alias = self.parse_ident()?;
-            expr = Expression::Alias {
-                expr: Box::new(expr),
-                alias,
-            }
         }
-
-        Ok(expr)
     }
 
     fn parse_col(&mut self) -> ParserResult<Column> {
@@ -1635,7 +1625,6 @@ mod tests {
         let sql = "SELECT CONCAT(first_name, ' ', last_name) FROM users ORDER BY last_name DESC;";
         let statement = Parser::new(sql).parse_statement();
 
-        println!("statement {statement:#?}");
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
@@ -1654,6 +1643,36 @@ mod tests {
                     expr: Expression::Identifier("last_name".into())
                 }],
                 r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_aliases() {
+        let sql = "SELECT salary + bonus AS total, name AS employee_name FROM employees;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![
+                    Expression::Alias {
+                        expr: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Plus,
+                            left: Box::new(Expression::Identifier("salary".into())),
+                            right: Box::new(Expression::Identifier("bonus".into()))
+                        }),
+                        alias: "total".into()
+                    },
+                    Expression::Alias {
+                        expr: Box::new(Expression::Identifier("name".into())),
+                        alias: "employee_name".into()
+                    }
+                ],
+                from: "employees".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
             })
         )
     }
