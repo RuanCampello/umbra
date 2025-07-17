@@ -373,8 +373,9 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
 
             func.return_type()
         }
-        Expression::Alias { expr, .. } => analyze_expression(schema, col_type, expr)?,
-        Expression::Nested(expr) => analyze_expression(schema, col_type, expr)?,
+        Expression::Nested(expr) | Expression::Alias { expr, .. } => {
+            analyze_expression(schema, col_type, expr)?
+        }
         Expression::Wildcard => {
             return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
         }

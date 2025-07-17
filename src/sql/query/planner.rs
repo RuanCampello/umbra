@@ -71,15 +71,20 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }));
             }
 
-            let mut output = Schema::empty();
-            for expr in &columns {
-                match expr {
-                    Expression::Identifier(ident) => {
-                        output.push(schema.columns[schema.index_of(ident).unwrap()].clone())
-                    }
-                    _ => output.push(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
-                }
-            }
+            let output = Schema::new(
+                columns
+                    .iter()
+                    .map(|expr| match expr {
+                        Expression::Identifier(ident) => {
+                            Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
+                        }
+                        Expression::Alias { expr, alias } => {
+                            Ok(Column::new(alias, resolve_type(schema, expr)?))
+                        }
+                        _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                    })
+                    .collect::<Result<Vec<_>, SqlError>>()?,
+            );
 
             let is_grouped = !group_by.is_empty();
             let aggr_exprs: Vec<_> = columns
