@@ -2962,4 +2962,50 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn select_with_aliases() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(100), salary REAL, bonus REAL);")?;
+        db.exec(
+            r#"
+            INSERT INTO employees (name, salary, bonus)
+            VALUES ('Alice', 3000.0, 500.0), ('Bob', 2500.0, 300.0);
+        "#,
+        )?;
+
+        let query =
+            db.exec("SELECT salary + bonus AS total, name AS employee_name FROM employees;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::Float(3500.0), Value::String("Alice".into())],
+                vec![Value::Float(2800.0), Value::String("Bob".into())]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_alias_with_group_by() -> DatabaseResult {
+        let db = &mut Database::default();
+        db.exec("CREATE TABLE sales (region VARCHAR(10), price INT, bonus INT);")?;
+        db.exec("INSERT INTO sales (region, price, bonus) VALUES ('N', 10, 2);")?;
+        db.exec("INSERT INTO sales (region, price, bonus) VALUES ('N', 15, 3);")?;
+        db.exec("INSERT INTO sales (region, price, bonus) VALUES ('S', 20, 5);")?;
+
+        let query =
+            db.exec("SELECT region, SUM(price + bonus) AS sum_total FROM sales GROUP BY region ORDER BY region;")?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("N".to_string()), Value::Float(30.0)],
+                vec![Value::String("S".to_string()), Value::Float(25.0)],
+            ]
+        );
+
+        Ok(())
+    }
 }
