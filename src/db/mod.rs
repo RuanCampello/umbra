@@ -3068,27 +3068,27 @@ mod tests {
             vec![
                 vec![
                     Value::String("Alice".to_string()),
-                    Value::Float(2.0),
+                    Value::Number(2),
                     Value::Float(34.0)
                 ],
                 vec![
                     Value::String("Bob".to_string()),
-                    Value::Float(1.0),
+                    Value::Number(1),
                     Value::Float(16.0)
                 ],
                 vec![
                     Value::String("Carol".to_string()),
-                    Value::Float(1.0),
+                    Value::Number(1),
                     Value::Float(25.0)
                 ],
                 vec![
                     Value::String("Dave".to_string()),
-                    Value::Float(1.0),
+                    Value::Number(1),
                     Value::Float(34.0)
                 ],
                 vec![
                     Value::String("Eve".to_string()),
-                    Value::Float(1.0),
+                    Value::Number(1),
                     Value::Float(8.0)
                 ],
             ]
