@@ -2990,19 +2990,107 @@ mod tests {
     #[test]
     fn select_alias_with_group_by() -> DatabaseResult {
         let mut db = Database::default();
-        db.exec("CREATE TABLE sales (region VARCHAR(10), price INT, bonus INT);")?;
-        db.exec("INSERT INTO sales (region, price, bonus) VALUES ('N', 10, 2);")?;
-        db.exec("INSERT INTO sales (region, price, bonus) VALUES ('N', 15, 3);")?;
-        db.exec("INSERT INTO sales (region, price, bonus) VALUES ('S', 20, 5);")?;
+        db.exec(
+            r#"
+            CREATE TABLE sales (
+                id SERIAL PRIMARY KEY,
+                region VARCHAR(10),
+                price INT,
+                bonus INT,
+                discount INT,
+                salesperson VARCHAR(20)
+            );
+        "#,
+        )?;
 
-        let query =
-            db.exec("SELECT region, SUM(price + bonus) AS sum_total FROM sales GROUP BY region ORDER BY region;")?;
+        db.exec(
+            r#"
+            INSERT INTO sales (region, price, bonus, discount, salesperson) VALUES
+                ('N', 10, 2, 1, 'Alice'),
+                ('N', 15, 3, 2, 'Bob'),
+                ('S', 20, 5, 0, 'Carol'),
+                ('S', 30, 7, 3, 'Dave'),
+                ('S', 25, 0, 2, 'Alice'),
+                ('N', 8, 1, 1, 'Eve');
+        "#,
+        )?;
+
+        let query = db.exec(
+            "SELECT region, SUM(price + bonus) AS sum_total FROM sales GROUP BY region ORDER BY region;",
+        )?;
 
         assert_eq!(
             query.tuples,
             vec![
-                vec![Value::String("N".to_string()), Value::Float(30.0)],
-                vec![Value::String("S".to_string()), Value::Float(25.0)],
+                vec![Value::String("N".to_string()), Value::Float(39.0)],
+                vec![Value::String("S".to_string()), Value::Float(87.0)],
+            ]
+        );
+
+        let query = db.exec(
+        r#"
+            SELECT region, SUM(price) AS total_price, AVG(bonus) AS avg_bonus, MAX(discount) AS max_discount 
+            FROM sales 
+            GROUP BY region 
+            ORDER BY region;
+        "#
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::String("N".to_string()),
+                    Value::Float(33.0),
+                    Value::Float(2.0),
+                    Value::Float(2.0),
+                ],
+                vec![
+                    Value::String("S".to_string()),
+                    Value::Float(75.0),
+                    Value::Float(4.0),
+                    Value::Float(3.0),
+                ],
+            ]
+        );
+
+        let query = db.exec(
+            r#"
+            SELECT salesperson, COUNT(*) AS num_sales, SUM(price + bonus - discount) AS net_total 
+            FROM sales 
+            GROUP BY salesperson 
+            ORDER BY salesperson;
+        "#,
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::String("Alice".to_string()),
+                    Value::Float(2.0),
+                    Value::Float(34.0)
+                ],
+                vec![
+                    Value::String("Bob".to_string()),
+                    Value::Float(1.0),
+                    Value::Float(16.0)
+                ],
+                vec![
+                    Value::String("Carol".to_string()),
+                    Value::Float(1.0),
+                    Value::Float(25.0)
+                ],
+                vec![
+                    Value::String("Dave".to_string()),
+                    Value::Float(1.0),
+                    Value::Float(34.0)
+                ],
+                vec![
+                    Value::String("Eve".to_string()),
+                    Value::Float(1.0),
+                    Value::Float(8.0)
+                ],
             ]
         );
 
