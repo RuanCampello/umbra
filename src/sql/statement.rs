@@ -7,6 +7,7 @@
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
@@ -508,6 +509,27 @@ impl Display for Statement {
         };
 
         f.write_char(';')
+    }
+}
+
+impl Expression {
+    pub(in crate::sql) fn unwrap_alias(&self) -> &Self {
+        match self {
+            Expression::Alias { ref expr, .. } => &**expr,
+            _ => self,
+        }
+    }
+
+    pub(in crate::sql) fn unwrap_name(&self) -> Cow<'_, str> {
+        match self {
+            Expression::Alias { alias, .. } => Cow::Borrowed(&alias),
+            Expression::Nested(expr) => expr.unwrap_name(),
+            expr => Cow::Owned(expr.to_string()),
+        }
+    }
+
+    pub(in crate::sql) fn is_aggr_fn(&self) -> bool {
+        matches!(self, Expression::Function { func, .. } if func.is_aggr())
     }
 }
 

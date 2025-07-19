@@ -169,6 +169,8 @@ pub(in crate::sql) fn analyze<'s>(
             let metadata = ctx.metadata(from)?;
 
             for expr in columns {
+                let expr = expr.unwrap_alias();
+
                 if expr.eq(&Expression::Wildcard) {
                     continue;
                 }

@@ -87,10 +87,15 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             );
 
             let is_grouped = !group_by.is_empty();
-            let aggr_exprs: Vec<_> = columns
+            let aggr_exprs: Vec<(&Expression, String)> = columns
                 .iter()
-                .filter(|e| matches!(e, Expression::Function { func, .. } if func.is_aggr()))
-                .cloned()
+                .filter_map(|expr| match expr {
+                    Expression::Alias { ref alias, expr } if expr.is_aggr_fn() => {
+                        Some((expr.as_ref(), alias.to_string()))
+                    }
+                    expr if expr.is_aggr_fn() => Some((expr, expr.to_string())),
+                    _ => None,
+                })
                 .collect();
 
             if is_grouped || !aggr_exprs.is_empty() {
@@ -105,8 +110,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     }
                 }
 
-                for expr in &aggr_exprs {
-                    aggr_schema.push(Column::new(&expr.to_string(), resolve_type(schema, expr)?));
+                for (aggr_fn, name) in &aggr_exprs {
+                    aggr_schema.push(Column::new(name, resolve_type(schema, &aggr_fn)?))
                 }
 
                 if group_by.is_empty() && !order_by.is_empty() {
@@ -135,7 +140,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 let mut plan = Planner::Aggregate(
                     AggregateBuilder {
                         source: Box::new(source),
-                        aggr_exprs,
+                        aggr_exprs: aggr_exprs.iter().map(|expr| expr.0.clone()).collect(),
                         page_size,
                         group_by: group_by.clone(),
                         output: aggr_schema.clone(),
@@ -170,6 +175,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     let projection: Vec<Expression> = columns
                         .iter()
                         .map(|expr| match expr {
+                            Expression::Alias { .. } => {
+                                Expression::Identifier(expr.unwrap_name().into())
+                            }
                             Expression::Function { func, .. } => {
                                 Expression::Identifier(func.to_string())
                             }

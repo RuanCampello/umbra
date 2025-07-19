@@ -2989,7 +2989,7 @@ mod tests {
 
     #[test]
     fn select_alias_with_group_by() -> DatabaseResult {
-        let db = &mut Database::default();
+        let mut db = Database::default();
         db.exec("CREATE TABLE sales (region VARCHAR(10), price INT, bonus INT);")?;
         db.exec("INSERT INTO sales (region, price, bonus) VALUES ('N', 10, 2);")?;
         db.exec("INSERT INTO sales (region, price, bonus) VALUES ('N', 15, 3);")?;
