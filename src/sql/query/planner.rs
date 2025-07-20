@@ -207,7 +207,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 for order in &order_by {
                     match order.expr {
                         Expression::Identifier(ref ident) => {
-                            indexes.push(schema.index_of(ident).unwrap());
+                            let idx = resolve_order_index(schema, &columns, ident)?;
+                            indexes.push(idx);
                             directions.push(order.direction);
                         }
                         _ => {
@@ -389,6 +390,24 @@ fn single_typeof_column<'a>(
     }
 
     None
+}
+
+fn resolve_order_index<'a>(
+    schema: &'a Schema,
+    columns: &'a [Expression],
+    ident: &str,
+) -> Result<usize, SqlError> {
+    for (i, expr) in columns.iter().enumerate() {
+        if let Expression::Alias { alias, .. } = expr {
+            if alias == ident {
+                return Ok(i);
+            }
+        }
+    }
+
+    schema
+        .index_of(ident)
+        .ok_or(SqlError::InvalidColumn(ident.into()))
 }
 
 #[cfg(test)]
