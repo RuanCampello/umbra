@@ -176,7 +176,7 @@ pub(crate) fn resolve_expression<'exp>(
                     .ok()
                     .map(|num| num as usize);
 
-                let count = get_value::<i128>(val, schema, &args[1])
+                let count = get_value::<i128>(val, schema, &args[2])
                     .ok()
                     .map(|num| num as isize);
 
