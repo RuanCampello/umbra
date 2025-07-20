@@ -15,6 +15,15 @@ pub(super) const fn abs(value: &Value) -> Result<Value, SqlError<2>> {
     }
 }
 
+#[inline(always)]
+pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError<2>> {
+    match (base, expoent) {
+        (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(*e))),
+        (Value::Number(b), Value::Number(e)) => Ok(Value::Number(b.pow(*e as u32))),
+        _ => todo!(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
