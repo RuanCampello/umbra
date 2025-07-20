@@ -55,7 +55,10 @@ pub(super) fn trunc(value: &Value, decimals: Option<&Value>) -> Result<Value, Sq
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db::SqlError, sql::statement::Value};
+    use crate::{
+        db::SqlError,
+        sql::statement::{Expression, Value},
+    };
 
     #[test]
     fn test_abs() -> Result<(), SqlError<2>> {
@@ -81,6 +84,48 @@ mod tests {
         assert_eq!(
             Value::Float(f64::INFINITY),
             power(&2.0.into(), &1024.0.into())?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_trunc() -> Result<(), SqlError<1>> {
+        use std::f64::consts::PI;
+
+        assert_eq!(Value::Float(3f64), trunc(&PI.into(), None)?);
+        assert_eq!(Value::Float(3.14), trunc(&PI.into(), Some(&2.into()))?);
+
+        assert_eq!(
+            Err(TypeError::ExpectedType {
+                expected: VmType::Number,
+                found: Expression::Value(3.5.into())
+            }
+            .into()),
+            trunc(&PI.into(), Some(&3.5.into()))
+        );
+        assert_eq!(
+            Err(TypeError::ExpectedType {
+                expected: VmType::Number,
+                found: Expression::Value(3.into())
+            }
+            .into()),
+            trunc(&3.into(), None)
+        );
+
+        assert!(matches!(trunc(&f64::NAN.into(), None)?, Value::Float(x) if x.is_nan()));
+        assert_eq!(
+            Value::Float(f64::INFINITY),
+            trunc(&f64::INFINITY.into(), None)?
+        );
+        assert_eq!(
+            Value::Float(f64::NEG_INFINITY),
+            trunc(&f64::NEG_INFINITY.into(), None)?
+        );
+        assert_eq!(Value::Float(0.0), trunc(&0.0.into(), None)?);
+        assert_eq!(
+            Value::Float(123456789.0),
+            trunc(&123456789.12345.into(), None)?
         );
 
         Ok(())
