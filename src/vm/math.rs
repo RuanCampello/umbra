@@ -33,11 +33,27 @@ mod tests {
     fn test_abs() -> Result<(), SqlError<2>> {
         assert_eq!(Value::Number(24), abs(&Value::Number(-24))?);
         assert_eq!(Value::Number(69), abs(&Value::Number(69))?);
+        assert_eq!(Value::Float(f64::INFINITY), abs(&f64::NEG_INFINITY.into())?);
+        assert_ne!(Value::Float(f64::NAN), abs(&f64::NAN.into())?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_power() -> Result<(), SqlError<2>> {
+        assert_eq!(Value::Number(729), power(&9.into(), &3.into())?);
+        assert_eq!(Value::Number(1), power(&i128::MAX.into(), &0.into())?);
+        assert!(matches!(power(&f64::NAN.into(), &2.0.into())?, Value::Float(x) if x.is_nan()));
+        assert_eq!(Value::Float(1.0), power(&0.0.into(), &0.0.into())?);
         assert_eq!(
             Value::Float(f64::INFINITY),
-            abs(&Value::Float(f64::NEG_INFINITY))?
+            power(&0.0.into(), &(-1.0).into())?
         );
-        assert_ne!(Value::Float(f64::NAN), abs(&Value::Float(f64::NAN))?);
+        assert!(matches!(power(&(-2.0).into(), &0.5.into())?, Value::Float(x) if x.is_nan()));
+        assert_eq!(
+            Value::Float(f64::INFINITY),
+            power(&2.0.into(), &1024.0.into())?
+        );
 
         Ok(())
     }
