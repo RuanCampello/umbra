@@ -20,7 +20,35 @@ pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError<2>>
     match (base, expoent) {
         (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(*e))),
         (Value::Number(b), Value::Number(e)) => Ok(Value::Number(b.pow(*e as u32))),
-        _ => todo!(),
+        _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
+            expected: [VmType::Number, VmType::Float],
+        })),
+    }
+}
+
+#[inline(always)]
+pub(super) fn trunc(value: &Value, decimals: Option<&Value>) -> Result<Value, SqlError<1>> {
+    use crate::sql::statement::Expression;
+
+    match (value, decimals) {
+        (Value::Float(value), None) => Ok(value.trunc().into()),
+        (Value::Float(value), Some(decimals)) => match decimals {
+            Value::Number(decimals) => {
+                let factor = 10f64.powi(*decimals as i32);
+                Ok(((value * factor).trunc() / factor).into())
+            }
+            _ => {
+                return Err(SqlError::Type(TypeError::ExpectedType {
+                    expected: VmType::Number,
+                    found: Expression::Value(decimals.clone()),
+                }))
+            }
+        },
+        _ => Err(TypeError::ExpectedType {
+            expected: VmType::Float,
+            found: Expression::Value(value.clone()),
+        }
+        .into()),
     }
 }
 
