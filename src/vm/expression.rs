@@ -26,7 +26,7 @@ pub enum VmError {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum TypeError {
+pub enum TypeError<const EXPECTED_TYPES: usize = 1> {
     CannotApplyUnary {
         operator: UnaryOperator,
         value: Value,
@@ -38,6 +38,10 @@ pub enum TypeError {
     },
     ExpectedType {
         expected: VmType,
+        found: Expression,
+    },
+    ExpectedOneOfTypes {
+        expected: [VmType; EXPECTED_TYPES],
         found: Expression,
     },
     InvalidDate(DateParseError),
@@ -311,6 +315,19 @@ impl Display for TypeError {
             }
             TypeError::ExpectedType { expected, found } => {
                 write!(f, "Expected {expected:#?} but found {found:#?}")
+            }
+            TypeError::ExpectedOneOfTypes { expected, found } => {
+                write!(f, "Expected one of ")?;
+
+                for (idx, r#type) in expected.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+
+                    write!(f, "{:#?}", r#type)?;
+                }
+
+                write!(f, " but found {found:#?}")
             }
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
