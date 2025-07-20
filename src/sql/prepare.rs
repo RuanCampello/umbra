@@ -112,13 +112,16 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 }
             }
 
-            values.iter_mut().for_each(|values| {
-                (0..columns.len()).for_each(|idx| {
+            (0..columns.len()).for_each(|idx| {
+                if let Some(sorted_idx) = {
                     let sorted_idx = metadata.schema.index_of(&columns[idx]).unwrap();
-
+                    (idx != sorted_idx).then_some(sorted_idx)
+                } {
                     columns.swap(idx, sorted_idx);
-                    values.swap(idx, sorted_idx);
-                });
+                    values
+                        .iter_mut()
+                        .for_each(|values| values.swap(idx, sorted_idx));
+                }
             })
         }
         Statement::Explain(inner) => prepare(&mut *inner, ctx)?,

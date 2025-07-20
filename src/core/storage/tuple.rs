@@ -87,6 +87,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             let uuid = Uuid::from_str(uuid).unwrap();
             buff.extend_from_slice(uuid.as_ref())
         }
+
         _ => unimplemented!("Tried to call serialize from {value} into {type}"),
     }
 }

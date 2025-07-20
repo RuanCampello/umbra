@@ -3096,4 +3096,22 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn alias_with_order_by() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30), age INT UNSIGNED);")?;
+        db.exec("INSERT INTO users (age, name) VALUES (19, 'Jonh Doe'), (23, 'Mary Dove');")?;
+
+        let query = db.exec("SELECT name as user_name, age FROM users ORDER BY user_name;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("John Doe".into()), Value::Number(19)],
+                vec![Value::String("Mary Dove".into()), Value::Number(23)]
+            ]
+        );
+
+        Ok(())
+    }
 }
