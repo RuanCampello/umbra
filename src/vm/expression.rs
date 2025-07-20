@@ -26,7 +26,7 @@ pub enum VmError {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum TypeError<const EXPECTED_TYPES: usize = 1> {
+pub enum TypeError<const N: usize = DEFAULT_NUM_EXPECTED_TYPES> {
     CannotApplyUnary {
         operator: UnaryOperator,
         value: Value,
@@ -41,12 +41,13 @@ pub enum TypeError<const EXPECTED_TYPES: usize = 1> {
         found: Expression,
     },
     ExpectedOneOfTypes {
-        expected: [VmType; EXPECTED_TYPES],
-        found: Expression,
+        expected: [VmType; N],
     },
     InvalidDate(DateParseError),
     UuidError(UuidError),
 }
+
+pub(crate) const DEFAULT_NUM_EXPECTED_TYPES: usize = 1;
 
 trait ValueExtractor<T> {
     fn extract(value: Value, argument: &Expression) -> Result<T, SqlError>;
@@ -316,7 +317,7 @@ impl Display for TypeError {
             TypeError::ExpectedType { expected, found } => {
                 write!(f, "Expected {expected:#?} but found {found:#?}")
             }
-            TypeError::ExpectedOneOfTypes { expected, found } => {
+            TypeError::ExpectedOneOfTypes { expected } => {
                 write!(f, "Expected one of ")?;
 
                 for (idx, r#type) in expected.iter().enumerate() {
@@ -327,7 +328,7 @@ impl Display for TypeError {
                     write!(f, "{:#?}", r#type)?;
                 }
 
-                write!(f, " but found {found:#?}")
+                Ok(())
             }
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),

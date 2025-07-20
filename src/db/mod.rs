@@ -22,7 +22,7 @@ use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::query;
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
-use crate::vm::expression::{TypeError, VmError};
+use crate::vm::expression::{TypeError, VmError, DEFAULT_NUM_EXPECTED_TYPES};
 use crate::vm::planner::{Execute, Planner, Tuple};
 use crate::{index, vm};
 use std::cell::RefCell;
@@ -88,7 +88,7 @@ pub enum DatabaseError {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum SqlError {
+pub enum SqlError<const N: usize = DEFAULT_NUM_EXPECTED_TYPES> {
     /// Database table isn't found or somewhat corrupted.
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
@@ -99,7 +99,7 @@ pub enum SqlError {
     Analyzer(AnalyzerError),
     /// Invalid function arguments. Expected x but found y.
     InvalidFuncArgs(usize, usize),
-    Type(TypeError),
+    Type(TypeError<N>),
     Vm(VmError),
     Other(String),
 }
