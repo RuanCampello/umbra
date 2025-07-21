@@ -4,6 +4,44 @@
 use super::expression::{TypeError, VmType};
 use crate::{db::SqlError, sql::statement::Value};
 
+#[repr(i8)]
+#[derive(Debug, PartialEq)]
+enum Sign {
+    Negative = -1,
+    Neutral,
+    Positive,
+}
+
+trait Signed: Sized {
+    fn sign(&self) -> Sign;
+}
+
+impl Signed for i128 {
+    #[inline(always)]
+    fn sign(&self) -> Sign {
+        match self.gt(&0) {
+            true => Sign::Positive,
+            _ => match self.eq(&0) {
+                true => Sign::Neutral,
+                false => Sign::Negative,
+            },
+        }
+    }
+}
+
+impl Signed for f64 {
+    #[inline(always)]
+    fn sign(&self) -> Sign {
+        match self {
+            x if x.is_nan() => Sign::Neutral,
+            x if *x == 0.0 && x.is_sign_negative() => Sign::Negative,
+            x if *x > 0.0 => Sign::Positive,
+            x if *x < 0.0 => Sign::Negative,
+            _ => Sign::Neutral,
+        }
+    }
+}
+
 #[inline(always)]
 pub(super) const fn abs(value: &Value) -> Result<Value, SqlError<2>> {
     match value {
@@ -129,5 +167,21 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_signum() {
+        assert_eq!(Sign::Positive, i128::MAX.sign());
+        assert_eq!(Sign::Neutral, 0.sign());
+        assert_eq!(Sign::Negative, i128::MIN.sign());
+
+        assert_eq!(Sign::Positive, f64::MAX.sign());
+        assert_eq!(Sign::Neutral, 0.00000f64.sign());
+        assert_eq!(Sign::Positive, 0.00001f64.sign());
+        assert_eq!(Sign::Negative, f64::MIN.sign());
+
+        assert_eq!(Sign::Neutral, f64::NAN.sign());
+        assert_eq!(Sign::Positive, f64::INFINITY.sign());
+        assert_eq!(Sign::Negative, f64::NEG_INFINITY.sign());
     }
 }
