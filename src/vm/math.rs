@@ -90,6 +90,17 @@ pub(super) fn trunc(value: &Value, decimals: Option<&Value>) -> Result<Value, Sq
     }
 }
 
+#[inline(always)]
+pub(super) fn sign(value: &Value) -> Result<Value, SqlError<2>> {
+    match value {
+        Value::Number(n) => Ok(Value::Number(n.sign() as i128)),
+        Value::Float(f) => Ok(Value::Number(f.sign() as i128)),
+        _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
+            expected: [VmType::Float, VmType::Number],
+        })),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
