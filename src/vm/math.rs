@@ -90,6 +90,14 @@ impl SquaredRoot for f64 {
             return Ok(*self);
         }
 
+        if self.is_sign_positive() && self.is_infinite() {
+            return Ok(f64::INFINITY);
+        }
+
+        if self.is_nan() {
+            return Ok(f64::NAN);
+        }
+
         let mut guess: f64 = self / 2f64;
         while guess > self / guess {
             guess = (guess + self / guess) / 2f64;
@@ -269,12 +277,45 @@ mod tests {
     }
 
     #[test]
-    fn test_sqrt() {
+    fn test_integer_sqrt() {
+        assert_eq!(Value::Number(4), sqrt(&Value::Number(16)).unwrap());
+        assert_eq!(Value::Number(10), sqrt(&Value::Number(100)).unwrap());
+
+        assert_eq!(Value::Number(5), sqrt(&Value::Number(27)).unwrap());
+        assert_eq!(Value::Number(3), sqrt(&Value::Number(10)).unwrap());
+
         assert_eq!(Value::Number(5), sqrt(&27i128.into()).unwrap());
+        assert_eq!(Value::Number(0), sqrt(&Value::Number(0)).unwrap());
+
+        assert_eq!(
+            SqlError::Vm(VmError::NegativeNumSqrt),
+            sqrt(&Value::Number(-1)).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_float_sqrt() {
         assert_eq!(
             Value::Float(5.196152422706632),
             sqrt(&27f64.into()).unwrap()
         );
+        assert_eq!(Value::Float(4.0), sqrt(&Value::Float(16.0)).unwrap());
         assert_eq!(Value::Float(0f64), sqrt(&0f64.into()).unwrap());
+
+        assert_eq!(
+            Value::Float(f64::INFINITY),
+            sqrt(&f64::INFINITY.into()).unwrap()
+        );
+        assert_eq!(
+            SqlError::Vm(VmError::NegativeNumSqrt),
+            sqrt(&f64::NEG_INFINITY.into()).unwrap_err()
+        );
+
+        assert_eq!(
+            SqlError::Type(TypeError::ExpectedOneOfTypes {
+                expected: [VmType::Number, VmType::Float],
+            }),
+            sqrt(&Value::Boolean(true)).unwrap_err()
+        );
     }
 }
