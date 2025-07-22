@@ -1,7 +1,9 @@
 //! SQL mathematical logics in Rust.
 //! Sometimes, you need to implement `sqrt` from scratch, to make it work.
 
-use super::expression::{TypeError, VmType};
+#![allow(dead_code)]
+
+use super::expression::{TypeError, VmError, VmType};
 use crate::{db::SqlError, sql::statement::Value};
 
 #[repr(i8)]
@@ -14,6 +16,10 @@ enum Sign {
 
 trait Signed: Sized {
     fn sign(&self) -> Sign;
+}
+
+trait SquaredRoot: Sized + PartialEq + PartialOrd + std::ops::Add<Self> {
+    fn sqrt(&self) -> Result<Self, SqlError<2>>;
 }
 
 impl Signed for i128 {
@@ -39,6 +45,57 @@ impl Signed for f64 {
             x if *x < 0.0 => Sign::Negative,
             _ => Sign::Neutral,
         }
+    }
+}
+
+impl SquaredRoot for u128 {
+    #[inline(always)]
+    fn sqrt(&self) -> Result<Self, SqlError<2>> {
+        if self.le(&2u128) {
+            return Ok(*self);
+        }
+
+        let mut num = *self;
+        let mut res = 0u128;
+        let mut bit = 1u128 << 126;
+
+        while bit.gt(self) {
+            bit >>= 2;
+        }
+
+        while bit.ne(&0u128) {
+            match num.ge(&(res + bit)) {
+                true => {
+                    num -= res + bit;
+                    res = (res >> 1) + bit;
+                }
+                false => res >>= 1,
+            }
+
+            bit >>= 2;
+        }
+
+        Ok(res)
+    }
+}
+
+impl SquaredRoot for f64 {
+    #[inline(always)]
+    fn sqrt(&self) -> Result<Self, SqlError<2>> {
+        if self.sign().eq(&Sign::Negative) {
+            return Err(SqlError::Vm(VmError::NegativeNumSqrt));
+        }
+
+        if self.eq(&0f64) || self.eq(&1f64) {
+            return Ok(*self);
+        }
+
+        let mut guess: f64 = self / 2f64;
+        while guess > self / guess {
+            guess = (guess + self / guess) / 2f64;
+        }
+
+        Ok(guess)
     }
 }
 
@@ -95,6 +152,21 @@ pub(super) fn sign(value: &Value) -> Result<Value, SqlError<2>> {
     match value {
         Value::Number(n) => Ok(Value::Number(n.sign() as i128)),
         Value::Float(f) => Ok(Value::Number(f.sign() as i128)),
+        _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
+            expected: [VmType::Float, VmType::Number],
+        })),
+    }
+}
+
+#[inline(always)]
+pub(super) fn sqrt(value: &Value) -> Result<Value, SqlError<2>> {
+    match value {
+        Value::Number(n) => {
+            let n = u128::try_from(*n).or(Err(SqlError::Vm(VmError::NegativeNumSqrt)))?;
+            let sqrt = n.sqrt()?;
+            Ok(Value::Number(sqrt as i128))
+        }
+        Value::Float(f) => Ok(Value::Float(f.sqrt()?)),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
             expected: [VmType::Float, VmType::Number],
         })),
@@ -194,5 +266,15 @@ mod tests {
         assert_eq!(Sign::Neutral, f64::NAN.sign());
         assert_eq!(Sign::Positive, f64::INFINITY.sign());
         assert_eq!(Sign::Negative, f64::NEG_INFINITY.sign());
+    }
+
+    #[test]
+    fn test_sqrt() {
+        assert_eq!(Value::Number(5), sqrt(&27i128.into()).unwrap());
+        assert_eq!(
+            Value::Float(5.196152422706632),
+            sqrt(&27f64.into()).unwrap()
+        );
+        assert_eq!(Value::Float(0f64), sqrt(&0f64.into()).unwrap());
     }
 }

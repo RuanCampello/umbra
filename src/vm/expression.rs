@@ -23,6 +23,7 @@ pub enum VmType {
 #[derive(Debug, PartialEq)]
 pub enum VmError {
     DivisionByZero(i128, i128),
+    NegativeNumSqrt,
 }
 
 #[derive(Debug, PartialEq)]
@@ -340,6 +341,7 @@ impl Display for VmError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DivisionByZero(left, right) => write!(f, "Division by zero: {left} / {right}"),
+            Self::NegativeNumSqrt => write!(f, "Cannot take square root of a negative number"),
         }
     }
 }
