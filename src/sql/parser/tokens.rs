@@ -177,7 +177,7 @@ impl Keyword {
     pub fn is_function(&self) -> bool {
         use crate::sql::statement::Function;
 
-        Function::try_from(*self).is_ok()
+        Function::try_from(self).is_ok()
     }
 }
 

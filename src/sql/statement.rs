@@ -745,20 +745,20 @@ impl From<Function> for Keyword {
     }
 }
 
-impl TryFrom<Keyword> for Function {
+impl TryFrom<&Keyword> for Function {
     type Error = ();
 
-    fn try_from(value: Keyword) -> Result<Self, Self::Error> {
+    fn try_from(value: &Keyword) -> Result<Self, Self::Error> {
         match value {
-            Keyword::Sqrt => Ok(Function::Sqrt),
-            Keyword::Ascii => Ok(Function::Ascii),
-            Keyword::Position => Ok(Function::Position),
-            Keyword::Power => Ok(Function::Power),
-            Keyword::Substring => Ok(Function::Substring),
-            Keyword::Sign => Ok(Function::Sign),
-            Keyword::Abs => Ok(Function::Abs),
-            Keyword::Concat => Ok(Function::Concat),
-            Keyword::Trunc => Ok(Function::Trunc),
+            Keyword::Sqrt => Ok(Self::Sqrt),
+            Keyword::Ascii => Ok(Self::Ascii),
+            Keyword::Position => Ok(Self::Position),
+            Keyword::Power => Ok(Self::Power),
+            Keyword::Substring => Ok(Self::Substring),
+            Keyword::Sign => Ok(Self::Sign),
+            Keyword::Abs => Ok(Self::Abs),
+            Keyword::Concat => Ok(Self::Concat),
+            Keyword::Trunc => Ok(Self::Trunc),
             _ => Err(()),
         }
     }

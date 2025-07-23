@@ -521,7 +521,7 @@ impl<'input> Parser<'input> {
                 let value = self.parse_closing_expr()?;
 
                 Ok(Expression::Function {
-                    func: Function::try_from(keyword).unwrap(),
+                    func: Function::try_from(&keyword).unwrap(),
                     args: vec![value],
                 })
             }
