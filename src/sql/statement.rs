@@ -659,7 +659,9 @@ impl Function {
             Self::Substring => Some((2, 3)),
             Self::Concat => Some((1, usize::MAX)),
             Self::Position => Some((2, 2)),
-            Self::Sqrt | Self::Ascii => UNARY,
+            Self::Power => Some((2, 2)),
+            Self::Ascii => UNARY,
+            func if func.is_math() => UNARY,
             _ => None,
         }
     }
