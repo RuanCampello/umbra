@@ -7,6 +7,7 @@
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::ops::Neg;
@@ -262,6 +263,11 @@ pub enum Function {
     Concat,
     Ascii,
     Position,
+    Abs,
+    Sign,
+    Sqrt,
+    Power,
+    Trunc,
     UuidV4,
 }
 
@@ -648,11 +654,12 @@ impl Display for Value {
 impl Function {
     /// Returns respectvly the minimum and the maximum (if there's any) of this function arguments.
     pub const fn size_of_args(&self) -> Option<(usize, usize)> {
+        const UNARY: Option<(usize, usize)> = Some((1, 1));
         match self {
             Self::Substring => Some((2, 3)),
-            Self::Ascii => Some((1, 1)),
             Self::Concat => Some((1, usize::MAX)),
             Self::Position => Some((2, 2)),
+            Self::Sqrt | Self::Ascii => UNARY,
             _ => None,
         }
     }
@@ -660,20 +667,39 @@ impl Function {
     /// Returns the `VmType` that this function returns.
     pub const fn return_type(&self) -> VmType {
         match self {
+            Self::Abs | Self::Sqrt | Self::Trunc | Self::Power => VmType::Float,
             Self::Substring | Self::Concat => VmType::String,
-            Self::UuidV4 | Self::Ascii | Self::Position => VmType::Number,
+            Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign => VmType::Number,
         }
+    }
+
+    pub const fn is_math(&self) -> bool {
+        return matches!(
+            self,
+            Self::Trunc | Self::Abs | Self::Sqrt | Self::Sign | Self::Power
+        );
     }
 }
 
 impl Display for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.borrow())
+    }
+}
+
+impl Borrow<str> for Function {
+    fn borrow(&self) -> &str {
         match self {
-            Self::Substring => f.write_str("SUBSTRING"),
-            Self::Concat => f.write_str("CONCAT"),
-            Self::Ascii => f.write_str("ASCII"),
-            Self::Position => f.write_str("POSITION"),
-            Self::UuidV4 => f.write_str("u4()"),
+            Function::Substring => "SUBSTRING",
+            Function::Concat => "CONCAT",
+            Function::Ascii => "ASCII",
+            Function::Position => "POSITION",
+            Function::Power => "POWER",
+            Function::Abs => "ABS",
+            Function::Trunc => "TRUNC",
+            Function::Sign => "SIGN",
+            Function::Sqrt => "SQRT",
+            Function::UuidV4 => unimplemented!("uuidv4 is not yet available"),
         }
     }
 }

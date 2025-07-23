@@ -48,6 +48,7 @@ pub enum TypeError<const N: usize = DEFAULT_NUM_EXPECTED_TYPES> {
     UuidError(UuidError),
 }
 
+/// The default expected types for a given mathematical function.
 pub(crate) const DEFAULT_NUM_EXPECTED_TYPES: usize = 1;
 
 trait ValueExtractor<T> {
