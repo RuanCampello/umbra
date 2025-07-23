@@ -691,19 +691,56 @@ impl Display for Function {
     }
 }
 
-impl Borrow<str> for Function {
-    fn borrow(&self) -> &str {
-        match self {
-            Function::Substring => "SUBSTRING",
-            Function::Concat => "CONCAT",
-            Function::Ascii => "ASCII",
-            Function::Position => "POSITION",
-            Function::Power => "POWER",
-            Function::Abs => "ABS",
-            Function::Trunc => "TRUNC",
-            Function::Sign => "SIGN",
-            Function::Sqrt => "SQRT",
-            Function::UuidV4 => unimplemented!("uuidv4 is not yet available"),
+macro_rules! define_function_mapping {
+    ($($variant:ident => $str:expr),* $(,)?) => {
+        impl std::borrow::Borrow<str> for Function {
+            fn borrow(&self) -> &str {
+                match self {
+                    $(Function::$variant => $str,)*
+                }
+            }
+        }
+
+        impl std::str::FromStr for Function {
+            type Err = ();
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                let upper = s.to_uppercase();
+                match upper.as_str() {
+                    $($str => Ok(Function::$variant),)*
+                    _ => Err(()),
+                }
+            }
+        }
+    };
+}
+
+define_function_mapping! {
+    Substring => "SUBSTRING",
+    Concat => "CONCAT",
+    Ascii => "ASCII",
+    Position => "POSITION",
+    Power => "POWER",
+    Abs => "ABS",
+    Trunc => "TRUNC",
+    Sign => "SIGN",
+    Sqrt => "SQRT",
+    UuidV4 => "UUIDV4",
+}
+
+impl From<Function> for Keyword {
+    fn from(value: Function) -> Self {
+        match value {
+            Function::Sqrt => Self::Sqrt,
+            Function::Ascii => Self::Ascii,
+            Function::Position => Self::Position,
+            Function::Power => Self::Power,
+            Function::Substring => Self::Substring,
+            Function::Sign => Self::Sign,
+            Function::Abs => Self::Abs,
+            Function::Concat => Self::Concat,
+            Function::Trunc => Self::Trunc,
+            Function::UuidV4 => unimplemented!(),
         }
     }
 }

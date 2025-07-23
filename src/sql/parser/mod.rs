@@ -220,7 +220,7 @@ impl<'input> Parser<'input> {
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
             }
-            Token::Keyword(func) if Self::supported_functions().contains(&func) => {
+            Token::Keyword(func) if func.is_function() => {
                 self.expect_token(Token::LeftParen)?;
                 self.parse_func(func)
             }
@@ -608,15 +608,6 @@ impl<'input> Parser<'input> {
         &'key K: IntoIterator<Item = &'key Keyword>,
     {
         keywords.into_iter().map(From::from).collect()
-    }
-
-    const fn supported_functions() -> [Keyword; 4] {
-        [
-            Keyword::Substring,
-            Keyword::Ascii,
-            Keyword::Concat,
-            Keyword::Position,
-        ]
     }
 
     const fn supported_statements() -> [Keyword; 10] {
@@ -1503,5 +1494,47 @@ mod tests {
                 r#where: None,
             })
         )
+    }
+
+    #[test]
+    fn test_abs_func() {
+        let sql = "SELECT ABS(amount) FROM payments;";
+        let statement = Parser::new(sql).parse_statement();
+
+        println!("{statement:#?}");
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Abs,
+                    args: vec![Expression::Identifier("amount".into())],
+                }],
+                from: "payments".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_power_func() {
+        let sql = "SELECT POWER(base, exponent) FROM numbers;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Power,
+                    args: vec![
+                        Expression::Identifier("base".into()),
+                        Expression::Identifier("exponent".into())
+                    ],
+                }],
+                from: "numbers".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        );
     }
 }

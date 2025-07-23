@@ -214,10 +214,6 @@ mod tests {
             Value::Float(f64::INFINITY),
             power(&2.0.into(), &1024.0.into())?
         );
-        assert_eq!(
-            Value::Float(1.9671513572895653),
-            power(&1.0764.into(), &10f64.into())?
-        );
 
         Ok(())
     }

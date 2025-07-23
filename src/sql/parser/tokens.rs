@@ -173,6 +173,12 @@ impl Keyword {
             _ => Some(*self),
         }
     }
+
+    pub fn is_function(&self) -> bool {
+        use crate::sql::statement::Function;
+        let string: &str = self.borrow();
+        string.parse::<Function>().is_ok()
+    }
 }
 
 impl Borrow<str> for Keyword {
@@ -248,6 +254,12 @@ impl Borrow<str> for Keyword {
 impl FromStr for Keyword {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use crate::sql::statement::Function;
+
+        if let Ok(function) = s.parse::<Function>() {
+            return Ok(Keyword::from(function));
+        }
+
         let keyword = match s.to_uppercase().as_str() {
             "SELECT" => Keyword::Select,
             "CREATE" => Keyword::Create,
