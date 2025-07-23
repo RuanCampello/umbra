@@ -13,6 +13,8 @@ use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::ops::Neg;
 use std::str::FromStr;
 
+use super::Keyword;
+
 /// SQL statements.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Statement {

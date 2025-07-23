@@ -3,6 +3,7 @@
 //! You may consider checking out [IBM documentation](https://www.ibm.com/docs/en/db2/11.5.0?topic=elements-tokens) on that.
 
 use std::{
+    borrow::Borrow,
     fmt::{Display, Formatter, Write},
     str::FromStr,
 };
@@ -64,6 +65,11 @@ pub enum Keyword {
     Substring,
     Ascii,
     Concat,
+    Abs,
+    Sqrt,
+    Trunc,
+    Power,
+    Sign,
     Position,
     For,
     Primary,
@@ -117,7 +123,7 @@ impl Display for Token {
         match self {
             Self::Whitespace(whitespace) => f.write_char(whitespace.as_char()),
             Self::Identifier(identifier) => f.write_str(identifier),
-            Self::Keyword(keyword) => f.write_str(keyword.as_str()),
+            Self::Keyword(keyword) => f.write_str(keyword.borrow()),
             Self::Number(number) => f.write_str(number),
             Self::String(string) => write!(f, "\"{string}\""),
             token => {
@@ -167,8 +173,10 @@ impl Keyword {
             _ => Some(*self),
         }
     }
+}
 
-    pub fn as_str(&self) -> &'static str {
+impl Borrow<str> for Keyword {
+    fn borrow(&self) -> &str {
         match self {
             Self::Select => "SELECT",
             Self::Create => "CREATE",
@@ -186,10 +194,6 @@ impl Keyword {
             Self::Between => "BETWEEN",
             Self::In => "IN",
             Self::Like => "LIKE",
-            Self::Substring => "SUBSTRING",
-            Self::Ascii => "ASCII",
-            Self::Concat => "CONCAT",
-            Self::Position => "POSITION",
             Self::For => "FOR",
             Self::Primary => "PRIMARY",
             Self::Key => "KEY",
@@ -227,6 +231,15 @@ impl Keyword {
             Self::Date => "DATE",
             Self::Time => "TIME",
             Self::Timestamp => "TIMESTAMP",
+            Self::Abs => "ABS",
+            Self::Sqrt => "SQRT",
+            Self::Concat => "CONCAT",
+            Self::Substring => "SUBSTRING",
+            Self::Ascii => "ASCII",
+            Self::Power => "POWER",
+            Self::Trunc => "TRUNC",
+            Self::Sign => "SIGN",
+            Self::Position => "POSITION",
             Self::None => "_",
         }
     }
@@ -302,7 +315,7 @@ impl FromStr for Keyword {
 
 impl Display for Keyword {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.borrow())
     }
 }
 
