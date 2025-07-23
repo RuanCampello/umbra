@@ -745,6 +745,25 @@ impl From<Function> for Keyword {
     }
 }
 
+impl TryFrom<Keyword> for Function {
+    type Error = ();
+
+    fn try_from(value: Keyword) -> Result<Self, Self::Error> {
+        match value {
+            Keyword::Sqrt => Ok(Function::Sqrt),
+            Keyword::Ascii => Ok(Function::Ascii),
+            Keyword::Position => Ok(Function::Position),
+            Keyword::Power => Ok(Function::Power),
+            Keyword::Substring => Ok(Function::Substring),
+            Keyword::Sign => Ok(Function::Sign),
+            Keyword::Abs => Ok(Function::Abs),
+            Keyword::Concat => Ok(Function::Concat),
+            Keyword::Trunc => Ok(Function::Trunc),
+            _ => Err(()),
+        }
+    }
+}
+
 impl Display for Temporal {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

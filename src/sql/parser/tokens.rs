@@ -176,8 +176,8 @@ impl Keyword {
 
     pub fn is_function(&self) -> bool {
         use crate::sql::statement::Function;
-        let string: &str = self.borrow();
-        string.parse::<Function>().is_ok()
+
+        Function::try_from(*self).is_ok()
     }
 }
 

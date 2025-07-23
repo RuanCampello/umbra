@@ -269,6 +269,13 @@ impl<'input> Parser<'input> {
         }
     }
 
+    fn parse_closing_expr(&mut self) -> ParserResult<Expression> {
+        let pref = self.parse_expr(None)?;
+        self.expect_token(Token::RightParen)?;
+
+        Ok(pref)
+    }
+
     fn parse_col(&mut self) -> ParserResult<Column> {
         let name = self.parse_ident()?;
         let data_type = self.parse_type()?;
@@ -501,7 +508,24 @@ impl<'input> Parser<'input> {
                     args: vec![needle, haystack],
                 })
             }
-            _ => unreachable!("invalid function"),
+            Keyword::Power => {
+                let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Power,
+                    args,
+                })
+            }
+            keyword if keyword.is_function() => {
+                let value = self.parse_closing_expr()?;
+
+                Ok(Expression::Function {
+                    func: Function::try_from(keyword).unwrap(),
+                    args: vec![value],
+                })
+            }
+            func => unreachable!("invalid function: {func}"),
         }
     }
 
