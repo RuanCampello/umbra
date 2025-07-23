@@ -479,21 +479,17 @@ impl<'input> Parser<'input> {
                     ],
                 })
             }
-            Keyword::Ascii => {
-                let expr = self.parse_expr(None)?;
-                self.expect_token(Token::RightParen)?;
-
-                Ok(Expression::Function {
-                    func: Function::Ascii,
-                    args: vec![expr],
-                })
-            }
-            Keyword::Concat => {
+            keyword
+                if matches!(
+                    keyword,
+                    Keyword::Ascii | Keyword::Concat | Keyword::Power | Keyword::Trunc
+                ) =>
+            {
                 let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
 
                 Ok(Expression::Function {
-                    func: Function::Concat,
+                    func: Function::try_from(&keyword).unwrap(),
                     args,
                 })
             }
@@ -506,15 +502,6 @@ impl<'input> Parser<'input> {
                 Ok(Expression::Function {
                     func: Function::Position,
                     args: vec![needle, haystack],
-                })
-            }
-            Keyword::Power => {
-                let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
-                self.expect_token(Token::RightParen)?;
-
-                Ok(Expression::Function {
-                    func: Function::Power,
-                    args,
                 })
             }
             keyword if keyword.is_function() => {
@@ -1525,7 +1512,6 @@ mod tests {
         let sql = "SELECT ABS(amount) FROM payments;";
         let statement = Parser::new(sql).parse_statement();
 
-        println!("{statement:#?}");
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
@@ -1560,5 +1546,47 @@ mod tests {
                 r#where: None,
             })
         );
+    }
+
+    #[test]
+    fn test_trunc_func() {
+        let sql = "SELECT TRUNC(amount) FROM payments;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Trunc,
+                    args: vec![Expression::Identifier("amount".into())],
+                }],
+                from: "payments".into(),
+                order_by: vec![],
+                r#where: None,
+            })
+        );
+
+        let sql = "SELECT TRUNC(amount, 4) FROM payments WHERE customer_id > 10;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Trunc,
+                    args: vec![
+                        Expression::Identifier("amount".into()),
+                        Expression::Value(4i128.into())
+                    ],
+                }],
+                from: "payments".into(),
+                order_by: vec![],
+                r#where: Some(Expression::BinaryOperation {
+                    operator: BinaryOperator::Gt,
+                    left: Box::new(Expression::Identifier("customer_id".into())),
+                    right: Box::new(Expression::Value(10i128.into()))
+                }),
+            })
+        )
     }
 }
