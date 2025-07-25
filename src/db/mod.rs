@@ -2693,7 +2693,8 @@ mod tests {
 
         db.exec(
             r#"
-            INSERT INTO employees VALUES
+            INSERT INTO employees (employee_id, first_name, last_name, salary, bonus_percentage, tax_deduction)
+            VALUES
             (101, 'John', 'Smith', 75000.00, 15.00, -12500.00),
             (102, 'Sarah', 'Johnson', 68000.50, 12.50, -10200.75),
             (103, 'Michael', 'Williams', 92000.00, 20.00, -18400.00),
@@ -2713,6 +2714,7 @@ mod tests {
                 vec!["David".into(), 110000.00f64.into(), 331.66f64.into()],
             ]
         );
+
         Ok(())
     }
 }
