@@ -88,7 +88,7 @@ pub enum DatabaseError {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum SqlError<const N: usize = DEFAULT_NUM_EXPECTED_TYPES> {
+pub enum SqlError {
     /// Database table isn't found or somewhat corrupted.
     InvalidTable(String),
     /// Column isn't found or not usable in the given context.
@@ -99,7 +99,7 @@ pub enum SqlError<const N: usize = DEFAULT_NUM_EXPECTED_TYPES> {
     Analyzer(AnalyzerError),
     /// Invalid function arguments. Expected x but found y.
     InvalidFuncArgs(usize, usize),
-    Type(TypeError<N>),
+    Type(TypeError),
     Vm(VmError),
     Other(String),
 }

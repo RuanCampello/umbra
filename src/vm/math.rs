@@ -19,7 +19,7 @@ trait Signed: Sized {
 }
 
 trait SquaredRoot: Sized + PartialEq + PartialOrd + std::ops::Add<Self> {
-    fn sqrt(&self) -> Result<Self, SqlError<2>>;
+    fn sqrt(&self) -> Result<Self, SqlError>;
 }
 
 impl Signed for i128 {
@@ -50,7 +50,7 @@ impl Signed for f64 {
 
 impl SquaredRoot for u128 {
     #[inline(always)]
-    fn sqrt(&self) -> Result<Self, SqlError<2>> {
+    fn sqrt(&self) -> Result<Self, SqlError> {
         if self.le(&2u128) {
             return Ok(*self);
         }
@@ -81,7 +81,7 @@ impl SquaredRoot for u128 {
 
 impl SquaredRoot for f64 {
     #[inline(always)]
-    fn sqrt(&self) -> Result<Self, SqlError<2>> {
+    fn sqrt(&self) -> Result<Self, SqlError> {
         if self.sign().eq(&Sign::Negative) {
             return Err(SqlError::Vm(VmError::NegativeNumSqrt));
         }
@@ -108,29 +108,29 @@ impl SquaredRoot for f64 {
 }
 
 #[inline(always)]
-pub(super) const fn abs(value: &Value) -> Result<Value, SqlError<2>> {
+pub(super) fn abs(value: &Value) -> Result<Value, SqlError> {
     match value {
         Value::Float(f) => Ok(Value::Float(f.abs())),
         Value::Number(n) => Ok(Value::Number(n.abs())),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
-            expected: [VmType::Number, VmType::Float],
+            expected: vec![VmType::Number, VmType::Float],
         })),
     }
 }
 
 #[inline(always)]
-pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError<2>> {
+pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError> {
     match (base, expoent) {
         (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(*e))),
         (Value::Number(b), Value::Number(e)) => Ok(Value::Number(b.pow(*e as u32))),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
-            expected: [VmType::Number, VmType::Float],
+            expected: vec![VmType::Number, VmType::Float],
         })),
     }
 }
 
 #[inline(always)]
-pub(super) fn trunc(value: &Value, decimals: Option<&Value>) -> Result<Value, SqlError<1>> {
+pub(super) fn trunc(value: &Value, decimals: Option<&Value>) -> Result<Value, SqlError> {
     use crate::sql::statement::Expression;
 
     match (value, decimals) {
@@ -156,18 +156,18 @@ pub(super) fn trunc(value: &Value, decimals: Option<&Value>) -> Result<Value, Sq
 }
 
 #[inline(always)]
-pub(super) fn sign(value: &Value) -> Result<Value, SqlError<2>> {
+pub(super) fn sign(value: &Value) -> Result<Value, SqlError> {
     match value {
         Value::Number(n) => Ok(Value::Number(n.sign() as i128)),
         Value::Float(f) => Ok(Value::Number(f.sign() as i128)),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
-            expected: [VmType::Float, VmType::Number],
+            expected: vec![VmType::Float, VmType::Number],
         })),
     }
 }
 
 #[inline(always)]
-pub(super) fn sqrt(value: &Value) -> Result<Value, SqlError<2>> {
+pub(super) fn sqrt(value: &Value) -> Result<Value, SqlError> {
     match value {
         Value::Number(n) => {
             let n = u128::try_from(*n).or(Err(SqlError::Vm(VmError::NegativeNumSqrt)))?;
@@ -176,7 +176,7 @@ pub(super) fn sqrt(value: &Value) -> Result<Value, SqlError<2>> {
         }
         Value::Float(f) => Ok(Value::Float(f.sqrt()?)),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
-            expected: [VmType::Float, VmType::Number],
+            expected: vec![VmType::Float, VmType::Number],
         })),
     }
 }
@@ -190,7 +190,7 @@ mod tests {
     };
 
     #[test]
-    fn test_abs() -> Result<(), SqlError<2>> {
+    fn test_abs() -> Result<(), SqlError> {
         assert_eq!(Value::Number(24), abs(&Value::Number(-24))?);
         assert_eq!(Value::Number(69), abs(&Value::Number(69))?);
         assert_eq!(Value::Float(f64::INFINITY), abs(&f64::NEG_INFINITY.into())?);
@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_power() -> Result<(), SqlError<2>> {
+    fn test_power() -> Result<(), SqlError> {
         assert_eq!(Value::Number(729), power(&9.into(), &3.into())?);
         assert_eq!(Value::Number(1), power(&i128::MAX.into(), &0.into())?);
         assert!(matches!(power(&f64::NAN.into(), &2.0.into())?, Value::Float(x) if x.is_nan()));
@@ -219,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn test_trunc() -> Result<(), SqlError<1>> {
+    fn test_trunc() -> Result<(), SqlError> {
         use std::f64::consts::PI;
 
         assert_eq!(Value::Float(3f64), trunc(&PI.into(), None)?);
@@ -313,7 +313,7 @@ mod tests {
 
         assert_eq!(
             SqlError::Type(TypeError::ExpectedOneOfTypes {
-                expected: [VmType::Number, VmType::Float],
+                expected: vec![VmType::Number, VmType::Float],
             }),
             sqrt(&Value::Boolean(true)).unwrap_err()
         );

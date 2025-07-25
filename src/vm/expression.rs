@@ -1,3 +1,5 @@
+use libc::write;
+
 use crate::core::date::DateParseError;
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
@@ -27,7 +29,7 @@ pub enum VmError {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum TypeError<const N: usize = DEFAULT_NUM_EXPECTED_TYPES> {
+pub enum TypeError {
     CannotApplyUnary {
         operator: UnaryOperator,
         value: Value,
@@ -42,7 +44,7 @@ pub enum TypeError<const N: usize = DEFAULT_NUM_EXPECTED_TYPES> {
         found: Expression,
     },
     ExpectedOneOfTypes {
-        expected: [VmType; N],
+        expected: Vec<VmType>,
     },
     InvalidDate(DateParseError),
     UuidError(UuidError),
