@@ -127,7 +127,8 @@ pub(super) fn abs(value: &Value) -> Result<Value, SqlError> {
 pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError> {
     match (base, expoent) {
         (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(*e))),
-        (Value::Number(b), Value::Number(e)) => Ok(Value::Number(b.pow(*e as u32))),
+        (Value::Float(b), Value::Number(e)) => Ok(Value::Float(b.powi(*e as _))),
+        (Value::Number(b), Value::Number(e)) => Ok(Value::Number(b.pow(*e as _))),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
             expected: vec![VmType::Number, VmType::Float],
         })),

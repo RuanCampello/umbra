@@ -2677,7 +2677,7 @@ mod tests {
     }
 
     #[test]
-    fn math_functions() -> DatabaseResult {
+    fn basic_math_functions() -> DatabaseResult {
         let mut db = Database::default();
         db.exec(
             r#"
@@ -2731,6 +2731,25 @@ mod tests {
                 vec![110000f64.into(), 11f64.into()]
             ]
         );
+
+        let query = db.exec(
+            "SELECT TRUNC(POWER(bonus_percentage, 2), 2) FROM employees ORDER BY bonus_percentage;",
+        )?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![105.06f64.into()],
+                vec![156.25f64.into()],
+                vec![225f64.into()],
+                vec![400f64.into()],
+                vec![625f64.into()]
+            ]
+        );
+
+        let query = db.exec("SELECT ABS(SIGN(tax_deduction)) FROM employees;")?;
+        for row in query.tuples {
+            assert!(row.iter().all(|i| i.eq(&Value::Number(1))));
+        }
 
         Ok(())
     }
