@@ -175,7 +175,7 @@ impl Display for Whitespace {
 
 impl Keyword {
     pub fn as_optional(&self) -> Option<Keyword> {
-         {
+         match self {
             Self::None => None,
             _ => Some(*self),
         }
