@@ -479,12 +479,8 @@ impl<'input> Parser<'input> {
                     ],
                 })
             }
-          
-            keyword
-                if matches!(
-                    keyword, Keyword::Concat | Keyword::Power | Keyword::Trunc
-                ) =>
-            {
+
+            keyword if matches!(keyword, Keyword::Concat | Keyword::Power | Keyword::Trunc) => {
                 let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
 
@@ -512,7 +508,7 @@ impl<'input> Parser<'input> {
                     func: Function::try_from(&keyword).unwrap(),
                     args: vec![value],
                 })
-            }           
+            }
             Keyword::Count => self.parse_unary_func(Function::Count),
             Keyword::Sum => self.parse_unary_func(Function::Sum),
             Keyword::Avg => self.parse_unary_func(Function::Avg),
@@ -1633,6 +1629,7 @@ mod tests {
                     args: vec![Expression::Identifier("amount".into())],
                 }],
                 from: "payments".into(),
+                group_by: vec![],
                 order_by: vec![],
                 r#where: None,
             })
@@ -1655,6 +1652,7 @@ mod tests {
                     ],
                 }],
                 from: "numbers".into(),
+                group_by: vec![],
                 order_by: vec![],
                 r#where: None,
             })
@@ -1674,6 +1672,7 @@ mod tests {
                     args: vec![Expression::Identifier("amount".into())],
                 }],
                 from: "payments".into(),
+                group_by: vec![],
                 order_by: vec![],
                 r#where: None,
             })
@@ -1694,6 +1693,7 @@ mod tests {
                 }],
                 from: "payments".into(),
                 order_by: vec![],
+                group_by: vec![],
                 r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Gt,
                     left: Box::new(Expression::Identifier("customer_id".into())),
