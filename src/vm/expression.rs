@@ -1,3 +1,4 @@
+use super::{functions, math};
 use crate::core::date::DateParseError;
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
@@ -8,8 +9,6 @@ use std::fmt::{Display, Formatter};
 use std::mem;
 use std::ops::Neg;
 use std::str::FromStr;
-
-use super::functions;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
@@ -23,6 +22,7 @@ pub enum VmType {
 #[derive(Debug, PartialEq)]
 pub enum VmError {
     DivisionByZero(i128, i128),
+    NegativeNumSqrt,
 }
 
 #[derive(Debug, PartialEq)]
@@ -40,6 +40,9 @@ pub enum TypeError {
         expected: VmType,
         found: Expression,
     },
+    ExpectedOneOfTypes {
+        expected: Vec<VmType>,
+    },
     InvalidDate(DateParseError),
     UuidError(UuidError),
 }
@@ -49,11 +52,7 @@ trait ValueExtractor<T> {
 }
 
 macro_rules! impl_value_extractor {
-    (
-        $(
-            $value_variant:ident => ($type:ty, $vm_type:ident)
-        ),* $(,)?
-    ) => {
+    ($($value_variant:ident => ($type:ty, $vm_type:ident)),* $(,)?) => {
         $(
             impl ValueExtractor<$type> for Value {
                 fn extract(value: Value, argument: &Expression) -> Result<$type, SqlError> {
@@ -61,7 +60,7 @@ macro_rules! impl_value_extractor {
                         Value::$value_variant(x) => Ok(x),
                         _ => Err(SqlError::Type(TypeError::ExpectedType {
                             expected: VmType::$vm_type,
-                            found: argument.clone(),
+                            found: argument.clone()
                         })),
                     }
                 }
@@ -189,7 +188,7 @@ pub(crate) fn resolve_expression<'exp>(
             Function::Concat => {
                 let strings: Vec<String> = args
                     .iter()
-                    .map(|expr| get_value(val, schema, expr))
+                    .map(|arg| get_value(val, schema, arg))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Value::String(functions::concat(&strings)))
@@ -199,6 +198,31 @@ pub(crate) fn resolve_expression<'exp>(
                 let string: String = get_value(val, schema, &args[1])?;
 
                 Ok(Value::Number(functions::position(&string, &pat) as i128))
+            }
+            Function::Abs => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                math::abs(&value)
+            }
+            Function::Sqrt => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                math::sqrt(&value)
+            }
+            Function::Power => {
+                let base = resolve_expression(val, schema, &args[0])?;
+                let expoent = resolve_expression(val, schema, &args[1])?;
+                math::power(&base, &expoent)
+            }
+            Function::Trunc => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                let decimals = args
+                    .get(1)
+                    .and_then(|arg| resolve_expression(val, schema, arg).ok());
+
+                math::trunc(&value, decimals)
+            }
+            Function::Sign => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                math::sign(&value)
             }
             Function::TypeOf => {
                 let type_of = match &args[0] {
@@ -331,6 +355,19 @@ impl Display for TypeError {
             TypeError::ExpectedType { expected, found } => {
                 write!(f, "Expected {expected:#?} but found {found:#?}")
             }
+            TypeError::ExpectedOneOfTypes { expected } => {
+                write!(f, "Expected one of ")?;
+
+                for (idx, r#type) in expected.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+
+                    write!(f, "{:#?}", r#type)?;
+                }
+
+                Ok(())
+            }
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
         }
@@ -341,6 +378,7 @@ impl Display for VmError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DivisionByZero(left, right) => write!(f, "Division by zero: {left} / {right}"),
+            Self::NegativeNumSqrt => write!(f, "Cannot take square root of a negative number"),
         }
     }
 }

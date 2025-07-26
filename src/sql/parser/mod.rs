@@ -220,7 +220,7 @@ impl<'input> Parser<'input> {
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
             }
-            Token::Keyword(func) if Self::supported_functions().contains(&func) => {
+            Token::Keyword(func) if func.is_function() => {
                 self.expect_token(Token::LeftParen)?;
                 self.parse_func(func)
             }
@@ -267,6 +267,13 @@ impl<'input> Parser<'input> {
                 found: token,
             })),
         }
+    }
+
+    fn parse_closing_expr(&mut self) -> ParserResult<Expression> {
+        let pref = self.parse_expr(None)?;
+        self.expect_token(Token::RightParen)?;
+
+        Ok(pref)
     }
 
     fn parse_col(&mut self) -> ParserResult<Column> {
@@ -472,16 +479,17 @@ impl<'input> Parser<'input> {
                     ],
                 })
             }
-            Keyword::Ascii => self.parse_unary_func(Function::Ascii),
-            Keyword::Concat => {
+
+            keyword if matches!(keyword, Keyword::Concat | Keyword::Power | Keyword::Trunc) => {
                 let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
 
                 Ok(Expression::Function {
-                    func: Function::Concat,
+                    func: Function::try_from(&keyword).unwrap(),
                     args,
                 })
             }
+            Keyword::Ascii => self.parse_unary_func(Function::Ascii),
             Keyword::Position => {
                 let needle = self.parse_pref()?;
                 self.expect_keyword(Keyword::In)?;
@@ -493,13 +501,21 @@ impl<'input> Parser<'input> {
                     args: vec![needle, haystack],
                 })
             }
+            keyword if keyword.is_function() => {
+                let value = self.parse_closing_expr()?;
+
+                Ok(Expression::Function {
+                    func: Function::try_from(&keyword).unwrap(),
+                    args: vec![value],
+                })
+            }
             Keyword::Count => self.parse_unary_func(Function::Count),
             Keyword::Sum => self.parse_unary_func(Function::Sum),
             Keyword::Avg => self.parse_unary_func(Function::Avg),
             Keyword::Min => self.parse_unary_func(Function::Min),
             Keyword::Max => self.parse_unary_func(Function::Max),
             Keyword::TypeOf => self.parse_unary_func(Function::TypeOf),
-            _ => unreachable!("invalid function"),
+            func => unreachable!("invalid function: {func}"),
         }
     }
 
@@ -615,21 +631,6 @@ impl<'input> Parser<'input> {
         &'key K: IntoIterator<Item = &'key Keyword>,
     {
         keywords.into_iter().map(From::from).collect()
-    }
-
-    const fn supported_functions() -> [Keyword; 10] {
-        [
-            Keyword::Substring,
-            Keyword::Ascii,
-            Keyword::Concat,
-            Keyword::Position,
-            Keyword::Count,
-            Keyword::Avg,
-            Keyword::Sum,
-            Keyword::Max,
-            Keyword::Min,
-            Keyword::TypeOf,
-        ]
     }
 
     const fn supported_statements() -> [Keyword; 10] {
@@ -1611,6 +1612,93 @@ mod tests {
                 group_by: vec![],
                 order_by: vec![],
                 r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_abs_func() {
+        let sql = "SELECT ABS(amount) FROM payments;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Abs,
+                    args: vec![Expression::Identifier("amount".into())],
+                }],
+                from: "payments".into(),
+                group_by: vec![],
+                order_by: vec![],
+                r#where: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_power_func() {
+        let sql = "SELECT POWER(base, exponent) FROM numbers;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Power,
+                    args: vec![
+                        Expression::Identifier("base".into()),
+                        Expression::Identifier("exponent".into())
+                    ],
+                }],
+                from: "numbers".into(),
+                group_by: vec![],
+                order_by: vec![],
+                r#where: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_trunc_func() {
+        let sql = "SELECT TRUNC(amount) FROM payments;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Trunc,
+                    args: vec![Expression::Identifier("amount".into())],
+                }],
+                from: "payments".into(),
+                group_by: vec![],
+                order_by: vec![],
+                r#where: None,
+            })
+        );
+
+        let sql = "SELECT TRUNC(amount, 4) FROM payments WHERE customer_id > 10;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Trunc,
+                    args: vec![
+                        Expression::Identifier("amount".into()),
+                        Expression::Value(4i128.into())
+                    ],
+                }],
+                from: "payments".into(),
+                order_by: vec![],
+                group_by: vec![],
+                r#where: Some(Expression::BinaryOperation {
+                    operator: BinaryOperator::Gt,
+                    left: Box::new(Expression::Identifier("customer_id".into())),
+                    right: Box::new(Expression::Value(10i128.into()))
+                }),
             })
         )
     }
