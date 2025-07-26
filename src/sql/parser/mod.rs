@@ -494,15 +494,6 @@ impl<'input> Parser<'input> {
                 })
             }
             Keyword::Ascii => self.parse_unary_func(Function::Ascii),
-            Keyword::Concat => {
-                let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
-                self.expect_token(Token::RightParen)?;
-
-                Ok(Expression::Function {
-                    func: Function::try_from(&keyword).unwrap(),
-                    args,
-                })
-            }
             Keyword::Position => {
                 let needle = self.parse_pref()?;
                 self.expect_keyword(Keyword::In)?;
