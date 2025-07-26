@@ -159,7 +159,7 @@ impl Display for Token {
 
 impl Whitespace {
     pub(in crate::sql) fn as_char(&self) -> char {
-        match self {
+         {
             Self::Tab => '\t',
             Self::Space => ' ',
             Self::Newline => '\n',
@@ -175,7 +175,7 @@ impl Display for Whitespace {
 
 impl Keyword {
     pub fn as_optional(&self) -> Option<Keyword> {
-        match self {
+         {
             Self::None => None,
             _ => Some(*self),
         }
@@ -250,6 +250,7 @@ impl Borrow<str> for Keyword {
             Self::Date => "DATE",
             Self::Time => "TIME",
             Self::Timestamp => "TIMESTAMP",
+            Self::Count => "COUNT",
             Self::Abs => "ABS",
             Self::Sqrt => "SQRT",
             Self::Concat => "CONCAT",
