@@ -10,7 +10,7 @@ use crate::{
     sql::{
         analyzer,
         query::optimiser,
-        statement::{Column, Delete, Expression, Select, Type, Update},
+        statement::{Column, Delete, Expression, OrderBy, OrderDirection, Select, Type, Update},
         Statement,
     },
     vm::{
@@ -71,21 +71,31 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }));
             }
 
-            let mut output = Schema::empty();
-            for expr in &columns {
-                match expr {
-                    Expression::Identifier(ident) => {
-                        output.push(schema.columns[schema.index_of(ident).unwrap()].clone())
-                    }
-                    _ => output.push(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
-                }
-            }
+            let output = Schema::new(
+                columns
+                    .iter()
+                    .map(|expr| match expr {
+                        Expression::Identifier(ident) => {
+                            Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
+                        }
+                        Expression::Alias { expr, alias } => {
+                            Ok(Column::new(alias, resolve_type(schema, expr)?))
+                        }
+                        _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                    })
+                    .collect::<Result<Vec<_>, SqlError>>()?,
+            );
 
             let is_grouped = !group_by.is_empty();
-            let aggr_exprs: Vec<_> = columns
+            let aggr_exprs: Vec<(&Expression, String)> = columns
                 .iter()
-                .filter(|e| matches!(e, Expression::Function { func, .. } if func.is_aggr()))
-                .cloned()
+                .filter_map(|expr| match expr {
+                    Expression::Alias { ref alias, expr } if expr.is_aggr_fn() => {
+                        Some((expr.as_ref(), alias.to_string()))
+                    }
+                    expr if expr.is_aggr_fn() => Some((expr, expr.to_string())),
+                    _ => None,
+                })
                 .collect();
 
             if is_grouped || !aggr_exprs.is_empty() {
@@ -100,18 +110,13 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     }
                 }
 
-                for expr in &aggr_exprs {
-                    aggr_schema.push(Column::new(&expr.to_string(), resolve_type(schema, expr)?));
+                for (aggr_fn, name) in &aggr_exprs {
+                    aggr_schema.push(Column::new(name, resolve_type(schema, &aggr_fn)?))
                 }
 
                 if group_by.is_empty() && !order_by.is_empty() {
-                    let indexes = order_by
-                        .iter()
-                        .map(|expr| match expr {
-                            Expression::Identifier(ident) => schema.index_of(ident).unwrap(),
-                            _ => panic!("ORDER BY exprs without GROUP BY must be identifiers"),
-                        })
-                        .collect();
+                    let (indexes, directions) =
+                        extract_order_indexes_and_directions(schema, &order_by)?;
 
                     source = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -123,14 +128,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             work_dir: work_dir.clone(),
                             mem_buff_size: page_size,
                         }),
-                        comparator: TupleComparator::new(schema.clone(), schema.clone(), indexes),
+                        comparator: TupleComparator::new(
+                            schema.clone(),
+                            schema.clone(),
+                            indexes,
+                            directions,
+                        ),
                     }));
                 }
 
                 let mut plan = Planner::Aggregate(
                     AggregateBuilder {
                         source: Box::new(source),
-                        aggr_exprs,
+                        aggr_exprs: aggr_exprs.iter().map(|expr| expr.0.clone()).collect(),
                         page_size,
                         group_by: group_by.clone(),
                         output: aggr_schema.clone(),
@@ -139,13 +149,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 );
 
                 if is_grouped && !order_by.is_empty() {
-                    let indexes = order_by
-                        .iter()
-                        .map(|expr| match expr {
-                            Expression::Identifier(ident) => aggr_schema.index_of(ident).unwrap(),
-                            _ => aggr_schema.index_of(&expr.to_string()).unwrap(),
-                        })
-                        .collect();
+                    let (indexes, directions) =
+                        extract_order_indexes_and_directions(&aggr_schema, &order_by)?;
 
                     plan = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -161,16 +166,20 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             aggr_schema.clone(),
                             aggr_schema.clone(),
                             indexes,
+                            directions,
                         ),
                     }));
                 }
 
-                if output != aggr_schema {
+                if output.ne(&aggr_schema) {
                     let projection: Vec<Expression> = columns
                         .iter()
                         .map(|expr| match expr {
+                            Expression::Alias { .. } => {
+                                Expression::Identifier(expr.unwrap_name().into())
+                            }
                             Expression::Function { func, .. } => {
-                                Expression::Identifier(format!("{func}"))
+                                Expression::Identifier(func.to_string())
                             }
                             other => other.clone(),
                         })
@@ -188,22 +197,26 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             }
 
             if !order_by.is_empty()
-                && order_by != [Expression::Identifier(schema.columns[0].name.clone())]
+                && order_by != [Expression::Identifier(schema.columns[0].name.clone()).into()]
             {
                 let mut sorted_schema = schema.clone();
                 let mut indexes = Vec::new();
                 let mut extra_exprs = Vec::new();
+                let mut directions = Vec::new();
 
-                for expr in &order_by {
-                    match expr {
-                        Expression::Identifier(ident) => {
-                            indexes.push(schema.index_of(ident).unwrap());
+                for order in &order_by {
+                    match order.expr {
+                        Expression::Identifier(ref ident) => {
+                            let idx = resolve_order_index(schema, &columns, ident)?;
+                            indexes.push(idx);
+                            directions.push(order.direction);
                         }
                         _ => {
-                            let ty = resolve_type(schema, expr)?;
+                            let ty = resolve_type(schema, &order.expr)?;
                             indexes.push(sorted_schema.len());
-                            sorted_schema.push(Column::new(&expr.to_string(), ty));
-                            extra_exprs.push(expr.clone());
+                            directions.push(order.direction);
+                            sorted_schema.push(Column::new(&order.expr.to_string(), ty));
+                            extra_exprs.push(order.expr.clone());
                         }
                     }
                 }
@@ -226,7 +239,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         work_dir,
                         mem_buff_size: page_size,
                     }),
-                    comparator: TupleComparator::new(schema.clone(), sorted_schema, indexes),
+                    comparator: TupleComparator::new(
+                        schema.clone(),
+                        sorted_schema,
+                        indexes,
+                        directions,
+                    ),
                 }));
             }
 
@@ -320,6 +338,30 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
     })
 }
 
+fn extract_order_indexes_and_directions(
+    schema: &Schema,
+    order_by: &[OrderBy],
+) -> Result<(Vec<usize>, Vec<OrderDirection>), DatabaseError> {
+    order_by
+        .iter()
+        .map(|order| {
+            let idx = match &order.expr {
+                Expression::Identifier(ident) => schema
+                    .index_of(ident)
+                    .ok_or(SqlError::InvalidGroupBy(ident.into())),
+                _ => schema
+                    .index_of(&order.expr.to_string())
+                    .ok_or(SqlError::Other(format!(
+                        "ORDER BY expression `{}` not found in output columns",
+                        order.expr.to_string()
+                    ))),
+            }?;
+            Ok((idx, order.direction))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|p| p.into_iter().unzip())
+}
+
 fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
     match planner {
         Planner::Filter(filter) => needs_collection(&filter.source),
@@ -348,6 +390,24 @@ fn single_typeof_column<'a>(
     }
 
     None
+}
+
+fn resolve_order_index<'a>(
+    schema: &'a Schema,
+    columns: &'a [Expression],
+    ident: &str,
+) -> Result<usize, SqlError> {
+    for (i, expr) in columns.iter().enumerate() {
+        if let Expression::Alias { alias, .. } = expr {
+            if alias == ident {
+                return Ok(i);
+            }
+        }
+    }
+
+    schema
+        .index_of(ident)
+        .ok_or(SqlError::InvalidColumn(ident.into()))
 }
 
 #[cfg(test)]
@@ -643,7 +703,12 @@ mod tests {
                     page_size,
                     work_dir: work_dir.clone(),
                     input_buffers: DEFAULT_SORT_BUFFER_SIZE,
-                    comparator: TupleComparator::new(keys.clone(), keys.clone(), vec![0]),
+                    comparator: TupleComparator::new(
+                        keys.clone(),
+                        keys.clone(),
+                        vec![0],
+                        vec![Default::default()]
+                    ),
                     collection: Collect::from(CollectBuilder {
                         mem_buff_size: page_size,
                         schema: keys,
@@ -762,7 +827,8 @@ mod tests {
                     comparator: TupleComparator::new(
                         db.tables["users"].schema.to_owned(),
                         db.tables["users"].schema.to_owned(),
-                        vec![1, 2]
+                        vec![1, 2],
+                        vec![Default::default(), Default::default()]
                     ),
                     collection: CollectBuilder {
                         mem_buff_size: page_size,
@@ -805,7 +871,8 @@ mod tests {
                     comparator: TupleComparator::new(
                         db.tables["users"].schema.clone(),
                         sort_schema.clone(),
-                        vec![1, 4, 5]
+                        vec![1, 4, 5],
+                        vec![Default::default(), Default::default(), Default::default()]
                     ),
                     collection: CollectBuilder {
                         mem_buff_size: page_size,
@@ -919,7 +986,12 @@ mod tests {
         let sort = SortBuilder {
             page_size,
             work_dir: work_dir.clone(),
-            comparator: TupleComparator::new(schema.clone(), schema.clone(), vec![1]),
+            comparator: TupleComparator::new(
+                schema.clone(),
+                schema.clone(),
+                vec![1],
+                vec![Default::default()],
+            ),
             input_buffers: DEFAULT_SORT_BUFFER_SIZE,
             collection: CollectBuilder {
                 work_dir,
@@ -1062,6 +1134,7 @@ mod tests {
                 Schema::new(vec![Column::primary_key("id", Type::Serial)]),
                 Schema::new(vec![Column::primary_key("id", Type::Serial)]),
                 vec![0],
+                vec![Default::default()],
             ),
             collection: collect,
         });

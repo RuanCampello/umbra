@@ -169,6 +169,8 @@ pub(in crate::sql) fn analyze<'s>(
             let metadata = ctx.metadata(from)?;
 
             for expr in columns {
+                let expr = expr.unwrap_alias();
+
                 if expr.eq(&Expression::Wildcard) {
                     continue;
                 }
@@ -186,8 +188,8 @@ pub(in crate::sql) fn analyze<'s>(
             analyze_where(&metadata.schema, r#where)?;
 
             // FIXME: we probably can do this in parallel
-            for expr in order_by {
-                analyze_expression(&metadata.schema, None, expr)?;
+            for order in order_by {
+                analyze_expression(&metadata.schema, None, &order.expr)?;
             }
 
             for expr in group_by {
@@ -373,7 +375,9 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
 
             func.return_type()
         }
-        Expression::Nested(expr) => analyze_expression(schema, col_type, expr)?,
+        Expression::Nested(expr) | Expression::Alias { expr, .. } => {
+            analyze_expression(schema, col_type, expr)?
+        }
         Expression::Wildcard => {
             return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
         }
@@ -1017,6 +1021,18 @@ mod tests {
         Analyze {
             sql: "SELECT customer_id, SUM(amount) FROM payment GROUP BY customer_id;",
             ctx: &[context],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn alias() -> AnalyzerResult {
+        Analyze {
+            ctx: &[
+                "CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(30), salary REAL, bonus REAL);",
+            ],
+            sql: "SELECT salary + bonus AS total, name AS employee_name FROM employees;",
             expected: Ok(()),
         }
         .assert()

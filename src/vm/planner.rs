@@ -10,7 +10,7 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{join, Assignment, Expression, Function, Value};
+use crate::sql::statement::{join, Assignment, Expression, Function, OrderDirection, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
@@ -218,6 +218,7 @@ pub(crate) struct TupleComparator {
     schema: Schema,
     sort_schema: Schema,
     sort_indexes: Vec<usize>,
+    directions: Vec<OrderDirection>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1513,11 +1514,17 @@ impl<File: FileOperations> Drop for FileFifo<File> {
 }
 
 impl TupleComparator {
-    pub(crate) fn new(schema: Schema, sort_schema: Schema, sort_indexes: Vec<usize>) -> Self {
+    pub(crate) fn new(
+        schema: Schema,
+        sort_schema: Schema,
+        sort_indexes: Vec<usize>,
+        directions: Vec<OrderDirection>,
+    ) -> Self {
         Self {
             schema,
             sort_schema,
             sort_indexes,
+            directions,
         }
     }
 
@@ -1533,18 +1540,26 @@ impl TupleComparator {
         );
 
         self.sort_indexes
-            .iter().copied()
-            .map(|idx| (tuple[idx].partial_cmp(&other_tuple[idx]), &tuple[idx], &other_tuple[idx]))
-            .find_map(|(cmp, v1, v2)| match cmp {
-                Some(ordering) if ordering != Ordering::Equal => Some(ordering),
-                None => {
-                    if std::mem::discriminant(v1).ne(&std::mem::discriminant(v2)) {
-                        unreachable!("This should be impossible, but type {v1} in memory is different from {v2}");
-                    }
-                    None
-                }
+            .iter()
+            .zip(self.directions.iter().copied())
+            .map(|(&idx, direction)| {
+                debug_assert!(
+                    idx < tuple.len(),
+                    "Sort index {idx} out of bounds for tuple of len {}",
+                    tuple.len()
+                );
+
+                let ord = tuple[idx].partial_cmp(&other_tuple[idx]);
+                (ord, direction)
+            })
+            .find_map(|(ord, direction)| match ord {
+                Some(ordering) if ordering != Ordering::Equal => Some(match direction {
+                    OrderDirection::Desc => ordering.reverse(),
+                    _ => ordering,
+                }),
                 _ => None,
-            }).unwrap_or(Ordering::Equal)
+            })
+            .unwrap_or(Ordering::Equal)
     }
 }
 

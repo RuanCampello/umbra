@@ -10,7 +10,7 @@ use crate::{
     db::{Ctx, Database, DatabaseError, IndexMetadata, Relation},
     sql::{
         parser::Parser,
-        statement::{BinaryOperator, Expression, Value},
+        statement::{BinaryOperator, Expression, OrderDirection, Value},
     },
     vm::planner::{
         Collect, CollectBuilder, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner,
@@ -159,8 +159,16 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
         let page_size = db.pager.borrow().page_size;
         let work_dir = db.work_dir.clone();
 
-        let comparator =
-            TupleComparator::new(table.key_only_schema(), table.key_only_schema(), vec![0]);
+        let (indexes, directions): (Vec<_>, Vec<_>) =
+            vec![(0, OrderDirection::default())].into_iter().unzip();
+
+        let comparator = TupleComparator::new(
+            table.key_only_schema(),
+            table.key_only_schema(),
+            indexes,
+            directions,
+        );
+
         source = Planner::Sort(Sort::from(SortBuilder {
             page_size,
             comparator,

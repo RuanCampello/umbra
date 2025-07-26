@@ -17,7 +17,7 @@ pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
         }) => {
             simplify_iter(columns.iter_mut())?;
             simplify_where(r#where)?;
-            simplify_iter(order_by.iter_mut())?;
+            simplify_iter(order_by.iter_mut().map(|order| &mut order.expr))?;
         }
         Statement::Update(Update {
             columns, r#where, ..

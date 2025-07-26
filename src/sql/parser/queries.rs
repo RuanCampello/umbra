@@ -1,4 +1,6 @@
-use crate::sql::statement::{Create, Delete, Drop, Insert, Select, Update};
+use crate::sql::statement::{
+    Create, Delete, Drop, Insert, OrderBy, OrderDirection, Select, Update,
+};
 
 use super::{
     tokens::{Keyword, Token},
@@ -7,12 +9,33 @@ use super::{
 
 impl<'sql> Sql<'sql> for Select {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
-        let columns = parser.parse_separated_tokens(|parser| parser.parse_expr(None), false)?;
+        let columns = parser.parse_separated_tokens(
+            |parser| {
+                let expr = parser.parse_expr(None)?;
+                match parser.consume_optional(Token::Keyword(Keyword::As)) {
+                    false => Ok(expr),
+                    _ => Ok(super::Expression::Alias {
+                        alias: parser.parse_ident()?,
+                        expr: Box::new(expr),
+                    }),
+                }
+            },
+            false,
+        )?;
+
         parser.expect_keyword(Keyword::From)?;
         let (from, r#where) = parser.parse_from_and_where()?;
 
-        let group_by = parser.parse_by_separated_keyword(Keyword::Group)?;
-        let order_by = parser.parse_by_separated_keyword(Keyword::Order)?;
+        let group_by = parser.parse_by_separated_keyword(Keyword::Group, |p| p.parse_expr(None))?;
+        let order_by = parser.parse_by_separated_keyword(Keyword::Order, |p| {
+            let expr = p.parse_expr(None)?;
+            let direction = match p.consume_one(&[Keyword::Asc, Keyword::Desc]) {
+                Keyword::Desc => OrderDirection::Desc,
+                _ => OrderDirection::Asc,
+            };
+
+            Ok(OrderBy { expr, direction })
+        })?;
 
         Ok(Select {
             columns,

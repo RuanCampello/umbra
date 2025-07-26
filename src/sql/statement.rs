@@ -8,6 +8,7 @@ use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Par
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
 use std::borrow::Borrow;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
@@ -70,7 +71,7 @@ pub(crate) struct Select {
     pub columns: Vec<Expression>,
     pub from: String,
     pub r#where: Option<Expression>,
-    pub order_by: Vec<Expression>,
+    pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
     // TODO: limit
 }
@@ -119,7 +120,24 @@ pub enum Expression {
         func: Function,
         args: Vec<Self>,
     },
+    Alias {
+        expr: Box<Self>,
+        alias: String,
+    },
     Nested(Box<Self>),
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+pub(crate) struct OrderBy {
+    pub expr: Expression,
+    pub direction: OrderDirection,
+}
+
+#[derive(Debug, Default, PartialEq, PartialOrd, Clone, Copy)]
+pub(crate) enum OrderDirection {
+    #[default]
+    Asc,
+    Desc,
 }
 
 /// Date/Time related types.
@@ -502,6 +520,27 @@ impl Display for Statement {
     }
 }
 
+impl Expression {
+    pub(in crate::sql) fn unwrap_alias(&self) -> &Self {
+        match self {
+            Expression::Alias { ref expr, .. } => &**expr,
+            _ => self,
+        }
+    }
+
+    pub(in crate::sql) fn unwrap_name(&self) -> Cow<'_, str> {
+        match self {
+            Expression::Alias { alias, .. } => Cow::Borrowed(&alias),
+            Expression::Nested(expr) => expr.unwrap_name(),
+            expr => Cow::Owned(expr.to_string()),
+        }
+    }
+
+    pub(in crate::sql) fn is_aggr_fn(&self) -> bool {
+        matches!(self, Expression::Function { func, .. } if func.is_aggr())
+    }
+}
+
 impl Default for Expression {
     fn default() -> Self {
         Expression::Wildcard
@@ -644,6 +683,7 @@ impl Display for Expression {
                 write!(f, "{operator}{expr}")
             }
             Self::Function { func, args } => write!(f, "{func}"),
+            Self::Alias { expr, alias } => write!(f, "{expr} AS {alias}"),
             Self::Nested(expr) => write!(f, "({expr})"),
         }
     }
@@ -856,6 +896,12 @@ impl TryFrom<&Keyword> for Function {
             Keyword::Abs => Ok(Self::Abs),
             Keyword::Concat => Ok(Self::Concat),
             Keyword::Trunc => Ok(Self::Trunc),
+            Keyword::Count => Ok(Self::Count),
+            Keyword::Sum => Ok(Self::Sum),
+            Keyword::Avg => Ok(Self::Avg),
+            Keyword::Min => Ok(Self::Min),
+            Keyword::Max => Ok(Self::Max),
+            Keyword::TypeOf => Ok(Self::TypeOf),
             _ => Err(()),
         }
     }
@@ -867,6 +913,24 @@ impl Display for Temporal {
             Self::DateTime(datetime) => Display::fmt(datetime, f),
             Self::Date(date) => Display::fmt(date, f),
             Self::Time(time) => Display::fmt(time, f),
+        }
+    }
+}
+
+impl Display for OrderBy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.direction {
+            OrderDirection::Asc => write!(f, "{} ASC", self.expr),
+            OrderDirection::Desc => write!(f, "{} DESC", self.expr),
+        }
+    }
+}
+
+impl From<Expression> for OrderBy {
+    fn from(expr: Expression) -> Self {
+        Self {
+            expr,
+            direction: Default::default(),
         }
     }
 }

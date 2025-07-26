@@ -2958,4 +2958,238 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn order_by_desc() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, price INT, name VARCHAR(20));")?;
+        db.exec(
+            r#"
+            INSERT INTO items (price, name)
+            VALUES (50, 'banana'), (10, 'apple'), (30, 'cherry');
+        "#,
+        )?;
+
+        let query = db.exec("SELECT name FROM items ORDER BY name DESC;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("cherry".into())],
+                vec![Value::String("banana".into())],
+                vec![Value::String("apple".into())]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn order_by_desc_multiple_columns() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE people (id SERIAL PRIMARY KEY, first_name VARCHAR(20), last_name VARCHAR(20));")?;
+        db.exec(
+            r#"
+        INSERT INTO people (first_name, last_name)
+        VALUES
+            ('John', 'Smith'),
+            ('Alice', 'Smith'),
+            ('Bob', 'Adams'),
+            ('Mary', 'Baker'),
+            ('Jane', 'Adams');
+        "#,
+        )?;
+
+        let query = db.exec(
+            "SELECT first_name, last_name FROM people ORDER BY last_name DESC, first_name DESC;",
+        )?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("John".into()), Value::String("Smith".into())],
+                vec![Value::String("Alice".into()), Value::String("Smith".into())],
+                vec![Value::String("Mary".into()), Value::String("Baker".into())],
+                vec![Value::String("Jane".into()), Value::String("Adams".into())],
+                vec![Value::String("Bob".into()), Value::String("Adams".into())],
+            ]
+        );
+
+        let query = db.exec(
+            "SELECT first_name, last_name FROM people ORDER BY last_name ASC, first_name DESC;",
+        )?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("Jane".into()), Value::String("Adams".into())],
+                vec![Value::String("Bob".into()), Value::String("Adams".into())],
+                vec![Value::String("Mary".into()), Value::String("Baker".into())],
+                vec![Value::String("John".into()), Value::String("Smith".into())],
+                vec![Value::String("Alice".into()), Value::String("Smith".into())],
+            ]
+        );
+
+        // assert `ASC` and `DESC` parity
+        let query =
+            db.exec("SELECT first_name, last_name FROM people ORDER BY last_name, first_name;")?;
+        let mut reverse_query = db.exec(
+            "SELECT first_name, last_name FROM people ORDER BY last_name DESC, first_name DESC;",
+        )?;
+        reverse_query.tuples.reverse();
+
+        assert_eq!(query.tuples, reverse_query.tuples);
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_with_aliases() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(100), salary REAL, bonus REAL);")?;
+        db.exec(
+            r#"
+            INSERT INTO employees (name, salary, bonus)
+            VALUES ('Alice', 3000.0, 500.0), ('Bob', 2500.0, 300.0);
+        "#,
+        )?;
+
+        let query =
+            db.exec("SELECT salary + bonus AS total, name AS employee_name FROM employees;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::Float(3500.0), Value::String("Alice".into())],
+                vec![Value::Float(2800.0), Value::String("Bob".into())]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_alias_with_group_by() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE sales (
+                id SERIAL PRIMARY KEY,
+                region VARCHAR(10),
+                price INT,
+                bonus INT,
+                discount INT,
+                salesperson VARCHAR(20)
+            );
+        "#,
+        )?;
+
+        db.exec(
+            r#"
+            INSERT INTO sales (region, price, bonus, discount, salesperson) VALUES
+                ('N', 10, 2, 1, 'Alice'),
+                ('N', 15, 3, 2, 'Bob'),
+                ('S', 20, 5, 0, 'Carol'),
+                ('S', 30, 7, 3, 'Dave'),
+                ('S', 25, 0, 2, 'Alice'),
+                ('N', 8, 1, 1, 'Eve');
+        "#,
+        )?;
+
+        let query = db.exec(
+            "SELECT region, SUM(price + bonus) AS sum_total FROM sales GROUP BY region ORDER BY region;",
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("N".to_string()), Value::Float(39.0)],
+                vec![Value::String("S".to_string()), Value::Float(87.0)],
+            ]
+        );
+
+        let query = db.exec(
+        r#"
+            SELECT region, SUM(price) AS total_price, AVG(bonus) AS avg_bonus, MAX(discount) AS max_discount 
+            FROM sales 
+            GROUP BY region 
+            ORDER BY region;
+        "#
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::String("N".to_string()),
+                    Value::Float(33.0),
+                    Value::Float(2.0),
+                    Value::Float(2.0),
+                ],
+                vec![
+                    Value::String("S".to_string()),
+                    Value::Float(75.0),
+                    Value::Float(4.0),
+                    Value::Float(3.0),
+                ],
+            ]
+        );
+
+        let query = db.exec(
+            r#"
+            SELECT salesperson, COUNT(*) AS num_sales, SUM(price + bonus - discount) AS net_total 
+            FROM sales 
+            GROUP BY salesperson 
+            ORDER BY salesperson;
+        "#,
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::String("Alice".to_string()),
+                    Value::Number(2),
+                    Value::Float(34.0)
+                ],
+                vec![
+                    Value::String("Bob".to_string()),
+                    Value::Number(1),
+                    Value::Float(16.0)
+                ],
+                vec![
+                    Value::String("Carol".to_string()),
+                    Value::Number(1),
+                    Value::Float(25.0)
+                ],
+                vec![
+                    Value::String("Dave".to_string()),
+                    Value::Number(1),
+                    Value::Float(34.0)
+                ],
+                vec![
+                    Value::String("Eve".to_string()),
+                    Value::Number(1),
+                    Value::Float(8.0)
+                ],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "the future will say"]
+    fn alias_with_order_by() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30), age INT UNSIGNED);")?;
+        db.exec("INSERT INTO users (age, name) VALUES (19, 'Jonh Doe'), (23, 'Mary Dove');")?;
+
+        let query = db.exec("SELECT name as user_name, age FROM users ORDER BY user_name;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![Value::String("John Doe".into()), Value::Number(19)],
+                vec![Value::String("Mary Dove".into()), Value::Number(23)]
+            ]
+        );
+
+        Ok(())
+    }
 }

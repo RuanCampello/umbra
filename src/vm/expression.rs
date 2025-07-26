@@ -239,10 +239,14 @@ pub(crate) fn resolve_expression<'exp>(
 
                 Ok(Value::String(type_of))
             }
-            _ => unimplemented!("function handling is not yet implemented"),
+            func => unimplemented!("function {func} handling is not yet implemented"),
         },
-        Expression::Nested(expr) => resolve_expression(val, schema, expr),
-        Expression::Wildcard => unreachable!("Wildcards should have been resolved by now"),
+        Expression::Nested(expr) | Expression::Alias { expr, .. } => {
+            resolve_expression(val, schema, expr)
+        }
+        Expression::Wildcard => {
+            unreachable!("Wildcards should have been resolved by now")
+        }
     }
 }
 

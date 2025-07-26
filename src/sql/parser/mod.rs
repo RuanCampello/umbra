@@ -125,14 +125,16 @@ impl<'input> Parser<'input> {
         Ok(expr)
     }
 
-    fn parse_by_separated_keyword(&mut self, keyword: Keyword) -> ParserResult<Vec<Expression>> {
-        match self.consume_optional(Token::Keyword(keyword)) {
-            true => {
-                self.expect_keyword(Keyword::By)?;
-                self.parse_separated_tokens(|p| p.parse_expr(None), false)
-            }
-            false => Ok(vec![]),
+    fn parse_by_separated_keyword<T>(
+        &mut self,
+        keyword: Keyword,
+        mut parse_elem: impl FnMut(&mut Self) -> ParserResult<T>,
+    ) -> ParserResult<Vec<T>> {
+        if !self.consume_optional(Token::Keyword(keyword)) {
+            return Ok(vec![]);
         }
+        self.expect_keyword(Keyword::By)?;
+        self.parse_separated_tokens(|p| parse_elem(p), false)
     }
 
     fn parse_infix(&mut self, left: Expression, precedence: u8) -> ParserResult<Expression> {
@@ -769,7 +771,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::Expression;
+    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
 
     #[test]
     fn test_parse_select() {
@@ -1475,9 +1477,12 @@ mod tests {
                 columns: vec![Expression::Identifier("name".into())],
                 from: "users".into(),
                 r#where: None,
-                order_by: vec![Expression::Function {
-                    func: Function::Ascii,
-                    args: vec![Expression::Identifier("name".into())]
+                order_by: vec![OrderBy {
+                    expr: Expression::Function {
+                        func: Function::Ascii,
+                        args: vec![Expression::Identifier("name".into())]
+                    },
+                    direction: Default::default(),
                 }],
                 group_by: vec![],
             })
@@ -1615,7 +1620,8 @@ mod tests {
             })
         )
     }
-
+  
+  
     #[test]
     fn test_abs_func() {
         let sql = "SELECT ABS(amount) FROM payments;";
@@ -1699,6 +1705,121 @@ mod tests {
                     left: Box::new(Expression::Identifier("customer_id".into())),
                     right: Box::new(Expression::Value(10i128.into()))
                 }),
+            })
+        )
+    }
+  
+  
+    #[test]
+    fn test_explicit_order_by() {
+        let sql = "SELECT CONCAT(first_name, ' ', last_name) FROM users ORDER BY last_name DESC;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Concat,
+                    args: vec![
+                        Expression::Identifier("first_name".into()),
+                        Expression::Value(Value::String(" ".into())),
+                        Expression::Identifier("last_name".into()),
+                    ]
+                }],
+                from: "users".into(),
+                group_by: vec![],
+                order_by: vec![OrderBy {
+                    direction: OrderDirection::Desc,
+                    expr: Expression::Identifier("last_name".into())
+                }],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_aliases() {
+        let sql = "SELECT salary + bonus AS total, name AS employee_name FROM employees;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![
+                    Expression::Alias {
+                        expr: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Plus,
+                            left: Box::new(Expression::Identifier("salary".into())),
+                            right: Box::new(Expression::Identifier("bonus".into()))
+                        }),
+                        alias: "total".into()
+                    },
+                    Expression::Alias {
+                        expr: Box::new(Expression::Identifier("name".into())),
+                        alias: "employee_name".into()
+                    }
+                ],
+                from: "employees".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
+            })
+        )
+    }
+
+    #[test]
+    fn test_nested_aliases() {
+        let sql = "SELECT (salary * 2) + (bonus / 2) as value FROM employees;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Alias {
+                    expr: Box::new(Expression::BinaryOperation {
+                        operator: BinaryOperator::Plus,
+                        left: Box::new(Expression::Nested(Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Mul,
+                            left: Box::new(Expression::Identifier("salary".into())),
+                            right: Box::new(Expression::Value(Value::Number(2)))
+                        }))),
+                        right: Box::new(Expression::Nested(Box::new(
+                            Expression::BinaryOperation {
+                                operator: BinaryOperator::Div,
+                                left: Box::new(Expression::Identifier("bonus".into())),
+                                right: Box::new(Expression::Value(Value::Number(2)))
+                            }
+                        )))
+                    }),
+                    alias: "value".into()
+                }],
+                from: "employees".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn test_named_function_alias() {
+        let sql = "SELECT COUNT(*) as user_count FROM users;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Alias {
+                    alias: "user_count".into(),
+                    expr: Box::new(Expression::Function {
+                        func: Function::Count,
+                        args: vec![Expression::Wildcard]
+                    })
+                }],
+                from: "users".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
             })
         )
     }
