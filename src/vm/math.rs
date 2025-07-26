@@ -19,6 +19,7 @@ trait Signed: Sized {
 }
 
 trait SquaredRoot: Sized + PartialEq + PartialOrd + std::ops::Add<Self> {
+    const EPSILON: f64 = f64::EPSILON;
     fn sqrt(&self) -> Result<Self, SqlError>;
 }
 
@@ -99,7 +100,9 @@ impl SquaredRoot for f64 {
         }
 
         let mut guess: f64 = self / 2f64;
-        while guess > self / guess {
+        let mut prev = 0f64;
+        while (guess - prev).abs() > Self::EPSILON {
+            prev = guess;
             guess = (guess + self / guess) / 2f64;
         }
 
@@ -130,14 +133,14 @@ pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError> {
 }
 
 #[inline(always)]
-pub(super) fn trunc(value: &Value, decimals: Option<&Value>) -> Result<Value, SqlError> {
+pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, SqlError> {
     use crate::sql::statement::Expression;
 
     match (value, decimals) {
         (Value::Float(value), None) => Ok(value.trunc().into()),
         (Value::Float(value), Some(decimals)) => match decimals {
             Value::Number(decimals) => {
-                let factor = 10f64.powi(*decimals as i32);
+                let factor = 10f64.powi(decimals as i32);
                 Ok(((value * factor).trunc() / factor).into())
             }
             _ => {
@@ -223,7 +226,7 @@ mod tests {
         use std::f64::consts::PI;
 
         assert_eq!(Value::Float(3f64), trunc(&PI.into(), None)?);
-        assert_eq!(Value::Float(3.14), trunc(&PI.into(), Some(&2.into()))?);
+        assert_eq!(Value::Float(3.14), trunc(&PI.into(), Some(2.into()))?);
 
         assert_eq!(
             Err(TypeError::ExpectedType {
@@ -231,7 +234,7 @@ mod tests {
                 found: Expression::Value(3.5.into())
             }
             .into()),
-            trunc(&PI.into(), Some(&3.5.into()))
+            trunc(&PI.into(), Some(3.5.into()))
         );
         assert_eq!(
             Err(TypeError::ExpectedType {

@@ -1,5 +1,4 @@
-use libc::write;
-
+use super::{functions, math};
 use crate::core::date::DateParseError;
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
@@ -10,8 +9,6 @@ use std::fmt::{Display, Formatter};
 use std::mem;
 use std::ops::Neg;
 use std::str::FromStr;
-
-use super::functions;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
@@ -204,6 +201,31 @@ pub(crate) fn resolve_expression<'exp>(
                 let string: String = get_value(val, schema, &args[1])?;
 
                 Ok(Value::Number(functions::position(&string, &pat) as i128))
+            }
+            Function::Abs => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                math::abs(&value)
+            }
+            Function::Sqrt => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                math::sqrt(&value)
+            }
+            Function::Power => {
+                let base = resolve_expression(val, schema, &args[0])?;
+                let expoent = resolve_expression(val, schema, &args[1])?;
+                math::power(&base, &expoent)
+            }
+            Function::Trunc => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                let decimals = args
+                    .get(1)
+                    .and_then(|arg| resolve_expression(val, schema, arg).ok());
+
+                math::trunc(&value, decimals)
+            }
+            Function::Sign => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                math::sign(&value)
             }
             _ => unimplemented!("function handling is not yet implemented"),
         },
