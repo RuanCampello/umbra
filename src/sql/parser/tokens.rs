@@ -159,7 +159,7 @@ impl Display for Token {
 
 impl Whitespace {
     pub(in crate::sql) fn as_char(&self) -> char {
-         {
+         match self {
             Self::Tab => '\t',
             Self::Space => ' ',
             Self::Newline => '\n',
