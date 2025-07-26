@@ -125,8 +125,8 @@ impl<'input> Parser<'input> {
         Ok(expr)
     }
 
-    fn parse_order_by(&mut self) -> ParserResult<Vec<Expression>> {
-        match self.consume_optional(Token::Keyword(Keyword::Order)) {
+    fn parse_by_separated_keyword(&mut self, keyword: Keyword) -> ParserResult<Vec<Expression>> {
+        match self.consume_optional(Token::Keyword(keyword)) {
             true => {
                 self.expect_keyword(Keyword::By)?;
                 self.parse_separated_tokens(|p| p.parse_expr(None), false)
@@ -479,12 +479,22 @@ impl<'input> Parser<'input> {
                     ],
                 })
             }
+          
             keyword
                 if matches!(
-                    keyword,
-                    Keyword::Ascii | Keyword::Concat | Keyword::Power | Keyword::Trunc
+                    keyword, Keyword::Concat | Keyword::Power | Keyword::Trunc
                 ) =>
             {
+                let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::try_from(&keyword).unwrap(),
+                    args,
+                })
+            }
+            Keyword::Ascii => self.parse_unary_func(Function::Ascii),
+            Keyword::Concat => {
                 let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
 
@@ -511,9 +521,24 @@ impl<'input> Parser<'input> {
                     func: Function::try_from(&keyword).unwrap(),
                     args: vec![value],
                 })
-            }
+            }           
+            Keyword::Count => self.parse_unary_func(Function::Count),
+            Keyword::Sum => self.parse_unary_func(Function::Sum),
+            Keyword::Avg => self.parse_unary_func(Function::Avg),
+            Keyword::Min => self.parse_unary_func(Function::Min),
+            Keyword::Max => self.parse_unary_func(Function::Max),
+            Keyword::TypeOf => self.parse_unary_func(Function::TypeOf),
             func => unreachable!("invalid function: {func}"),
         }
+    }
+
+    fn parse_unary_func(&mut self, func: Function) -> ParserResult<Expression> {
+        let expr = self.parse_expr(None)?;
+        self.expect_token(Token::RightParen)?;
+        Ok(Expression::Function {
+            func,
+            args: vec![expr],
+        })
     }
 
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
@@ -774,6 +799,7 @@ mod tests {
                 from: "bills".to_string(),
                 r#where: None,
                 order_by: vec![],
+                group_by: vec![],
             }))
         );
     }
@@ -799,6 +825,7 @@ mod tests {
                     ))),
                 }),
                 order_by: vec![],
+                group_by: vec![],
             }))
         );
     }
@@ -815,6 +842,7 @@ mod tests {
                 from: "users".to_string(),
                 r#where: None,
                 order_by: vec![],
+                group_by: vec![],
             }))
         );
     }
@@ -1027,6 +1055,7 @@ mod tests {
                     from: "employees".to_string(),
                     r#where: None,
                     order_by: vec![],
+                    group_by: vec![],
                 })
             ]
         );
@@ -1052,6 +1081,7 @@ mod tests {
                     right: Box::new(Expression::Value(Value::String("12:00:00".into()))),
                 }),
                 order_by: vec![],
+                group_by: vec![],
             }))
         );
     }
@@ -1340,6 +1370,7 @@ mod tests {
             Statement::Select(Select {
                 from: "film".to_string(),
                 order_by: vec![],
+                group_by: vec![],
                 columns: vec![
                     Expression::Identifier("film_id".into()),
                     Expression::Identifier("title".into())
@@ -1390,6 +1421,7 @@ mod tests {
             statement.unwrap(),
             Statement::Select(Select {
                 order_by: vec![],
+                group_by: vec![],
                 from: "customer".into(),
                 columns: vec![
                     Expression::Identifier("name".into()),
@@ -1439,6 +1471,7 @@ mod tests {
                 }],
                 from: "users".into(),
                 order_by: vec![],
+                group_by: vec![],
                 r#where: None,
             })
         )
@@ -1458,7 +1491,8 @@ mod tests {
                 order_by: vec![Expression::Function {
                     func: Function::Ascii,
                     args: vec![Expression::Identifier("name".into())]
-                }]
+                }],
+                group_by: vec![],
             })
         )
     }
@@ -1480,6 +1514,7 @@ mod tests {
                 }],
                 from: "users".into(),
                 order_by: vec![],
+                group_by: vec![],
                 r#where: None,
             })
         )
@@ -1501,6 +1536,93 @@ mod tests {
                     ]
                 }],
                 from: "films".into(),
+                order_by: vec![],
+                group_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_count_func() {
+        let sql = "SELECT COUNT(*) FROM payments;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Count,
+                    args: vec![Expression::Wildcard]
+                }],
+                from: "payments".into(),
+                order_by: vec![],
+                group_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_avg_func() {
+        let sql = "SELECT AVG(price) FROM products;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Avg,
+                    args: vec![Expression::Identifier("price".into())]
+                }],
+                from: "products".into(),
+                order_by: vec![],
+                group_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_group_by() {
+        let sql = "SELECT id, SUM(price) FROM sales GROUP BY id;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![
+                    Expression::Identifier("id".into()),
+                    Expression::Function {
+                        func: Function::Sum,
+                        args: vec![Expression::Identifier("price".into())]
+                    }
+                ],
+                from: "sales".into(),
+                group_by: vec![Expression::Identifier("id".into())],
+                order_by: vec![],
+                r#where: None,
+            })
+        )
+    }
+
+    #[test]
+    fn test_typeof() {
+        let sql = "SELECT name, TYPEOF(id) FROM users;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![
+                    Expression::Identifier("name".into()),
+                    Expression::Function {
+                        func: Function::TypeOf,
+                        args: vec![Expression::Identifier("id".into())]
+                    }
+                ],
+                from: "users".into(),
+                group_by: vec![],
                 order_by: vec![],
                 r#where: None,
             })

@@ -47,9 +47,6 @@ pub enum TypeError {
     UuidError(UuidError),
 }
 
-/// The default expected types for a given mathematical function.
-pub(crate) const DEFAULT_NUM_EXPECTED_TYPES: usize = 1;
-
 trait ValueExtractor<T> {
     fn extract(value: Value, argument: &Expression) -> Result<T, SqlError>;
 }
@@ -226,6 +223,21 @@ pub(crate) fn resolve_expression<'exp>(
             Function::Sign => {
                 let value = resolve_expression(val, schema, &args[0])?;
                 math::sign(&value)
+            }
+            Function::TypeOf => {
+                let type_of = match &args[0] {
+                    Expression::Identifier(name) => {
+                        let idx = schema
+                            .index_of(name)
+                            .ok_or_else(|| SqlError::InvalidColumn(name.into()))?;
+                        Ok(schema.columns[idx].data_type.to_string())
+                    }
+                    _ => Err(SqlError::Other(
+                        "Expected identifier for typeof function".into(),
+                    )),
+                }?;
+
+                Ok(Value::String(type_of))
             }
             _ => unimplemented!("function handling is not yet implemented"),
         },

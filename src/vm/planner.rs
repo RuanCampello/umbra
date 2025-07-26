@@ -10,7 +10,7 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{join, Assignment, Expression, Value};
+use crate::sql::statement::{join, Assignment, Expression, Function, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
@@ -46,6 +46,8 @@ pub(crate) enum Planner<File: FileOperations> {
     Update(Update<File>),
     Delete(Delete<File>),
     SortKeys(SortKeys<File>),
+    /// Used for aggregate functions like `COUNT` or `AVG`.
+    Aggregate(Aggregate<File>),
     Project(Project<File>),
     Collect(Collect<File>),
     /// Handles literal values from INSERT statements.
@@ -173,6 +175,17 @@ pub(crate) struct Project<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct Aggregate<File: FileOperations> {
+    source: Box<Planner<File>>,
+    group_by: Vec<Expression>,
+    aggr_exprs: Vec<Expression>,
+    output: Schema,
+    output_buffer: TupleBuffer,
+    filled: bool,
+    page_size: usize,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
@@ -233,6 +246,15 @@ pub(crate) struct CollectBuilder<File: FileOperations> {
     pub mem_buff_size: usize,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) struct AggregateBuilder<File: FileOperations> {
+    pub source: Box<Planner<File>>,
+    pub group_by: Vec<Expression>,
+    pub aggr_exprs: Vec<Expression>,
+    pub output: Schema,
+    pub page_size: usize,
+}
+
 pub(crate) type Tuple = Vec<Value>;
 
 pub(crate) const DEFAULT_SORT_BUFFER_SIZE: usize = 4;
@@ -259,6 +281,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Delete(delete) => delete.try_next(),
             Self::SortKeys(keys) => keys.try_next(),
             Self::Project(projection) => projection.try_next(),
+            Self::Aggregate(aggr) => aggr.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
@@ -276,6 +299,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Delete(delete) => &delete.source,
             Self::SortKeys(keys) => &keys.source,
             Self::Collect(collection) => &collection.source,
+            Self::Aggregate(aggr) => &aggr.source,
             _ => return None,
         })
     }
@@ -298,6 +322,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Project(projection) => format!("{projection}"),
             Self::Collect(collection) => format!("{collection}"),
             Self::Values(values) => format!("{values}"),
+            Self::Aggregate(aggr) => format!("{aggr}"),
         };
 
         format!("{prefix}{display}")
@@ -312,6 +337,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Sort(sort) => &sort.collection.schema,
             Self::Collect(collection) => &collection.schema,
             Self::Project(project) => &project.output,
+            Self::Aggregate(aggr) => &aggr.output,
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
             _ => return None,
@@ -1096,6 +1122,131 @@ impl<File: PlanExecutor> Execute for Project<File> {
     }
 }
 
+impl<File: PlanExecutor> Execute for Aggregate<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if self.filled {
+            return Ok(self.output_buffer.pop_front());
+        }
+
+        self.output_buffer.clear();
+
+        let input_schema = self.source.schema().unwrap();
+        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> = HashMap::new();
+
+        while let Some(row) = self.source.try_next()? {
+            let key = self
+                .group_by
+                .iter()
+                .map(|expr| resolve_expression(&row, &input_schema, &expr))
+                .collect::<Result<Vec<_>, _>>()?;
+            groups.entry(key).or_default().push(row)
+        }
+
+        if groups.is_empty() {
+            self.filled = true;
+
+            let is_count = |expr: &Expression| matches!(expr, Expression::Function { func, .. } if *func == Function::Count);
+            if self.group_by.is_empty() && self.aggr_exprs.iter().all(|expr| is_count(expr)) {
+                return Ok(Some(vec![Value::Number(0); self.aggr_exprs.len()]));
+            }
+            return Ok(None);
+        }
+
+        for (key, rows) in groups.into_iter() {
+            let mut tuple = key;
+
+            for aggr_expr in &self.aggr_exprs {
+                match aggr_expr {
+                    Expression::Function { func, args } if func.is_aggr() => {
+                        let value = self.apply_aggr(func, args, &rows, &input_schema)?;
+                        tuple.push(value)
+                    }
+                    _ => {
+                        let value = resolve_expression(&rows[0], &input_schema, aggr_expr)?;
+                        tuple.push(value)
+                    }
+                };
+            }
+
+            self.output_buffer.push(tuple);
+        }
+
+        self.filled = true;
+        Ok(self.output_buffer.pop_front())
+    }
+}
+
+impl<File: PlanExecutor> Aggregate<File> {
+    fn apply_aggr(
+        &self,
+        func: &Function,
+        args: &[Expression],
+        rows: &[Tuple],
+        schema: &Schema,
+    ) -> Result<Value, DatabaseError> {
+        let values = match args.first() {
+            None => vec![],
+            Some(Expression::Wildcard) => vec![Value::Number(1); rows.len()],
+            Some(arg) => rows
+                .iter()
+                .map(|row| resolve_expression(row, schema, arg))
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+
+        match func {
+            Function::Count => Ok(Value::Number(values.len() as _)),
+            Function::Sum | Function::Avg => {
+                let sum = values.iter().fold(0.0, |acc, v| {
+                    acc + match v {
+                        Value::Float(f) => *f,
+                        Value::Number(n) => *n as f64,
+                        _ => 0.0,
+                    }
+                });
+
+                match func.eq(&Function::Sum) {
+                    true => Ok(Value::Float(sum)),
+                    _ => Ok(Value::Float(sum / values.len() as f64)),
+                }
+            }
+            Function::Min => Ok(values
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Number(0))),
+            Function::Max => Ok(values
+                .iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Number(0))),
+
+            _ => unreachable!("this ain't a aggregate function"),
+        }
+    }
+}
+
+impl<File: FileOperations> From<AggregateBuilder<File>> for Aggregate<File> {
+    fn from(value: AggregateBuilder<File>) -> Self {
+        let AggregateBuilder {
+            aggr_exprs,
+            page_size,
+            group_by,
+            source,
+            output,
+        } = value;
+
+        Self {
+            source,
+            group_by,
+            aggr_exprs,
+            output,
+            page_size,
+            output_buffer: TupleBuffer::empty(),
+            filled: false,
+        }
+    }
+}
+
 impl Execute for Values {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         let Some(mut values) = self.values.pop_front() else {
@@ -1375,7 +1526,6 @@ impl TupleComparator {
             tuple.len().eq(&other_tuple.len()),
             "Comp called for mismatch size tuples"
         );
-        println!("tuple {tuple:#?} schema {:#?}", self.schema);
 
         debug_assert!(
             tuple.len().eq(&self.schema.len()),
@@ -1496,7 +1646,7 @@ impl<File: FileOperations> Display for Sort<File> {
             .iter()
             .map(|idx| &self.comparator.sort_schema.columns[*idx].name);
 
-        write!(f, "Sort {}", join(col_names, ", "))
+        write!(f, "Sort by {}", join(col_names, ", "))
     }
 }
 
@@ -1548,6 +1698,12 @@ impl<File: FileOperations> Display for Collect<File> {
             "Collect {}",
             join(self.schema.columns.iter().map(|col| &col.name), ", ")
         )
+    }
+}
+
+impl<File: FileOperations> Display for Aggregate<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Aggregate on {}", join(&self.group_by, ", "))
     }
 }
 

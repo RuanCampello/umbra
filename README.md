@@ -166,7 +166,7 @@ CREATE TABLE shadow_agents (
 - [ ] `LIMIT`/`OFFSET` (self-restraint coming soon™)
 - [ ] Table aliases (`FROM crypts AS c` - naming things is hard)
 - [ ] `JOIN` (relationships require couples therapy)
-- [ ] `GROUP BY` (aggregation is a social construct)
+- [x] `GROUP BY` (aggregation is a social construct)
 - [ ] `HAVING` 
 
 #### 💸 **Transactions**
@@ -179,10 +179,17 @@ CREATE TABLE shadow_agents (
 - [ ] Non-unique indexes *(for the masses)*
 - [ ] Partial indexes *(discrimination coming soon)*
 
-### 🧮 Basic Functions
-- [ ] `COUNT`
-- [ ] `AVG`
-- [ ] `SUM`
+### 🧮 Aggregate Functions
+
+Now available: _numerical seances_. Umbra can perform ritualistic summoning of truths across rows using standard SQL aggregate functions. Useful for divining patterns, spotting anomalies, or just counting how many regrets you’ve inserted into a table.
+
+| Function      | Description                                          | Example                                          |
+| ------------- | ---------------------------------------------------- | ------------------------------------------------ |
+| `COUNT(*)`    | How many? (*all of them*)                            | `SELECT COUNT(*) FROM curses;`                   |
+| `SUM(expr)`   | Add them all up (*tally your sins*)                  | `SELECT SUM(darkness_level) FROM cursed_items;`  |
+| `AVG(expr)`   | Arithmetic mean (*because median is too mainstream*) | `SELECT AVG(void_pressure) FROM entropy_watch;`  |
+| `MIN(expr)`   | The lowest value (*bottom of the abyss*)             | `SELECT MIN(shadow_density) FROM entropy_watch;` |
+| `MAX(expr)`   | The highest value (*loftiest darkness*)              | `SELECT MAX(soul_count) FROM cursed_items;`      |
 
 ### 🔤 **String Functions**
 

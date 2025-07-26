@@ -163,19 +163,34 @@ pub(in crate::sql) fn analyze<'s>(
             columns,
             from,
             order_by,
+            group_by,
             r#where,
         }) => {
             let metadata = ctx.metadata(from)?;
 
             for expr in columns {
-                if expr.ne(&Expression::Wildcard) {
-                    analyze_expression(&metadata.schema, None, expr)?;
+                if expr.eq(&Expression::Wildcard) {
+                    continue;
                 }
+
+                let is_aggr = matches!(expr, Expression::Function { func, .. } if func.is_aggr());
+                let in_group_by = group_by.iter().any(|group| group.eq(expr));
+
+                if !group_by.is_empty() && !is_aggr && !in_group_by {
+                    return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
+                }
+
+                analyze_expression(&metadata.schema, None, expr)?;
             }
 
             analyze_where(&metadata.schema, r#where)?;
 
+            // FIXME: we probably can do this in parallel
             for expr in order_by {
+                analyze_expression(&metadata.schema, None, expr)?;
+            }
+
+            for expr in group_by {
                 analyze_expression(&metadata.schema, None, expr)?;
             }
         }
@@ -351,7 +366,9 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             }
 
             for arg in args {
-                analyze_expression(schema, col_type, arg)?;
+                if arg.ne(&Expression::Wildcard) {
+                    analyze_expression(schema, col_type, arg)?;
+                }
             }
 
             func.return_type()
@@ -974,5 +991,34 @@ mod tests {
             ctx: &["CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(100));"],
             expected: Ok(())
         }.assert()
+    }
+
+    #[test]
+    fn count_function() -> AnalyzerResult {
+        Analyze {
+            sql: "SELECT COUNT(amount) FROM payments;",
+            ctx: &["CREATE TABLE payments (id SERIAL PRIMARY KEY, amount REAL);"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn group_by() -> AnalyzerResult {
+        let context = "CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INT, staff_id INT, amount INT);";
+
+        Analyze {
+            sql: "SELECT customer_id, SUM(amount) FROM payment GROUP BY amount;",
+            ctx: &[context],
+            expected: Err(SqlError::InvalidGroupBy("customer_id".into()).into()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT customer_id, SUM(amount) FROM payment GROUP BY customer_id;",
+            ctx: &[context],
+            expected: Ok(()),
+        }
+        .assert()
     }
 }
