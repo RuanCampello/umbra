@@ -806,6 +806,12 @@ define_function_mapping! {
     Trunc => "TRUNC",
     Sign => "SIGN",
     Sqrt => "SQRT",
+    Min => "MIN",
+    Sum => "SUM",
+    Avg => "AVG",
+    Count => "COUNT",
+    TypeOf => "TYPEOF",
+    Max => "MAX",
     UuidV4 => "UUIDV4",
 }
 
