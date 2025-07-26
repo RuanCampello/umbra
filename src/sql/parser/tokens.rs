@@ -75,7 +75,6 @@ pub enum Keyword {
     Min,
     Max,
     Sum,
->>>>>>> main
     Position,
     TypeOf,
     For,
