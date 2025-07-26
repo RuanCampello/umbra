@@ -22,7 +22,7 @@ use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::query;
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
-use crate::vm::expression::{TypeError, VmError, DEFAULT_NUM_EXPECTED_TYPES};
+use crate::vm::expression::{TypeError, VmError};
 use crate::vm::planner::{Execute, Planner, Tuple};
 use crate::{index, vm};
 use std::cell::RefCell;
