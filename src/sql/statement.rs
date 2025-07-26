@@ -896,6 +896,12 @@ impl TryFrom<&Keyword> for Function {
             Keyword::Abs => Ok(Self::Abs),
             Keyword::Concat => Ok(Self::Concat),
             Keyword::Trunc => Ok(Self::Trunc),
+            Keyword::Count => Ok(Self::Count),
+            Keyword::Sum => Ok(Self::Sum),
+            Keyword::Avg => Ok(Self::Avg),
+            Keyword::Min => Ok(Self::Min),
+            Keyword::Max => Ok(Self::Max),
+            Keyword::TypeOf => Ok(Self::TypeOf),
             _ => Err(()),
         }
     }
