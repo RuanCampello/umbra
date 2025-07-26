@@ -829,6 +829,12 @@ impl From<Function> for Keyword {
             Function::Abs => Self::Abs,
             Function::Concat => Self::Concat,
             Function::Trunc => Self::Trunc,
+            Function::Min => Self::Min,
+            Function::Max => Self::Max,
+            Function::Count => Self::Count,
+            Function::TypeOf => Self::TypeOf,
+            Function::Avg => Self::Avg,
+            Function::Sum => Self::Sum,
             Function::UuidV4 => unimplemented!(),
         }
     }
