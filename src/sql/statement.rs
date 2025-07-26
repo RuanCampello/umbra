@@ -745,7 +745,7 @@ impl Function {
             Self::Avg | Self::Min | Self::Max | Self::Sum => VmType::Float,
             Self::Abs | Self::Sqrt | Self::Trunc | Self::Power => VmType::Float,
             Self::Substring | Self::Concat => VmType::String,
-            Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign => VmType::Number,
+            Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => VmType::Number,
         }
     }
 
