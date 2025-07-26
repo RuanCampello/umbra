@@ -7,8 +7,8 @@
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
-use std::borrow::Cow;
 use std::borrow::Borrow;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
@@ -926,8 +926,9 @@ impl From<Expression> for OrderBy {
             expr,
             direction: Default::default(),
         }
+    }
 }
-  
+
 impl From<i128> for Value {
     fn from(value: i128) -> Self {
         Self::Number(value)
