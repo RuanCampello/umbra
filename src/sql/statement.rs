@@ -8,11 +8,14 @@ use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Par
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
 use std::borrow::Cow;
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
 use std::ops::Neg;
 use std::str::FromStr;
+
+use super::Keyword;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -294,6 +297,11 @@ pub enum Function {
     /// POSITION(substring text IN string text) -> int;
     /// ```
     Position,
+    Abs,
+    Sign,
+    Sqrt,
+    Power,
+    Trunc,
     /// Computes the number of input rows.
     Count,
     /// Computes the average (arithmetic mean) of all input values.
@@ -757,11 +765,14 @@ impl Function {
     /// Returns respectively the minimum and the maximum (if there's any) number of function's arguments.
     pub const fn size_of_args(&self) -> Option<(usize, usize)> {
         const UNARY: Option<(usize, usize)> = Some((1, 1));
-
         match self {
             Self::Substring => Some((2, 3)),
             Self::Concat => Some((1, usize::MAX)),
             Self::Position => Some((2, 2)),
+            Self::Power => Some((2, 2)),
+            Self::Trunc => Some((1, 2)),
+            Self::Ascii => UNARY,
+            func if func.is_math() => UNARY,
             func if func.is_unary() => UNARY,
             _ => None,
         }
@@ -772,8 +783,19 @@ impl Function {
         match self {
             Self::Substring | Self::Concat | Self::TypeOf => VmType::String,
             Self::Avg | Self::Min | Self::Max | Self::Sum => VmType::Float,
-            Self::UuidV4 | Self::Ascii | Self::Position | Self::Count => VmType::Number,
+            Self::Abs | Self::Sqrt | Self::Trunc | Self::Power => VmType::Float,
+            Self::Substring | Self::Concat => VmType::String,
+            Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => {
+                VmType::Number
+            }
         }
+    }
+
+    pub const fn is_math(&self) -> bool {
+        return matches!(
+            self,
+            Self::Trunc | Self::Abs | Self::Sqrt | Self::Sign | Self::Power
+        );
     }
 
     pub const fn is_aggr(&self) -> bool {
@@ -790,18 +812,91 @@ impl Function {
 
 impl Display for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Substring => f.write_str("SUBSTRING"),
-            Self::Concat => f.write_str("CONCAT"),
-            Self::Ascii => f.write_str("ASCII"),
-            Self::Position => f.write_str("POSITION"),
-            Self::Count => f.write_str("COUNT"),
-            Self::Max => f.write_str("MAX"),
-            Self::Min => f.write_str("MIN"),
-            Self::Sum => f.write_str("SUM"),
-            Self::Avg => f.write_str("AVG"),
-            Self::TypeOf => f.write_str("TYPEOF"),
-            Self::UuidV4 => f.write_str("u4()"),
+        f.write_str(self.borrow())
+    }
+}
+
+macro_rules! define_function_mapping {
+    ($($variant:ident => $str:expr),* $(,)?) => {
+        impl std::borrow::Borrow<str> for Function {
+            fn borrow(&self) -> &str {
+                match self {
+                    $(Function::$variant => $str,)*
+                }
+            }
+        }
+
+        impl std::str::FromStr for Function {
+            type Err = ();
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                let upper = s.to_uppercase();
+                match upper.as_str() {
+                    $($str => Ok(Function::$variant),)*
+                    _ => Err(()),
+                }
+            }
+        }
+    };
+}
+
+define_function_mapping! {
+    Substring => "SUBSTRING",
+    Concat => "CONCAT",
+    Ascii => "ASCII",
+    Position => "POSITION",
+    Power => "POWER",
+    Abs => "ABS",
+    Trunc => "TRUNC",
+    Sign => "SIGN",
+    Sqrt => "SQRT",
+    Min => "MIN",
+    Sum => "SUM",
+    Avg => "AVG",
+    Count => "COUNT",
+    TypeOf => "TYPEOF",
+    Max => "MAX",
+    UuidV4 => "UUIDV4",
+}
+
+impl From<Function> for Keyword {
+    fn from(value: Function) -> Self {
+        match value {
+            Function::Sqrt => Self::Sqrt,
+            Function::Ascii => Self::Ascii,
+            Function::Position => Self::Position,
+            Function::Power => Self::Power,
+            Function::Substring => Self::Substring,
+            Function::Sign => Self::Sign,
+            Function::Abs => Self::Abs,
+            Function::Concat => Self::Concat,
+            Function::Trunc => Self::Trunc,
+            Function::Min => Self::Min,
+            Function::Max => Self::Max,
+            Function::Count => Self::Count,
+            Function::TypeOf => Self::TypeOf,
+            Function::Avg => Self::Avg,
+            Function::Sum => Self::Sum,
+            Function::UuidV4 => unimplemented!(),
+        }
+    }
+}
+
+impl TryFrom<&Keyword> for Function {
+    type Error = ();
+
+    fn try_from(value: &Keyword) -> Result<Self, Self::Error> {
+        match value {
+            Keyword::Sqrt => Ok(Self::Sqrt),
+            Keyword::Ascii => Ok(Self::Ascii),
+            Keyword::Position => Ok(Self::Position),
+            Keyword::Power => Ok(Self::Power),
+            Keyword::Substring => Ok(Self::Substring),
+            Keyword::Sign => Ok(Self::Sign),
+            Keyword::Abs => Ok(Self::Abs),
+            Keyword::Concat => Ok(Self::Concat),
+            Keyword::Trunc => Ok(Self::Trunc),
+            _ => Err(()),
         }
     }
 }
@@ -831,6 +926,29 @@ impl From<Expression> for OrderBy {
             expr,
             direction: Default::default(),
         }
+}
+  
+impl From<i128> for Value {
+    fn from(value: i128) -> Self {
+        Self::Number(value)
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
+
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Self::Float(value as f64)
+    }
+}
+
+impl From<&str> for Value {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_string())
     }
 }
 

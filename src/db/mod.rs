@@ -2682,6 +2682,84 @@ mod tests {
     }
 
     #[test]
+    fn basic_math_functions() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE employees (
+                employee_id SERIAL PRIMARY KEY,
+                first_name VARCHAR(50),
+                last_name VARCHAR(50),
+                salary DOUBLE PRECISION,
+                bonus_percentage REAL,
+                tax_deduction DOUBLE PRECISION
+            );"#,
+        )?;
+
+        db.exec(
+            r#"
+            INSERT INTO employees (employee_id, first_name, last_name, salary, bonus_percentage, tax_deduction)
+            VALUES
+            (101, 'John', 'Smith', 75000.00, 15.00, -12500.00),
+            (102, 'Sarah', 'Johnson', 68000.50, 12.50, -10200.75),
+            (103, 'Michael', 'Williams', 92000.00, 20.00, -18400.00),
+            (104, 'Emily', 'Brown', 55000.25, 10.25, -8250.38),
+            (105, 'David', 'Jones', 110000.00, 25.00, -27500.00);
+        "#,
+        )?;
+
+        let query = db.exec("SELECT first_name, salary, TRUNC(SQRT(salary), 2) FROM employees;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec!["John".into(), 75000f64.into(), 273.86f64.into()],
+                vec!["Sarah".into(), 68000.50f64.into(), 260.76f64.into()],
+                vec!["Michael".into(), 92000f64.into(), 303.31.into()],
+                vec!["Emily".into(), 55000.25f64.into(), 234.52f64.into()],
+                vec!["David".into(), 110000.00f64.into(), 331.66f64.into()],
+            ]
+        );
+
+        let query = db.exec("SELECT SIGN(tax_deduction) FROM employees;")?;
+        for row in query.tuples {
+            assert!(row.iter().all(|i| i.eq(&Value::Number(-1))));
+        }
+
+        let query = db.exec("SELECT salary, TRUNC(salary/10000) FROM employees;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![75000f64.into(), 7f64.into()],
+                vec![68000.5f64.into(), 6f64.into()],
+                vec![92000f64.into(), 9f64.into()],
+                vec![55000.25f64.into(), 5f64.into()],
+                vec![110000f64.into(), 11f64.into()]
+            ]
+        );
+
+        let query = db.exec(
+            "SELECT TRUNC(POWER(bonus_percentage, 2), 2) FROM employees ORDER BY bonus_percentage;",
+        )?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![105.06f64.into()],
+                vec![156.25f64.into()],
+                vec![225f64.into()],
+                vec![400f64.into()],
+                vec![625f64.into()]
+            ]
+        );
+
+        let query = db.exec("SELECT ABS(SIGN(tax_deduction)) FROM employees;")?;
+        for row in query.tuples {
+            assert!(row.iter().all(|i| i.eq(&Value::Number(1))));
+        }
+      
+        Ok(())
+    }
+
+    #[test]
     fn count_function() -> DatabaseResult {
         let mut db = Database::default();
         db.exec("CREATE TABLE customer (id SERIAL PRIMARY KEY, name VARCHAR(50), last_name VARCHAR(50));")?;
@@ -2878,7 +2956,6 @@ mod tests {
                 vec![Value::Number(3), Value::Number(3), Value::Float(50.0), Value::Float(50.0)],
             ]
         );
-
         Ok(())
     }
 
