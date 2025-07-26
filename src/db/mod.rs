@@ -2715,6 +2715,23 @@ mod tests {
             ]
         );
 
+        let query = db.exec("SELECT SIGN(tax_deduction) FROM employees;")?;
+        for row in query.tuples {
+            assert!(row.iter().all(|i| i.eq(&Value::Number(-1))));
+        }
+
+        let query = db.exec("SELECT salary, TRUNC(salary/10000) FROM employees;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![75000f64.into(), 7f64.into()],
+                vec![68000.5f64.into(), 6f64.into()],
+                vec![92000f64.into(), 9f64.into()],
+                vec![55000.25f64.into(), 5f64.into()],
+                vec![110000f64.into(), 11f64.into()]
+            ]
+        );
+
         Ok(())
     }
 }
