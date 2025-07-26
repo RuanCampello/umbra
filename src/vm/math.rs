@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+use std::ops::Div;
+
 use super::expression::{TypeError, VmError, VmType};
 use crate::{db::SqlError, sql::statement::Value};
 
@@ -141,7 +143,7 @@ pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, Sql
         (Value::Float(value), Some(decimals)) => match decimals {
             Value::Number(decimals) => {
                 let factor = 10f64.powi(decimals as i32);
-                Ok(((value * factor).trunc() / factor).into())
+                Ok(value.mul_add(factor, 0f64).trunc().div(factor).into())
             }
             _ => {
                 return Err(SqlError::Type(TypeError::ExpectedType {

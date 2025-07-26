@@ -2703,13 +2703,13 @@ mod tests {
         "#,
         )?;
 
-        let query = db.exec("SELECT first_name, salary, SQRT(salary) FROM employees;")?;
+        let query = db.exec("SELECT first_name, salary, TRUNC(SQRT(salary), 2) FROM employees;")?;
         assert_eq!(
             query.tuples,
             vec![
                 vec!["John".into(), 75000f64.into(), 273.86f64.into()],
-                vec!["Sarah".into(), 68000f64.into(), 260.77f64.into()],
-                vec!["Michael".into(), 92000f64.into(), 234.52.into()],
+                vec!["Sarah".into(), 68000.50f64.into(), 260.76f64.into()],
+                vec!["Michael".into(), 92000f64.into(), 303.31.into()],
                 vec!["Emily".into(), 55000.25f64.into(), 234.52f64.into()],
                 vec!["David".into(), 110000.00f64.into(), 331.66f64.into()],
             ]
