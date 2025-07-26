@@ -851,12 +851,6 @@ impl TryFrom<&Keyword> for Function {
     }
 }
 
-impl Display for Function {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(self.borrow())
-    }
-}
-
 impl Display for Temporal {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
