@@ -99,6 +99,7 @@ pub enum Keyword {
     Uuid,
     Unsigned,
     Varchar,
+    Text,
     Bool,
     True,
     False,
@@ -161,7 +162,7 @@ impl Display for Token {
 
 impl Whitespace {
     pub(in crate::sql) fn as_char(&self) -> char {
-         match self {
+        match self {
             Self::Tab => '\t',
             Self::Space => ' ',
             Self::Newline => '\n',
@@ -177,7 +178,7 @@ impl Display for Whitespace {
 
 impl Keyword {
     pub fn as_optional(&self) -> Option<Keyword> {
-         match self {
+        match self {
             Self::None => None,
             _ => Some(*self),
         }
@@ -236,6 +237,7 @@ impl Borrow<str> for Keyword {
             Self::Uuid => "UUID",
             Self::Unsigned => "UNSIGNED",
             Self::Varchar => "VARCHAR",
+            Self::Text => "TEXT",
             Self::Bool => "BOOLEAN",
             Self::True => "TRUE",
             Self::False => "FALSE",
@@ -330,6 +332,7 @@ impl FromStr for Keyword {
             "OWNED" => Keyword::Owned,
             "UNSIGNED" => Keyword::Unsigned,
             "VARCHAR" => Keyword::Varchar,
+            "TEXT" => Keyword::Text,
             "BOOLEAN" => Keyword::Bool,
             "INDEX" => Keyword::Index,
             "ORDER" => Keyword::Order,

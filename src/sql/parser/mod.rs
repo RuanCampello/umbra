@@ -650,7 +650,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 14] {
+    const fn supported_types() -> [Keyword; 15] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -663,6 +663,7 @@ impl<'input> Parser<'input> {
             Keyword::Uuid,
             Keyword::Bool,
             Keyword::Varchar,
+            Keyword::Text,
             Keyword::Time,
             Keyword::Date,
             Keyword::Timestamp,
@@ -1620,8 +1621,7 @@ mod tests {
             })
         )
     }
-  
-  
+
     #[test]
     fn test_abs_func() {
         let sql = "SELECT ABS(amount) FROM payments;";
@@ -1708,8 +1708,7 @@ mod tests {
             })
         )
     }
-  
-  
+
     #[test]
     fn test_explicit_order_by() {
         let sql = "SELECT CONCAT(first_name, ' ', last_name) FROM users ORDER BY last_name DESC;";
@@ -1823,4 +1822,23 @@ mod tests {
             })
         )
     }
+
+    #[test]
+    fn test_text_column() {
+        let sql = "CREATE TABLE notes (id SERIAL PRIMARY KEY, content TEXT, created_at TIMESTAMP);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Table {
+                name: "notes".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Serial),
+                    Column::new("content", Type::Text),
+                    Column::new("created_at", Type::DateTime)
+                ]
+            })
+        )
+    }
 }
+
