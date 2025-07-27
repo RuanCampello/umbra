@@ -3192,4 +3192,27 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn text_column() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE notes (id SERIAL PRIMARY KEY, title VARCHAR(100), content TEXT);")?;
+        db.exec(r#"
+        INSERT INTO notes (title, content) VALUES
+            ('Meeting Notes', 'Discussed project timeline and deliverables. Team agreed on Q2 launch.'),
+            ('Ideas', 'Consider adding dark mode to the application. Users have requested this feature.'),
+            ('Reminder', 'Call dentist on Monday to schedule annual checkup.');
+        "#)?;
+
+        let query = db.exec("SELECT title, content FROM notes WHERE content LIKE '%project%';")?;
+        assert_eq!(
+            query.tuples,
+            vec![vec![
+                "Meeting Notes".into(),
+                "Discussed project timeline and deliverables. Team agreed on Q2 launch.".into()
+            ]]
+        );
+
+        Ok(())
+    }
 }
