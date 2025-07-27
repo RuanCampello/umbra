@@ -320,10 +320,11 @@ impl From<&Type> for VmType {
     fn from(value: &Type) -> Self {
         match value {
             Type::Boolean => VmType::Bool,
-            Type::Varchar(_) => VmType::String,
-            Type::Time | Type::Date | Type::DateTime => VmType::Date,
-            Type::Real | Type::DoublePrecision => VmType::Float,
-            _ => VmType::Number,
+            Type::Varchar(_) | Type::Uuid | Type::Text => VmType::String,
+            Type::Date | Type::DateTime | Type::Time => VmType::Date,
+            float if float.is_float() => VmType::Float,
+            number if number.is_integer() || number.is_serial() => VmType::Number,
+            _ => panic!("Cannot convert type {value} to VmType"),
         }
     }
 }

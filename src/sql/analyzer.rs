@@ -257,6 +257,7 @@ fn analyze_assignment<'exp, 'id>(
     };
 
     if expect_type.ne(&evaluate_type) {
+        print!("expected {expect_type:#?}");
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
             found: value.clone(),
@@ -286,14 +287,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 .index_of(ident)
                 .ok_or(SqlError::InvalidColumn(ident.to_string()))?;
 
-            match schema.columns[idx].data_type {
-                Type::Boolean => VmType::Bool,
-                Type::Varchar(_) | Type::Uuid => VmType::String,
-                Type::Date | Type::DateTime | Type::Time => VmType::Date,
-                float if float.is_float() => VmType::Float,
-                number if number.is_integer() => VmType::Number,
-                _ => unreachable!("this type is not defined for analyze_expression"),
-            }
+            (&schema.columns[idx].data_type).into()
         }
 
         Expression::BinaryOperation {

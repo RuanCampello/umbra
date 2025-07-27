@@ -378,7 +378,7 @@ impl Type {
             | Self::Integer
             | Self::UnsignedInteger
             | Self::BigInteger
-            | Self::UnsignedBigInteger => true, // uuid in the end is just an integer number
+            | Self::UnsignedBigInteger => true,
             _ => self.is_serial(),
         }
     }
