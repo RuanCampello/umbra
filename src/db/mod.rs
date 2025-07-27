@@ -3215,4 +3215,77 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn text_column_ordering() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);")?;
+        db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob'), ('Carol');")?;
+
+        let query = db.exec("SELECT name FROM users ORDER BY name DESC;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec!["Carol".into()],
+                vec!["Bob".into()],
+                vec!["Alice".into()]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn text_string_functions() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE users (id INT PRIMARY KEY, name TEXT);")?;
+        db.exec("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol'), (4, 'dave');")?;
+
+        let query = db.exec("SELECT SUBSTRING(name FROM 2 FOR 2) FROM users ORDER BY id;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec!["li".into()],
+                vec!["ob".into()],
+                vec!["ar".into()],
+                vec!["av".into()]
+            ]
+        );
+
+        let query = db.exec("SELECT CONCAT(name, '_user') FROM users ORDER BY id;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec!["alice_user".into()],
+                vec!["bob_user".into()],
+                vec!["carol_user".into()],
+                vec!["dave_user".into()]
+            ]
+        );
+
+        let query = db.exec("SELECT ASCII(name) FROM users ORDER BY id;")?;
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![('a' as i128).into()],
+                vec![('b' as i128).into()],
+                vec![('c' as i128).into()],
+                vec![('d' as i128).into()],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn text_column_filtering() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);")?;
+        db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob'), ('Carol');")?;
+
+        let query = db.exec("SELECT name FROM users WHERE name LIKE 'A%';")?;
+        assert_eq!(query.tuples, vec![vec!["Alice".into()]]);
+
+        Ok(())
+    }
 }
