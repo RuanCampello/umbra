@@ -164,6 +164,7 @@ CREATE TABLE shadow_agents (
 - [x] `ORDER BY` (implemented after herding literal bats)
 - [x] `BETWEEN` (for when life exists within bounds)
 - [ ] `LIMIT`/`OFFSET` (self-restraint coming soon™)
+- [x] Column aliases (SELECT tomb AS grave - identity is fluid)
 - [ ] Table aliases (`FROM crypts AS c` - naming things is hard)
 - [ ] `JOIN` (relationships require couples therapy)
 - [x] `GROUP BY` (aggregation is a social construct)
@@ -190,6 +191,23 @@ Now available: _numerical seances_. Umbra can perform ritualistic summoning of t
 | `AVG(expr)`   | Arithmetic mean (*because median is too mainstream*) | `SELECT AVG(void_pressure) FROM entropy_watch;`  |
 | `MIN(expr)`   | The lowest value (*bottom of the abyss*)             | `SELECT MIN(shadow_density) FROM entropy_watch;` |
 | `MAX(expr)`   | The highest value (*loftiest darkness*)              | `SELECT MAX(soul_count) FROM cursed_items;`      |
+
+### ➗ Mathematical Functions  
+
+For when you need to quantify the abyss. Basic arithmetic operations (`+`, `-`, `*`, `/`) work as expected, but these functions handle the *unnatural* calculations.  
+
+| Function       | Description                                      | Example                                      |
+|----------------|--------------------------------------------------|----------------------------------------------|
+| `ABS(x)`       | Absolute value (*distance from zero*)            | `SELECT ABS(-666) → 666`                     |
+| `SQRT(x)`      | Square root (*measure of diagonal despair*)      | `SELECT SQRT(2) → 1.414...`                  |
+| `POWER(x, y)`  | Exponentiation (*x raised to yth torment*)       | `SELECT POWER(2, 10) → 1024`                 |
+| `TRUNC(x)`     | Amputate decimals (*integer-only suffering*)     | `SELECT TRUNC(3.14159) → 3`                  |
+| `TRUNC(x, n)`  | Precision mutilation (*n decimal digits*)        | `SELECT TRUNC(3.14159, 2) → 3.14`            |
+| `SIGN(x)`      | Returns -1, 0, or 1 (*the algebra of alignment*)| `SELECT SIGN(-13) → -1`                      |
+
+> [!WARNING]  
+> **Division by Zero**  
+> Attempting to divide by zero will summon an error—because some voids should remain unexplored.
 
 ### 🔤 **String Functions**
 

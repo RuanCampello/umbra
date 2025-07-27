@@ -2755,7 +2755,7 @@ mod tests {
         for row in query.tuples {
             assert!(row.iter().all(|i| i.eq(&Value::Number(1))));
         }
-      
+
         Ok(())
     }
 
@@ -3175,7 +3175,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the future will say"]
     fn alias_with_order_by() -> DatabaseResult {
         let mut db = Database::default();
         db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30), age INT UNSIGNED);")?;
