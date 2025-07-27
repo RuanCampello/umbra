@@ -42,6 +42,18 @@ pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usi
     }
 }
 
+/// Returns the size in bytes of the varlena header, given its first byte.
+/// If the first byte less than 127: 1-byte header (short string, length is the first byte)
+/// If the first byte greater or equal to 128: 4-byte header (long string, length is in the next 3 bytes)
+///
+/// *Note*: the first byte being equal to 0x7f is reserved and cannot be used.
+const fn varlena_header_len(byte: u8) -> usize {
+    match byte < 0x7f {
+        true => 1,
+        false => 4,
+    }
+}
+
 pub(crate) fn deserialize(buff: &[u8], schema: &Schema) -> Vec<Value> {
     read_from(&mut io::Cursor::new(buff), schema).unwrap()
 }
