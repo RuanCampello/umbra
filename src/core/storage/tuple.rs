@@ -170,7 +170,27 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             ))
         }
 
-        Type::Text => unimplemented!(),
+        Type::Text => {
+            let mut header = [0; 4];
+            reader.read_exact(&mut header[..1])?;
+            let header_len = varlena_header_len(header[0]);
+
+            let length = match header_len == 1 {
+                false => {
+                    reader.read_exact(&mut header[1..4])?;
+                    ((header[1] as usize) << 16)
+                        | ((header[2] as usize) << 8)
+                        | (header[3] as usize)
+                }
+                _ => header[0] as usize,
+            };
+
+            let mut buf = vec![0; length];
+            reader.read_exact(&mut buf)?;
+            Ok(Value::String(
+                String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
+            ))
+        }
 
         Type::Boolean => {
             let mut byte = [0; byte_len_of_type(&Type::Boolean)];
