@@ -287,7 +287,12 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 .index_of(ident)
                 .ok_or(SqlError::InvalidColumn(ident.to_string()))?;
 
-            (&schema.columns[idx].data_type).into()
+            // this is an expection because when dealing with outside input, UUID's treated as a
+            // String, but inside the engine, we treat it as a Number.
+            match &schema.columns[idx].data_type {
+                Type::Uuid => VmType::String,
+                r#type => r#type.into(),
+            }
         }
 
         Expression::BinaryOperation {
@@ -299,6 +304,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             let right_type = analyze_expression(schema, col_type, right)?;
 
             if left_type.ne(&right_type) {
+                println!("left {left_type:#?} right {right_type:#?}");
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),

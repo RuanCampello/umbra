@@ -98,6 +98,7 @@ pub(crate) fn resolve_expression<'exp>(
             let (left, right) = try_coerce(left, right);
 
             let mismatched_types = || {
+                println!("left {left} right {right}");
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
                     operator: *operator,
@@ -337,7 +338,7 @@ impl PartialEq for VmType {
             // we do this for coercion properties
             (VmType::Float, VmType::Number) | (VmType::Number, VmType::Float) => true,
             (VmType::String, VmType::Date) | (VmType::Date, VmType::String) => true,
-            //(VmType::String, VmType::Number) | (VmType::Number, VmType::String) => true,
+            // (VmType::String, VmType::Number) | (VmType::Number, VmType::String) => true,
             _ => mem::discriminant(self) == mem::discriminant(other),
         }
     }
