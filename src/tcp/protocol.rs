@@ -84,13 +84,14 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                 cursor += name_len;
 
                 let data_type = match content[cursor] {
-                    STRING_CATEGORY | 0x0 => {
+                    byte if byte == STRING_CATEGORY | 0x0 => {
                         let mut buff = [0; 4];
                         buff.copy_from_slice(&content[cursor + 1..cursor + 5]);
                         let max_chars = u32::from_le_bytes(buff) as usize;
                         cursor += 4;
                         Type::Varchar(max_chars)
                     }
+                    byte if byte == STRING_CATEGORY | 0x1 => Type::Text,
 
                     content => {
                         Type::try_from(&content).map_err(|_| EncodingError::InvalidType(content))?
@@ -153,6 +154,7 @@ impl From<&Type> for u8 {
             Type::DoublePrecision => FLOAT_CATEGORY | 0x1,
 
             Type::Varchar(_) => STRING_CATEGORY | 0x0,
+            Type::Text => STRING_CATEGORY | 0x1,
 
             Type::Date => TEMPORAL_CATEGORY | 0x0,
             Type::Time => TEMPORAL_CATEGORY | 0x1,

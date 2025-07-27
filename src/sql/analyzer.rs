@@ -286,13 +286,11 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 .index_of(ident)
                 .ok_or(SqlError::InvalidColumn(ident.to_string()))?;
 
-            match schema.columns[idx].data_type {
-                Type::Boolean => VmType::Bool,
-                Type::Varchar(_) | Type::Uuid => VmType::String,
-                Type::Date | Type::DateTime | Type::Time => VmType::Date,
-                float if float.is_float() => VmType::Float,
-                number if number.is_integer() => VmType::Number,
-                _ => unreachable!("this type is not defined for analyze_expression"),
+            // this is an expection because when dealing with outside input, UUID's treated as a
+            // String, but inside the engine, we treat it as a Number.
+            match &schema.columns[idx].data_type {
+                Type::Uuid => VmType::String,
+                r#type => r#type.into(),
             }
         }
 
@@ -305,6 +303,7 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             let right_type = analyze_expression(schema, col_type, right)?;
 
             if left_type.ne(&right_type) {
+                println!("left {left_type:#?} right {right_type:#?}");
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
@@ -433,6 +432,7 @@ fn analyze_where<'exp>(
 }
 
 fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
+    println!("expected {expected_type}");
     match expected_type {
         Type::Date => {
             NaiveDate::parse_str(s)?;
@@ -1033,6 +1033,59 @@ mod tests {
                 "CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(30), salary REAL, bonus REAL);",
             ],
             sql: "SELECT salary + bonus AS total, name AS employee_name FROM employees;",
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn insert_empty_text() -> AnalyzerResult {
+        Analyze {
+            sql: "INSERT INTO users (id, notes) VALUES (1, '');",
+            ctx: &["CREATE TABLE users (id INT PRIMARY KEY, notes TEXT);"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn insert_large_text() -> AnalyzerResult {
+        Analyze {
+            sql: &format!(
+                "INSERT INTO t (id, notes) VALUES (1, '{}');",
+                "x".repeat(10000)
+            ),
+            ctx: &["CREATE TABLE t (id INT PRIMARY KEY, notes TEXT);"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_where_between_text_varchar() -> AnalyzerResult {
+        let ctx = &["CREATE TABLE documents (
+            id INT PRIMARY KEY,
+            short_desc VARCHAR(100),
+            full_text TEXT
+        );"];
+
+        Analyze {
+            sql: "SELECT * FROM documents WHERE short_desc = 'Quick brown fox';",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT * FROM documents WHERE full_text = 'Lorem ipsum dolor sit amet';",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT * FROM documents WHERE full_text LIKE '%lorem%';",
+            ctx,
             expected: Ok(()),
         }
         .assert()

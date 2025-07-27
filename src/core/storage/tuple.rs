@@ -42,6 +42,18 @@ pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usi
     }
 }
 
+/// Returns the size in bytes of the varlena header, given its first byte.
+/// If the first byte less than 127: 1-byte header (short string, length is the first byte)
+/// If the first byte greater or equal to 128: 4-byte header (long string, length is in the next 3 bytes)
+///
+/// *Note*: the first byte being equal to 0x7f is reserved and cannot be used.
+const fn varlena_header_len(byte: u8) -> usize {
+    match byte < 0x7f {
+        true => 1,
+        false => 4,
+    }
+}
+
 pub(crate) fn deserialize(buff: &[u8], schema: &Schema) -> Vec<Value> {
     read_from(&mut io::Cursor::new(buff), schema).unwrap()
 }
@@ -65,6 +77,22 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
 
             buff.extend_from_slice(&b_len[..len_prefix]);
             buff.extend_from_slice(string.as_bytes());
+        }
+        (Type::Text, Value::String(string)) => {
+            let bytes = string.as_bytes();
+            let len = bytes.len();
+
+            match len < 127 {
+                true => buff.push(len as u8),
+                _ => {
+                    // 4 byte header: 0x80 + 3 bytes BE length
+                    buff.push(0x80);
+                    buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
+                }
+            }
+
+            // then we add the string content itself
+            buff.extend_from_slice(bytes);
         }
         (Type::Boolean, Value::Boolean(bool)) => buff.push(u8::from(*bool)),
         (int, Value::Number(num)) if int.is_integer() => {
@@ -136,6 +164,15 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 
                 utf_8_length_bytes(max) + string.as_bytes().len()
             }
+            Type::Text => {
+                let Value::String(string) = &tuple[idx] else {
+                    panic!("Expected data type TEXT but found {}", tuple[idx]);
+                };
+
+                let len = string.as_bytes().len();
+                let header_len = varlena_header_len(len as _);
+                header_len + len
+            }
             other => byte_len_of_type(&other),
         })
         .sum()
@@ -157,72 +194,106 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
                 String::from_utf8(string).expect("Couldn't parse string from utf8"),
             ))
         }
+
+        Type::Text => {
+            let mut header = [0; 4];
+            reader.read_exact(&mut header[..1])?;
+            let header_len = varlena_header_len(header[0]);
+
+            let length = match header_len == 1 {
+                false => {
+                    reader.read_exact(&mut header[1..4])?;
+                    let be = [0, header[1], header[2], header[3]];
+                    u32::from_be_bytes(be) as usize
+                }
+                _ => header[0] as usize,
+            };
+
+            let mut buf = vec![0; length];
+            reader.read_exact(&mut buf)?;
+            Ok(Value::String(
+                String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
+            ))
+        }
+
         Type::Boolean => {
             let mut byte = [0; byte_len_of_type(&Type::Boolean)];
             reader.read_exact(&mut byte)?;
             Ok(Value::Boolean(byte[0] != 0))
         }
+
         Type::SmallInt => {
             let mut buf = [0; byte_len_of_type(&Type::SmallInt)];
             reader.read_exact(&mut buf)?;
             let n = i16::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::UnsignedSmallInt | Type::SmallSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedSmallInt)];
             reader.read_exact(&mut buf)?;
             let n = u16::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::Integer => {
             let mut buf = [0; byte_len_of_type(&Type::Integer)];
             reader.read_exact(&mut buf)?;
             let n = i32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::UnsignedInteger | Type::Serial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
             reader.read_exact(&mut buf)?;
             let n = u32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::BigInteger => {
             let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
             reader.read_exact(&mut buf)?;
             let n = i64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::UnsignedBigInteger | Type::BigSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
             reader.read_exact(&mut buf)?;
             let n = u64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::Uuid => {
             let mut buf = [0; byte_len_of_type(&Type::Uuid)];
             reader.read_exact(&mut buf)?;
             Ok(Value::Uuid(Uuid::from_bytes(buf)))
         }
+
         Type::Real => {
             let mut bytes = [0; byte_len_of_type(&Type::Real)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Float(f32::from_be_bytes(bytes).into()))
         }
+
         Type::DoublePrecision => {
             let mut bytes = [0; byte_len_of_type(&Type::DoublePrecision)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Float(f64::from_be_bytes(bytes)))
         }
+
         Type::Date => {
             let mut bytes = [0; byte_len_of_type(&Type::Date)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
         }
+
         Type::Time => {
             let mut bytes = [0; byte_len_of_type(&Type::Time)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Temporal(NaiveTime::from(bytes).into()))
         }
+
         Type::DateTime => {
             let mut date_bytes = [0; byte_len_of_type(&Type::Date)];
             reader.read_exact(&mut date_bytes)?;
@@ -269,5 +340,41 @@ mod tests {
     #[should_panic]
     fn test_type_mismatch() {
         round_trip(Type::Varchar(20), &Value::Number(20));
+    }
+
+    #[test]
+    fn test_text_varlena_roundtrip() {
+        let cases: Vec<String> = vec![
+            "".into(),  // empty
+            "a".into(), // 1 byte
+            "x".repeat(126),
+            "y".repeat(127),
+            "日本語".into(), // multibyte
+            "z".repeat(1024),
+        ];
+
+        for s in cases {
+            let mut buf = Vec::new();
+            serialize_into(&mut buf, &Type::Text, &Value::String(s.to_string()));
+
+            if s.len() < 0x7f {
+                assert_eq!(buf[0], s.len() as u8);
+            } else {
+                assert_eq!(buf[0], 0x80);
+                let len = s.len() as u32;
+                let be = len.to_be_bytes();
+                assert_eq!(&buf[1..4], &be[1..]);
+            }
+
+            let mut cursor = Cursor::new(&buf);
+            let schema = Schema::new(vec![Column::new("t", Type::Text)]);
+            let row = read_from(&mut cursor, &schema).unwrap();
+
+            assert_eq!(
+                row[0],
+                Value::String(s.clone()),
+                "Failed roundtrip for text: {s:?}",
+            );
+        }
     }
 }

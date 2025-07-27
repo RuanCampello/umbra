@@ -139,7 +139,7 @@ CREATE TABLE shadow_agents (
 - [x] `VARCHAR`
 - [x] `BOOLEAN`
 - [ ] `DECIMAL`
-- [ ] `TEXT`
+- [x] `TEXT` (the loquacious one)
 - [x] Temporal types (because time flies when... I ran out of jokes)
     - [x] `DATE`
     - [x] `TIME`

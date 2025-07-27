@@ -267,6 +267,8 @@ pub enum Type {
     Boolean,
     /// Variable length character type with a limit
     Varchar(usize),
+    /// Variable unlimited length
+    Text,
     /// 4-byte variable-precision floating point type.
     Real,
     /// 8-byte variable-precision floating point type.
@@ -376,7 +378,7 @@ impl Type {
             | Self::Integer
             | Self::UnsignedInteger
             | Self::BigInteger
-            | Self::UnsignedBigInteger => true, // uuid in the end is just an integer number
+            | Self::UnsignedBigInteger => true,
             _ => self.is_serial(),
         }
     }
@@ -744,6 +746,7 @@ impl Display for Type {
             Type::Time => f.write_str("TIME"),
             Type::Date => f.write_str("DATE"),
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
+            Type::Text => write!(f, "TEXT"),
         }
     }
 }

@@ -1,4 +1,4 @@
-# UMBRA BINARY PROTOCOL v0.1
+# UMBRA BINARY PROTOCOL v0.2
 
 **The Shadow Whisper**
 
@@ -8,14 +8,16 @@
 Each message is structured as follows:
 
 [ 4 bytes ] - SQL Content length (u32, little-endian)
+
 [ 1 byte  ] - Message type (ASCII character)
+
 [ n bytes ] - Payload (depends on message type)
 
 ## Message Types:
 
- - (+) -> (0x2B) - `QuerySet` Response
- - (!) -> (0x21) - Empty / OK Response
- - (-) -> (0x2D) - Error Response
+(+) -> (0x2B) - `QuerySet` Response
+(!) -> (0x21) - Empty / OK Response
+(-) -> (0x2D) - Error Response
 
 ## Payload Details:
 
@@ -25,7 +27,9 @@ Each message is structured as follows:
 
 For each column:
   [ 2 bytes ] - Column name length (u16, LE)
+
   [ n bytes ] - Column name (UTF-8)
+
   [ 1 byte  ] - Type code (see below)
       If `VARCHAR`:
         [ 4 bytes ] - Max length (u32, LE)
@@ -64,6 +68,7 @@ Integer Types:
 
 String Types:
  - 0x40 - `VARCHAR` (requires additional 4-byte max length)
+ - 0x41 - `TEXT` (no max length field)
 
 Temporal Types:
  - 0x50 - `DATE`

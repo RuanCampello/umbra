@@ -98,6 +98,7 @@ pub(crate) fn resolve_expression<'exp>(
             let (left, right) = try_coerce(left, right);
 
             let mismatched_types = || {
+                println!("left {left} right {right}");
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
                     operator: *operator,
@@ -320,10 +321,13 @@ impl From<&Type> for VmType {
     fn from(value: &Type) -> Self {
         match value {
             Type::Boolean => VmType::Bool,
-            Type::Varchar(_) => VmType::String,
-            Type::Time | Type::Date | Type::DateTime => VmType::Date,
-            Type::Real | Type::DoublePrecision => VmType::Float,
-            _ => VmType::Number,
+            Type::Varchar(_) | Type::Text => VmType::String,
+            Type::Date | Type::DateTime | Type::Time => VmType::Date,
+            float if float.is_float() => VmType::Float,
+            number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
+                VmType::Number
+            }
+            _ => panic!("Cannot convert type {value} to VmType"),
         }
     }
 }
@@ -334,7 +338,7 @@ impl PartialEq for VmType {
             // we do this for coercion properties
             (VmType::Float, VmType::Number) | (VmType::Number, VmType::Float) => true,
             (VmType::String, VmType::Date) | (VmType::Date, VmType::String) => true,
-            //(VmType::String, VmType::Number) | (VmType::Number, VmType::String) => true,
+            // (VmType::String, VmType::Number) | (VmType::Number, VmType::String) => true,
             _ => mem::discriminant(self) == mem::discriminant(other),
         }
     }
