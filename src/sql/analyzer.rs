@@ -257,7 +257,7 @@ fn analyze_assignment<'exp, 'id>(
     };
 
     if expect_type.ne(&evaluate_type) {
-        print!("expected {expect_type:#?}");
+        println!("expected {expect_type:#?} found {value}");
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
             found: value.clone(),
@@ -427,6 +427,7 @@ fn analyze_where<'exp>(
 }
 
 fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
+    println!("expected {expected_type}");
     match expected_type {
         Type::Date => {
             NaiveDate::parse_str(s)?;

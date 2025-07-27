@@ -164,6 +164,15 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 
                 utf_8_length_bytes(max) + string.as_bytes().len()
             }
+            Type::Text => {
+                let Value::String(string) = &tuple[idx] else {
+                    panic!("Expected data type TEXT but found {}", tuple[idx]);
+                };
+
+                let len = string.as_bytes().len();
+                let header_len = varlena_header_len(len as _);
+                header_len + len
+            }
             other => byte_len_of_type(&other),
         })
         .sum()
