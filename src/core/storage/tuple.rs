@@ -333,4 +333,40 @@ mod tests {
     fn test_type_mismatch() {
         round_trip(Type::Varchar(20), &Value::Number(20));
     }
+
+    #[test]
+    fn test_text_varlena_roundtrip() {
+        let cases: Vec<String> = vec![
+            "".into(),  // empty
+            "a".into(), // 1 byte
+            "x".repeat(126),
+            "y".repeat(127),
+            "日本語".into(), // multibyte
+            "z".repeat(1024),
+        ];
+
+        for s in cases {
+            let mut buf = Vec::new();
+            serialize_into(&mut buf, &Type::Text, &Value::String(s.to_string()));
+
+            if s.len() < 0x7f {
+                assert_eq!(buf[0], s.len() as u8);
+            } else {
+                assert_eq!(buf[0], 0x80);
+                let len = s.len() as u32;
+                let be = len.to_be_bytes();
+                assert_eq!(&buf[1..4], &be[1..]);
+            }
+
+            let mut cursor = Cursor::new(&buf);
+            let schema = Schema::new(vec![Column::new("t", Type::Text)]);
+            let row = read_from(&mut cursor, &schema).unwrap();
+
+            assert_eq!(
+                row[0],
+                Value::String(s.clone()),
+                "Failed roundtrip for text: {s:?}",
+            );
+        }
+    }
 }
