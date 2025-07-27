@@ -157,72 +157,87 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
                 String::from_utf8(string).expect("Couldn't parse string from utf8"),
             ))
         }
+
+        Type::Text => unimplemented!(),
+
         Type::Boolean => {
             let mut byte = [0; byte_len_of_type(&Type::Boolean)];
             reader.read_exact(&mut byte)?;
             Ok(Value::Boolean(byte[0] != 0))
         }
+
         Type::SmallInt => {
             let mut buf = [0; byte_len_of_type(&Type::SmallInt)];
             reader.read_exact(&mut buf)?;
             let n = i16::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::UnsignedSmallInt | Type::SmallSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedSmallInt)];
             reader.read_exact(&mut buf)?;
             let n = u16::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::Integer => {
             let mut buf = [0; byte_len_of_type(&Type::Integer)];
             reader.read_exact(&mut buf)?;
             let n = i32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::UnsignedInteger | Type::Serial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
             reader.read_exact(&mut buf)?;
             let n = u32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::BigInteger => {
             let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
             reader.read_exact(&mut buf)?;
             let n = i64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::UnsignedBigInteger | Type::BigSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
             reader.read_exact(&mut buf)?;
             let n = u64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
         }
+
         Type::Uuid => {
             let mut buf = [0; byte_len_of_type(&Type::Uuid)];
             reader.read_exact(&mut buf)?;
             Ok(Value::Uuid(Uuid::from_bytes(buf)))
         }
+
         Type::Real => {
             let mut bytes = [0; byte_len_of_type(&Type::Real)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Float(f32::from_be_bytes(bytes).into()))
         }
+
         Type::DoublePrecision => {
             let mut bytes = [0; byte_len_of_type(&Type::DoublePrecision)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Float(f64::from_be_bytes(bytes)))
         }
+
         Type::Date => {
             let mut bytes = [0; byte_len_of_type(&Type::Date)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
         }
+
         Type::Time => {
             let mut bytes = [0; byte_len_of_type(&Type::Time)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Temporal(NaiveTime::from(bytes).into()))
         }
+
         Type::DateTime => {
             let mut date_bytes = [0; byte_len_of_type(&Type::Date)];
             reader.read_exact(&mut date_bytes)?;

@@ -267,6 +267,8 @@ pub enum Type {
     Boolean,
     /// Variable length character type with a limit
     Varchar(usize),
+    /// Variable unlimited length
+    Text,
     /// 4-byte variable-precision floating point type.
     Real,
     /// 8-byte variable-precision floating point type.
@@ -744,6 +746,7 @@ impl Display for Type {
             Type::Time => f.write_str("TIME"),
             Type::Date => f.write_str("DATE"),
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
+            Type::Text => write!(f, "TEXT"),
         }
     }
 }
