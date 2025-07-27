@@ -82,12 +82,12 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             let bytes = string.as_bytes();
             let len = bytes.len();
 
-            match len < 0x7f {
+            match len < 127 {
                 true => buff.push(len as u8),
                 _ => {
                     // 4 byte header: 0x80 + 3 bytes BE length
                     buff.push(0x80);
-                    buff.extend_from_slice(&len.to_be_bytes()[1..]);
+                    buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
                 }
             }
 
@@ -203,9 +203,8 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             let length = match header_len == 1 {
                 false => {
                     reader.read_exact(&mut header[1..4])?;
-                    ((header[1] as usize) << 16)
-                        | ((header[2] as usize) << 8)
-                        | (header[3] as usize)
+                    let be = [0, header[1], header[2], header[3]];
+                    u32::from_be_bytes(be) as usize
                 }
                 _ => header[0] as usize,
             };
