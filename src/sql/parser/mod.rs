@@ -351,6 +351,7 @@ impl<'input> Parser<'input> {
             Keyword::Timestamp => Ok(Type::DateTime),
             Keyword::Date => Ok(Type::Date),
             Keyword::Time => Ok(Type::Time),
+            Keyword::Text => Ok(Type::Text),
             keyword => unreachable!("unexpected column token: {keyword}"),
         }
     }
@@ -1841,4 +1842,3 @@ mod tests {
         )
     }
 }
-
