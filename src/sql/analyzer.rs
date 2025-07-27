@@ -1038,4 +1038,57 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn insert_empty_text() -> AnalyzerResult {
+        Analyze {
+            sql: "INSERT INTO users (id, notes) VALUES (1, '');",
+            ctx: &["CREATE TABLE users (id INT PRIMARY KEY, notes TEXT);"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn insert_large_text() -> AnalyzerResult {
+        Analyze {
+            sql: &format!(
+                "INSERT INTO t (id, notes) VALUES (1, '{}');",
+                "x".repeat(10000)
+            ),
+            ctx: &["CREATE TABLE t (id INT PRIMARY KEY, notes TEXT);"],
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_where_between_text_varchar() -> AnalyzerResult {
+        let ctx = &["CREATE TABLE documents (
+            id INT PRIMARY KEY,
+            short_desc VARCHAR(100),
+            full_text TEXT
+        );"];
+
+        Analyze {
+            sql: "SELECT * FROM documents WHERE short_desc = 'Quick brown fox';",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT * FROM documents WHERE full_text = 'Lorem ipsum dolor sit amet';",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT * FROM documents WHERE full_text LIKE '%lorem%';",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }
