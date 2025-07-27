@@ -78,6 +78,22 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             buff.extend_from_slice(&b_len[..len_prefix]);
             buff.extend_from_slice(string.as_bytes());
         }
+        (Type::Text, Value::String(string)) => {
+            let bytes = string.as_bytes();
+            let len = bytes.len();
+
+            match len < 0x7f {
+                true => buff.push(len as u8),
+                _ => {
+                    // 4 byte header: 0x80 + 3 bytes BE length
+                    buff.push(0x80);
+                    buff.extend_from_slice(&len.to_be_bytes()[1..]);
+                }
+            }
+
+            // then we add the string content itself
+            buff.extend_from_slice(bytes);
+        }
         (Type::Boolean, Value::Boolean(bool)) => buff.push(u8::from(*bool)),
         (int, Value::Number(num)) if int.is_integer() => {
             let b_len = byte_len_of_type(int);
