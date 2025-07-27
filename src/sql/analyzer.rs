@@ -257,7 +257,6 @@ fn analyze_assignment<'exp, 'id>(
     };
 
     if expect_type.ne(&evaluate_type) {
-        println!("expected {expect_type:#?} found {value}");
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
             found: value.clone(),
