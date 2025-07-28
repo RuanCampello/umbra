@@ -12,7 +12,7 @@ pub(crate) mod query;
 mod prepare;
 pub mod statement;
 
-pub(crate) fn pipeline(input: &str, db: &mut impl Ctx) -> Result<Statement, DatabaseError> {
+pub(crate) fn pipeline<'a>(input: &'a str, db: &mut impl Ctx) -> Result<Statement<'a>, DatabaseError> {
     let mut statement = Parser::new(input).parse_statement()?;
 
     analyzer::analyze(&statement, db)?;

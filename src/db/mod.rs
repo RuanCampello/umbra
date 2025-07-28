@@ -52,7 +52,7 @@ pub(crate) struct Context {
 #[derive(Debug)]
 struct PreparedStatement<'db, File: FileOperations> {
     db: &'db mut Database<File>,
-    exec: Option<Exec<File>>,
+    exec: Option<Exec<'db, File>>,
     autocommit: bool,
 }
 
@@ -70,8 +70,8 @@ enum TransactionState {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Exec<File: FileOperations> {
-    Statement(Statement),
+pub(crate) enum Exec<'a, File: FileOperations> {
+    Statement(Statement<'a>),
     Plan(Planner<File>),
     Explain(VecDeque<String>),
 }

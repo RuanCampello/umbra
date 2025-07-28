@@ -19,12 +19,12 @@ use super::Keyword;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
-pub(crate) enum Statement {
+pub(crate) enum Statement<'a> {
     Create(Create),
-    Select(Select),
-    Update(Update),
-    Insert(Insert),
-    Delete(Delete),
+    Select(Select<'a>),
+    Update(Update<'a>),
+    Insert(Insert<'a>),
+    Delete(Delete<'a>),
     Drop(Drop),
     Commit,
     StartTransaction,
@@ -34,9 +34,9 @@ pub(crate) enum Statement {
 
 /// The `UPDATE` assignment instruction.
 #[derive(Debug, PartialEq)]
-pub(crate) struct Assignment {
+pub(crate) struct Assignment<'a> {
     pub identifier: String,
-    pub value: Expression,
+    pub value: Expression<'a>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -67,33 +67,33 @@ pub(crate) enum Create {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Select {
-    pub columns: Vec<Expression>,
+pub(crate) struct Select<'a> {
+    pub columns: Vec<Expression<'a>>,
     pub from: String,
-    pub r#where: Option<Expression>,
-    pub order_by: Vec<OrderBy>,
-    pub group_by: Vec<Expression>,
+    pub r#where: Option<Expression<'a>>,
+    pub order_by: Vec<OrderBy<'a>>,
+    pub group_by: Vec<Expression<'a>>,
     // TODO: limit
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Update {
+pub(crate) struct Update<'a> {
     pub table: String,
-    pub columns: Vec<Assignment>,
-    pub r#where: Option<Expression>,
+    pub columns: Vec<Assignment<'a>>,
+    pub r#where: Option<Expression<'a>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Insert {
+pub(crate) struct Insert<'a> {
     pub into: String,
     pub columns: Vec<String>,
-    pub values: Vec<Vec<Expression>>,
+    pub values: Vec<Vec<Expression<'a>>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Delete {
+pub(crate) struct Delete<'a> {
     pub from: String,
-    pub r#where: Option<Expression>,
+    pub r#where: Option<Expression<'a>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -103,8 +103,8 @@ pub(crate) enum Drop {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub enum Expression {
-    Identifier(String),
+pub enum Expression<'a> {
+    Identifier(&'a str),
     Value(Value),
     Wildcard,
     UnaryOperation {
@@ -122,14 +122,14 @@ pub enum Expression {
     },
     Alias {
         expr: Box<Self>,
-        alias: String,
+        alias: &'a str,
     },
     Nested(Box<Self>),
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub(crate) struct OrderBy {
-    pub expr: Expression,
+pub(crate) struct OrderBy<'a> {
+    pub expr: Expression<'a>,
     pub direction: OrderDirection,
 }
 
@@ -200,7 +200,7 @@ pub enum Value {
 pub enum Constraint {
     PrimaryKey,
     Unique,
-    Default(Expression),
+    Default(Expression<'static>), // Use static lifetime for storage
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
@@ -425,7 +425,7 @@ impl Type {
     }
 }
 
-impl Display for Statement {
+impl<'a> Display for Statement<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Statement::Create(create) => match create {
@@ -530,7 +530,7 @@ impl Display for Statement {
     }
 }
 
-impl Expression {
+impl<'a> Expression<'a> {
     pub(in crate::sql) fn unwrap_alias(&self) -> &Self {
         match self {
             Expression::Alias { ref expr, .. } => &**expr,
@@ -551,7 +551,7 @@ impl Expression {
     }
 }
 
-impl Default for Expression {
+impl<'a> Default for Expression<'a> {
     fn default() -> Self {
         Expression::Wildcard
     }
@@ -676,7 +676,36 @@ impl Display for Column {
     }
 }
 
-impl Display for Expression {
+impl<'a> Expression<'a> {
+    /// Convert a borrowed Expression to an owned Expression with 'static lifetime
+    pub fn into_owned(self) -> Expression<'static> {
+        match self {
+            Expression::Identifier(s) => Expression::Identifier(Box::leak(s.to_string().into_boxed_str())),
+            Expression::Value(v) => Expression::Value(v),
+            Expression::Wildcard => Expression::Wildcard,
+            Expression::UnaryOperation { operator, expr } => Expression::UnaryOperation {
+                operator,
+                expr: Box::new(expr.into_owned()),
+            },
+            Expression::BinaryOperation { operator, left, right } => Expression::BinaryOperation {
+                operator,
+                left: Box::new(left.into_owned()),
+                right: Box::new(right.into_owned()),
+            },
+            Expression::Function { func, args } => Expression::Function {
+                func,
+                args: args.into_iter().map(|arg| arg.into_owned()).collect(),
+            },
+            Expression::Alias { expr, alias } => Expression::Alias {
+                expr: Box::new(expr.into_owned()),
+                alias: Box::leak(alias.to_string().into_boxed_str()),
+            },
+            Expression::Nested(expr) => Expression::Nested(Box::new(expr.into_owned())),
+        }
+    }
+}
+
+impl<'a> Display for Expression<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Identifier(ident) => f.write_str(ident),
@@ -728,7 +757,7 @@ impl Display for UnaryOperator {
     }
 }
 
-impl Display for Assignment {
+impl<'a> Display for Assignment<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} = {}", self.identifier, self.value)
     }
@@ -928,7 +957,7 @@ impl Display for Temporal {
     }
 }
 
-impl Display for OrderBy {
+impl<'a> Display for OrderBy<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.direction {
             OrderDirection::Asc => write!(f, "{} ASC", self.expr),
@@ -937,8 +966,8 @@ impl Display for OrderBy {
     }
 }
 
-impl From<Expression> for OrderBy {
-    fn from(expr: Expression) -> Self {
+impl<'a> From<Expression<'a>> for OrderBy<'a> {
+    fn from(expr: Expression<'a>) -> Self {
         Self {
             expr,
             direction: Default::default(),

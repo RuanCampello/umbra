@@ -7,7 +7,7 @@ use crate::vm::expression::resolve_only_expression;
 
 use super::statement::{Delete, Insert, Select, Update};
 
-pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
+pub(crate) fn optimise<'a>(statement: &mut Statement<'a>) -> Result<(), SqlError> {
     match statement {
         Statement::Select(Select {
             columns,
@@ -160,7 +160,7 @@ fn simplify_where(r#where: &mut Option<Expression>) -> Result<(), SqlError> {
     r#where.as_mut().map(simplify).unwrap_or(Ok(()))
 }
 
-fn resolve_expression(expression: &Expression) -> Result<Expression, SqlError> {
+fn resolve_expression<'a>(expression: &Expression<'a>) -> Result<Expression<'static>, SqlError> {
     resolve_only_expression(expression).map(Expression::Value)
 }
 

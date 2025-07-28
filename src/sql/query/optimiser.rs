@@ -380,7 +380,7 @@ fn find_index_paths<'exp>(
     }
 }
 
-fn determine_bounds(expr: &Expression) -> (Bound<&Value>, Bound<&Value>) {
+fn determine_bounds<'a>(expr: &'a Expression<'a>) -> (Bound<&'a Value>, Bound<&'a Value>) {
     let Expression::BinaryOperation {
         left,
         operator,
@@ -465,7 +465,7 @@ fn range_union<'value>(
     Some((union_start, union_end))
 }
 
-fn range_to_expr(col: &str, (start, end): (Bound<&Value>, Bound<&Value>)) -> Expression {
+fn range_to_expr<'a>(col: &'a str, (start, end): (Bound<&'a Value>, Bound<&'a Value>)) -> Expression<'a> {
     let expr = match (start, end) {
         (Bound::Unbounded, Bound::Excluded(v)) => format!("{col} < {v}"),
         (Bound::Unbounded, Bound::Included(v)) => format!("{col} <= {v}"),

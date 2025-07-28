@@ -7,7 +7,7 @@ use super::{
     Parser, ParserResult, Sql,
 };
 
-impl<'sql> Sql<'sql> for Select {
+impl<'sql> Sql<'sql> for Select<'sql> {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         let columns = parser.parse_separated_tokens(
             |parser| {
@@ -103,7 +103,7 @@ impl<'sql> Sql<'sql> for Create {
     }
 }
 
-impl<'sql> Sql<'sql> for Insert {
+impl<'sql> Sql<'sql> for Insert<'sql> {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         parser.expect_keyword(Keyword::Into)?;
         let into = parser.parse_ident()?;
@@ -137,7 +137,7 @@ impl<'sql> Sql<'sql> for Insert {
     }
 }
 
-impl<'sql> Sql<'sql> for Update {
+impl<'sql> Sql<'sql> for Update<'sql> {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         let table = parser.parse_ident()?;
         parser.expect_keyword(Keyword::Set)?;
@@ -169,7 +169,7 @@ impl<'sql> Sql<'sql> for Drop {
     }
 }
 
-impl<'sql> Sql<'sql> for Delete {
+impl<'sql> Sql<'sql> for Delete<'sql> {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         parser.expect_keyword(Keyword::From)?;
         let (from, r#where) = parser.parse_from_and_where()?;

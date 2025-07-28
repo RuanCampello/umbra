@@ -18,7 +18,7 @@ use std::str::FromStr;
 
 struct AliasCtx<'s> {
     schema: &'s Schema,
-    aliases: &'s HashMap<&'s str, &'s Expression>,
+    aliases: &'s HashMap<&'s str, &'s Expression<'s>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -46,7 +46,7 @@ pub(in crate::sql) trait AnalyzeCtx {
 }
 
 pub(in crate::sql) fn analyze<'s>(
-    statement: &'s Statement,
+    statement: &'s Statement<'s>,
     ctx: &'s mut impl Ctx,
 ) -> AnalyzerResult<'s, ()> {
     match statement {
@@ -313,7 +313,7 @@ impl<'s> AnalyzeCtx for AliasCtx<'s> {
 pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
     ctx: &Ctx,
     data_type: Option<&Type>,
-    expr: &'exp Expression,
+    expr: &'exp Expression<'exp>,
 ) -> Result<VmType, SqlError> {
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, data_type)?,
@@ -424,9 +424,9 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
 fn analyze_expression_with_aliases<'exp>(
     schema: &Schema,
-    aliases: &HashMap<&str, &Expression>,
+    aliases: &HashMap<&str, &Expression<'exp>>,
     col_type: Option<&Type>,
-    expr: &'exp Expression,
+    expr: &'exp Expression<'exp>,
 ) -> Result<VmType, SqlError> {
     if let Expression::Identifier(ident) = expr {
         if let Some(aliases_expr) = aliases.get(ident.as_str()) {
