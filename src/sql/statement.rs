@@ -328,6 +328,14 @@ impl Column {
         }
     }
 
+    pub fn from_string(name: String, data_type: Type) -> Self {
+        Self {
+            name,
+            data_type,
+            constraints: vec![],
+        }
+    }
+
     pub fn primary_key(name: &str, data_type: Type) -> Self {
         Self {
             name: name.to_string(),

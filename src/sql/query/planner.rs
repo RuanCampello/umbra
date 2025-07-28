@@ -81,7 +81,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         Expression::Alias { expr, alias } => {
                             Ok(Column::new(alias, resolve_type(schema, expr)?))
                         }
-                        _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                        _ => Ok(Column::from_string(expr.to_string(), resolve_type(schema, expr)?)),
                     })
                     .collect::<Result<Vec<_>, SqlError>>()?,
             );
@@ -106,7 +106,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         Expression::Identifier(ident) => aggr_schema
                             .push(schema.columns[schema.index_of(ident).unwrap()].clone()),
                         _ => aggr_schema
-                            .push(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                            .push(Column::from_string(expr.to_string(), resolve_type(schema, expr)?)),
                     }
                 }
 
@@ -218,7 +218,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             let ty = resolve_type(schema, &order.expr)?;
                             indexes.push(sorted_schema.len());
                             directions.push(order.direction);
-                            sorted_schema.push(Column::new(&order.expr.to_string(), ty));
+                            sorted_schema.push(Column::from_string(order.expr.to_string(), ty));
                             extra_exprs.push(order.expr.clone());
                         }
                     }
