@@ -8,7 +8,7 @@ use crate::{
     core::storage::pagination::io::FileOperations,
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
     sql::{
-        analyzer,
+        analyzer::{self, contains_aggregate},
         query::optimiser,
         statement::{Column, Delete, Expression, OrderBy, OrderDirection, Select, Type, Update},
         Statement,
@@ -90,10 +90,10 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let aggr_exprs: Vec<(&Expression, String)> = columns
                 .iter()
                 .filter_map(|expr| match expr {
-                    Expression::Alias { ref alias, expr } if expr.is_aggr_fn() => {
+                    Expression::Alias { ref alias, expr } if contains_aggregate(expr) => {
                         Some((expr.as_ref(), alias.to_string()))
                     }
-                    expr if expr.is_aggr_fn() => Some((expr, expr.to_string())),
+                    expr if contains_aggregate(expr) => Some((expr, expr.to_string())),
                     _ => None,
                 })
                 .collect();
@@ -103,8 +103,30 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 for expr in &group_by {
                     match expr {
-                        Expression::Identifier(ident) => aggr_schema
-                            .push(schema.columns[schema.index_of(ident).unwrap()].clone()),
+                        Expression::Identifier(ident) => {
+                            // First check if this identifier is an alias
+                            let mut found_alias = false;
+                            for col_expr in &columns {
+                                if let Expression::Alias { alias, expr: inner_expr } = col_expr {
+                                    if alias == ident {
+                                        // This GROUP BY identifier matches an alias
+                                        let column_type = resolve_type(schema, inner_expr)?;
+                                        aggr_schema.push(Column::new(alias, column_type));
+                                        found_alias = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if !found_alias {
+                                // Not an alias, try to find it in the original schema
+                                if let Some(idx) = schema.index_of(ident) {
+                                    aggr_schema.push(schema.columns[idx].clone());
+                                } else {
+                                    return Err(SqlError::InvalidColumn(ident.into()).into());
+                                }
+                            }
+                        }
                         _ => aggr_schema
                             .push(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
                     }
@@ -116,7 +138,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 if group_by.is_empty() && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(schema, &order_by)?;
+                        extract_order_indexes_and_directions(schema, &columns, &order_by)?;
 
                     source = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -137,12 +159,30 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     }));
                 }
 
+                // Resolve GROUP BY aliases to original expressions for the VM
+                let resolved_group_by: Vec<Expression> = group_by
+                    .iter()
+                    .map(|expr| {
+                        if let Expression::Identifier(ident) = expr {
+                            // Check if this identifier is an alias and resolve it
+                            for col_expr in &columns {
+                                if let Expression::Alias { alias, expr: inner_expr } = col_expr {
+                                    if alias == ident {
+                                        return *inner_expr.clone();
+                                    }
+                                }
+                            }
+                        }
+                        expr.clone()
+                    })
+                    .collect();
+
                 let mut plan = Planner::Aggregate(
                     AggregateBuilder {
                         source: Box::new(source),
                         aggr_exprs: aggr_exprs.iter().map(|expr| expr.0.clone()).collect(),
                         page_size,
-                        group_by: group_by.clone(),
+                        group_by: resolved_group_by,
                         output: aggr_schema.clone(),
                     }
                     .into(),
@@ -150,7 +190,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 if is_grouped && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(&aggr_schema, &order_by)?;
+                        extract_order_indexes_and_directions(&aggr_schema, &columns, &order_by)?;
 
                     plan = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -340,23 +380,38 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
 
 fn extract_order_indexes_and_directions(
     schema: &Schema,
+    columns: &[Expression], // Add columns parameter for alias resolution
     order_by: &[OrderBy],
 ) -> Result<(Vec<usize>, Vec<OrderDirection>), DatabaseError> {
     order_by
         .iter()
         .map(|order| {
             let idx = match &order.expr {
-                Expression::Identifier(ident) => schema
-                    .index_of(ident)
-                    .ok_or(SqlError::InvalidGroupBy(ident.into())),
+                Expression::Identifier(ident) => {
+                    // First check if this is an alias in the SELECT columns
+                    for (i, expr) in columns.iter().enumerate() {
+                        if let Expression::Alias { alias, .. } = expr {
+                            if alias == ident {
+                                return Ok((i, order.direction));
+                            }
+                        }
+                    }
+                    
+                    // If not found as alias, check in schema
+                    schema
+                        .index_of(ident)
+                        .ok_or(SqlError::InvalidGroupBy(ident.into()))
+                        .map(|idx| (idx, order.direction))
+                }
                 _ => schema
                     .index_of(&order.expr.to_string())
                     .ok_or(SqlError::Other(format!(
                         "ORDER BY expression `{}` not found in output columns",
                         order.expr.to_string()
-                    ))),
+                    )))
+                    .map(|idx| (idx, order.direction)),
             }?;
-            Ok((idx, order.direction))
+            Ok(idx)
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|p| p.into_iter().unzip())

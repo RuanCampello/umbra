@@ -45,6 +45,27 @@ pub(in crate::sql) trait AnalyzeCtx {
     fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)>;
 }
 
+/// Check if an expression contains aggregate functions (recursively)
+pub(in crate::sql) fn contains_aggregate(expr: &Expression) -> bool {
+    match expr {
+        Expression::Function { func, args } => {
+            // If this is an aggregate function, return true
+            if func.is_aggr() {
+                return true;
+            }
+            // Otherwise check if any of the arguments contain aggregates
+            args.iter().any(contains_aggregate)
+        }
+        Expression::BinaryOperation { left, right, .. } => {
+            contains_aggregate(left) || contains_aggregate(right)
+        }
+        Expression::UnaryOperation { expr, .. } => contains_aggregate(expr),
+        Expression::Nested(expr) => contains_aggregate(expr),
+        Expression::Alias { expr, .. } => contains_aggregate(expr),
+        _ => false,
+    }
+}
+
 pub(in crate::sql) fn analyze<'s>(
     statement: &'s Statement,
     ctx: &'s mut impl Ctx,
@@ -192,8 +213,22 @@ pub(in crate::sql) fn analyze<'s>(
                     continue;
                 }
 
-                let is_aggr = matches!(expr, Expression::Function { func, .. } if func.is_aggr());
-                let in_group_by = group_by.iter().any(|group| group.eq(expr));
+                let is_aggr = contains_aggregate(expr);
+                let in_group_by = group_by.iter().any(|group| {
+                    // Check if the expression directly matches the group by expression
+                    if group.eq(expr) {
+                        return true;
+                    }
+                    
+                    // Check if the group by expression is an alias that resolves to our expression
+                    if let Expression::Identifier(alias_name) = group {
+                        if let Some(alias_expr) = aliases.get(alias_name) {
+                            return alias_expr.eq(&expr);
+                        }
+                    }
+                    
+                    false
+                });
 
                 if !group_by.is_empty() && !is_aggr && !in_group_by {
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
