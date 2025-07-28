@@ -10,7 +10,7 @@ use crate::{
     db::{Ctx, Database, DatabaseError, IndexMetadata, Relation},
     sql::{
         parser::Parser,
-        statement::{BinaryOperator, Expression, OrderDirection, Value},
+        statement::{BinaryOperator, Expression, OrderDirection, OwnedExpression, Value},
     },
     vm::planner::{
         Collect, CollectBuilder, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner,

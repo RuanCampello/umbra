@@ -11,7 +11,7 @@ use crate::{
     sql::{
         analyzer,
         query::optimiser,
-        statement::{Column, Delete, Expression, OrderBy, OrderDirection, OwnedDelete, OwnedInsert, OwnedSelect, OwnedStatement, OwnedUpdate, Select, Type, Update},
+        statement::{Column, Delete, Expression, OrderBy, OrderDirection, OwnedDelete, OwnedExpression, OwnedInsert, OwnedSelect, OwnedStatement, OwnedUpdate, Select, Type, Update},
         Statement,
     },
     vm::{
@@ -51,14 +51,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             order_by,
             group_by,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
+            let mut source = optimiser::generate_seq_plan(&from, r#where.as_ref().map(|e| e.as_borrowed()), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from)?;
             let schema = &table.schema;
 
             // this is a special case for `type_of` function
-            if let Some((col_name, type_of)) = single_typeof_column(&columns, &schema) {
+            if let Some((col_name, type_of)) = single_typeof_column(&columns.iter().map(|e| e.as_borrowed()).collect::<Vec<_>>(), &schema) {
                 use crate::sql::statement::Value;
 
                 return Ok(Planner::Project(Project {
@@ -68,7 +68,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         values: vec![vec![Expression::Value(Value::String(type_of.clone()))]]
                             .into(),
                     })),
-                    projection: vec![Expression::Value(Value::String(type_of))],
+                    projection: vec![OwnedExpression::Value(Value::String(type_of))],
                 }));
             }
 
@@ -76,22 +76,22 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 columns
                     .iter()
                     .map(|expr| match expr {
-                        Expression::Identifier(ident) => {
+                        OwnedExpression::Identifier(ident) => {
                             Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
                         }
-                        Expression::Alias { expr, alias } => {
-                            Ok(Column::new(alias, resolve_type(schema, expr)?))
+                        OwnedExpression::Alias { expr, alias } => {
+                            Ok(Column::new(alias, resolve_type(schema, &expr.as_borrowed())?))
                         }
-                        _ => Ok(Column::from_string(expr.to_string(), resolve_type(schema, expr)?)),
+                        _ => Ok(Column::from_string(expr.to_string(), resolve_type(schema, &expr.as_borrowed())?)),
                     })
                     .collect::<Result<Vec<_>, SqlError>>()?,
             );
 
             let is_grouped = !group_by.is_empty();
-            let aggr_exprs: Vec<(&Expression, String)> = columns
+            let aggr_exprs: Vec<(&OwnedExpression, String)> = columns
                 .iter()
                 .filter_map(|expr| match expr {
-                    Expression::Alias { ref alias, expr } if expr.is_aggr_fn() => {
+                    OwnedExpression::Alias { ref alias, expr } if expr.is_aggr_fn() => {
                         Some((expr.as_ref(), alias.to_string()))
                     }
                     expr if expr.is_aggr_fn() => Some((expr, expr.to_string())),
@@ -104,10 +104,10 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 for expr in &group_by {
                     match expr {
-                        Expression::Identifier(ident) => aggr_schema
+                        OwnedExpression::Identifier(ident) => aggr_schema
                             .push(schema.columns[schema.index_of(ident).unwrap()].clone()),
                         _ => aggr_schema
-                            .push(Column::from_string(expr.to_string(), resolve_type(schema, expr)?)),
+                            .push(Column::from_string(expr.to_string(), resolve_type(schema, &expr.as_borrowed())?)),
                     }
                 }
 
