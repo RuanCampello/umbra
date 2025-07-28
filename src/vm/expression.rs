@@ -3,7 +3,7 @@ use crate::core::date::DateParseError;
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
-    BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+    BinaryOperator, Expression, Function, OwnedExpression, Temporal, Type, UnaryOperator, Value,
 };
 use std::fmt::{Display, Formatter};
 use std::mem;
@@ -32,13 +32,13 @@ pub enum TypeError {
         value: Value,
     },
     CannotApplyBinary {
-        left: Expression,
+        left: OwnedExpression,
         operator: BinaryOperator,
-        right: Expression,
+        right: OwnedExpression,
     },
     ExpectedType {
         expected: VmType,
-        found: Expression,
+        found: OwnedExpression,
     },
     ExpectedOneOfTypes {
         expected: Vec<VmType>,
@@ -60,7 +60,7 @@ macro_rules! impl_value_extractor {
                         Value::$value_variant(x) => Ok(x),
                         _ => Err(SqlError::Type(TypeError::ExpectedType {
                             expected: VmType::$vm_type,
-                            found: argument.clone()
+                            found: argument.clone().into_owned()
                         })),
                     }
                 }
@@ -78,7 +78,7 @@ pub(crate) fn resolve_expression<'exp>(
         Expression::Value(value) => Ok(value.clone()),
         Expression::Identifier(ident) => match schema.index_of(ident) {
             Some(idx) => Ok(val[idx].clone()),
-            None => Err(SqlError::InvalidColumn(ident.clone())),
+            None => Err(SqlError::InvalidColumn(ident.to_string())),
         },
         Expression::UnaryOperation { operator, expr } => {
             let value = resolve_expression(val, schema, expr)?;
@@ -230,7 +230,7 @@ pub(crate) fn resolve_expression<'exp>(
                     Expression::Identifier(name) => {
                         let idx = schema
                             .index_of(name)
-                            .ok_or_else(|| SqlError::InvalidColumn(name.into()))?;
+                            .ok_or_else(|| SqlError::InvalidColumn(name.clone().into()))?;
                         Ok(schema.columns[idx].data_type.to_string())
                     }
                     _ => Err(SqlError::Other(
@@ -281,7 +281,7 @@ pub(crate) fn evaluate_where(
 
         other => Err(SqlError::Type(TypeError::ExpectedType {
             expected: VmType::Bool,
-            found: Expression::Value(other),
+            found: OwnedExpression::Value(other),
         })),
     }
 }

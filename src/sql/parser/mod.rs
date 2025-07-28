@@ -69,7 +69,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    pub fn try_parse(&mut self) -> ParserResult<Vec<Statement>> {
+    pub fn try_parse(&mut self) -> ParserResult<Vec<Statement<'input>>> {
         let mut statements = Vec::new();
 
         loop {
@@ -80,7 +80,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    pub fn parse_statement(&mut self) -> ParserResult<Statement> {
+    pub fn parse_statement(&mut self) -> ParserResult<Statement<'input>> {
         let statement = match self.expect_one(&Self::supported_statements())? {
             Keyword::Select => Statement::Select(Select::parse(self)?),
             Keyword::Create => Statement::Create(Create::parse(self)?),
@@ -113,7 +113,7 @@ impl<'input> Parser<'input> {
         })
     }
 
-    pub(crate) fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression> {
+    pub(crate) fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression<'input>> {
         let mut expr = self.parse_pref()?;
         let mut next = self.get_precedence();
 
@@ -137,7 +137,7 @@ impl<'input> Parser<'input> {
         self.parse_separated_tokens(|p| parse_elem(p), false)
     }
 
-    fn parse_infix(&mut self, left: Expression, precedence: u8) -> ParserResult<Expression> {
+    fn parse_infix(&mut self, left: Expression<'input>, precedence: u8) -> ParserResult<Expression<'input>> {
         let op = match self.next_token()? {
             Token::Eq => BinaryOperator::Eq,
             Token::Neq => BinaryOperator::Neq,
@@ -213,9 +213,9 @@ impl<'input> Parser<'input> {
         })
     }
 
-    fn parse_pref(&mut self) -> ParserResult<Expression> {
+    fn parse_pref(&mut self) -> ParserResult<Expression<'input>> {
         match self.next_token()? {
-            Token::Identifier(identifier) => Ok(Expression::Identifier(identifier)),
+            Token::Identifier(identifier) => Ok(Expression::Identifier(Cow::Owned(identifier))),
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
@@ -271,7 +271,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    fn parse_closing_expr(&mut self) -> ParserResult<Expression> {
+    fn parse_closing_expr(&mut self) -> ParserResult<Expression<'input>> {
         let pref = self.parse_expr(None)?;
         self.expect_token(Token::RightParen)?;
 
@@ -356,7 +356,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    fn parse_assign(&mut self) -> ParserResult<Assignment> {
+    fn parse_assign(&mut self) -> ParserResult<Assignment<'input>> {
         let identifier = self.parse_ident()?;
         self.expect_token(Token::Eq)?;
         let value = self.parse_expr(None)?;
@@ -409,7 +409,7 @@ impl<'input> Parser<'input> {
         Ok(parsed)
     }
 
-    fn parse_from_and_where(&mut self) -> ParserResult<(String, Option<Expression>)> {
+    fn parse_from_and_where(&mut self) -> ParserResult<(String, Option<Expression<'input>>)> {
         let from = self.parse_ident()?;
         let r#where = match self.consume_optional(Token::Keyword(Keyword::Where)) {
             true => Some(self.parse_expr(None)?),
@@ -419,7 +419,7 @@ impl<'input> Parser<'input> {
         Ok((from, r#where))
     }
 
-    fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression> {
+    fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression<'input>> {
         let value_str = self.parse_ident()?;
 
         let value = match keyword {
@@ -453,7 +453,7 @@ impl<'input> Parser<'input> {
         Ok(Expression::Value(Value::String(value)))
     }
 
-    fn parse_func(&mut self, function: Keyword) -> ParserResult<Expression> {
+    fn parse_func(&mut self, function: Keyword) -> ParserResult<Expression<'input>> {
         match function {
             Keyword::Substring => {
                 let expr = self.parse_expr(None)?;
@@ -522,7 +522,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    fn parse_unary_func(&mut self, func: Function) -> ParserResult<Expression> {
+    fn parse_unary_func(&mut self, func: Function) -> ParserResult<Expression<'input>> {
         let expr = self.parse_expr(None)?;
         self.expect_token(Token::RightParen)?;
         Ok(Expression::Function {
@@ -784,8 +784,8 @@ mod tests {
             statement,
             Ok(Statement::Select(Select {
                 columns: vec![
-                    Expression::Identifier("id".to_string()),
-                    Expression::Identifier("price".to_string())
+                    Expression::Identifier(Cow::Borrowed("id")),
+                    Expression::Identifier(Cow::Borrowed("price"))
                 ],
                 from: "bills".to_string(),
                 r#where: None,
@@ -804,13 +804,13 @@ mod tests {
             statement,
             Ok(Statement::Select(Select {
                 columns: vec![
-                    Expression::Identifier("title".to_string()),
-                    Expression::Identifier("author".to_string())
+                    Expression::Identifier(Cow::Borrowed("title")),
+                    Expression::Identifier(Cow::Borrowed("author"))
                 ],
                 from: "books".to_string(),
                 r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Eq,
-                    left: Box::new(Expression::Identifier("author".to_string())),
+                    left: Box::new(Expression::Identifier(Cow::Borrowed("author"))),
                     right: Box::new(Expression::Value(Value::String(
                         "Agatha Christie".to_string()
                     ))),
@@ -930,7 +930,7 @@ mod tests {
                         identifier: "salary".to_string(),
                         value: Expression::BinaryOperation {
                             operator: BinaryOperator::Mul,
-                            left: Box::new(Expression::Identifier("salary".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("salary"))),
                             right: Box::new(Expression::Value(Value::Number(2))),
                         },
                     },
@@ -945,14 +945,14 @@ mod tests {
                         operator: BinaryOperator::And,
                         left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("department".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("department"))),
                             right: Box::new(Expression::Value(Value::String(
                                 "engineering".to_string(),
                             ))),
                         }),
                         right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::GtEq,
-                            left: Box::new(Expression::Identifier("performance_score".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("performance_score"))),
                             right: Box::new(Expression::Value(Value::Number(80))),
                         }),
                     }),
@@ -960,12 +960,12 @@ mod tests {
                         operator: BinaryOperator::Or,
                         left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Gt,
-                            left: Box::new(Expression::Identifier("years_of_service".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("years_of_service"))),
                             right: Box::new(Expression::Value(Value::Number(3))),
                         }),
                         right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("is_team_lead".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("is_team_lead"))),
                             right: Box::new(Expression::Value(Value::Boolean(true))),
                         }),
                     })))
@@ -1068,7 +1068,7 @@ mod tests {
                 from: "schedule".to_string(),
                 r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Lt,
-                    left: Box::new(Expression::Identifier("start_time".to_string())),
+                    left: Box::new(Expression::Identifier(Cow::Borrowed("start_time"))),
                     right: Box::new(Expression::Value(Value::String("12:00:00".into()))),
                 }),
                 order_by: vec![],
@@ -1372,18 +1372,18 @@ mod tests {
                         operator: BinaryOperator::Or,
                         left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("film_id".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("film_id"))),
                             right: Box::new(Expression::Value(Value::Number(1))),
                         }),
                         right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("film_id".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("film_id"))),
                             right: Box::new(Expression::Value(Value::Number(2))),
                         }),
                     }),
                     right: Box::new(Expression::BinaryOperation {
                         operator: BinaryOperator::Eq,
-                        left: Box::new(Expression::Identifier("film_id".to_string())),
+                        left: Box::new(Expression::Identifier(Cow::Borrowed("film_id"))),
                         right: Box::new(Expression::Value(Value::Number(3))),
                     }),
                 }),

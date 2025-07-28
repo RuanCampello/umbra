@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::VecDeque,
     io::{Read, Seek, Write},
     rc::Rc,
@@ -10,7 +11,7 @@ use crate::{
     sql::{
         analyzer,
         query::optimiser,
-        statement::{Column, Delete, Expression, OrderBy, OrderDirection, Select, Type, Update},
+        statement::{Column, Delete, Expression, OrderBy, OrderDirection, OwnedDelete, OwnedExpression, OwnedInsert, OwnedSelect, OwnedStatement, OwnedUpdate, Select, Type, Update},
         Statement,
     },
     vm::{
@@ -27,12 +28,12 @@ use crate::{
 };
 
 pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
-    statement: Statement,
+    statement: OwnedStatement,
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     Ok(match statement {
-        Statement::Insert(Insert { into, values, .. }) => {
-            let values = VecDeque::from(values);
+        OwnedStatement::Insert(OwnedInsert { into, values, .. }) => {
+            let values = VecDeque::from(values.into_iter().map(|v| v.into_iter().collect()).collect::<Vec<_>>());
             let source = Box::new(Planner::Values(Values { values }));
             let table = db.metadata(&into)?;
 
@@ -43,21 +44,21 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 pager: Rc::clone(&db.pager),
             })
         }
-        Statement::Select(Select {
+        OwnedStatement::Select(OwnedSelect {
             columns,
             from,
             r#where,
             order_by,
             group_by,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
+            let mut source = optimiser::generate_seq_plan(&from, r#where.as_ref().map(|e| e.as_borrowed()), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from)?;
             let schema = &table.schema;
 
             // this is a special case for `type_of` function
-            if let Some((col_name, type_of)) = single_typeof_column(&columns, &schema) {
+            if let Some((col_name, type_of)) = single_typeof_column(&columns.iter().map(|e| e.as_borrowed()).collect::<Vec<_>>(), &schema) {
                 use crate::sql::statement::Value;
 
                 return Ok(Planner::Project(Project {
@@ -67,7 +68,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         values: vec![vec![Expression::Value(Value::String(type_of.clone()))]]
                             .into(),
                     })),
-                    projection: vec![Expression::Value(Value::String(type_of))],
+                    projection: vec![OwnedExpression::Value(Value::String(type_of))],
                 }));
             }
 
@@ -75,22 +76,22 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 columns
                     .iter()
                     .map(|expr| match expr {
-                        Expression::Identifier(ident) => {
+                        OwnedExpression::Identifier(ident) => {
                             Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
                         }
-                        Expression::Alias { expr, alias } => {
-                            Ok(Column::new(alias, resolve_type(schema, expr)?))
+                        OwnedExpression::Alias { expr, alias } => {
+                            Ok(Column::new(alias, resolve_type(schema, &expr.as_borrowed())?))
                         }
-                        _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                        _ => Ok(Column::from_string(expr.to_string(), resolve_type(schema, &expr.as_borrowed())?)),
                     })
                     .collect::<Result<Vec<_>, SqlError>>()?,
             );
 
             let is_grouped = !group_by.is_empty();
-            let aggr_exprs: Vec<(&Expression, String)> = columns
+            let aggr_exprs: Vec<(&OwnedExpression, String)> = columns
                 .iter()
                 .filter_map(|expr| match expr {
-                    Expression::Alias { ref alias, expr } if expr.is_aggr_fn() => {
+                    OwnedExpression::Alias { ref alias, expr } if expr.is_aggr_fn() => {
                         Some((expr.as_ref(), alias.to_string()))
                     }
                     expr if expr.is_aggr_fn() => Some((expr, expr.to_string())),
@@ -103,10 +104,10 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 for expr in &group_by {
                     match expr {
-                        Expression::Identifier(ident) => aggr_schema
+                        OwnedExpression::Identifier(ident) => aggr_schema
                             .push(schema.columns[schema.index_of(ident).unwrap()].clone()),
                         _ => aggr_schema
-                            .push(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                            .push(Column::from_string(expr.to_string(), resolve_type(schema, &expr.as_borrowed())?)),
                     }
                 }
 
@@ -140,9 +141,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 let mut plan = Planner::Aggregate(
                     AggregateBuilder {
                         source: Box::new(source),
-                        aggr_exprs: aggr_exprs.iter().map(|expr| expr.0.clone()).collect(),
+                        aggr_exprs: aggr_exprs.iter().map(|expr| expr.0.clone().into_owned()).collect(),
                         page_size,
-                        group_by: group_by.clone(),
+                        group_by: group_by.into_iter().map(|g| g.into_owned()).collect(),
                         output: aggr_schema.clone(),
                     }
                     .into(),
@@ -172,16 +173,16 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }
 
                 if output.ne(&aggr_schema) {
-                    let projection: Vec<Expression> = columns
+                    let projection: Vec<Expression<'static>> = columns
                         .iter()
                         .map(|expr| match expr {
                             Expression::Alias { .. } => {
-                                Expression::Identifier(expr.unwrap_name().into())
+                                Expression::Identifier(Cow::Owned(expr.unwrap_name().into_owned()))
                             }
                             Expression::Function { func, .. } => {
-                                Expression::Identifier(func.to_string())
+                                Expression::Identifier(Cow::Owned(func.to_string()))
                             }
-                            other => other.clone(),
+                            other => other.clone().into_owned(),
                         })
                         .collect();
 
@@ -196,9 +197,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 return Ok(plan);
             }
 
-            if !order_by.is_empty()
-                && order_by != [Expression::Identifier(schema.columns[0].name.clone()).into()]
-            {
+            // Check if order_by is just the first column in default order
+            let is_default_order = order_by.len() == 1 
+                && matches!(&order_by[0].expr, Expression::Identifier(ident) if ident == &schema.columns[0].name)
+                && order_by[0].direction == OrderDirection::Asc;
+
+            if !order_by.is_empty() && !is_default_order {
                 let mut sorted_schema = schema.clone();
                 let mut indexes = Vec::new();
                 let mut extra_exprs = Vec::new();
@@ -215,7 +219,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             let ty = resolve_type(schema, &order.expr)?;
                             indexes.push(sorted_schema.len());
                             directions.push(order.direction);
-                            sorted_schema.push(Column::new(&order.expr.to_string(), ty));
+                            sorted_schema.push(Column::from_string(order.expr.to_string(), ty));
                             extra_exprs.push(order.expr.clone());
                         }
                     }
@@ -223,7 +227,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 if !extra_exprs.is_empty() {
                     source = Planner::SortKeys(SortKeys {
-                        expressions: extra_exprs,
+                        expressions: extra_exprs.into_iter().map(|e| e.into_owned()).collect(),
                         schema: schema.clone(),
                         source: Box::new(source),
                     });
@@ -255,11 +259,11 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             Planner::Project(Project {
                 output,
                 source: Box::new(source),
-                projection: columns,
+                projection: columns.into_iter().map(|c| c.into_owned()).collect(),
                 input: schema.clone(),
             })
         }
-        Statement::Update(Update {
+        OwnedStatement::Update(OwnedUpdate {
             table,
             columns,
             r#where,
@@ -281,13 +285,13 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             Planner::Update(UpdatePlan {
                 comparator: metadata.comp()?,
                 table: metadata.clone(),
-                assigments: columns,
+                assigments: columns.into_iter().map(|c| c.into_owned()).collect(),
                 pager: Rc::clone(&db.pager),
                 source: Box::new(source),
             })
         }
 
-        Statement::Delete(Delete { from, r#where }) => {
+        OwnedStatement::Delete(OwnedDelete { from, r#where }) => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
 
             let work_dir = db.work_dir.clone();
@@ -348,7 +352,7 @@ fn extract_order_indexes_and_directions(
             let idx = match &order.expr {
                 Expression::Identifier(ident) => schema
                     .index_of(ident)
-                    .ok_or(SqlError::InvalidGroupBy(ident.into())),
+                    .ok_or(SqlError::InvalidGroupBy(ident.clone().into())),
                 _ => schema
                     .index_of(&order.expr.to_string())
                     .ok_or(SqlError::Other(format!(
@@ -399,7 +403,7 @@ fn resolve_order_index<'a>(
 ) -> Result<usize, SqlError> {
     for (i, expr) in columns.iter().enumerate() {
         if let Expression::Alias { alias, .. } = expr {
-            if alias == ident {
+            if *alias == ident {
                 return Ok(i);
             }
         }

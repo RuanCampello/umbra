@@ -19,12 +19,12 @@ use super::Keyword;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
-pub(crate) enum Statement {
+pub(crate) enum Statement<'a> {
     Create(Create),
-    Select(Select),
-    Update(Update),
-    Insert(Insert),
-    Delete(Delete),
+    Select(Select<'a>),
+    Update(Update<'a>),
+    Insert(Insert<'a>),
+    Delete(Delete<'a>),
     Drop(Drop),
     Commit,
     StartTransaction,
@@ -32,11 +32,107 @@ pub(crate) enum Statement {
     Explain(Box<Self>),
 }
 
+/// Owned SQL statements for storage contexts
+#[derive(Debug, PartialEq)]
+pub(crate) enum OwnedStatement {
+    Create(Create),
+    Select(OwnedSelect),
+    Update(OwnedUpdate),
+    Insert(OwnedInsert),
+    Delete(OwnedDelete),
+    Drop(Drop),
+    Commit,
+    StartTransaction,
+    Rollback,
+    Explain(Box<Self>),
+}
+
+impl<'a> Statement<'a> {
+    /// Convert a borrowed Statement to an owned Statement
+    pub fn into_owned(self) -> OwnedStatement {
+        match self {
+            Statement::Create(create) => OwnedStatement::Create(create),
+            Statement::Select(select) => OwnedStatement::Select(select.into_owned()),
+            Statement::Update(update) => OwnedStatement::Update(update.into_owned()),
+            Statement::Insert(insert) => OwnedStatement::Insert(insert.into_owned()),
+            Statement::Delete(delete) => OwnedStatement::Delete(delete.into_owned()),
+            Statement::Drop(drop) => OwnedStatement::Drop(drop),
+            Statement::Commit => OwnedStatement::Commit,
+            Statement::StartTransaction => OwnedStatement::StartTransaction,
+            Statement::Rollback => OwnedStatement::Rollback,
+            Statement::Explain(inner) => OwnedStatement::Explain(Box::new(inner.into_owned())),
+        }
+    }
+}
+
 /// The `UPDATE` assignment instruction.
 #[derive(Debug, PartialEq)]
-pub(crate) struct Assignment {
+pub(crate) struct Assignment<'a> {
     pub identifier: String,
-    pub value: Expression,
+    pub value: Expression<'a>,
+}
+
+impl<'a> Assignment<'a> {
+    pub fn into_owned(self) -> OwnedAssignment {
+        OwnedAssignment {
+            identifier: self.identifier,
+            value: self.value.into_owned(),
+        }
+    }
+}
+
+/// An owned Assignment type for storage contexts
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct OwnedAssignment {
+    pub identifier: String,
+    pub value: OwnedExpression,
+}
+
+impl OwnedAssignment {
+    // For compatibility with existing code that calls into_owned() on owned types
+    pub fn into_owned(self) -> Self {
+        self
+    }
+}
+
+/// Owned OrderBy for storage contexts
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
+pub(crate) struct OwnedOrderBy {
+    pub expr: OwnedExpression,
+    pub direction: OrderDirection,
+}
+
+/// Owned Select for storage contexts
+#[derive(Debug, PartialEq)]
+pub(crate) struct OwnedSelect {
+    pub columns: Vec<OwnedExpression>,
+    pub from: String,
+    pub r#where: Option<OwnedExpression>,
+    pub order_by: Vec<OwnedOrderBy>,
+    pub group_by: Vec<OwnedExpression>,
+}
+
+/// Owned Update for storage contexts
+#[derive(Debug, PartialEq)]
+pub(crate) struct OwnedUpdate {
+    pub table: String,
+    pub columns: Vec<OwnedAssignment>,
+    pub r#where: Option<OwnedExpression>,
+}
+
+/// Owned Insert for storage contexts
+#[derive(Debug, PartialEq)]
+pub(crate) struct OwnedInsert {
+    pub into: String,
+    pub columns: Vec<String>,
+    pub values: Vec<Vec<OwnedExpression>>,
+}
+
+/// Owned Delete for storage contexts
+#[derive(Debug, PartialEq)]
+pub(crate) struct OwnedDelete {
+    pub from: String,
+    pub r#where: Option<OwnedExpression>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -67,33 +163,74 @@ pub(crate) enum Create {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Select {
-    pub columns: Vec<Expression>,
+pub(crate) struct Select<'a> {
+    pub columns: Vec<Expression<'a>>,
     pub from: String,
-    pub r#where: Option<Expression>,
-    pub order_by: Vec<OrderBy>,
-    pub group_by: Vec<Expression>,
+    pub r#where: Option<Expression<'a>>,
+    pub order_by: Vec<OrderBy<'a>>,
+    pub group_by: Vec<Expression<'a>>,
     // TODO: limit
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct Update {
-    pub table: String,
-    pub columns: Vec<Assignment>,
-    pub r#where: Option<Expression>,
+impl<'a> Select<'a> {
+    pub fn into_owned(self) -> OwnedSelect {
+        OwnedSelect {
+            columns: self.columns.into_iter().map(|e| e.into_owned()).collect(),
+            from: self.from,
+            r#where: self.r#where.map(|e| e.into_owned()),
+            order_by: self.order_by.into_iter().map(|o| o.into_owned()).collect(),
+            group_by: self.group_by.into_iter().map(|e| e.into_owned()).collect(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Insert {
+pub(crate) struct Update<'a> {
+    pub table: String,
+    pub columns: Vec<Assignment<'a>>,
+    pub r#where: Option<Expression<'a>>,
+}
+
+impl<'a> Update<'a> {
+    pub fn into_owned(self) -> OwnedUpdate {
+        OwnedUpdate {
+            table: self.table,
+            columns: self.columns.into_iter().map(|a| a.into_owned()).collect(),
+            r#where: self.r#where.map(|e| e.into_owned()),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Insert<'a> {
     pub into: String,
     pub columns: Vec<String>,
-    pub values: Vec<Vec<Expression>>,
+    pub values: Vec<Vec<Expression<'a>>>,
+}
+
+impl<'a> Insert<'a> {
+    pub fn into_owned(self) -> OwnedInsert {
+        OwnedInsert {
+            into: self.into,
+            columns: self.columns,
+            values: self.values.into_iter().map(|v| v.into_iter().map(|e| e.into_owned()).collect()).collect(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Delete {
+pub(crate) struct Delete<'a> {
     pub from: String,
-    pub r#where: Option<Expression>,
+    pub r#where: Option<Expression<'a>>,
+}
+
+impl<'a> Delete<'a> {
+    pub fn into_owned(self) -> OwnedDelete {
+        OwnedDelete {
+            from: self.from,
+            r#where: self.r#where.map(|e| e.into_owned()),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -103,8 +240,8 @@ pub(crate) enum Drop {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub enum Expression {
-    Identifier(String),
+pub enum Expression<'a> {
+    Identifier(Cow<'a, str>),
     Value(Value),
     Wildcard,
     UnaryOperation {
@@ -122,15 +259,24 @@ pub enum Expression {
     },
     Alias {
         expr: Box<Self>,
-        alias: String,
+        alias: Cow<'a, str>,
     },
     Nested(Box<Self>),
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub(crate) struct OrderBy {
-    pub expr: Expression,
+pub(crate) struct OrderBy<'a> {
+    pub expr: Expression<'a>,
     pub direction: OrderDirection,
+}
+
+impl<'a> OrderBy<'a> {
+    pub fn into_owned(self) -> OwnedOrderBy {
+        OwnedOrderBy {
+            expr: self.expr.into_owned(),
+            direction: self.direction,
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, PartialOrd, Clone, Copy)]
@@ -196,11 +342,37 @@ pub enum Value {
     Uuid(Uuid),
 }
 
+/// An owned Expression type for storage contexts where we need to own the data
+#[derive(Debug, PartialEq, Clone)]
+pub enum OwnedExpression {
+    Identifier(String),
+    Value(Value),
+    Wildcard,
+    UnaryOperation {
+        operator: UnaryOperator,
+        expr: Box<Self>,
+    },
+    BinaryOperation {
+        operator: BinaryOperator,
+        left: Box<Self>,
+        right: Box<Self>,
+    },
+    Function {
+        func: Function,
+        args: Vec<Self>,
+    },
+    Alias {
+        expr: Box<Self>,
+        alias: String,
+    },
+    Nested(Box<Self>),
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Constraint {
     PrimaryKey,
     Unique,
-    Default(Expression),
+    Default(OwnedExpression),
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
@@ -328,6 +500,14 @@ impl Column {
         }
     }
 
+    pub fn from_string(name: String, data_type: Type) -> Self {
+        Self {
+            name,
+            data_type,
+            constraints: vec![],
+        }
+    }
+
     pub fn primary_key(name: &str, data_type: Type) -> Self {
         Self {
             name: name.to_string(),
@@ -417,7 +597,7 @@ impl Type {
     }
 }
 
-impl Display for Statement {
+impl<'a> Display for Statement<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Statement::Create(create) => match create {
@@ -522,7 +702,113 @@ impl Display for Statement {
     }
 }
 
-impl Expression {
+impl Display for OwnedStatement {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            OwnedStatement::Create(create) => match create {
+                Create::Sequence {
+                    name,
+                    r#type,
+                    table,
+                } => write!(f, "CREATE SEQUENCE {name} AS {type} OWNED BY {table}")?,
+                Create::Table { name, columns } => {
+                    write!(f, "CREATE TABLE {name} ({})", join(columns, ", "))?;
+                }
+
+                Create::Database(name) => {
+                    write!(f, "CREATE DATABASE {name}")?;
+                }
+
+                Create::Index {
+                    name,
+                    table,
+                    column,
+                    unique,
+                } => {
+                    let unique = if *unique { "UNIQUE " } else { "" };
+                    write!(f, "CREATE {unique}INDEX {name} ON {table} ({column})")?;
+                }
+            },
+
+            OwnedStatement::Select(OwnedSelect {
+                columns,
+                from,
+                r#where,
+                order_by,
+                group_by,
+            }) => {
+                let columns = join(columns, ", ");
+                write!(f, "SELECT {columns} FROM {from}")?;
+
+                if let Some(expr) = r#where {
+                    write!(f, " WHERE {expr}")?;
+                }
+
+                if !group_by.is_empty() {
+                    write!(f, " GROUP BY {}", join(group_by, ", "))?;
+                }
+
+                if !order_by.is_empty() {
+                    write!(f, " ORDER BY {}", join(order_by, ", "))?;
+                }
+            }
+
+            OwnedStatement::Update(OwnedUpdate {
+                table,
+                columns,
+                r#where,
+            }) => {
+                write!(f, "UPDATE {table} SET {}", join(columns, ", "))?;
+                if let Some(expr) = r#where {
+                    write!(f, " WHERE {expr}")?;
+                }
+            }
+
+            OwnedStatement::Insert(OwnedInsert {
+                into,
+                columns,
+                values,
+            }) => {
+                let columns = match columns.is_empty() {
+                    true => String::from(" "),
+                    false => format!(" ({}) ", join(columns, ", ")),
+                };
+
+                let values = join(
+                    &values
+                        .iter()
+                        .map(|row| format!("({})", join(row, ", ")))
+                        .collect::<Vec<_>>(),
+                    ", ",
+                );
+
+                write!(f, "INSERT INTO {into}{columns}VALUES ({})", values)?;
+            }
+
+            OwnedStatement::Delete(OwnedDelete { from, r#where }) => {
+                write!(f, "DELETE FROM {from}")?;
+
+                if let Some(expr) = r#where {
+                    write!(f, " WHERE {expr}")?;
+                }
+            }
+
+            OwnedStatement::Drop(drop) => match drop {
+                Drop::Table(name) => write!(f, "DROP TABLE {name}")?,
+                Drop::Database(name) => write!(f, "DROP DATABASE {name}")?,
+            },
+
+            OwnedStatement::Commit => f.write_str("COMMIT")?,
+            OwnedStatement::StartTransaction => f.write_str("BEGIN")?,
+            OwnedStatement::Rollback => f.write_str("ROLLBACK")?,
+            OwnedStatement::Explain(statement) => write!(f, "EXPLAIN {statement}")?,
+        };
+
+        f.write_char(';')
+    }
+}
+
+impl<'a> Expression<'a> {
     pub(in crate::sql) fn unwrap_alias(&self) -> &Self {
         match self {
             Expression::Alias { ref expr, .. } => &**expr,
@@ -543,7 +829,7 @@ impl Expression {
     }
 }
 
-impl Default for Expression {
+impl<'a> Default for Expression<'a> {
     fn default() -> Self {
         Expression::Wildcard
     }
@@ -668,7 +954,118 @@ impl Display for Column {
     }
 }
 
-impl Display for Expression {
+impl<'a> Expression<'a> {
+    /// Convert a borrowed Expression to an owned Expression
+    pub fn into_owned(self) -> OwnedExpression {
+        match self {
+            Expression::Identifier(cow) => OwnedExpression::Identifier(cow.into_owned()),
+            Expression::Value(v) => OwnedExpression::Value(v),
+            Expression::Wildcard => OwnedExpression::Wildcard,
+            Expression::UnaryOperation { operator, expr } => OwnedExpression::UnaryOperation {
+                operator,
+                expr: Box::new(expr.into_owned()),
+            },
+            Expression::BinaryOperation { operator, left, right } => OwnedExpression::BinaryOperation {
+                operator,
+                left: Box::new(left.into_owned()),
+                right: Box::new(right.into_owned()),
+            },
+            Expression::Function { func, args } => OwnedExpression::Function {
+                func,
+                args: args.into_iter().map(|arg| arg.into_owned()).collect(),
+            },
+            Expression::Alias { expr, alias } => OwnedExpression::Alias {
+                expr: Box::new(expr.into_owned()),
+                alias: alias.into_owned(),
+            },
+            Expression::Nested(expr) => OwnedExpression::Nested(Box::new(expr.into_owned())),
+        }
+    }
+}
+
+impl OwnedExpression {
+    /// Convert an owned Expression to a borrowed Expression
+    pub fn as_borrowed(&self) -> Expression<'_> {
+        match self {
+            OwnedExpression::Identifier(s) => Expression::Identifier(Cow::Borrowed(s)),
+            OwnedExpression::Value(v) => Expression::Value(v.clone()),
+            OwnedExpression::Wildcard => Expression::Wildcard,
+            OwnedExpression::UnaryOperation { operator, expr } => Expression::UnaryOperation {
+                operator: *operator,
+                expr: Box::new(expr.as_borrowed()),
+            },
+            OwnedExpression::BinaryOperation { operator, left, right } => Expression::BinaryOperation {
+                operator: *operator,
+                left: Box::new(left.as_borrowed()),
+                right: Box::new(right.as_borrowed()),
+            },
+            OwnedExpression::Function { func, args } => Expression::Function {
+                func: *func,
+                args: args.iter().map(|arg| arg.as_borrowed()).collect(),
+            },
+            OwnedExpression::Alias { expr, alias } => Expression::Alias {
+                expr: Box::new(expr.as_borrowed()),
+                alias: Cow::Borrowed(alias),
+            },
+            OwnedExpression::Nested(expr) => Expression::Nested(Box::new(expr.as_borrowed())),
+        }
+    }
+
+    pub(in crate::sql) fn unwrap_alias(&self) -> &Self {
+        match self {
+            OwnedExpression::Alias { ref expr, .. } => &**expr,
+            _ => self,
+        }
+    }
+
+    pub(in crate::sql) fn unwrap_name(&self) -> Cow<'_, str> {
+        match self {
+            OwnedExpression::Alias { alias, .. } => Cow::Borrowed(&alias),
+            OwnedExpression::Nested(expr) => expr.unwrap_name(),
+            expr => Cow::Owned(expr.to_string()),
+        }
+    }
+
+    pub(in crate::sql) fn is_aggr_fn(&self) -> bool {
+        matches!(self, OwnedExpression::Function { func, .. } if func.is_aggr())
+    }
+
+    // For compatibility with existing code that calls into_owned() on owned types
+    pub fn into_owned(self) -> Self {
+        self
+    }
+}
+
+impl Default for OwnedExpression {
+    fn default() -> Self {
+        OwnedExpression::Wildcard
+    }
+}
+
+impl<'a> Display for Expression<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Identifier(ident) => f.write_str(ident),
+            Self::Value(value) => write!(f, "{value}"),
+            Self::Wildcard => f.write_char('*'),
+            Self::BinaryOperation {
+                operator,
+                left,
+                right,
+            } => {
+                write!(f, "{left} {operator} {right}")
+            }
+            Self::UnaryOperation { operator, expr } => {
+                write!(f, "{operator}{expr}")
+            }
+            Self::Function { func, args } => write!(f, "{func}"),
+            Self::Alias { expr, alias } => write!(f, "{expr} AS {alias}"),
+            Self::Nested(expr) => write!(f, "({expr})"),
+        }
+    }
+}
+
+impl Display for OwnedExpression {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Identifier(ident) => f.write_str(ident),
@@ -720,7 +1117,13 @@ impl Display for UnaryOperator {
     }
 }
 
-impl Display for Assignment {
+impl<'a> Display for Assignment<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{} = {}", self.identifier, self.value)
+    }
+}
+
+impl Display for OwnedAssignment {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} = {}", self.identifier, self.value)
     }
@@ -920,7 +1323,7 @@ impl Display for Temporal {
     }
 }
 
-impl Display for OrderBy {
+impl<'a> Display for OrderBy<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.direction {
             OrderDirection::Asc => write!(f, "{} ASC", self.expr),
@@ -929,8 +1332,17 @@ impl Display for OrderBy {
     }
 }
 
-impl From<Expression> for OrderBy {
-    fn from(expr: Expression) -> Self {
+impl Display for OwnedOrderBy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.direction {
+            OrderDirection::Asc => write!(f, "{} ASC", self.expr),
+            OrderDirection::Desc => write!(f, "{} DESC", self.expr),
+        }
+    }
+}
+
+impl<'a> From<Expression<'a>> for OrderBy<'a> {
+    fn from(expr: Expression<'a>) -> Self {
         Self {
             expr,
             direction: Default::default(),

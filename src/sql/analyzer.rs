@@ -13,12 +13,13 @@ use crate::sql::statement::{
 };
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::{HashMap, HashSet};
+use std::borrow::Cow;
 use std::fmt::Display;
 use std::str::FromStr;
 
 struct AliasCtx<'s> {
     schema: &'s Schema,
-    aliases: &'s HashMap<String, &'s Expression>,
+    aliases: &'s HashMap<Cow<'s, str>, &'s Expression<'s>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -46,7 +47,7 @@ pub(in crate::sql) trait AnalyzeCtx {
 }
 
 pub(in crate::sql) fn analyze<'s>(
-    statement: &'s Statement,
+    statement: &'s Statement<'s>,
     ctx: &'s mut impl Ctx,
 ) -> AnalyzerResult<'s, ()> {
     match statement {
@@ -177,7 +178,7 @@ pub(in crate::sql) fn analyze<'s>(
         }) => {
             let metadata = ctx.metadata(from)?;
 
-            let aliases: HashMap<String, &Expression> = columns
+            let aliases: HashMap<Cow<str>, &Expression<'s>> = columns
                 .iter()
                 .filter_map(|column_expr| match column_expr {
                     Expression::Alias { expr, alias } => Some((alias.clone(), expr.as_ref())),
@@ -276,7 +277,7 @@ fn analyze_assignment<'exp, 'id>(
     if expect_type.ne(&evaluate_type) {
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
-            found: value.clone(),
+            found: value.clone().into_owned(),
         }));
     }
 
@@ -313,7 +314,7 @@ impl<'s> AnalyzeCtx for AliasCtx<'s> {
 pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
     ctx: &Ctx,
     data_type: Option<&Type>,
-    expr: &'exp Expression,
+    expr: &'exp Expression<'exp>,
 ) -> Result<VmType, SqlError> {
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, data_type)?,
@@ -321,7 +322,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             let data_type = ctx
                 .resolve_identifier(ident)
                 .map(|tuple| tuple.1)
-                .ok_or(SqlError::InvalidColumn(ident.into()))?;
+                .ok_or(SqlError::InvalidColumn(ident.clone().into()))?;
 
             // this is an expection because when dealing with outside input, UUID's treated as a
             // String, but inside the engine, we treat it as a Number.
@@ -341,8 +342,8 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
-                    left: *left.clone(),
-                    right: *right.clone(),
+                    left: (*left.clone()).into_owned(),
+                    right: (*right.clone()).into_owned(),
                     operator: *operator,
                 }));
             }
@@ -391,7 +392,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 VmType::Number | VmType::Float => VmType::Number,
                 _ => Err(SqlError::Type(TypeError::ExpectedType {
                     expected: VmType::Number,
-                    found: *expr.clone(),
+                    found: (*expr.clone()).into_owned(),
                 }))?,
             }
         }
@@ -424,12 +425,12 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
 fn analyze_expression_with_aliases<'exp>(
     schema: &Schema,
-    aliases: &HashMap<String, &Expression>,
+    aliases: &HashMap<Cow<str>, &Expression<'exp>>,
     col_type: Option<&Type>,
-    expr: &'exp Expression,
+    expr: &'exp Expression<'exp>,
 ) -> Result<VmType, SqlError> {
     if let Expression::Identifier(ident) = expr {
-        if let Some(aliases_expr) = aliases.get(ident) {
+        if let Some(aliases_expr) = aliases.get(ident.as_ref()) {
             return analyze_expression_with_aliases(schema, aliases, col_type, &aliases_expr);
         }
     }
@@ -471,7 +472,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
 
 fn analyze_where<'exp>(
     schema: &'exp Schema,
-    r#where: &'exp Option<Expression>,
+    r#where: &'exp Option<Expression<'exp>>,
 ) -> Result<(), DatabaseError> {
     let Some(expr) = r#where else { return Ok(()) };
 
@@ -481,7 +482,7 @@ fn analyze_where<'exp>(
 
     Err(TypeError::ExpectedType {
         expected: VmType::Bool,
-        found: expr.clone(),
+        found: expr.clone().into_owned(),
     }
     .into())
 }

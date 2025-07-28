@@ -4,6 +4,7 @@ use crate::{
     core::uuid::Uuid,
     db::{Ctx, DatabaseError, ROW_COL_ID},
 };
+use std::borrow::Cow;
 
 use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 
@@ -32,7 +33,7 @@ use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 /// -- prepared select statement
 /// INSERT INTO employees (id, name, age) VALUES (x, 'John Doe', 22) -- where 'x' is the next_val() of this given `SERIAL`.
 /// ```
-pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
+pub(crate) fn prepare<'a>(statement: &mut Statement<'a>, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
         Statement::Select(Select { columns, from, .. })
             if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) =>
@@ -44,7 +45,7 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 .iter()
                 .filter(|&col| col.name.ne(&ROW_COL_ID))
                 .cloned()
-                .map(|col| Expression::Identifier(col.name))
+                .map(|col| Expression::Identifier(Cow::Owned(col.name)))
                 .collect();
 
             let mut wildcards = Vec::new();

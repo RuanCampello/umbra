@@ -1,13 +1,14 @@
 use crate::sql::statement::{
     Create, Delete, Drop, Insert, OrderBy, OrderDirection, Select, Update,
 };
+use std::borrow::Cow;
 
 use super::{
     tokens::{Keyword, Token},
     Parser, ParserResult, Sql,
 };
 
-impl<'sql> Sql<'sql> for Select {
+impl<'sql> Sql<'sql> for Select<'sql> {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         let columns = parser.parse_separated_tokens(
             |parser| {
@@ -15,7 +16,7 @@ impl<'sql> Sql<'sql> for Select {
                 match parser.consume_optional(Token::Keyword(Keyword::As)) {
                     false => Ok(expr),
                     _ => Ok(super::Expression::Alias {
-                        alias: parser.parse_ident()?,
+                        alias: Cow::Owned(parser.parse_ident()?),
                         expr: Box::new(expr),
                     }),
                 }
@@ -103,7 +104,7 @@ impl<'sql> Sql<'sql> for Create {
     }
 }
 
-impl<'sql> Sql<'sql> for Insert {
+impl<'sql> Sql<'sql> for Insert<'sql> {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         parser.expect_keyword(Keyword::Into)?;
         let into = parser.parse_ident()?;
@@ -137,7 +138,7 @@ impl<'sql> Sql<'sql> for Insert {
     }
 }
 
-impl<'sql> Sql<'sql> for Update {
+impl<'sql> Sql<'sql> for Update<'sql> {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         let table = parser.parse_ident()?;
         parser.expect_keyword(Keyword::Set)?;
@@ -169,7 +170,7 @@ impl<'sql> Sql<'sql> for Drop {
     }
 }
 
-impl<'sql> Sql<'sql> for Delete {
+impl<'sql> Sql<'sql> for Delete<'sql> {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         parser.expect_keyword(Keyword::From)?;
         let (from, r#where) = parser.parse_from_and_where()?;

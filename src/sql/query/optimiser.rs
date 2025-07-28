@@ -10,7 +10,7 @@ use crate::{
     db::{Ctx, Database, DatabaseError, IndexMetadata, Relation},
     sql::{
         parser::Parser,
-        statement::{BinaryOperator, Expression, OrderDirection, Value},
+        statement::{BinaryOperator, Expression, OrderDirection, OwnedExpression, Value},
     },
     vm::planner::{
         Collect, CollectBuilder, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner,
@@ -20,9 +20,9 @@ use crate::{
 
 type IndexBounds<'value> = (Bound<&'value Value>, Bound<&'value Value>);
 
-pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
+pub(in crate::sql::query) fn generate_seq_plan<'a, File: PlanExecutor>(
     table: &str,
-    mut filter: Option<Expression>,
+    mut filter: Option<Expression<'a>>,
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     let source = match generate_optimised_seq_plan(table, db, &mut filter)? {
@@ -37,14 +37,14 @@ pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
     Ok(Planner::Filter(Filter {
         source: Box::new(source),
         schema: db.metadata(table)?.schema.clone(),
-        filter: expr,
+        filter: expr.into_owned(),
     }))
 }
 
-fn generate_optimised_seq_plan<File: PlanExecutor>(
+fn generate_optimised_seq_plan<'a, File: PlanExecutor>(
     table: &str,
     db: &mut Database<File>,
-    filter: &mut Option<Expression>,
+    filter: &mut Option<Expression<'a>>,
 ) -> Result<Option<Planner<File>>, DatabaseError> {
     let Some(expr) = filter else {
         return Ok(None);
@@ -88,7 +88,7 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
                     .end_bound()
                     .map(|value| tuple::serialize(&r#type, value));
 
-                let expr = range_to_expr(col, *range);
+                let expr = range_to_expr(col, *range).into_owned();
                 let pager = Rc::clone(&db.pager);
                 let relation = relation.clone();
 
@@ -218,7 +218,7 @@ fn find_index_paths<'exp>(
         } => match (&**left, &**right) {
             (Expression::Identifier(col), Expression::Value(_))
             | (Expression::Value(_), Expression::Identifier(col))
-                if (indexes.contains(col.as_str()) || col == k_col)
+                if (indexes.contains(col.as_ref()) || col.as_ref() == k_col)
                     && matches!(
                         operator,
                         BinaryOperator::Eq
@@ -228,7 +228,7 @@ fn find_index_paths<'exp>(
                             | BinaryOperator::GtEq
                     ) =>
             {
-                HashMap::from([(col.as_str(), VecDeque::from([determine_bounds(expr)]))])
+                HashMap::from([(col.as_ref(), VecDeque::from([determine_bounds(expr)]))])
             }
             (left, right) if matches!(operator, BinaryOperator::And | BinaryOperator::Or) => {
                 let mut left_paths = find_index_paths(k_col, indexes, left, cancel);
@@ -380,7 +380,7 @@ fn find_index_paths<'exp>(
     }
 }
 
-fn determine_bounds(expr: &Expression) -> (Bound<&Value>, Bound<&Value>) {
+fn determine_bounds<'a>(expr: &'a Expression<'a>) -> (Bound<&'a Value>, Bound<&'a Value>) {
     let Expression::BinaryOperation {
         left,
         operator,
@@ -465,7 +465,7 @@ fn range_union<'value>(
     Some((union_start, union_end))
 }
 
-fn range_to_expr(col: &str, (start, end): (Bound<&Value>, Bound<&Value>)) -> Expression {
+fn range_to_expr<'a>(col: &'a str, (start, end): (Bound<&'a Value>, Bound<&'a Value>)) -> OwnedExpression {
     let expr = match (start, end) {
         (Bound::Unbounded, Bound::Excluded(v)) => format!("{col} < {v}"),
         (Bound::Unbounded, Bound::Included(v)) => format!("{col} <= {v}"),
@@ -481,7 +481,7 @@ fn range_to_expr(col: &str, (start, end): (Bound<&Value>, Bound<&Value>)) -> Exp
         _ => unreachable!("Cannot build expression from {:?}", (start, end)),
     };
 
-    Parser::new(&expr).parse_expr(None).unwrap()
+    Parser::new(&expr).parse_expr(None).unwrap().into_owned()
 }
 
 fn cmp_start_bounds(bound1: &Bound<&Value>, bound2: &Bound<&Value>) -> Ordering {
@@ -552,7 +552,7 @@ fn is_exact_match(range: IndexBounds) -> bool {
     v1 == v2
 }
 
-fn skip_col_conditions(col: &str, expr: &mut Expression) {
+fn skip_col_conditions<'a>(col: &str, expr: &mut Expression<'a>) {
     let Expression::BinaryOperation {
         operator,
         left,
