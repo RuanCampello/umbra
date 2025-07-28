@@ -196,9 +196,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 return Ok(plan);
             }
 
-            if !order_by.is_empty()
-                && order_by != [Expression::Identifier(schema.columns[0].name.clone()).into()]
-            {
+            // Check if order_by is just the first column in default order
+            let is_default_order = order_by.len() == 1 
+                && matches!(&order_by[0].expr, Expression::Identifier(ident) if ident == &schema.columns[0].name)
+                && order_by[0].direction == OrderDirection::Asc;
+
+            if !order_by.is_empty() && !is_default_order {
                 let mut sorted_schema = schema.clone();
                 let mut indexes = Vec::new();
                 let mut extra_exprs = Vec::new();

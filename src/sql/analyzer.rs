@@ -18,7 +18,7 @@ use std::str::FromStr;
 
 struct AliasCtx<'s> {
     schema: &'s Schema,
-    aliases: &'s HashMap<String, &'s Expression>,
+    aliases: &'s HashMap<&'s str, &'s Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -177,10 +177,10 @@ pub(in crate::sql) fn analyze<'s>(
         }) => {
             let metadata = ctx.metadata(from)?;
 
-            let aliases: HashMap<String, &Expression> = columns
+            let aliases: HashMap<&str, &Expression> = columns
                 .iter()
                 .filter_map(|column_expr| match column_expr {
-                    Expression::Alias { expr, alias } => Some((alias.clone(), expr.as_ref())),
+                    Expression::Alias { expr, alias } => Some((alias.as_str(), expr.as_ref())),
                     _ => None,
                 })
                 .collect();
@@ -424,12 +424,12 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
 fn analyze_expression_with_aliases<'exp>(
     schema: &Schema,
-    aliases: &HashMap<String, &Expression>,
+    aliases: &HashMap<&str, &Expression>,
     col_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError> {
     if let Expression::Identifier(ident) = expr {
-        if let Some(aliases_expr) = aliases.get(ident) {
+        if let Some(aliases_expr) = aliases.get(ident.as_str()) {
             return analyze_expression_with_aliases(schema, aliases, col_type, &aliases_expr);
         }
     }
