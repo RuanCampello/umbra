@@ -60,7 +60,7 @@ macro_rules! impl_value_extractor {
                         Value::$value_variant(x) => Ok(x),
                         _ => Err(SqlError::Type(TypeError::ExpectedType {
                             expected: VmType::$vm_type,
-                            found: argument.clone()
+                            found: argument.clone().into_owned()
                         })),
                     }
                 }
@@ -230,7 +230,7 @@ pub(crate) fn resolve_expression<'exp>(
                     Expression::Identifier(name) => {
                         let idx = schema
                             .index_of(name)
-                            .ok_or_else(|| SqlError::InvalidColumn((*name).into()))?;
+                            .ok_or_else(|| SqlError::InvalidColumn(name.clone().into()))?;
                         Ok(schema.columns[idx].data_type.to_string())
                     }
                     _ => Err(SqlError::Other(

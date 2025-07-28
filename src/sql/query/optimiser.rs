@@ -88,7 +88,7 @@ fn generate_optimised_seq_plan<'a, File: PlanExecutor>(
                     .end_bound()
                     .map(|value| tuple::serialize(&r#type, value));
 
-                let expr = range_to_expr(col, *range);
+                let expr = range_to_expr(col, *range).into_owned();
                 let pager = Rc::clone(&db.pager);
                 let relation = relation.clone();
 
@@ -465,7 +465,7 @@ fn range_union<'value>(
     Some((union_start, union_end))
 }
 
-fn range_to_expr<'a>(col: &'a str, (start, end): (Bound<&'a Value>, Bound<&'a Value>)) -> Expression<'a> {
+fn range_to_expr<'a>(col: &'a str, (start, end): (Bound<&'a Value>, Bound<&'a Value>)) -> Expression<'static> {
     let expr = match (start, end) {
         (Bound::Unbounded, Bound::Excluded(v)) => format!("{col} < {v}"),
         (Bound::Unbounded, Bound::Included(v)) => format!("{col} <= {v}"),
@@ -481,7 +481,7 @@ fn range_to_expr<'a>(col: &'a str, (start, end): (Bound<&'a Value>, Bound<&'a Va
         _ => unreachable!("Cannot build expression from {:?}", (start, end)),
     };
 
-    Parser::new(&expr).parse_expr(None).unwrap()
+    Parser::new(&expr).parse_expr(None).unwrap().into_owned()
 }
 
 fn cmp_start_bounds(bound1: &Bound<&Value>, bound2: &Bound<&Value>) -> Ordering {
@@ -552,7 +552,7 @@ fn is_exact_match(range: IndexBounds) -> bool {
     v1 == v2
 }
 
-fn skip_col_conditions(col: &str, expr: &mut Expression) {
+fn skip_col_conditions<'a>(col: &str, expr: &mut Expression<'a>) {
     let Expression::BinaryOperation {
         operator,
         left,

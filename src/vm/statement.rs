@@ -279,7 +279,7 @@ fn collect_from_metadata<File: Write + Seek + Read + FileOperations>(
             mem_buff_size: page_size,
             schema: table.schema.clone(),
             source: Box::new(Planner::Filter(Filter {
-                filter: Parser::new(filter).parse_expr(None)?,
+                filter: Parser::new(filter).parse_expr(None)?.into_owned(),
                 schema: table.schema.clone(),
                 source: Box::new(Planner::SeqScan(SeqScan {
                     table: table.to_owned(),

@@ -69,7 +69,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    pub fn try_parse(&mut self) -> ParserResult<Vec<Statement>> {
+    pub fn try_parse(&mut self) -> ParserResult<Vec<Statement<'input>>> {
         let mut statements = Vec::new();
 
         loop {
@@ -80,7 +80,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    pub fn parse_statement(&mut self) -> ParserResult<Statement> {
+    pub fn parse_statement(&mut self) -> ParserResult<Statement<'input>> {
         let statement = match self.expect_one(&Self::supported_statements())? {
             Keyword::Select => Statement::Select(Select::parse(self)?),
             Keyword::Create => Statement::Create(Create::parse(self)?),
@@ -356,7 +356,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    fn parse_assign(&mut self) -> ParserResult<Assignment> {
+    fn parse_assign(&mut self) -> ParserResult<Assignment<'input>> {
         let identifier = self.parse_ident()?;
         self.expect_token(Token::Eq)?;
         let value = self.parse_expr(None)?;

@@ -33,7 +33,7 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
 ) -> Result<Planner<File>, DatabaseError> {
     Ok(match statement {
         Statement::Insert(Insert { into, values, .. }) => {
-            let values = VecDeque::from(values);
+            let values = VecDeque::from(values.into_iter().map(|v| v.into_iter().map(|expr| expr.into_owned()).collect()).collect::<Vec<_>>());
             let source = Box::new(Planner::Values(Values { values }));
             let table = db.metadata(&into)?;
 
@@ -141,9 +141,9 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
                 let mut plan = Planner::Aggregate(
                     AggregateBuilder {
                         source: Box::new(source),
-                        aggr_exprs: aggr_exprs.iter().map(|expr| expr.0.clone()).collect(),
+                        aggr_exprs: aggr_exprs.iter().map(|expr| expr.0.clone().into_owned()).collect(),
                         page_size,
-                        group_by: group_by.clone(),
+                        group_by: group_by.into_iter().map(|g| g.into_owned()).collect(),
                         output: aggr_schema.clone(),
                     }
                     .into(),
@@ -182,7 +182,7 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
                             Expression::Function { func, .. } => {
                                 Expression::Identifier(Cow::Owned(func.to_string()))
                             }
-                            other => other.clone(),
+                            other => other.clone().into_owned(),
                         })
                         .collect();
 
@@ -227,7 +227,7 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
 
                 if !extra_exprs.is_empty() {
                     source = Planner::SortKeys(SortKeys {
-                        expressions: extra_exprs,
+                        expressions: extra_exprs.into_iter().map(|e| e.into_owned()).collect(),
                         schema: schema.clone(),
                         source: Box::new(source),
                     });
@@ -259,7 +259,7 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
             Planner::Project(Project {
                 output,
                 source: Box::new(source),
-                projection: columns,
+                projection: columns.into_iter().map(|c| c.into_owned()).collect(),
                 input: schema.clone(),
             })
         }
@@ -285,7 +285,7 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
             Planner::Update(UpdatePlan {
                 comparator: metadata.comp()?,
                 table: metadata.clone(),
-                assigments: columns,
+                assigments: columns.into_iter().map(|c| c.into_owned()).collect(),
                 pager: Rc::clone(&db.pager),
                 source: Box::new(source),
             })
@@ -352,7 +352,7 @@ fn extract_order_indexes_and_directions(
             let idx = match &order.expr {
                 Expression::Identifier(ident) => schema
                     .index_of(ident)
-                    .ok_or(SqlError::InvalidGroupBy((*ident).into())),
+                    .ok_or(SqlError::InvalidGroupBy(ident.clone().into())),
                 _ => schema
                     .index_of(&order.expr.to_string())
                     .ok_or(SqlError::Other(format!(
