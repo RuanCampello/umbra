@@ -10,7 +10,7 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{join, Assignment, Expression, Function, OrderDirection, Value};
+use crate::sql::statement::{join, Assignment, Expression, Function, OwnedAssignment, OrderDirection, OwnedExpression, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
@@ -65,7 +65,7 @@ pub(crate) struct SeqScan<File> {
 pub(crate) struct ExactMatch<File> {
     pub relation: Relation,
     pub key: Vec<u8>,
-    pub expr: Expression<'static>,
+    pub expr: OwnedExpression,
     pub pager: Rc<RefCell<Pager<File>>>,
     pub done: bool,
     pub emit_only_key: bool,
@@ -80,7 +80,7 @@ pub(crate) struct RangeScan<File> {
     pager: Rc<RefCell<Pager<File>>>,
     range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
     comparator: BTreeKeyCmp,
-    expr: Expression<'static>,
+    expr: OwnedExpression,
     cursor: Cursor,
     init: bool,
     done: bool,
@@ -104,7 +104,7 @@ pub(crate) struct LogicalScan<File: FileOperations> {
 pub(crate) struct Filter<File: FileOperations> {
     pub source: Box<Planner<File>>,
     pub schema: Schema,
-    pub filter: Expression<'static>,
+    pub filter: OwnedExpression,
 }
 
 #[derive(Debug, PartialEq)]
@@ -133,7 +133,7 @@ pub(crate) struct Insert<File: FileOperations> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct Update<File: FileOperations> {
     pub table: TableMetadata,
-    pub assigments: Vec<Assignment<'static>>,
+    pub assigments: Vec<OwnedAssignment>,
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
     pub comparator: FixedSizeCmp,
@@ -151,7 +151,7 @@ pub(crate) struct Delete<File: FileOperations> {
 pub(crate) struct SortKeys<File: FileOperations> {
     pub source: Box<Planner<File>>,
     pub schema: Schema,
-    pub expressions: Vec<Expression<'static>>,
+    pub expressions: Vec<OwnedExpression>,
 }
 
 #[derive(Debug)]
@@ -171,14 +171,14 @@ pub(crate) struct Project<File: FileOperations> {
     pub source: Box<Planner<File>>,
     pub input: Schema,
     pub output: Schema,
-    pub projection: Vec<Expression<'static>>,
+    pub projection: Vec<OwnedExpression>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
     source: Box<Planner<File>>,
-    group_by: Vec<Expression<'static>>,
-    aggr_exprs: Vec<Expression<'static>>,
+    group_by: Vec<OwnedExpression>,
+    aggr_exprs: Vec<OwnedExpression>,
     output: Schema,
     output_buffer: TupleBuffer,
     filled: bool,
@@ -187,7 +187,7 @@ pub(crate) struct Aggregate<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Values {
-    pub values: VecDeque<Vec<Expression<'static>>>,
+    pub values: VecDeque<Vec<OwnedExpression>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -226,7 +226,7 @@ pub(crate) struct RangeScanBuilder<File: FileOperations> {
     pub pager: Rc<RefCell<Pager<File>>>,
     pub relation: Relation,
     pub range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
-    pub expr: Expression<'static>,
+    pub expr: OwnedExpression,
     pub emit_only_key: bool,
 }
 
@@ -250,8 +250,8 @@ pub(crate) struct CollectBuilder<File: FileOperations> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct AggregateBuilder<File: FileOperations> {
     pub source: Box<Planner<File>>,
-    pub group_by: Vec<Expression<'static>>,
-    pub aggr_exprs: Vec<Expression<'static>>,
+    pub group_by: Vec<OwnedExpression>,
+    pub aggr_exprs: Vec<OwnedExpression>,
     pub output: Schema,
     pub page_size: usize,
 }
@@ -404,7 +404,7 @@ impl<File: PlanExecutor> RangeScan<File> {
         range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
         relation: Relation,
         emit_only_key: bool,
-        expr: Expression<'static>,
+        expr: OwnedExpression,
         pager: Rc<RefCell<Pager<File>>>,
     ) -> Self {
         Self {
@@ -1146,7 +1146,7 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
         if groups.is_empty() {
             self.filled = true;
 
-            let is_count = |expr: &Expression<'static>| matches!(expr, Expression::Function { func, .. } if *func == Function::Count);
+            let is_count = |expr: &OwnedExpression| matches!(expr, Expression::Function { func, .. } if *func == Function::Count);
             if self.group_by.is_empty() && self.aggr_exprs.iter().all(|expr| is_count(expr)) {
                 return Ok(Some(vec![Value::Number(0); self.aggr_exprs.len()]));
             }
@@ -1181,7 +1181,7 @@ impl<File: PlanExecutor> Aggregate<File> {
     fn apply_aggr(
         &self,
         func: &Function,
-        args: &[Expression<'static>],
+        args: &[OwnedExpression],
         rows: &[Tuple],
         schema: &Schema,
     ) -> Result<Value, DatabaseError> {

@@ -21,7 +21,7 @@ use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::query;
-use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
+use crate::sql::statement::{Column, Constraint, Create, OwnedStatement, Statement, Type, Value};
 use crate::vm::expression::{TypeError, VmError};
 use crate::vm::planner::{Execute, Planner, Tuple};
 use crate::{index, vm};
@@ -71,7 +71,7 @@ enum TransactionState {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Exec<File: FileOperations> {
-    Statement(Statement<'static>),
+    Statement(OwnedStatement),
     Plan(Planner<File>),
     Explain(VecDeque<String>),
 }
@@ -221,17 +221,17 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         let mut schema = Schema::empty();
 
         let exec = match statement {
-            Statement::Create(_)
-            | Statement::Drop(_)
-            | Statement::StartTransaction
-            | Statement::Commit
-            | Statement::Rollback => Exec::Statement(statement.into_owned()),
+            OwnedStatement::Create(_)
+            | OwnedStatement::Drop(_)
+            | OwnedStatement::StartTransaction
+            | OwnedStatement::Commit
+            | OwnedStatement::Rollback => Exec::Statement(statement),
 
-            Statement::Explain(inner) => match &*inner {
-                Statement::Select { .. }
-                | Statement::Insert { .. }
-                | Statement::Update { .. }
-                | Statement::Delete { .. } => {
+            OwnedStatement::Explain(inner) => match &*inner {
+                OwnedStatement::Select { .. }
+                | OwnedStatement::Insert { .. }
+                | OwnedStatement::Update { .. }
+                | OwnedStatement::Delete { .. } => {
                     schema = Schema::new(vec![Column::new("Query Plan", Type::Varchar(255))]);
                     let planner = query::planner::generate_plan(*inner, self)?;
                     Exec::Explain(format!("{planner}").lines().map(String::from).collect())
@@ -599,7 +599,7 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
         if self.db.aborted_transaction()
             && !matches!(
                 exec,
-                Exec::Statement(Statement::Commit) | Exec::Statement(Statement::Rollback)
+                Exec::Statement(OwnedStatement::Commit) | Exec::Statement(OwnedStatement::Rollback)
             )
         {
             return Err(DatabaseError::Other(
@@ -607,7 +607,7 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
             ));
         }
 
-        if let Exec::Statement(Statement::StartTransaction) = exec {
+        if let Exec::Statement(OwnedStatement::StartTransaction) = exec {
             if self.db.active_transaction() {
                 return Err(DatabaseError::Other(
                     "Cannot start a transaction while there's one in progress".into(),
@@ -631,17 +631,17 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                 let mut affected_rows = 0;
 
                 match statement {
-                    Statement::Commit => {
+                    OwnedStatement::Commit => {
                         if self.db.transaction_state.eq(&TransactionState::Aborted) {
                             self.db.rollback()?;
                         } else {
                             self.db.commit()?;
                         }
                     }
-                    Statement::Rollback => {
+                    OwnedStatement::Rollback => {
                         self.db.rollback()?;
                     }
-                    Statement::Drop(_) | Statement::Create(_) => {
+                    OwnedStatement::Drop(_) | OwnedStatement::Create(_) => {
                         match vm::statement::exec(statement, self.db) {
                             Ok(rows) => affected_rows = rows,
                             Err(e) => {

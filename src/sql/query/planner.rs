@@ -11,7 +11,7 @@ use crate::{
     sql::{
         analyzer,
         query::optimiser,
-        statement::{Column, Delete, Expression, OrderBy, OrderDirection, Select, Type, Update},
+        statement::{Column, Delete, Expression, OrderBy, OrderDirection, OwnedDelete, OwnedInsert, OwnedSelect, OwnedStatement, OwnedUpdate, Select, Type, Update},
         Statement,
     },
     vm::{
@@ -27,13 +27,13 @@ use crate::{
     },
 };
 
-pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
-    statement: Statement<'a>,
+pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
+    statement: OwnedStatement,
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     Ok(match statement {
-        Statement::Insert(Insert { into, values, .. }) => {
-            let values = VecDeque::from(values.into_iter().map(|v| v.into_iter().map(|expr| expr.into_owned()).collect()).collect::<Vec<_>>());
+        OwnedStatement::Insert(OwnedInsert { into, values, .. }) => {
+            let values = VecDeque::from(values.into_iter().map(|v| v.into_iter().collect()).collect::<Vec<_>>());
             let source = Box::new(Planner::Values(Values { values }));
             let table = db.metadata(&into)?;
 
@@ -44,7 +44,7 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
                 pager: Rc::clone(&db.pager),
             })
         }
-        Statement::Select(Select {
+        OwnedStatement::Select(OwnedSelect {
             columns,
             from,
             r#where,
@@ -263,7 +263,7 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
                 input: schema.clone(),
             })
         }
-        Statement::Update(Update {
+        OwnedStatement::Update(OwnedUpdate {
             table,
             columns,
             r#where,
@@ -291,7 +291,7 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
             })
         }
 
-        Statement::Delete(Delete { from, r#where }) => {
+        OwnedStatement::Delete(OwnedDelete { from, r#where }) => {
             let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
 
             let work_dir = db.work_dir.clone();

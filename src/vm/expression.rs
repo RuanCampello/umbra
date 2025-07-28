@@ -3,7 +3,7 @@ use crate::core::date::DateParseError;
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
-    BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+    BinaryOperator, Expression, Function, OwnedExpression, Temporal, Type, UnaryOperator, Value,
 };
 use std::fmt::{Display, Formatter};
 use std::mem;
@@ -32,13 +32,13 @@ pub enum TypeError {
         value: Value,
     },
     CannotApplyBinary {
-        left: Expression<'static>,
+        left: OwnedExpression,
         operator: BinaryOperator,
-        right: Expression<'static>,
+        right: OwnedExpression,
     },
     ExpectedType {
         expected: VmType,
-        found: Expression<'static>,
+        found: OwnedExpression,
     },
     ExpectedOneOfTypes {
         expected: Vec<VmType>,
@@ -281,7 +281,7 @@ pub(crate) fn evaluate_where(
 
         other => Err(SqlError::Type(TypeError::ExpectedType {
             expected: VmType::Bool,
-            found: Expression::Value(other),
+            found: OwnedExpression::Value(other),
         })),
     }
 }

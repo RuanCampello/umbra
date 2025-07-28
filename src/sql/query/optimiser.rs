@@ -465,7 +465,7 @@ fn range_union<'value>(
     Some((union_start, union_end))
 }
 
-fn range_to_expr<'a>(col: &'a str, (start, end): (Bound<&'a Value>, Bound<&'a Value>)) -> Expression<'static> {
+fn range_to_expr<'a>(col: &'a str, (start, end): (Bound<&'a Value>, Bound<&'a Value>)) -> OwnedExpression {
     let expr = match (start, end) {
         (Bound::Unbounded, Bound::Excluded(v)) => format!("{col} < {v}"),
         (Bound::Unbounded, Bound::Included(v)) => format!("{col} <= {v}"),

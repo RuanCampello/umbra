@@ -17,20 +17,20 @@ use crate::{
     index,
     sql::{
         parser::Parser,
-        statement::{Constraint, Create, Drop, Statement, Value},
+        statement::{Constraint, Create, Drop, OwnedStatement, Statement, Value},
     },
     vm::planner::{CollectBuilder, Execute, Filter, Planner, SeqScan},
 };
 
 pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
-    statement: Statement,
+    statement: OwnedStatement,
     db: &mut Database<File>,
 ) -> Result<usize, DatabaseError> {
     let sql = statement.to_string();
     let mut affected_rows = 0;
 
     match statement {
-        Statement::Create(Create::Table { name, columns }) => {
+        OwnedStatement::Create(Create::Table { name, columns }) => {
             let root = allocate_root(db)?;
             insert_into_metadata(
                 db,
@@ -53,7 +53,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 });
 
             for sequence in sequences {
-                exec(Statement::Create(sequence), db)?;
+                exec(OwnedStatement::Create(sequence), db)?;
             }
 
             let skip_pk_idx = match has_btree_key(&columns) {
@@ -84,10 +84,10 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 });
 
             for index in indexes {
-                exec(Statement::Create(index), db)?;
+                exec(OwnedStatement::Create(index), db)?;
             }
         }
-        Statement::Create(Create::Index {
+        OwnedStatement::Create(Create::Index {
             name,
             table,
             column,
@@ -150,7 +150,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             db.context.invalidate(&table);
         }
-        Statement::Create(Create::Sequence {
+        OwnedStatement::Create(Create::Sequence {
             name,
             r#type,
             table,
@@ -174,7 +174,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             )?;
         }
 
-        Statement::Drop(Drop::Table(name)) => {
+        OwnedStatement::Drop(Drop::Table(name)) => {
             let comparator = db.metadata(DB_METADATA)?.comp()?;
             let mut planner = collect_from_metadata(db, &format!("table_name = '{name}'"))?;
             let schema = planner.schema().ok_or(DatabaseError::Corrupted(format!(
