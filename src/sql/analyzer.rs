@@ -12,9 +12,14 @@ use crate::sql::statement::{
     BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
 };
 use crate::vm::expression::{TypeError, VmType};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::str::FromStr;
+
+struct AliasCtx<'s> {
+    schema: &'s Schema,
+    aliases: &'s HashMap<String, &'s Expression>,
+}
 
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
@@ -35,6 +40,10 @@ pub enum AlreadyExists {
 }
 
 type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
+
+pub(in crate::sql) trait AnalyzeCtx {
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)>;
+}
 
 pub(in crate::sql) fn analyze<'s>(
     statement: &'s Statement,
@@ -168,6 +177,14 @@ pub(in crate::sql) fn analyze<'s>(
         }) => {
             let metadata = ctx.metadata(from)?;
 
+            let aliases: HashMap<String, &Expression> = columns
+                .iter()
+                .filter_map(|column_expr| match column_expr {
+                    Expression::Alias { expr, alias } => Some((alias.clone(), expr.as_ref())),
+                    _ => None,
+                })
+                .collect();
+
             for expr in columns {
                 let expr = expr.unwrap_alias();
 
@@ -189,11 +206,11 @@ pub(in crate::sql) fn analyze<'s>(
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
-                analyze_expression(&metadata.schema, None, &order.expr)?;
+                analyze_expression_with_aliases(&metadata.schema, &aliases, None, &order.expr)?;
             }
 
             for expr in group_by {
-                analyze_expression(&metadata.schema, None, expr)?;
+                analyze_expression_with_aliases(&metadata.schema, &aliases, None, expr)?;
             }
         }
 
@@ -274,21 +291,41 @@ fn analyze_assignment<'exp, 'id>(
     Ok(())
 }
 
-pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
-    schema: &'sch Schema,
-    col_type: Option<&Type>,
+impl AnalyzeCtx for Schema {
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
+        self.index_of(ident)
+            .map(|idx| (idx, &self.columns[idx].data_type))
+    }
+}
+
+impl<'s> AnalyzeCtx for AliasCtx<'s> {
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
+        if let Some(_) = self.aliases.get(ident) {
+            return None;
+        }
+
+        self.schema
+            .index_of(ident)
+            .map(|idx| (idx, &self.schema.columns[idx].data_type))
+    }
+}
+
+pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
+    ctx: &Ctx,
+    data_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError> {
     Ok(match expr {
-        Expression::Value(value) => analyze_value(value, col_type)?,
+        Expression::Value(value) => analyze_value(value, data_type)?,
         Expression::Identifier(ident) => {
-            let idx = schema
-                .index_of(ident)
-                .ok_or(SqlError::InvalidColumn(ident.to_string()))?;
+            let data_type = ctx
+                .resolve_identifier(ident)
+                .map(|tuple| tuple.1)
+                .ok_or(SqlError::InvalidColumn(ident.into()))?;
 
             // this is an expection because when dealing with outside input, UUID's treated as a
             // String, but inside the engine, we treat it as a Number.
-            match &schema.columns[idx].data_type {
+            match data_type {
                 Type::Uuid => VmType::String,
                 r#type => r#type.into(),
             }
@@ -299,11 +336,10 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
             left,
             right,
         } => {
-            let left_type = analyze_expression(schema, col_type, left)?;
-            let right_type = analyze_expression(schema, col_type, right)?;
+            let left_type = analyze_expression(ctx, data_type, left)?;
+            let right_type = analyze_expression(ctx, data_type, right)?;
 
             if left_type.ne(&right_type) {
-                println!("left {left_type:#?} right {right_type:#?}");
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
@@ -333,54 +369,73 @@ pub(in crate::sql) fn analyze_expression<'exp, 'sch>(
                 _ => unreachable!("unexpected operation state"),
             }
         }
+
         Expression::UnaryOperation { operator, expr } => {
             if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
-                (col_type, operator, &**expr)
+                (data_type, operator, &**expr)
             {
                 match value {
-                    Value::Number(num) => {
-                        analyze_number(&-num, data_type)?;
+                    Value::Number(n) => {
+                        analyze_number(&-n, data_type)?;
                         return Ok(VmType::Number);
                     }
-                    Value::Float(float) => {
-                        analyze_float(&-float, data_type)?;
+                    Value::Float(f) => {
+                        analyze_float(&-f, data_type)?;
                         return Ok(VmType::Float);
                     }
                     _ => unreachable!(),
                 }
             }
 
-            match analyze_expression(schema, col_type, expr)? {
-                VmType::Number => VmType::Number,
-                VmType::Float => VmType::Float,
-                _ => Err(TypeError::ExpectedType {
+            match analyze_expression(ctx, data_type, expr)? {
+                VmType::Number | VmType::Float => VmType::Number,
+                _ => Err(SqlError::Type(TypeError::ExpectedType {
                     expected: VmType::Number,
                     found: *expr.clone(),
-                })?,
+                }))?,
             }
         }
+
         Expression::Function { func, args } => {
-            if let Some((min_args, max_args)) = func.size_of_args() {
-                if args.len() < min_args || args.len() > max_args {
-                    return Err(SqlError::InvalidFuncArgs(min_args, args.len()));
+            if let Some((min, max)) = func.size_of_args() {
+                if args.len() < min || args.len() > max {
+                    return Err(SqlError::InvalidFuncArgs(min, args.len()));
                 }
             }
 
             for arg in args {
                 if arg.ne(&Expression::Wildcard) {
-                    analyze_expression(schema, col_type, arg)?;
+                    analyze_expression(ctx, data_type, arg)?;
                 }
             }
 
             func.return_type()
         }
+
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
-            analyze_expression(schema, col_type, expr)?
+            analyze_expression(ctx, data_type, expr)?
         }
+
         Expression::Wildcard => {
             return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
         }
     })
+}
+
+fn analyze_expression_with_aliases<'exp>(
+    schema: &Schema,
+    aliases: &HashMap<String, &Expression>,
+    col_type: Option<&Type>,
+    expr: &'exp Expression,
+) -> Result<VmType, SqlError> {
+    if let Expression::Identifier(ident) = expr {
+        if let Some(aliases_expr) = aliases.get(ident) {
+            return analyze_expression_with_aliases(schema, aliases, col_type, &aliases_expr);
+        }
+    }
+
+    let ctx = AliasCtx { schema, aliases };
+    analyze_expression(&ctx, col_type, expr)
 }
 
 fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
