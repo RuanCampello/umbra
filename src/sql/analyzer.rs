@@ -487,7 +487,6 @@ fn analyze_where<'exp>(
 }
 
 fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
-    println!("expected {expected_type}");
     match expected_type {
         Type::Date => {
             NaiveDate::parse_str(s)?;

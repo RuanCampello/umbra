@@ -3193,6 +3193,76 @@ mod tests {
     }
 
     #[test]
+    fn complete_alias_with_group_and_order() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE employees (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(30),
+                department VARCHAR(20),
+                salary DOUBLE PRECISION, 
+                hire_date DATE,
+                performance_rating INT
+            );"#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO employees (name, department, salary, hire_date, performance_rating) VALUES
+                ('John Smith', 'Engineering', 85000.00, '2020-05-15', 8),
+                ('Jane Doe', 'Marketing', 72000.00, '2019-11-20', 7),
+                ('Mike Johnson', 'Engineering', 92000.00, '2018-03-10', 9),
+                ('Sarah Williams', 'HR', 68000.00, '2021-01-05', 6),
+                ('David Brown', 'Marketing', 78000.00, '2020-07-22', 8),
+                ('Emily Davis', 'Engineering', 88000.00, '2019-09-14', 7);
+        "#,
+        )?;
+
+        let query = db.exec(
+            r#"
+            SELECT 
+                department AS dept,
+                COUNT(*) AS employee_count,
+                TRUNC(AVG(salary), 1) AS avg_salary,
+                MAX(performance_rating) AS max_rating,
+                MIN(hire_date) AS earliest_hire
+            FROM employees
+            GROUP BY dept
+            ORDER BY avg_salary DESC;
+        "#,
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    Value::String("Engineering".into()),
+                    Value::Number(3),
+                    Value::Float(88333.3),
+                    Value::Number(9),
+                    Value::String("2018-03-10".into())
+                ],
+                vec![
+                    Value::String("Marketing".into()),
+                    Value::Number(2),
+                    Value::Float(75000.0),
+                    Value::Number(8),
+                    Value::String("2019-11-20".into())
+                ],
+                vec![
+                    Value::String("HR".into()),
+                    Value::Number(1),
+                    Value::Float(68000.0),
+                    Value::Number(6),
+                    Value::String("2021-01-05".into())
+                ]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn text_column() -> DatabaseResult {
         let mut db = Database::default();
         db.exec("CREATE TABLE notes (id SERIAL PRIMARY KEY, title VARCHAR(100), content TEXT);")?;
