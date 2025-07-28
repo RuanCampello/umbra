@@ -4,6 +4,7 @@ use crate::{
     core::uuid::Uuid,
     db::{Ctx, DatabaseError, ROW_COL_ID},
 };
+use std::borrow::Cow;
 
 use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 
@@ -44,7 +45,7 @@ pub(crate) fn prepare<'a>(statement: &mut Statement<'a>, ctx: &mut impl Ctx) -> 
                 .iter()
                 .filter(|&col| col.name.ne(&ROW_COL_ID))
                 .cloned()
-                .map(|col| Expression::Identifier(Box::leak(col.name.into_boxed_str())))
+                .map(|col| Expression::Identifier(Cow::Owned(col.name)))
                 .collect();
 
             let mut wildcards = Vec::new();

@@ -1,6 +1,7 @@
 use crate::sql::statement::{
     Create, Delete, Drop, Insert, OrderBy, OrderDirection, Select, Update,
 };
+use std::borrow::Cow;
 
 use super::{
     tokens::{Keyword, Token},
@@ -15,7 +16,7 @@ impl<'sql> Sql<'sql> for Select<'sql> {
                 match parser.consume_optional(Token::Keyword(Keyword::As)) {
                     false => Ok(expr),
                     _ => Ok(super::Expression::Alias {
-                        alias: Box::leak(parser.parse_ident()?.into_boxed_str()),
+                        alias: Cow::Owned(parser.parse_ident()?),
                         expr: Box::new(expr),
                     }),
                 }

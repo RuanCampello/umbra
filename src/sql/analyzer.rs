@@ -13,12 +13,13 @@ use crate::sql::statement::{
 };
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::{HashMap, HashSet};
+use std::borrow::Cow;
 use std::fmt::Display;
 use std::str::FromStr;
 
 struct AliasCtx<'s> {
     schema: &'s Schema,
-    aliases: &'s HashMap<&'s str, &'s Expression<'s>>,
+    aliases: &'s HashMap<Cow<'s, str>, &'s Expression<'s>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -177,10 +178,10 @@ pub(in crate::sql) fn analyze<'s>(
         }) => {
             let metadata = ctx.metadata(from)?;
 
-            let aliases: HashMap<&str, &Expression<'s>> = columns
+            let aliases: HashMap<Cow<str>, &Expression<'s>> = columns
                 .iter()
                 .filter_map(|column_expr| match column_expr {
-                    Expression::Alias { expr, alias } => Some((*alias, expr.as_ref())),
+                    Expression::Alias { expr, alias } => Some((alias.clone(), expr.as_ref())),
                     _ => None,
                 })
                 .collect();
@@ -321,7 +322,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             let data_type = ctx
                 .resolve_identifier(ident)
                 .map(|tuple| tuple.1)
-                .ok_or(SqlError::InvalidColumn((*ident).into()))?;
+                .ok_or(SqlError::InvalidColumn(ident.clone().into()))?;
 
             // this is an expection because when dealing with outside input, UUID's treated as a
             // String, but inside the engine, we treat it as a Number.
@@ -424,12 +425,12 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
 fn analyze_expression_with_aliases<'exp>(
     schema: &Schema,
-    aliases: &HashMap<&str, &Expression<'exp>>,
+    aliases: &HashMap<Cow<str>, &Expression<'exp>>,
     col_type: Option<&Type>,
     expr: &'exp Expression<'exp>,
 ) -> Result<VmType, SqlError> {
     if let Expression::Identifier(ident) = expr {
-        if let Some(aliases_expr) = aliases.get(ident) {
+        if let Some(aliases_expr) = aliases.get(ident.as_ref()) {
             return analyze_expression_with_aliases(schema, aliases, col_type, &aliases_expr);
         }
     }

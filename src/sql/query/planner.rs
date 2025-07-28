@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::VecDeque,
     io::{Read, Seek, Write},
     rc::Rc,
@@ -176,10 +177,10 @@ pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
                         .iter()
                         .map(|expr| match expr {
                             Expression::Alias { .. } => {
-                                Expression::Identifier(Box::leak(expr.unwrap_name().into_owned().into_boxed_str()))
+                                Expression::Identifier(Cow::Owned(expr.unwrap_name().into_owned()))
                             }
                             Expression::Function { func, .. } => {
-                                Expression::Identifier(Box::leak(func.to_string().into_boxed_str()))
+                                Expression::Identifier(Cow::Owned(func.to_string()))
                             }
                             other => other.clone(),
                         })

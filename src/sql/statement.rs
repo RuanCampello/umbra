@@ -172,7 +172,7 @@ pub(crate) enum Drop {
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub enum Expression<'a> {
-    Identifier(&'a str),
+    Identifier(Cow<'a, str>),
     Value(Value),
     Wildcard,
     UnaryOperation {
@@ -190,7 +190,7 @@ pub enum Expression<'a> {
     },
     Alias {
         expr: Box<Self>,
-        alias: &'a str,
+        alias: Cow<'a, str>,
     },
     Nested(Box<Self>),
 }
@@ -757,7 +757,7 @@ impl<'a> Expression<'a> {
     /// Convert a borrowed Expression to an owned Expression with 'static lifetime
     pub fn into_owned(self) -> Expression<'static> {
         match self {
-            Expression::Identifier(s) => Expression::Identifier(Box::leak(s.to_string().into_boxed_str())),
+            Expression::Identifier(cow) => Expression::Identifier(Cow::Owned(cow.into_owned())),
             Expression::Value(v) => Expression::Value(v),
             Expression::Wildcard => Expression::Wildcard,
             Expression::UnaryOperation { operator, expr } => Expression::UnaryOperation {
@@ -775,7 +775,7 @@ impl<'a> Expression<'a> {
             },
             Expression::Alias { expr, alias } => Expression::Alias {
                 expr: Box::new(expr.into_owned()),
-                alias: Box::leak(alias.to_string().into_boxed_str()),
+                alias: Cow::Owned(alias.into_owned()),
             },
             Expression::Nested(expr) => Expression::Nested(Box::new(expr.into_owned())),
         }

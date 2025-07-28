@@ -215,7 +215,7 @@ impl<'input> Parser<'input> {
 
     fn parse_pref(&mut self) -> ParserResult<Expression<'input>> {
         match self.next_token()? {
-            Token::Identifier(identifier) => Ok(Expression::Identifier(Box::leak(identifier.into_boxed_str()))),
+            Token::Identifier(identifier) => Ok(Expression::Identifier(Cow::Owned(identifier))),
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
@@ -784,8 +784,8 @@ mod tests {
             statement,
             Ok(Statement::Select(Select {
                 columns: vec![
-                    Expression::Identifier("id".to_string()),
-                    Expression::Identifier("price".to_string())
+                    Expression::Identifier(Cow::Borrowed("id")),
+                    Expression::Identifier(Cow::Borrowed("price"))
                 ],
                 from: "bills".to_string(),
                 r#where: None,
@@ -804,13 +804,13 @@ mod tests {
             statement,
             Ok(Statement::Select(Select {
                 columns: vec![
-                    Expression::Identifier("title".to_string()),
-                    Expression::Identifier("author".to_string())
+                    Expression::Identifier(Cow::Borrowed("title")),
+                    Expression::Identifier(Cow::Borrowed("author"))
                 ],
                 from: "books".to_string(),
                 r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Eq,
-                    left: Box::new(Expression::Identifier("author".to_string())),
+                    left: Box::new(Expression::Identifier(Cow::Borrowed("author"))),
                     right: Box::new(Expression::Value(Value::String(
                         "Agatha Christie".to_string()
                     ))),
@@ -930,7 +930,7 @@ mod tests {
                         identifier: "salary".to_string(),
                         value: Expression::BinaryOperation {
                             operator: BinaryOperator::Mul,
-                            left: Box::new(Expression::Identifier("salary".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("salary"))),
                             right: Box::new(Expression::Value(Value::Number(2))),
                         },
                     },
@@ -945,14 +945,14 @@ mod tests {
                         operator: BinaryOperator::And,
                         left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("department".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("department"))),
                             right: Box::new(Expression::Value(Value::String(
                                 "engineering".to_string(),
                             ))),
                         }),
                         right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::GtEq,
-                            left: Box::new(Expression::Identifier("performance_score".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("performance_score"))),
                             right: Box::new(Expression::Value(Value::Number(80))),
                         }),
                     }),
@@ -960,12 +960,12 @@ mod tests {
                         operator: BinaryOperator::Or,
                         left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Gt,
-                            left: Box::new(Expression::Identifier("years_of_service".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("years_of_service"))),
                             right: Box::new(Expression::Value(Value::Number(3))),
                         }),
                         right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("is_team_lead".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("is_team_lead"))),
                             right: Box::new(Expression::Value(Value::Boolean(true))),
                         }),
                     })))
@@ -1068,7 +1068,7 @@ mod tests {
                 from: "schedule".to_string(),
                 r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Lt,
-                    left: Box::new(Expression::Identifier("start_time".to_string())),
+                    left: Box::new(Expression::Identifier(Cow::Borrowed("start_time"))),
                     right: Box::new(Expression::Value(Value::String("12:00:00".into()))),
                 }),
                 order_by: vec![],
@@ -1372,18 +1372,18 @@ mod tests {
                         operator: BinaryOperator::Or,
                         left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("film_id".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("film_id"))),
                             right: Box::new(Expression::Value(Value::Number(1))),
                         }),
                         right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("film_id".to_string())),
+                            left: Box::new(Expression::Identifier(Cow::Borrowed("film_id"))),
                             right: Box::new(Expression::Value(Value::Number(2))),
                         }),
                     }),
                     right: Box::new(Expression::BinaryOperation {
                         operator: BinaryOperator::Eq,
-                        left: Box::new(Expression::Identifier("film_id".to_string())),
+                        left: Box::new(Expression::Identifier(Cow::Borrowed("film_id"))),
                         right: Box::new(Expression::Value(Value::Number(3))),
                     }),
                 }),

@@ -218,7 +218,7 @@ fn find_index_paths<'exp>(
         } => match (&**left, &**right) {
             (Expression::Identifier(col), Expression::Value(_))
             | (Expression::Value(_), Expression::Identifier(col))
-                if (indexes.contains(col) || *col == k_col)
+                if (indexes.contains(col.as_ref()) || col.as_ref() == k_col)
                     && matches!(
                         operator,
                         BinaryOperator::Eq
@@ -228,7 +228,7 @@ fn find_index_paths<'exp>(
                             | BinaryOperator::GtEq
                     ) =>
             {
-                HashMap::from([(*col, VecDeque::from([determine_bounds(expr)]))])
+                HashMap::from([(col.as_ref(), VecDeque::from([determine_bounds(expr)]))])
             }
             (left, right) if matches!(operator, BinaryOperator::And | BinaryOperator::Or) => {
                 let mut left_paths = find_index_paths(k_col, indexes, left, cancel);
