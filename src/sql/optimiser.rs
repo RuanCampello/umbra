@@ -37,7 +37,7 @@ pub(crate) fn optimise<'a>(statement: &mut Statement<'a>) -> Result<(), SqlError
     Ok(())
 }
 
-pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
+pub(crate) fn simplify<'a>(expression: &mut Expression<'a>) -> Result<(), SqlError> {
     match expression {
         Expression::UnaryOperation { expr, .. } => {
             simplify(expr)?;
@@ -150,13 +150,13 @@ pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
     Ok(())
 }
 
-fn simplify_iter<'exp>(
-    mut expression: impl Iterator<Item = &'exp mut Expression>,
+fn simplify_iter<'a>(
+    mut expression: impl Iterator<Item = &'a mut Expression<'a>>,
 ) -> Result<(), SqlError> {
     expression.try_for_each(simplify)
 }
 
-fn simplify_where(r#where: &mut Option<Expression>) -> Result<(), SqlError> {
+fn simplify_where<'a>(r#where: &mut Option<Expression<'a>>) -> Result<(), SqlError> {
     r#where.as_mut().map(simplify).unwrap_or(Ok(()))
 }
 

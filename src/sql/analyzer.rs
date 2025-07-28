@@ -177,10 +177,10 @@ pub(in crate::sql) fn analyze<'s>(
         }) => {
             let metadata = ctx.metadata(from)?;
 
-            let aliases: HashMap<&str, &Expression> = columns
+            let aliases: HashMap<&str, &Expression<'s>> = columns
                 .iter()
                 .filter_map(|column_expr| match column_expr {
-                    Expression::Alias { expr, alias } => Some((alias.as_str(), expr.as_ref())),
+                    Expression::Alias { expr, alias } => Some((*alias, expr.as_ref())),
                     _ => None,
                 })
                 .collect();
@@ -321,7 +321,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             let data_type = ctx
                 .resolve_identifier(ident)
                 .map(|tuple| tuple.1)
-                .ok_or(SqlError::InvalidColumn(ident.into()))?;
+                .ok_or(SqlError::InvalidColumn((*ident).into()))?;
 
             // this is an expection because when dealing with outside input, UUID's treated as a
             // String, but inside the engine, we treat it as a Number.
@@ -429,7 +429,7 @@ fn analyze_expression_with_aliases<'exp>(
     expr: &'exp Expression<'exp>,
 ) -> Result<VmType, SqlError> {
     if let Expression::Identifier(ident) = expr {
-        if let Some(aliases_expr) = aliases.get(ident.as_str()) {
+        if let Some(aliases_expr) = aliases.get(ident) {
             return analyze_expression_with_aliases(schema, aliases, col_type, &aliases_expr);
         }
     }

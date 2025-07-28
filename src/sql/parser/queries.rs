@@ -15,7 +15,7 @@ impl<'sql> Sql<'sql> for Select<'sql> {
                 match parser.consume_optional(Token::Keyword(Keyword::As)) {
                     false => Ok(expr),
                     _ => Ok(super::Expression::Alias {
-                        alias: parser.parse_ident()?,
+                        alias: Box::leak(parser.parse_ident()?.into_boxed_str()),
                         expr: Box::new(expr),
                     }),
                 }

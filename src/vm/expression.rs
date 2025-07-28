@@ -32,13 +32,13 @@ pub enum TypeError {
         value: Value,
     },
     CannotApplyBinary {
-        left: Expression,
+        left: Expression<'static>,
         operator: BinaryOperator,
-        right: Expression,
+        right: Expression<'static>,
     },
     ExpectedType {
         expected: VmType,
-        found: Expression,
+        found: Expression<'static>,
     },
     ExpectedOneOfTypes {
         expected: Vec<VmType>,

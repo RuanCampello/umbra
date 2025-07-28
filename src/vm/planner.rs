@@ -65,7 +65,7 @@ pub(crate) struct SeqScan<File> {
 pub(crate) struct ExactMatch<File> {
     pub relation: Relation,
     pub key: Vec<u8>,
-    pub expr: Expression,
+    pub expr: Expression<'static>,
     pub pager: Rc<RefCell<Pager<File>>>,
     pub done: bool,
     pub emit_only_key: bool,
@@ -80,7 +80,7 @@ pub(crate) struct RangeScan<File> {
     pager: Rc<RefCell<Pager<File>>>,
     range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
     comparator: BTreeKeyCmp,
-    expr: Expression,
+    expr: Expression<'static>,
     cursor: Cursor,
     init: bool,
     done: bool,
@@ -104,7 +104,7 @@ pub(crate) struct LogicalScan<File: FileOperations> {
 pub(crate) struct Filter<File: FileOperations> {
     pub source: Box<Planner<File>>,
     pub schema: Schema,
-    pub filter: Expression,
+    pub filter: Expression<'static>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -133,7 +133,7 @@ pub(crate) struct Insert<File: FileOperations> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct Update<File: FileOperations> {
     pub table: TableMetadata,
-    pub assigments: Vec<Assignment>,
+    pub assigments: Vec<Assignment<'static>>,
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
     pub comparator: FixedSizeCmp,
@@ -151,7 +151,7 @@ pub(crate) struct Delete<File: FileOperations> {
 pub(crate) struct SortKeys<File: FileOperations> {
     pub source: Box<Planner<File>>,
     pub schema: Schema,
-    pub expressions: Vec<Expression>,
+    pub expressions: Vec<Expression<'static>>,
 }
 
 #[derive(Debug)]
@@ -171,14 +171,14 @@ pub(crate) struct Project<File: FileOperations> {
     pub source: Box<Planner<File>>,
     pub input: Schema,
     pub output: Schema,
-    pub projection: Vec<Expression>,
+    pub projection: Vec<Expression<'static>>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
     source: Box<Planner<File>>,
-    group_by: Vec<Expression>,
-    aggr_exprs: Vec<Expression>,
+    group_by: Vec<Expression<'static>>,
+    aggr_exprs: Vec<Expression<'static>>,
     output: Schema,
     output_buffer: TupleBuffer,
     filled: bool,
@@ -187,7 +187,7 @@ pub(crate) struct Aggregate<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Values {
-    pub values: VecDeque<Vec<Expression>>,
+    pub values: VecDeque<Vec<Expression<'static>>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -226,7 +226,7 @@ pub(crate) struct RangeScanBuilder<File: FileOperations> {
     pub pager: Rc<RefCell<Pager<File>>>,
     pub relation: Relation,
     pub range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
-    pub expr: Expression,
+    pub expr: Expression<'static>,
     pub emit_only_key: bool,
 }
 
@@ -250,8 +250,8 @@ pub(crate) struct CollectBuilder<File: FileOperations> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct AggregateBuilder<File: FileOperations> {
     pub source: Box<Planner<File>>,
-    pub group_by: Vec<Expression>,
-    pub aggr_exprs: Vec<Expression>,
+    pub group_by: Vec<Expression<'static>>,
+    pub aggr_exprs: Vec<Expression<'static>>,
     pub output: Schema,
     pub page_size: usize,
 }
@@ -404,7 +404,7 @@ impl<File: PlanExecutor> RangeScan<File> {
         range: (Bound<Vec<u8>>, Bound<Vec<u8>>),
         relation: Relation,
         emit_only_key: bool,
-        expr: Expression,
+        expr: Expression<'static>,
         pager: Rc<RefCell<Pager<File>>>,
     ) -> Self {
         Self {
@@ -1146,7 +1146,7 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
         if groups.is_empty() {
             self.filled = true;
 
-            let is_count = |expr: &Expression| matches!(expr, Expression::Function { func, .. } if *func == Function::Count);
+            let is_count = |expr: &Expression<'static>| matches!(expr, Expression::Function { func, .. } if *func == Function::Count);
             if self.group_by.is_empty() && self.aggr_exprs.iter().all(|expr| is_count(expr)) {
                 return Ok(Some(vec![Value::Number(0); self.aggr_exprs.len()]));
             }
@@ -1181,7 +1181,7 @@ impl<File: PlanExecutor> Aggregate<File> {
     fn apply_aggr(
         &self,
         func: &Function,
-        args: &[Expression],
+        args: &[Expression<'static>],
         rows: &[Tuple],
         schema: &Schema,
     ) -> Result<Value, DatabaseError> {

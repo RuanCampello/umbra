@@ -44,7 +44,7 @@ pub(crate) fn prepare<'a>(statement: &mut Statement<'a>, ctx: &mut impl Ctx) -> 
                 .iter()
                 .filter(|&col| col.name.ne(&ROW_COL_ID))
                 .cloned()
-                .map(|col| Expression::Identifier(col.name))
+                .map(|col| Expression::Identifier(Box::leak(col.name.into_boxed_str())))
                 .collect();
 
             let mut wildcards = Vec::new();

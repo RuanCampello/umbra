@@ -113,7 +113,7 @@ impl<'input> Parser<'input> {
         })
     }
 
-    pub(crate) fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression> {
+    pub(crate) fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression<'input>> {
         let mut expr = self.parse_pref()?;
         let mut next = self.get_precedence();
 
@@ -213,9 +213,9 @@ impl<'input> Parser<'input> {
         })
     }
 
-    fn parse_pref(&mut self) -> ParserResult<Expression> {
+    fn parse_pref(&mut self) -> ParserResult<Expression<'input>> {
         match self.next_token()? {
-            Token::Identifier(identifier) => Ok(Expression::Identifier(identifier)),
+            Token::Identifier(identifier) => Ok(Expression::Identifier(Box::leak(identifier.into_boxed_str()))),
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),

@@ -172,14 +172,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }
 
                 if output.ne(&aggr_schema) {
-                    let projection: Vec<Expression> = columns
+                    let projection: Vec<Expression<'static>> = columns
                         .iter()
                         .map(|expr| match expr {
                             Expression::Alias { .. } => {
-                                Expression::Identifier(expr.unwrap_name().into())
+                                Expression::Identifier(Box::leak(expr.unwrap_name().into_owned().into_boxed_str()))
                             }
                             Expression::Function { func, .. } => {
-                                Expression::Identifier(func.to_string())
+                                Expression::Identifier(Box::leak(func.to_string().into_boxed_str()))
                             }
                             other => other.clone(),
                         })
@@ -351,7 +351,7 @@ fn extract_order_indexes_and_directions(
             let idx = match &order.expr {
                 Expression::Identifier(ident) => schema
                     .index_of(ident)
-                    .ok_or(SqlError::InvalidGroupBy(ident.into())),
+                    .ok_or(SqlError::InvalidGroupBy((*ident).into())),
                 _ => schema
                     .index_of(&order.expr.to_string())
                     .ok_or(SqlError::Other(format!(
@@ -402,7 +402,7 @@ fn resolve_order_index<'a>(
 ) -> Result<usize, SqlError> {
     for (i, expr) in columns.iter().enumerate() {
         if let Expression::Alias { alias, .. } = expr {
-            if alias == ident {
+            if *alias == ident {
                 return Ok(i);
             }
         }
