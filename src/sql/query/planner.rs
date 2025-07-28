@@ -26,8 +26,8 @@ use crate::{
     },
 };
 
-pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
-    statement: Statement,
+pub(crate) fn generate_plan<'a, File: Seek + Read + Write + FileOperations>(
+    statement: Statement<'a>,
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     Ok(match statement {

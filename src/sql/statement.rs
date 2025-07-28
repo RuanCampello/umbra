@@ -32,11 +32,38 @@ pub(crate) enum Statement<'a> {
     Explain(Box<Self>),
 }
 
+impl<'a> Statement<'a> {
+    /// Convert a borrowed Statement to an owned Statement with 'static lifetime
+    pub fn into_owned(self) -> Statement<'static> {
+        match self {
+            Statement::Create(create) => Statement::Create(create),
+            Statement::Select(select) => Statement::Select(select.into_owned()),
+            Statement::Update(update) => Statement::Update(update.into_owned()),
+            Statement::Insert(insert) => Statement::Insert(insert.into_owned()),
+            Statement::Delete(delete) => Statement::Delete(delete.into_owned()),
+            Statement::Drop(drop) => Statement::Drop(drop),
+            Statement::Commit => Statement::Commit,
+            Statement::StartTransaction => Statement::StartTransaction,
+            Statement::Rollback => Statement::Rollback,
+            Statement::Explain(inner) => Statement::Explain(Box::new(inner.into_owned())),
+        }
+    }
+}
+
 /// The `UPDATE` assignment instruction.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Assignment<'a> {
     pub identifier: String,
     pub value: Expression<'a>,
+}
+
+impl<'a> Assignment<'a> {
+    pub fn into_owned(self) -> Assignment<'static> {
+        Assignment {
+            identifier: self.identifier,
+            value: self.value.into_owned(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -76,11 +103,33 @@ pub(crate) struct Select<'a> {
     // TODO: limit
 }
 
+impl<'a> Select<'a> {
+    pub fn into_owned(self) -> Select<'static> {
+        Select {
+            columns: self.columns.into_iter().map(|e| e.into_owned()).collect(),
+            from: self.from,
+            r#where: self.r#where.map(|e| e.into_owned()),
+            order_by: self.order_by.into_iter().map(|o| o.into_owned()).collect(),
+            group_by: self.group_by.into_iter().map(|e| e.into_owned()).collect(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct Update<'a> {
     pub table: String,
     pub columns: Vec<Assignment<'a>>,
     pub r#where: Option<Expression<'a>>,
+}
+
+impl<'a> Update<'a> {
+    pub fn into_owned(self) -> Update<'static> {
+        Update {
+            table: self.table,
+            columns: self.columns.into_iter().map(|a| a.into_owned()).collect(),
+            r#where: self.r#where.map(|e| e.into_owned()),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -90,10 +139,29 @@ pub(crate) struct Insert<'a> {
     pub values: Vec<Vec<Expression<'a>>>,
 }
 
+impl<'a> Insert<'a> {
+    pub fn into_owned(self) -> Insert<'static> {
+        Insert {
+            into: self.into,
+            columns: self.columns,
+            values: self.values.into_iter().map(|v| v.into_iter().map(|e| e.into_owned()).collect()).collect(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct Delete<'a> {
     pub from: String,
     pub r#where: Option<Expression<'a>>,
+}
+
+impl<'a> Delete<'a> {
+    pub fn into_owned(self) -> Delete<'static> {
+        Delete {
+            from: self.from,
+            r#where: self.r#where.map(|e| e.into_owned()),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -131,6 +199,15 @@ pub enum Expression<'a> {
 pub(crate) struct OrderBy<'a> {
     pub expr: Expression<'a>,
     pub direction: OrderDirection,
+}
+
+impl<'a> OrderBy<'a> {
+    pub fn into_owned(self) -> OrderBy<'static> {
+        OrderBy {
+            expr: self.expr.into_owned(),
+            direction: self.direction,
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, PartialOrd, Clone, Copy)]

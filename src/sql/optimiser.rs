@@ -7,7 +7,7 @@ use crate::vm::expression::resolve_only_expression;
 
 use super::statement::{Delete, Insert, Select, Update};
 
-pub(crate) fn optimise<'a>(statement: &mut Statement<'a>) -> Result<(), SqlError> {
+pub(crate) fn optimise<'a>(statement: &'a mut Statement<'a>) -> Result<(), SqlError> {
     match statement {
         Statement::Select(Select {
             columns,

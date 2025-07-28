@@ -78,7 +78,7 @@ pub(crate) fn resolve_expression<'exp>(
         Expression::Value(value) => Ok(value.clone()),
         Expression::Identifier(ident) => match schema.index_of(ident) {
             Some(idx) => Ok(val[idx].clone()),
-            None => Err(SqlError::InvalidColumn(ident.clone())),
+            None => Err(SqlError::InvalidColumn(ident.to_string())),
         },
         Expression::UnaryOperation { operator, expr } => {
             let value = resolve_expression(val, schema, expr)?;
@@ -230,7 +230,7 @@ pub(crate) fn resolve_expression<'exp>(
                     Expression::Identifier(name) => {
                         let idx = schema
                             .index_of(name)
-                            .ok_or_else(|| SqlError::InvalidColumn(name.into()))?;
+                            .ok_or_else(|| SqlError::InvalidColumn((*name).into()))?;
                         Ok(schema.columns[idx].data_type.to_string())
                     }
                     _ => Err(SqlError::Other(

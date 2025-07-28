@@ -137,7 +137,7 @@ impl<'input> Parser<'input> {
         self.parse_separated_tokens(|p| parse_elem(p), false)
     }
 
-    fn parse_infix(&mut self, left: Expression, precedence: u8) -> ParserResult<Expression> {
+    fn parse_infix(&mut self, left: Expression<'input>, precedence: u8) -> ParserResult<Expression<'input>> {
         let op = match self.next_token()? {
             Token::Eq => BinaryOperator::Eq,
             Token::Neq => BinaryOperator::Neq,
@@ -271,7 +271,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    fn parse_closing_expr(&mut self) -> ParserResult<Expression> {
+    fn parse_closing_expr(&mut self) -> ParserResult<Expression<'input>> {
         let pref = self.parse_expr(None)?;
         self.expect_token(Token::RightParen)?;
 
@@ -409,7 +409,7 @@ impl<'input> Parser<'input> {
         Ok(parsed)
     }
 
-    fn parse_from_and_where(&mut self) -> ParserResult<(String, Option<Expression>)> {
+    fn parse_from_and_where(&mut self) -> ParserResult<(String, Option<Expression<'input>>)> {
         let from = self.parse_ident()?;
         let r#where = match self.consume_optional(Token::Keyword(Keyword::Where)) {
             true => Some(self.parse_expr(None)?),
@@ -419,7 +419,7 @@ impl<'input> Parser<'input> {
         Ok((from, r#where))
     }
 
-    fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression> {
+    fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression<'input>> {
         let value_str = self.parse_ident()?;
 
         let value = match keyword {
@@ -453,7 +453,7 @@ impl<'input> Parser<'input> {
         Ok(Expression::Value(Value::String(value)))
     }
 
-    fn parse_func(&mut self, function: Keyword) -> ParserResult<Expression> {
+    fn parse_func(&mut self, function: Keyword) -> ParserResult<Expression<'input>> {
         match function {
             Keyword::Substring => {
                 let expr = self.parse_expr(None)?;
@@ -522,7 +522,7 @@ impl<'input> Parser<'input> {
         }
     }
 
-    fn parse_unary_func(&mut self, func: Function) -> ParserResult<Expression> {
+    fn parse_unary_func(&mut self, func: Function) -> ParserResult<Expression<'input>> {
         let expr = self.parse_expr(None)?;
         self.expect_token(Token::RightParen)?;
         Ok(Expression::Function {

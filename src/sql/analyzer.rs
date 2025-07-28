@@ -276,7 +276,7 @@ fn analyze_assignment<'exp, 'id>(
     if expect_type.ne(&evaluate_type) {
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
-            found: value.clone(),
+            found: value.clone().into_owned(),
         }));
     }
 
@@ -341,8 +341,8 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
-                    left: *left.clone(),
-                    right: *right.clone(),
+                    left: (*left.clone()).into_owned(),
+                    right: (*right.clone()).into_owned(),
                     operator: *operator,
                 }));
             }
@@ -391,7 +391,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 VmType::Number | VmType::Float => VmType::Number,
                 _ => Err(SqlError::Type(TypeError::ExpectedType {
                     expected: VmType::Number,
-                    found: *expr.clone(),
+                    found: (*expr.clone()).into_owned(),
                 }))?,
             }
         }
@@ -471,7 +471,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
 
 fn analyze_where<'exp>(
     schema: &'exp Schema,
-    r#where: &'exp Option<Expression>,
+    r#where: &'exp Option<Expression<'exp>>,
 ) -> Result<(), DatabaseError> {
     let Some(expr) = r#where else { return Ok(()) };
 
@@ -481,7 +481,7 @@ fn analyze_where<'exp>(
 
     Err(TypeError::ExpectedType {
         expected: VmType::Bool,
-        found: expr.clone(),
+        found: expr.clone().into_owned(),
     }
     .into())
 }

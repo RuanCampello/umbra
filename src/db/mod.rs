@@ -52,7 +52,7 @@ pub(crate) struct Context {
 #[derive(Debug)]
 struct PreparedStatement<'db, File: FileOperations> {
     db: &'db mut Database<File>,
-    exec: Option<Exec<'db, File>>,
+    exec: Option<Exec<File>>,
     autocommit: bool,
 }
 
@@ -70,8 +70,8 @@ enum TransactionState {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Exec<'a, File: FileOperations> {
-    Statement(Statement<'a>),
+pub(crate) enum Exec<File: FileOperations> {
+    Statement(Statement<'static>),
     Plan(Planner<File>),
     Explain(VecDeque<String>),
 }
@@ -213,9 +213,9 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         todo!()
     }
 
-    fn prepare(
+    fn prepare<'a>(
         &mut self,
-        sql: &str,
+        sql: &'a str,
     ) -> Result<(Schema, PreparedStatement<'_, File>), DatabaseError> {
         let statement = crate::sql::pipeline(sql, self)?;
         let mut schema = Schema::empty();
@@ -225,7 +225,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             | Statement::Drop(_)
             | Statement::StartTransaction
             | Statement::Commit
-            | Statement::Rollback => Exec::Statement(statement),
+            | Statement::Rollback => Exec::Statement(statement.into_owned()),
 
             Statement::Explain(inner) => match &*inner {
                 Statement::Select { .. }
@@ -300,9 +300,10 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         let mut serials_to_load = Vec::new();
         let mut found_table_def = false;
 
-        let (schema, mut results) = self.prepare(&format!(
+        let query = format!(
             "SELECT root, sql FROM {DB_METADATA} WHERE table_name = '{table}';"
-        ))?;
+        );
+        let (schema, mut results) = self.prepare(&query)?;
 
         let corrupted_err = || {
             DatabaseError::Corrupted(format!(

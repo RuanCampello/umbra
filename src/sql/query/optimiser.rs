@@ -20,9 +20,9 @@ use crate::{
 
 type IndexBounds<'value> = (Bound<&'value Value>, Bound<&'value Value>);
 
-pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
+pub(in crate::sql::query) fn generate_seq_plan<'a, File: PlanExecutor>(
     table: &str,
-    mut filter: Option<Expression>,
+    mut filter: Option<Expression<'a>>,
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     let source = match generate_optimised_seq_plan(table, db, &mut filter)? {
@@ -37,14 +37,14 @@ pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
     Ok(Planner::Filter(Filter {
         source: Box::new(source),
         schema: db.metadata(table)?.schema.clone(),
-        filter: expr,
+        filter: expr.into_owned(),
     }))
 }
 
-fn generate_optimised_seq_plan<File: PlanExecutor>(
+fn generate_optimised_seq_plan<'a, File: PlanExecutor>(
     table: &str,
     db: &mut Database<File>,
-    filter: &mut Option<Expression>,
+    filter: &mut Option<Expression<'a>>,
 ) -> Result<Option<Planner<File>>, DatabaseError> {
     let Some(expr) = filter else {
         return Ok(None);
