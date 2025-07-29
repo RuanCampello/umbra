@@ -100,11 +100,20 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             let be_bytes = num.to_be_bytes();
             buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
         }
-        (float, Value::Float(num)) if float.is_float() => match float {
-            Type::Real => buff.extend_from_slice(&(*num as f32).to_be_bytes()),
-            Type::DoublePrecision => buff.extend_from_slice(&num.to_be_bytes()),
-            _ => unreachable!("what kind of float is this?"),
-        },
+        (r#type, value) if r#type.is_float() || r#type.is_integer() => {
+            println!("type {} value {value}", r#type);
+            let float = match value {
+                Value::Number(num) => *num as f64,
+                Value::Float(num) => *num,
+                _ => unreachable!(),
+            };
+
+            match r#type {
+                Type::Real => buff.extend_from_slice(&(float as f32).to_be_bytes()),
+                Type::DoublePrecision => buff.extend_from_slice(&float.to_be_bytes()),
+                _ => unreachable!("what kind of float is this?"),
+            }
+        }
         (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
         (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
         (Type::DateTime, Value::String(datetime)) => {
@@ -116,7 +125,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             buff.extend_from_slice(uuid.as_ref())
         }
 
-        _ => unimplemented!("Tried to call serialize from {value} into {type}"),
+        _ => unimplemented!("Tried to call serialize from {value:#?} into {type:#?}"),
     }
 }
 
