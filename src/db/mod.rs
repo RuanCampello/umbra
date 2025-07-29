@@ -3175,11 +3175,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the future will say"]
     fn alias_with_order_by() -> DatabaseResult {
         let mut db = Database::default();
         db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30), age INT UNSIGNED);")?;
-        db.exec("INSERT INTO users (age, name) VALUES (19, 'Jonh Doe'), (23, 'Mary Dove');")?;
+        db.exec("INSERT INTO users (age, name) VALUES (19, 'John Doe'), (23, 'Mary Dove');")?;
 
         let query = db.exec("SELECT name as user_name, age FROM users ORDER BY user_name;")?;
         assert_eq!(
@@ -3187,6 +3186,76 @@ mod tests {
             vec![
                 vec![Value::String("John Doe".into()), Value::Number(19)],
                 vec![Value::String("Mary Dove".into()), Value::Number(23)]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn complete_alias_with_group_and_order() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE employees (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(30),
+                department VARCHAR(20),
+                salary DOUBLE PRECISION, 
+                hire_date DATE,
+                performance_rating INT
+            );"#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO employees (name, department, salary, hire_date, performance_rating) VALUES
+                ('John Smith', 'Engineering', 85000.00, '2020-05-15', 8),
+                ('Jane Doe', 'Marketing', 72000.00, '2019-11-20', 7),
+                ('Mike Johnson', 'Engineering', 92000.00, '2018-03-10', 9),
+                ('Sarah Williams', 'HR', 68000.00, '2021-01-05', 6),
+                ('David Brown', 'Marketing', 78000.00, '2020-07-22', 8),
+                ('Emily Davis', 'Engineering', 88000.00, '2019-09-14', 7);
+        "#,
+        )?;
+
+        let query = db.exec(
+            r#"
+            SELECT 
+                department AS dept,
+                COUNT(*) AS employee_count,
+                TRUNC(AVG(salary), 1) AS avg_salary,
+                MAX(performance_rating) AS max_rating,
+                MIN(hire_date) AS earliest_hire
+            FROM employees
+            GROUP BY dept
+            ORDER BY avg_salary DESC;
+        "#,
+        )?;
+
+        assert_eq!(
+            query.tuples,
+            vec![
+                vec![
+                    "Engineering".into(),
+                    3.into(),
+                    88333.3f64.into(),
+                    9.into(),
+                    temporal!("2018-03-10")?,
+                ],
+                vec![
+                    "Marketing".into(),
+                    2.into(),
+                    75000f64.into(),
+                    8.into(),
+                    temporal!("2019-11-20")?,
+                ],
+                vec![
+                    "HR".into(),
+                    1.into(),
+                    68000f64.into(),
+                    6.into(),
+                    temporal!("2021-01-05")?,
+                ]
             ]
         );
 

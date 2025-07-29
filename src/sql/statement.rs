@@ -541,6 +541,14 @@ impl Expression {
     pub(in crate::sql) fn is_aggr_fn(&self) -> bool {
         matches!(self, Expression::Function { func, .. } if func.is_aggr())
     }
+
+    pub(in crate::sql) fn as_identifier(&self) -> Option<&str> {
+        if let Self::Identifier(alias) = self {
+            return Some(alias);
+        };
+
+        None
+    }
 }
 
 impl Default for Expression {
