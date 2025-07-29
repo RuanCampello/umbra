@@ -192,8 +192,18 @@ pub(in crate::sql) fn analyze<'s>(
                     continue;
                 }
 
-                let is_aggr = matches!(expr, Expression::Function { func, .. } if func.is_aggr());
-                let in_group_by = group_by.iter().any(|group| group.eq(expr));
+                let is_aggr = contains_aggregate(expr);
+                let in_group_by = group_by.iter().any(|group| {
+                    // check if the expression match directly the group by expression
+                    if group.eq(expr) {
+                        return true;
+                    }
+
+                    group
+                        .as_identifier()
+                        .and_then(|alias| aliases.get(alias))
+                        .map_or(false, |alias| alias.eq(&expr))
+                });
 
                 if !group_by.is_empty() && !is_aggr && !in_group_by {
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
@@ -289,6 +299,26 @@ fn analyze_assignment<'exp, 'id>(
     }
 
     Ok(())
+}
+
+/// Check if a given expression contains aggregate functions (recursively)
+pub(in crate::sql) fn contains_aggregate(expr: &Expression) -> bool {
+    match expr {
+        Expression::Function { func, args } => {
+            // if this is an aggregate function, return true
+            if func.is_aggr() {
+                return true;
+            }
+            args.iter().any(contains_aggregate)
+        }
+        Expression::BinaryOperation { left, right, .. } => {
+            contains_aggregate(left) || contains_aggregate(right)
+        }
+        Expression::UnaryOperation { expr, .. }
+        | Expression::Nested(expr)
+        | Expression::Alias { expr, .. } => contains_aggregate(expr),
+        _ => false,
+    }
 }
 
 impl AnalyzeCtx for Schema {
