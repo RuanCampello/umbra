@@ -1163,7 +1163,9 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
                         tuple.push(value)
                     }
                     _ => {
-                        let value = resolve_expression(&rows[0], &input_schema, aggr_expr)?;
+                        // Handle complex expressions that contain aggregates
+                        let processed_expr = self.process_aggregate_expression(aggr_expr, &rows, &input_schema)?;
+                        let value = resolve_expression(&rows[0], &input_schema, &processed_expr)?;
                         tuple.push(value)
                     }
                 };
@@ -1222,6 +1224,63 @@ impl<File: PlanExecutor> Aggregate<File> {
                 .unwrap_or(Value::Number(0))),
 
             _ => unreachable!("this ain't a aggregate function"),
+        }
+    }
+
+    /// Process a complex expression that contains aggregate functions.
+    /// This recursively finds aggregate functions, computes them, and replaces them with their values.
+    fn process_aggregate_expression(
+        &self,
+        expr: &Expression,
+        rows: &[Tuple],
+        schema: &Schema,
+    ) -> Result<Expression, DatabaseError> {
+        match expr {
+            Expression::Function { func, args } if func.is_aggr() => {
+                // This is an aggregate function, compute its value and return a Value expression
+                let value = self.apply_aggr(func, args, rows, schema)?;
+                Ok(Expression::Value(value))
+            }
+            Expression::Function { func, args } => {
+                // This is a non-aggregate function, process its arguments recursively
+                let processed_args: Result<Vec<_>, _> = args
+                    .iter()
+                    .map(|arg| self.process_aggregate_expression(arg, rows, schema))
+                    .collect();
+                Ok(Expression::Function {
+                    func: *func,
+                    args: processed_args?,
+                })
+            }
+            Expression::BinaryOperation { operator, left, right } => {
+                let processed_left = self.process_aggregate_expression(left, rows, schema)?;
+                let processed_right = self.process_aggregate_expression(right, rows, schema)?;
+                Ok(Expression::BinaryOperation {
+                    operator: *operator,
+                    left: Box::new(processed_left),
+                    right: Box::new(processed_right),
+                })
+            }
+            Expression::UnaryOperation { operator, expr: inner_expr } => {
+                let processed_expr = self.process_aggregate_expression(inner_expr, rows, schema)?;
+                Ok(Expression::UnaryOperation {
+                    operator: *operator,
+                    expr: Box::new(processed_expr),
+                })
+            }
+            Expression::Nested(inner_expr) => {
+                let processed_expr = self.process_aggregate_expression(inner_expr, rows, schema)?;
+                Ok(Expression::Nested(Box::new(processed_expr)))
+            }
+            Expression::Alias { expr: inner_expr, alias } => {
+                let processed_expr = self.process_aggregate_expression(inner_expr, rows, schema)?;
+                Ok(Expression::Alias {
+                    expr: Box::new(processed_expr),
+                    alias: alias.clone(),
+                })
+            }
+            // For non-aggregate expressions (identifiers, values, etc.), return as-is
+            _ => Ok(expr.clone()),
         }
     }
 }

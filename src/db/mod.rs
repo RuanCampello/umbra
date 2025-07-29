@@ -3379,4 +3379,90 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_trunc_avg_nested_functions() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE employees (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(30),
+                department VARCHAR(20),
+                salary DOUBLE PRECISION, 
+                hire_date DATE,
+                performance_rating INT
+            );"#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO employees (name, department, salary, hire_date, performance_rating) VALUES
+                ('John Smith', 'Engineering', 85000.00, '2020-05-15', 8),
+                ('Jane Doe', 'Marketing', 72000.00, '2019-11-20', 7),
+                ('Mike Johnson', 'Engineering', 92000.00, '2018-03-10', 9),
+                ('Sarah Williams', 'HR', 68000.00, '2021-01-05', 6),
+                ('David Brown', 'Marketing', 78000.00, '2020-07-22', 8),
+                ('Emily Davis', 'Engineering', 88000.00, '2019-09-14', 7);
+        "#,
+        )?;
+
+        let query = db.exec(
+            r#"
+            SELECT 
+                department AS dept,
+                COUNT(*) AS employee_count,
+                TRUNC(AVG(salary), 1) AS avg_salary,
+                MAX(performance_rating) AS max_rating,
+                MIN(hire_date) AS earliest_hire
+            FROM employees
+            GROUP BY dept
+            ORDER BY avg_salary DESC;
+        "#,
+        )?;
+
+        // Test that the query executed successfully and returned results
+        assert_eq!(query.tuples.len(), 3); // Should have 3 departments
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_complex_nested_aggregate_expressions() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec(
+            r#"
+            CREATE TABLE sales (
+                id SERIAL PRIMARY KEY,
+                region VARCHAR(20),
+                amount DOUBLE PRECISION
+            );"#,
+        )?;
+        db.exec(
+            r#"
+            INSERT INTO sales (region, amount) VALUES
+                ('North', 1000.00),
+                ('North', 1500.00),
+                ('South', 800.00),
+                ('South', 1200.00);
+        "#,
+        )?;
+
+        // Test multiple nested functions and arithmetic with aggregates
+        let query = db.exec(
+            r#"
+            SELECT 
+                region,
+                COUNT(*) AS row_count,
+                ABS(AVG(amount) - 1000) AS avg_diff_from_1000,
+                TRUNC(SUM(amount) / COUNT(*), 2) AS manual_avg
+            FROM sales
+            GROUP BY region;
+        "#,
+        )?;
+
+        // Test that the query executed successfully
+        assert_eq!(query.tuples.len(), 2); // Should have 2 regions
+        
+        Ok(())
+    }
 }
