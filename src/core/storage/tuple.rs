@@ -13,7 +13,7 @@ use crate::{
         date::{NaiveDate, NaiveTime, Parse},
         uuid::Uuid,
     },
-    sql::statement::{Type, Value},
+    sql::statement::{Temporal, Type, Value},
 };
 
 /// Returns the byte length of a given SQL [`Type`].
@@ -115,14 +115,28 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
             }
         }
         (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
+        (Type::Date, Value::Temporal(Temporal::Date(date))) => date.serialize(buff),
         (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
+        (Type::Time, Value::Temporal(Temporal::Time(time))) => time.serialize(buff),
         (Type::DateTime, Value::String(datetime)) => {
             NaiveDateTime::parse_str(datetime).unwrap().serialize(buff)
         }
+        (Type::DateTime, Value::Temporal(Temporal::DateTime(datetime))) => datetime.serialize(buff),
         (Type::Uuid, Value::Uuid(bytes)) => buff.extend_from_slice(bytes.as_ref()),
         (Type::Uuid, Value::String(uuid)) => {
             let uuid = Uuid::from_str(uuid).unwrap();
             buff.extend_from_slice(uuid.as_ref())
+        }
+        
+        // Handle temporal values being serialized as doubles (fallback for aggregate functions)
+        (Type::DoublePrecision, Value::Temporal(temporal)) => {
+            // When aggregate functions like MIN/MAX on dates get incorrectly typed as DOUBLE PRECISION
+            // but return temporal values, serialize them properly as the temporal type they actually are
+            match temporal {
+                Temporal::Date(date) => date.serialize(buff),
+                Temporal::DateTime(datetime) => datetime.serialize(buff), 
+                Temporal::Time(time) => time.serialize(buff),
+            }
         }
 
         _ => unimplemented!("Tried to call serialize from {value:#?} into {type:#?}"),

@@ -9,7 +9,7 @@ use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{
-    BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
+    BinaryOperator, Constraint, Create, Drop, Expression, Function, Statement, Type, UnaryOperator, Value,
 };
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::{HashMap, HashSet};
@@ -433,13 +433,25 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             }
 
+            // Analyze arguments first to get their types
+            let mut arg_types = Vec::new();
             for arg in args {
                 if arg.ne(&Expression::Wildcard) {
-                    analyze_expression(ctx, data_type, arg)?;
+                    arg_types.push(analyze_expression(ctx, data_type, arg)?);
                 }
             }
 
-            func.return_type()
+            // For MIN/MAX functions, return type should match the input type
+            match func {
+                Function::Min | Function::Max => {
+                    if let Some(first_arg_type) = arg_types.first() {
+                        *first_arg_type
+                    } else {
+                        func.return_type()
+                    }
+                }
+                _ => func.return_type(),
+            }
         }
 
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
