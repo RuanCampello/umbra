@@ -3236,25 +3236,25 @@ mod tests {
             query.tuples,
             vec![
                 vec![
-                    Value::String("Engineering".into()),
-                    Value::Number(3),
-                    Value::Float(88333.3),
-                    Value::Number(9),
-                    Value::String("2018-03-10".into())
+                    "Engineering".into(),
+                    3.into(),
+                    88333.3f64.into(),
+                    9.into(),
+                    temporal!("2018-03-10")?,
                 ],
                 vec![
-                    Value::String("Marketing".into()),
-                    Value::Number(2),
-                    Value::Float(75000.0),
-                    Value::Number(8),
-                    Value::String("2019-11-20".into())
+                    "Marketing".into(),
+                    2.into(),
+                    75000f64.into(),
+                    8.into(),
+                    temporal!("2019-11-20")?,
                 ],
                 vec![
-                    Value::String("HR".into()),
-                    Value::Number(1),
-                    Value::Float(68000.0),
-                    Value::Number(6),
-                    Value::String("2021-01-05".into())
+                    "HR".into(),
+                    1.into(),
+                    68000f64.into(),
+                    6.into(),
+                    temporal!("2021-01-05")?,
                 ]
             ]
         );
