@@ -341,7 +341,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             let cells = root.drain(..).collect::<Vec<_>>();
 
             let new_child = self.pager.get_mut(new_page)?;
-            cells.into_iter().for_each(|cell| new_child.push(cell));
+            new_child.push_all(cells);
             new_child.mutable_header().right_child = grandchild;
 
             parents.push(page_number);
