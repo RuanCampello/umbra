@@ -19,11 +19,11 @@ impl State {
     fn exec(&mut self, sql: &str) -> Result<QuerySet> {
         self.db.exec(sql)
     }
+}
 
-    fn drop(self) -> std::io::Result<()> {
-        drop(self.db);
-
-        std::fs::remove_file(self.path)
+impl Drop for State {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).expect("Failed to drop State")
     }
 }
 
@@ -95,10 +95,6 @@ fn serialisation_and_deserialisation() -> Result<()> {
             ]
         ]
     );
-
-    println!("{:#?}", query.tuples);
-
-    db.drop()?;
 
     Ok(())
 }
