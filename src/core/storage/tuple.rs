@@ -16,6 +16,12 @@ use crate::{
     sql::statement::{Temporal, Type, Value},
 };
 
+/// Trait for value types that can serialize themselves for specific SQL types.
+/// This replaces the large match statement with a more modular, extensible approach.
+trait ValueSerializer {
+    fn serialize_for_type(&self, target_type: &Type, buff: &mut Vec<u8>) -> Result<(), String>;
+}
+
 /// Returns the byte length of a given SQL [`Type`].
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
@@ -39,6 +45,157 @@ pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usi
         0..64 => 1,
         64..16384 => 2,
         _ => 4,
+    }
+}
+
+// Implementations of ValueSerializer for each Value variant
+impl ValueSerializer for String {
+    fn serialize_for_type(&self, target_type: &Type, buff: &mut Vec<u8>) -> Result<(), String> {
+        match target_type {
+            Type::Text => {
+                let bytes = self.as_bytes();
+                let len = bytes.len();
+
+                match len < 127 {
+                    true => buff.push(len as u8),
+                    _ => {
+                        // 4 byte header: 0x80 + 3 bytes BE length
+                        buff.push(0x80);
+                        buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
+                    }
+                }
+
+                // then we add the string content itself
+                buff.extend_from_slice(bytes);
+                Ok(())
+            }
+            Type::Date => {
+                NaiveDate::parse_str(self)
+                    .map_err(|e| format!("Failed to parse date: {:?}", e))?
+                    .serialize(buff);
+                Ok(())
+            }
+            Type::Time => {
+                NaiveTime::parse_str(self)
+                    .map_err(|e| format!("Failed to parse time: {:?}", e))?
+                    .serialize(buff);
+                Ok(())
+            }
+            Type::DateTime => {
+                NaiveDateTime::parse_str(self)
+                    .map_err(|e| format!("Failed to parse datetime: {:?}", e))?
+                    .serialize(buff);
+                Ok(())
+            }
+            Type::Uuid => {
+                let uuid = Uuid::from_str(self)
+                    .map_err(|e| format!("Failed to parse UUID: {:?}", e))?;
+                buff.extend_from_slice(uuid.as_ref());
+                Ok(())
+            }
+            _ => Err(format!("Unsupported type {:?} for String value", target_type))
+        }
+    }
+}
+
+impl ValueSerializer for i128 {
+    fn serialize_for_type(&self, target_type: &Type, buff: &mut Vec<u8>) -> Result<(), String> {
+        match target_type {
+            t if t.is_integer() => {
+                let b_len = byte_len_of_type(t);
+                let be_bytes = self.to_be_bytes();
+                buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
+                Ok(())
+            }
+            t if t.is_float() => {
+                let float = *self as f64;
+                match t {
+                    Type::Real => buff.extend_from_slice(&(float as f32).to_be_bytes()),
+                    Type::DoublePrecision => buff.extend_from_slice(&float.to_be_bytes()),
+                    _ => return Err(format!("Unsupported float type: {:?}", t))
+                }
+                Ok(())
+            }
+            _ => Err(format!("Unsupported type {:?} for Number value", target_type))
+        }
+    }
+}
+
+impl ValueSerializer for f64 {
+    fn serialize_for_type(&self, target_type: &Type, buff: &mut Vec<u8>) -> Result<(), String> {
+        match target_type {
+            t if t.is_float() => {
+                match t {
+                    Type::Real => buff.extend_from_slice(&(*self as f32).to_be_bytes()),
+                    Type::DoublePrecision => buff.extend_from_slice(&self.to_be_bytes()),
+                    _ => return Err(format!("Unsupported float type: {:?}", t))
+                }
+                Ok(())
+            }
+            t if t.is_integer() => {
+                let int_val = *self as i128;
+                let b_len = byte_len_of_type(t);
+                let be_bytes = int_val.to_be_bytes();
+                buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
+                Ok(())
+            }
+            _ => Err(format!("Unsupported type {:?} for Float value", target_type))
+        }
+    }
+}
+
+impl ValueSerializer for bool {
+    fn serialize_for_type(&self, target_type: &Type, buff: &mut Vec<u8>) -> Result<(), String> {
+        match target_type {
+            Type::Boolean => {
+                buff.push(u8::from(*self));
+                Ok(())
+            }
+            _ => Err(format!("Unsupported type {:?} for Boolean value", target_type))
+        }
+    }
+}
+
+impl ValueSerializer for Temporal {
+    fn serialize_for_type(&self, target_type: &Type, buff: &mut Vec<u8>) -> Result<(), String> {
+        match (target_type, self) {
+            (Type::Date, Temporal::Date(date)) => {
+                date.serialize(buff);
+                Ok(())
+            }
+            (Type::Time, Temporal::Time(time)) => {
+                time.serialize(buff);
+                Ok(())
+            }
+            (Type::DateTime, Temporal::DateTime(datetime)) => {
+                datetime.serialize(buff);
+                Ok(())
+            }
+            // Handle temporal values being serialized as doubles (fallback for aggregate functions)
+            (Type::DoublePrecision, temporal) => {
+                // When aggregate functions like MIN/MAX on dates get incorrectly typed as DOUBLE PRECISION
+                // but return temporal values, serialize them properly as the temporal type they actually are
+                match temporal {
+                    Temporal::Date(date) => date.serialize(buff),
+                    Temporal::DateTime(datetime) => datetime.serialize(buff), 
+                    Temporal::Time(time) => time.serialize(buff),
+                }
+                Ok(())
+            }
+            _ => Err(format!("Unsupported type {:?} for Temporal value {:?}", target_type, self))
+        }
+    }
+}
+
+impl ValueSerializer for Uuid {
+    fn serialize_for_type(&self, target_type: &Type, buff: &mut Vec<u8>) -> Result<(), String> {
+        match target_type {
+            Type::Uuid => {
+                buff.extend_from_slice(self.as_ref());
+                Ok(())
+            }
+            _ => Err(format!("Unsupported type {:?} for Uuid value", target_type))
+        }
     }
 }
 
@@ -66,80 +223,31 @@ pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
 }
 
 fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
-    match (r#type, value) {
-        (Type::Varchar(max), Value::String(string)) => {
-            if string.as_bytes().len() > u32::MAX as usize {
-                todo!("Strings too long are not supported {}", u32::MAX);
-            }
-
-            let b_len = string.as_bytes().len().to_le_bytes();
-            let len_prefix = utf_8_length_bytes(*max);
-
-            buff.extend_from_slice(&b_len[..len_prefix]);
-            buff.extend_from_slice(string.as_bytes());
-        }
-        (Type::Text, Value::String(string)) => {
-            let bytes = string.as_bytes();
-            let len = bytes.len();
-
-            match len < 127 {
-                true => buff.push(len as u8),
-                _ => {
-                    // 4 byte header: 0x80 + 3 bytes BE length
-                    buff.push(0x80);
-                    buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
+    let result = match value {
+        Value::String(s) => match r#type {
+            Type::Varchar(max) => {
+                if s.as_bytes().len() > u32::MAX as usize {
+                    todo!("Strings too long are not supported {}", u32::MAX);
                 }
-            }
 
-            // then we add the string content itself
-            buff.extend_from_slice(bytes);
-        }
-        (Type::Boolean, Value::Boolean(bool)) => buff.push(u8::from(*bool)),
-        (int, Value::Number(num)) if int.is_integer() => {
-            let b_len = byte_len_of_type(int);
-            let be_bytes = num.to_be_bytes();
-            buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
-        }
-        (r#type, value) if r#type.is_float() || r#type.is_integer() => {
-            println!("type {} value {value}", r#type);
-            let float = match value {
-                Value::Number(num) => *num as f64,
-                Value::Float(num) => *num,
-                _ => unreachable!(),
-            };
+                let b_len = s.as_bytes().len().to_le_bytes();
+                let len_prefix = utf_8_length_bytes(*max);
 
-            match r#type {
-                Type::Real => buff.extend_from_slice(&(float as f32).to_be_bytes()),
-                Type::DoublePrecision => buff.extend_from_slice(&float.to_be_bytes()),
-                _ => unreachable!("what kind of float is this?"),
+                buff.extend_from_slice(&b_len[..len_prefix]);
+                buff.extend_from_slice(s.as_bytes());
+                Ok(())
             }
-        }
-        (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
-        (Type::Date, Value::Temporal(Temporal::Date(date))) => date.serialize(buff),
-        (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
-        (Type::Time, Value::Temporal(Temporal::Time(time))) => time.serialize(buff),
-        (Type::DateTime, Value::String(datetime)) => {
-            NaiveDateTime::parse_str(datetime).unwrap().serialize(buff)
-        }
-        (Type::DateTime, Value::Temporal(Temporal::DateTime(datetime))) => datetime.serialize(buff),
-        (Type::Uuid, Value::Uuid(bytes)) => buff.extend_from_slice(bytes.as_ref()),
-        (Type::Uuid, Value::String(uuid)) => {
-            let uuid = Uuid::from_str(uuid).unwrap();
-            buff.extend_from_slice(uuid.as_ref())
-        }
-        
-        // Handle temporal values being serialized as doubles (fallback for aggregate functions)
-        (Type::DoublePrecision, Value::Temporal(temporal)) => {
-            // When aggregate functions like MIN/MAX on dates get incorrectly typed as DOUBLE PRECISION
-            // but return temporal values, serialize them properly as the temporal type they actually are
-            match temporal {
-                Temporal::Date(date) => date.serialize(buff),
-                Temporal::DateTime(datetime) => datetime.serialize(buff), 
-                Temporal::Time(time) => time.serialize(buff),
-            }
-        }
+            _ => s.serialize_for_type(r#type, buff)
+        },
+        Value::Number(n) => n.serialize_for_type(r#type, buff),
+        Value::Float(f) => f.serialize_for_type(r#type, buff),
+        Value::Boolean(b) => b.serialize_for_type(r#type, buff),
+        Value::Temporal(t) => t.serialize_for_type(r#type, buff),
+        Value::Uuid(u) => u.serialize_for_type(r#type, buff),
+    };
 
-        _ => unimplemented!("Tried to call serialize from {value:#?} into {type:#?}"),
+    if let Err(error) = result {
+        unimplemented!("Tried to call serialize from {value:#?} into {type:#?}: {error}");
     }
 }
 
