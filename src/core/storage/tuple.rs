@@ -7,6 +7,7 @@ use std::{
 use crate::{
     core::date::{NaiveDateTime, Serialize},
     db::{RowId, Schema},
+    sql::statement::Temporal,
 };
 use crate::{
     core::{
@@ -15,6 +16,10 @@ use crate::{
     },
     sql::statement::{Type, Value},
 };
+
+trait ValueSerialize {
+    fn serialize(&self, buff: &mut Vec<u8>, to: &Type);
+}
 
 /// Returns the byte length of a given SQL [`Type`].
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
@@ -66,66 +71,27 @@ pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
 }
 
 fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
-    match (r#type, value) {
-        (Type::Varchar(max), Value::String(string)) => {
-            if string.as_bytes().len() > u32::MAX as usize {
-                todo!("Strings too long are not supported {}", u32::MAX);
-            }
-
-            let b_len = string.as_bytes().len().to_le_bytes();
-            let len_prefix = utf_8_length_bytes(*max);
-
-            buff.extend_from_slice(&b_len[..len_prefix]);
-            buff.extend_from_slice(string.as_bytes());
-        }
-        (Type::Text, Value::String(string)) => {
-            let bytes = string.as_bytes();
-            let len = bytes.len();
-
-            match len < 127 {
-                true => buff.push(len as u8),
-                _ => {
-                    // 4 byte header: 0x80 + 3 bytes BE length
-                    buff.push(0x80);
-                    buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
+    match value {
+        Value::String(string) => match r#type {
+            Type::Varchar(max) => {
+                if string.as_bytes().len() > u32::MAX as usize {
+                    todo!("Strings too long are not supported {}", u32::MAX);
                 }
+
+                let b_len = string.as_bytes().len().to_le_bytes();
+                let len_prefix = utf_8_length_bytes(*max);
+
+                buff.extend_from_slice(&b_len[..len_prefix]);
+                buff.extend_from_slice(string.as_bytes());
             }
 
-            // then we add the string content itself
-            buff.extend_from_slice(bytes);
-        }
-        (Type::Boolean, Value::Boolean(bool)) => buff.push(u8::from(*bool)),
-        (int, Value::Number(num)) if int.is_integer() => {
-            let b_len = byte_len_of_type(int);
-            let be_bytes = num.to_be_bytes();
-            buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
-        }
-        (r#type, value) if r#type.is_float() || r#type.is_integer() => {
-            println!("type {} value {value}", r#type);
-            let float = match value {
-                Value::Number(num) => *num as f64,
-                Value::Float(num) => *num,
-                _ => unreachable!(),
-            };
-
-            match r#type {
-                Type::Real => buff.extend_from_slice(&(float as f32).to_be_bytes()),
-                Type::DoublePrecision => buff.extend_from_slice(&float.to_be_bytes()),
-                _ => unreachable!("what kind of float is this?"),
-            }
-        }
-        (Type::Date, Value::String(date)) => NaiveDate::parse_str(date).unwrap().serialize(buff),
-        (Type::Time, Value::String(time)) => NaiveTime::parse_str(time).unwrap().serialize(buff),
-        (Type::DateTime, Value::String(datetime)) => {
-            NaiveDateTime::parse_str(datetime).unwrap().serialize(buff)
-        }
-        (Type::Uuid, Value::Uuid(bytes)) => buff.extend_from_slice(bytes.as_ref()),
-        (Type::Uuid, Value::String(uuid)) => {
-            let uuid = Uuid::from_str(uuid).unwrap();
-            buff.extend_from_slice(uuid.as_ref())
-        }
-
-        _ => unimplemented!("Tried to call serialize from {value:#?} into {type:#?}"),
+            _ => string.serialize(buff, r#type),
+        },
+        Value::Number(n) => n.serialize(buff, r#type),
+        Value::Float(f) => f.serialize(buff, r#type),
+        Value::Boolean(b) => b.serialize(buff, r#type),
+        Value::Temporal(t) => t.serialize(buff, r#type),
+        Value::Uuid(u) => u.serialize(buff, r#type),
     }
 }
 
@@ -316,6 +282,103 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
     });
 
     values.collect()
+}
+
+impl ValueSerialize for String {
+    fn serialize(&self, buff: &mut Vec<u8>, to: &Type) {
+        match to {
+            Type::Text => {
+                let bytes = self.as_bytes();
+                let len = bytes.len();
+
+                match len < 127 {
+                    true => buff.push(len as u8),
+                    _ => {
+                        // 4 byte header: 0x80 + 3 bytes BE length
+                        buff.push(0x80);
+                        buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
+                    }
+                }
+
+                // then we add the string content itself
+                buff.extend_from_slice(bytes);
+            }
+            Type::Date => NaiveDate::parse_str(self).unwrap().serialize(buff),
+            Type::Time => NaiveTime::parse_str(self).unwrap().serialize(buff),
+            Type::DateTime => NaiveDateTime::parse_str(self).unwrap().serialize(buff),
+            Type::Uuid => buff.extend_from_slice(Uuid::from_str(self).unwrap().as_ref()),
+            _ => unreachable!("Unsupported type {to} for String value"),
+        }
+    }
+}
+
+impl ValueSerialize for i128 {
+    fn serialize(&self, buff: &mut Vec<u8>, to: &Type) {
+        match to {
+            typ if typ.is_integer() => {
+                let b_len = byte_len_of_type(to);
+                let be_bytes = self.to_be_bytes();
+                buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
+            }
+            typ if typ.is_float() => match typ {
+                Type::Real => buff.extend_from_slice(&(*self as f32).to_be_bytes()),
+                Type::DoublePrecision => buff.extend_from_slice(&(*self as f64).to_be_bytes()),
+                _ => unreachable!("What kind of float is this?"),
+            },
+            _ => unreachable!("Unsupported type {to} for i128 value"),
+        }
+    }
+}
+
+impl ValueSerialize for f64 {
+    fn serialize(&self, buff: &mut Vec<u8>, to: &Type) {
+        match to {
+            typ if typ.is_float() => match typ {
+                Type::Real => buff.extend_from_slice(&(*self as f32).to_be_bytes()),
+                Type::DoublePrecision => buff.extend_from_slice(&self.to_be_bytes()),
+                _ => unreachable!("What kind of float is this?"),
+            },
+            typ if typ.is_integer() => {
+                let value = *self as i128;
+                value.serialize(buff, typ);
+            }
+            _ => unreachable!("Unsupported type {to} for f64 value"),
+        }
+    }
+}
+
+impl ValueSerialize for Temporal {
+    fn serialize(&self, buff: &mut Vec<u8>, to: &Type) {
+        match (to, self) {
+            (Type::Date, Temporal::Date(date)) => date.serialize(buff),
+            (Type::Time, Temporal::Time(time)) => time.serialize(buff),
+            (Type::DateTime, Temporal::DateTime(datetime)) => datetime.serialize(buff),
+            (Type::DoublePrecision, temporal) => match temporal {
+                Temporal::Date(date) => date.serialize(buff),
+                Temporal::DateTime(datetime) => datetime.serialize(buff),
+                Temporal::Time(time) => time.serialize(buff),
+            },
+            _ => unreachable!("Unsupported type {to} for Temporal {self}"),
+        }
+    }
+}
+
+impl ValueSerialize for Uuid {
+    fn serialize(&self, buff: &mut Vec<u8>, to: &Type) {
+        match to {
+            Type::Uuid => buff.extend_from_slice(self.as_ref()),
+            _ => unreachable!("Unsupported type {to} for UUID"),
+        }
+    }
+}
+
+impl ValueSerialize for bool {
+    fn serialize(&self, buff: &mut Vec<u8>, to: &Type) {
+        match to {
+            Type::Boolean => buff.push(u8::from(*self)),
+            _ => unreachable!("This ain't a boolean"),
+        }
+    }
 }
 
 #[cfg(test)]

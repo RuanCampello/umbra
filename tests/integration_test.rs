@@ -96,6 +96,8 @@ fn serialisation_and_deserialisation() -> Result<()> {
         ]
     );
 
+    println!("{:#?}", query.tuples);
+
     db.drop()?;
 
     Ok(())
