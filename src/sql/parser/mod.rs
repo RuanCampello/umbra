@@ -118,7 +118,7 @@ impl<'input> Parser<'input> {
         self.next_token().and_then(|token| match token {
             Token::String(string) => Ok(string),
             _ => Err(self.error(ErrorKind::Expected {
-                expected: Token::Identifier(Default::default()),
+                expected: Token::String(Default::default()),
                 found: token,
             })),
         })
@@ -799,7 +799,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
+    use crate::sql::statement::{self, Expression, OrderBy, OrderDirection};
 
     #[test]
     fn test_parse_select() {
@@ -1873,8 +1873,6 @@ mod tests {
         let sql = "CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');";
         let statement = Parser::new(sql).parse_statement();
 
-        println!("statement {statement:#?}");
-
         assert_eq!(
             statement.unwrap(),
             Statement::Create(Create::Enum {
@@ -1882,5 +1880,41 @@ mod tests {
                 variants: vec!["sad".into(), "ok".into(), "happy".into()]
             })
         )
+    }
+
+    #[test]
+    fn test_empty_enum() {
+        let sql = "CREATE TYPE flavor AS ENUM ();";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap_err(),
+            ParserError {
+                kind: ErrorKind::Expected {
+                    expected: Token::String(Default::default()),
+                    found: Token::RightParen,
+                },
+                location: Location::new(1, 29),
+                input: sql.into(),
+            }
+        )
+    }
+
+    #[test]
+    fn test_create_enum_non_string_variant() {
+        let sql = "CREATE TYPE weird AS ENUM (foo, bar);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap_err(),
+            ParserError {
+                kind: ErrorKind::Expected {
+                    expected: Token::String(Default::default()),
+                    found: Token::Identifier("foo".into())
+                },
+                location: Location::new(1, 28),
+                input: sql.into()
+            }
+        );
     }
 }
