@@ -363,8 +363,8 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             VmType::Float => Type::DoublePrecision,
             VmType::Bool => Type::Boolean,
             VmType::Number => Type::BigInteger,
-            VmType::String => Type::Varchar(65535),
-            VmType::Date => Type::DateTime,
+            VmType::String => Type::Text,
+            VmType::Date => Type::Date,
         },
     })
 }
@@ -1200,7 +1200,7 @@ mod tests {
                         func: Function::Min,
                         args: vec![parse_expr("age")]
                     }],
-                    output: Schema::new(vec![Column::new("MIN", Type::DoublePrecision)]),
+                    output: Schema::new(vec![Column::new("MIN", Type::BigInteger)]),
                     page_size,
                 }
                 .into()
