@@ -89,8 +89,7 @@ impl<'sql> Sql<'sql> for Create {
                 parser.expect_keyword(Keyword::As)?;
                 let r#type = parser.parse_type()?;
 
-                parser.expect_keyword(Keyword::Owned)?;
-                parser.expect_keyword(Keyword::By)?;
+                parser.expect_keywords(&[Keyword::Owned, Keyword::By])?;
                 let table = parser.parse_ident()?;
 
                 Create::Sequence {
@@ -101,6 +100,7 @@ impl<'sql> Sql<'sql> for Create {
             }
             Keyword::Type => {
                 let name = parser.parse_ident()?;
+                parser.expect_keywords(&[Keyword::As, Keyword::Enum])?;
                 let variants = parser.parse_separated_tokens(Parser::parse_ident, true)?;
 
                 Create::Enum { name, variants }

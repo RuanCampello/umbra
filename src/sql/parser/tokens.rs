@@ -9,7 +9,7 @@ use std::{
 };
 
 /// SQL tokens.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::sql) enum Token {
     Whitespace(Whitespace),
     Identifier(String),
@@ -34,7 +34,7 @@ pub(in crate::sql) enum Token {
     Eof,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::sql) enum Whitespace {
     Tab,
     Space,
@@ -364,6 +364,12 @@ impl FromStr for Keyword {
 impl Display for Keyword {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.borrow())
+    }
+}
+
+impl AsRef<Token> for Token {
+    fn as_ref(&self) -> &Token {
+        self
     }
 }
 

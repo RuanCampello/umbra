@@ -543,12 +543,17 @@ impl<'input> Parser<'input> {
         self.next_token_stream()
     }
 
-    fn expect_token(&mut self, expected: Token) -> ParserResult<Token> {
+    fn expect_token<Tk>(&mut self, expected: Tk) -> ParserResult<Token>
+    where
+        Tk: AsRef<Token> + Clone,
+    {
+        let expected = expected.as_ref();
+
         self.next_token()
             .and_then(|token| match token.eq(&expected) {
                 true => Ok(token),
                 false => Err(self.error(ErrorKind::Expected {
-                    expected,
+                    expected: expected.clone(),
                     found: token,
                 })),
             })
@@ -557,6 +562,14 @@ impl<'input> Parser<'input> {
     fn expect_keyword(&mut self, expected: Keyword) -> ParserResult<Keyword> {
         self.expect_token(Token::Keyword(expected))
             .map(|_| expected)
+    }
+
+    fn expect_keywords(&mut self, expected: &[Keyword]) -> ParserResult<()> {
+        for &kw in expected {
+            self.expect_keyword(kw)?;
+        }
+
+        Ok(())
     }
 
     fn skip_whitespaces(&mut self) {
