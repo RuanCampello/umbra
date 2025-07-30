@@ -156,6 +156,8 @@ impl From<&Type> for u8 {
             Type::Varchar(_) => STRING_CATEGORY | 0x0,
             Type::Text => STRING_CATEGORY | 0x1,
 
+            Type::Enum(_) => panic!(),
+
             Type::Date => TEMPORAL_CATEGORY | 0x0,
             Type::Time => TEMPORAL_CATEGORY | 0x1,
             Type::DateTime => TEMPORAL_CATEGORY | 0x2,

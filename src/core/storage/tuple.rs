@@ -92,6 +92,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
+        Value::Enum { id, variant } => unimplemented!(),
     }
 }
 
@@ -279,6 +280,8 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
 
             Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
         }
+
+        Type::Enum(id) => unimplemented!(),
     });
 
     values.collect()

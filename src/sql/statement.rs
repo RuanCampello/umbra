@@ -189,6 +189,7 @@ pub enum Temporal {
 #[derive(Debug, Clone)]
 pub enum Value {
     String(String),
+    Enum { id: u16, variant: u16 },
     Number(i128),
     Float(f64),
     Boolean(bool),
@@ -275,6 +276,11 @@ pub enum Type {
     DoublePrecision,
     /// 8-byte Universal Unique Identifier defined by [RFC 4122](https://datatracker.ietf.org/doc/html/rfc4122).
     Uuid,
+    /// Enumerated types. They are an static and ordered set of user defined values.
+    /// Each enumerated data type is separated and cannot be compared directly with other
+    /// enumerated types.
+    /// Enumerated types are case sensitive, so `'sunday'` is different from `'SUNDAY'`.
+    Enum(u16),
     Date,
     Time,
     DateTime,
@@ -641,6 +647,7 @@ impl Hash for Value {
             Value::Boolean(b) => b.hash(state),
             Value::Temporal(t) => t.hash(state),
             Value::Uuid(u) => u.hash(state),
+            Value::Enum { id, .. } => id.hash(state),
         }
     }
 }
@@ -755,6 +762,7 @@ impl Display for Type {
             Type::Date => f.write_str("DATE"),
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
             Type::Text => write!(f, "TEXT"),
+            Type::Enum(id) => write!(f, "ENUM({id})"),
         }
     }
 }
@@ -768,6 +776,7 @@ impl Display for Value {
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
+            Value::Enum { id, variant } => write!(f, "ENUM({id}::{variant})"),
         }
     }
 }
