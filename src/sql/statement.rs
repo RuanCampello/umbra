@@ -2,7 +2,7 @@
 //! See [this](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 //! to reach out about statements and/or AST.
 
-#![allow(unused)]
+#![allow(unused, private_interfaces)]
 
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
@@ -19,7 +19,7 @@ use super::Keyword;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
-pub(crate) enum Statement {
+pub enum Statement {
     Create(Create),
     Select(Select),
     Update(Update),

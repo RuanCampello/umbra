@@ -27,7 +27,7 @@ pub use tokens::Keyword;
 
 use super::statement::{Delete, Insert, Select, Update};
 
-pub(crate) struct Parser<'input> {
+pub struct Parser<'input> {
     input: &'input str,
     tokenizer: Peekable<tokenizer::IntoIter<'input>>,
     location: Location,

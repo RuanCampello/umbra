@@ -7,4 +7,5 @@ pub mod sql;
 pub mod tcp;
 mod vm;
 
+pub use core::{Rng, Uuid};
 pub type Result<T> = std::result::Result<T, DatabaseError>;

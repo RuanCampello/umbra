@@ -72,7 +72,7 @@ pub(crate) fn has_btree_key(columns: &[Column]) -> bool {
         && !matches!(columns[0].data_type, Type::Varchar(_) | Type::Boolean)
 }
 
-pub(crate) fn umbra_schema() -> Schema {
+pub fn umbra_schema() -> Schema {
     Schema::from(&[
         Column::new("type", Type::Varchar(255)),
         Column::new("name", Type::Varchar(255)),

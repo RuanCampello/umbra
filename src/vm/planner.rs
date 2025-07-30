@@ -1623,7 +1623,7 @@ impl<File: FileOperations + PartialEq> PartialEq for Collect<File> {
     }
 }
 
-fn temp_file<File: FileOperations>(
+pub fn temp_file<File: FileOperations>(
     work_dir: &Path,
     extension: &str,
 ) -> io::Result<(PathBuf, File)> {

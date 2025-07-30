@@ -1,8 +1,9 @@
-use parser::Parser;
 use statement::Statement;
 
 use crate::db::{Ctx, DatabaseError};
-pub use parser::Keyword;
+pub use analyzer::AnalyzerError;
+pub use parser::{Keyword, Parser};
+pub use statement::Column;
 
 pub(crate) mod analyzer;
 pub(crate) mod optimiser;
