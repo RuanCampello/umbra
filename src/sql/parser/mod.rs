@@ -216,6 +216,8 @@ impl<'input> Parser<'input> {
     fn parse_pref(&mut self) -> ParserResult<Expression> {
         match self.next_token()? {
             Token::Identifier(identifier) => Ok(Expression::Identifier(identifier)),
+            // allow type to be used as a column name in certain contexts
+            Token::Keyword(Keyword::Type) => Ok(Expression::Identifier("type".into())),
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),

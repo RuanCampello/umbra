@@ -55,6 +55,7 @@ impl<'sql> Sql<'sql> for Create {
             Keyword::Unique,
             Keyword::Index,
             Keyword::Sequence,
+            Keyword::Type,
         ])?;
 
         Ok(match keyword {
@@ -97,6 +98,12 @@ impl<'sql> Sql<'sql> for Create {
                     name,
                     r#type,
                 }
+            }
+            Keyword::Type => {
+                let name = parser.parse_ident()?;
+                let variants = parser.parse_separated_tokens(Parser::parse_ident, true)?;
+
+                Create::Enum { name, variants }
             }
             _ => panic!("Unsupported keyword"),
         })

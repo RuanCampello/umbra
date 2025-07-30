@@ -64,6 +64,10 @@ pub(crate) enum Create {
         column: String,
         unique: bool,
     },
+    Enum {
+        name: String,
+        variants: Vec<String>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -448,6 +452,10 @@ impl Display for Statement {
                 } => {
                     let unique = if *unique { "UNIQUE" } else { "" };
                     write!(f, "CREATE {unique} INDEX {name} ON {table}({column})")?;
+                }
+
+                Create::Enum { name, variants } => {
+                    write!(f, "CREATE TYPE {name} AS ENUM ({})", join(variants, ", "))?
                 }
             },
 
