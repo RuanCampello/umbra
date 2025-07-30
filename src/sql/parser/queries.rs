@@ -101,7 +101,7 @@ impl<'sql> Sql<'sql> for Create {
             Keyword::Type => {
                 let name = parser.parse_ident()?;
                 parser.expect_keywords(&[Keyword::As, Keyword::Enum])?;
-                let variants = parser.parse_separated_tokens(Parser::parse_ident, true)?;
+                let variants = parser.parse_separated_tokens(Parser::parse_literal, true)?;
 
                 Create::Enum { name, variants }
             }

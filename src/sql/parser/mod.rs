@@ -113,6 +113,17 @@ impl<'input> Parser<'input> {
         })
     }
 
+    /// Parse string literals with quotation marks.
+    fn parse_literal(&mut self) -> ParserResult<String> {
+        self.next_token().and_then(|token| match token {
+            Token::String(string) => Ok(string),
+            _ => Err(self.error(ErrorKind::Expected {
+                expected: Token::Identifier(Default::default()),
+                found: token,
+            })),
+        })
+    }
+
     pub(crate) fn parse_expr(&mut self, precedence: Option<u8>) -> ParserResult<Expression> {
         let mut expr = self.parse_pref()?;
         let mut next = self.get_precedence();
@@ -1853,6 +1864,22 @@ mod tests {
                     Column::new("content", Type::Text),
                     Column::new("created_at", Type::DateTime)
                 ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_create_enum() {
+        let sql = "CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');";
+        let statement = Parser::new(sql).parse_statement();
+
+        println!("statement {statement:#?}");
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Enum {
+                name: "mood".into(),
+                variants: vec!["sad".into(), "ok".into(), "happy".into()]
             })
         )
     }
