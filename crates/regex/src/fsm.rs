@@ -3,3 +3,5 @@
 
 #[derive(Debug, Clone)]
 pub(crate) struct Regex {}
+
+impl Regex {}
