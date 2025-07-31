@@ -9,7 +9,7 @@ pub(crate) struct Regex {}
 pub(crate) struct Input<'h> {
     haystack: &'h [u8],
     span: Span,
-    anchored: bool,
+    anchored: Anchored,
     earliest: bool,
 }
 
@@ -22,6 +22,48 @@ pub(crate) struct Span {
     pub start: usize,
     /// End offset, exclusive.
     pub end: usize,
+}
+
+/// The identifier of a given regular expression.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Default, Clone, Copy)]
+#[repr(transparent)]
+pub(crate) struct PatternId(u32);
+
+/// The kind of anchored search to perform.
+/// There's a quite good article about regex anchors, you can read it [here](https://www.rexegg.com/regex-anchors.php)
+#[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
+pub(crate) enum Anchored {
+    Yes,
+    #[default]
+    No,
+    Pattern(PatternId),
+}
+
+impl<'h> Input<'h> {
+    pub(crate) fn new<H: Sized + AsRef<[u8]>>(haystack: &'h H) -> Self {
+        let haystack = haystack.as_ref();
+        Self {
+            haystack,
+            span: Span {
+                start: 0,
+                end: haystack.len(),
+            },
+            anchored: Anchored::default(),
+            earliest: false,
+        }
+    }
+
+    pub(crate) fn span<S: Into<Span>>(&mut self, span: S) {
+        let span = span.into();
+
+        assert!(
+            span.end <= self.haystack.len() && span.start <= span.end.wrapping_add(1),
+            "Invalid span {span:?} for haystack with length {}",
+            self.haystack.len()
+        );
+
+        self.span = span;
+    }
 }
 
 impl Regex {}
@@ -64,5 +106,17 @@ impl From<Span> for Range<usize> {
             start: value.start,
             end: value.end,
         }
+    }
+}
+
+impl core::fmt::Debug for PatternId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("PatternId").field(&self.0).finish()
+    }
+}
+
+impl core::fmt::Debug for Span {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}..{}", self.start, self.end)
     }
 }
