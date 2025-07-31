@@ -1,4 +1,4 @@
-//! The finite state machine related code.
+//! The finite state machine (FSW) related code.
 //! This is basically the engine that we use to compute regexes.
 
 use core::num::NonZeroUsize;
