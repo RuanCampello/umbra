@@ -3,6 +3,8 @@
 
 use core::num::NonZeroUsize;
 use core::ops::Range;
+
+mod dfa;
 mod strategy;
 
 #[derive(Debug, Clone)]
