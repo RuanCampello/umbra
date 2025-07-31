@@ -1,1 +1,2 @@
-pub struct Regex {}
+mod fsm;
+mod string;
