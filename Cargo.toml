@@ -8,7 +8,11 @@ edition = "2021"
 libc ="0.2.172"
 
 [workspace]
-members = ["usql"]
+members = [ "crates/regex" ,"usql"]
+
+[dependencies]
+# local dependencies, basically dog fooding
+regex = { path = "./crates/regex" }
 
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["html_reports"] }
