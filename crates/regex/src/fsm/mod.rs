@@ -1,7 +1,9 @@
 //! The finite state machine related code.
 //! This is basically the engine that we use to compute regexes.
 
+use core::num::NonZeroUsize;
 use core::ops::Range;
+mod strategy;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Regex {}
@@ -24,6 +26,12 @@ pub(crate) struct Span {
     pub end: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct Cache {
+    slots: Vec<Option<NonZeroUsize>>,
+    slots_len: usize,
+}
+
 /// The identifier of a given regular expression.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Default, Clone, Copy)]
 #[repr(transparent)]
@@ -38,6 +46,8 @@ pub(crate) enum Anchored {
     No,
     Pattern(PatternId),
 }
+
+impl Regex {}
 
 impl<'h> Input<'h> {
     pub(crate) fn new<H: Sized + AsRef<[u8]>>(haystack: &'h H) -> Self {
@@ -65,8 +75,6 @@ impl<'h> Input<'h> {
         self.span = span;
     }
 }
-
-impl Regex {}
 
 impl Span {
     #[inline]
