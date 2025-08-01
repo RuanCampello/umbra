@@ -17,6 +17,7 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
 use crate::core::uuid::UuidError;
+use crate::db::metadata::EnumRegistry;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
@@ -284,6 +285,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 row_id,
                 indexes: vec![],
                 serials: HashMap::new(),
+                enums: EnumRegistry::empty(),
                 schema,
             });
         }
@@ -295,6 +297,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             schema: Schema::empty(),
             indexes: Vec::new(),
             serials: HashMap::new(),
+            enums: EnumRegistry::empty(),
         };
 
         let mut serials_to_load = Vec::new();
@@ -531,6 +534,7 @@ impl TryFrom<&[&str]> for Context {
                         schema,
                         indexes: vec![],
                         serials: HashMap::new(),
+                        enums: EnumRegistry::empty(),
                     };
                     root += 1;
 
