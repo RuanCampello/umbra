@@ -27,6 +27,7 @@ pub enum AnalyzerError {
     MissingCols,
     DuplicateCols(String),
     MultiplePrimaryKeys,
+    DuplicateVariant,
     AlreadyExists(AlreadyExists),
     /// Attempt to assign Row Id special column manually.
     RowIdAssignment,
@@ -103,6 +104,15 @@ pub(in crate::sql) fn analyze<'s>(
 
             if metadata.indexes.iter().any(|idx| idx.name.eq(name)) {
                 return Err(AnalyzerError::AlreadyExists(AlreadyExists::Index(name.into())).into());
+            }
+        }
+
+        Statement::Create(Create::Enum { name, variants }) => {
+            let mut seen = HashSet::with_capacity(variants.len());
+            let contains_duplicate = variants.iter().any(|i| !seen.insert(i));
+
+            if contains_duplicate {
+                return Err(AnalyzerError::DuplicateVariant.into());
             }
         }
 
@@ -570,6 +580,9 @@ impl Display for AnalyzerError {
             AnalyzerError::MissingCols => write!(f, "all columns must be specified"),
             AnalyzerError::DuplicateCols(col) => write!(f, "column {col} was already declared"),
             AnalyzerError::AlreadyExists(name) => f.write_str(&name.to_string()),
+            AnalyzerError::DuplicateVariant => {
+                f.write_str("all variants of enumerables must be unique")
+            }
             AnalyzerError::MultiplePrimaryKeys => {
                 write!(f, "a table can only have one primary key")
             }
@@ -1181,6 +1194,16 @@ mod tests {
             sql: "SELECT * FROM documents WHERE full_text LIKE '%lorem%';",
             ctx,
             expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_enum_with_duplicated_value() -> AnalyzerResult {
+        Analyze {
+            sql: "CREATE TYPE mood AS ENUM ('happy', 'sad', 'happy');",
+            ctx: &[],
+            expected: Err(AnalyzerError::DuplicateVariant.into()),
         }
         .assert()
     }
