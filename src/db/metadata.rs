@@ -24,7 +24,6 @@ pub(crate) struct TableMetadata {
     pub indexes: Vec<IndexMetadata>,
     pub serials: HashMap<String, SequenceMetadata>,
     pub(in crate::db) row_id: RowId,
-    pub(in crate::db) enums: EnumRegistry,
 }
 
 /// The information we know about the table indexes during runtime.
@@ -142,15 +141,6 @@ impl TableMetadata {
         })
     }
 
-    pub fn get_enum(&self, identifier: &str) -> Result<Vec<&str>, DatabaseError> {
-        self.enums
-            .get(identifier)
-            .map(|variants| variants.iter().map(String::as_str).collect())
-            .ok_or(DatabaseError::Other(format!(
-                "Enum '{identifier}' does not exists"
-            )))
-    }
-
     pub fn keys(&self) -> &Column {
         self.schema.keys()
     }
@@ -167,8 +157,10 @@ impl EnumRegistry {
         }
     }
 
-    pub(in crate::db::metadata) fn get(&self, identifier: &str) -> Option<&Vec<String>> {
-        self.enums.get(identifier)
+    pub(in crate::db::metadata) fn get(&self, identifier: &str) -> Option<Vec<&str>> {
+        self.enums
+            .get(identifier)
+            .map(|variants| variants.iter().map(String::as_str).collect())
     }
 }
 

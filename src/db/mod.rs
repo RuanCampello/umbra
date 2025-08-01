@@ -47,6 +47,7 @@ pub struct Database<File> {
 #[derive(Debug)]
 pub(crate) struct Context {
     tables: HashMap<String, TableMetadata>,
+    enums: EnumRegistry,
     max_size: Option<usize>,
 }
 
@@ -285,7 +286,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 row_id,
                 indexes: vec![],
                 serials: HashMap::new(),
-                enums: EnumRegistry::empty(),
                 schema,
             });
         }
@@ -297,7 +297,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             schema: Schema::empty(),
             indexes: Vec::new(),
             serials: HashMap::new(),
-            enums: EnumRegistry::empty(),
         };
 
         let mut serials_to_load = Vec::new();
@@ -483,6 +482,7 @@ impl Context {
         Self {
             tables: HashMap::new(),
             max_size: None,
+            enums: EnumRegistry::empty(),
         }
     }
 
@@ -490,6 +490,7 @@ impl Context {
         Self {
             tables: HashMap::with_capacity(size),
             max_size: Some(size),
+            enums: EnumRegistry::empty(),
         }
     }
 
@@ -534,7 +535,6 @@ impl TryFrom<&[&str]> for Context {
                         schema,
                         indexes: vec![],
                         serials: HashMap::new(),
-                        enums: EnumRegistry::empty(),
                     };
                     root += 1;
 
