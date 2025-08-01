@@ -157,7 +157,7 @@ impl EnumRegistry {
         }
     }
 
-    pub(in crate::db::metadata) fn get(&self, identifier: &str) -> Option<Vec<&str>> {
+    pub(crate) fn get(&self, identifier: &str) -> Option<Vec<&str>> {
         self.enums
             .get(identifier)
             .map(|variants| variants.iter().map(String::as_str).collect())

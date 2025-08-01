@@ -117,6 +117,7 @@ const DEFAULT_CACHE_SIZE: usize = 512;
 
 pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
+    fn enums(&self) -> &EnumRegistry;
 }
 
 macro_rules! temporal {
@@ -447,6 +448,10 @@ impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
 
         self.context.metadata(table)
     }
+
+    fn enums(&self) -> &EnumRegistry {
+        &self.context.enums
+    }
 }
 
 impl<File> Database<File> {
@@ -590,6 +595,10 @@ impl Ctx for Context {
         self.tables
             .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
+    }
+
+    fn enums(&self) -> &EnumRegistry {
+        &self.enums
     }
 }
 

@@ -39,6 +39,7 @@ pub enum AnalyzerError {
 pub enum AlreadyExists {
     Table(String),
     Index(String),
+    Enum(String),
 }
 
 type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
@@ -108,6 +109,11 @@ pub(in crate::sql) fn analyze<'s>(
         }
 
         Statement::Create(Create::Enum { name, variants }) => {
+            let enums = ctx.enums();
+            if enums.get(name).is_some() {
+                return Err(AnalyzerError::AlreadyExists(AlreadyExists::Enum(name.into())).into());
+            }
+
             let mut seen = HashSet::with_capacity(variants.len());
             let contains_duplicate = variants.iter().any(|i| !seen.insert(i));
 
@@ -606,6 +612,7 @@ impl Display for AlreadyExists {
         match self {
             AlreadyExists::Table(table_name) => write!(f, "table {table_name} already exists"),
             AlreadyExists::Index(index_name) => write!(f, "index {index_name} already exists"),
+            AlreadyExists::Enum(enum_name) => write!(f, "enum {enum_name} already exists"),
         }
     }
 }
