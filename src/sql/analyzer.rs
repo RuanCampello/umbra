@@ -4,7 +4,7 @@
 //! After this analysis, we should be able to handle the execution without almost no runtime error
 //! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
 
-use super::statement::{Delete, Insert, Select, Update};
+use super::statement::{Delete, Insert, Select, Update, USER_DEFINED_TYPE};
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
@@ -65,9 +65,7 @@ pub(in crate::sql) fn analyze<'s>(
                     ))
                     .into());
                 }
-                Err(e) => {
-                    return Err(e);
-                }
+                Err(e) => return Err(e),
             };
 
             let mut primary_key = false;
@@ -76,6 +74,14 @@ pub(in crate::sql) fn analyze<'s>(
             for col in columns {
                 if !duplicates.insert(&col.name) {
                     return Err(AnalyzerError::DuplicateCols(col.name.to_string()).into());
+                }
+
+                if let Type::Enum(code) = col.data_type {
+                    if ctx.enums().get_from(&col.name, code).is_none() {
+                        return Err(
+                            AnalyzerError::InvalidUserDefinedType(col.name.to_string()).into()
+                        );
+                    }
                 }
 
                 if col.name.eq(ROW_COL_ID) {
@@ -1256,7 +1262,7 @@ mod tests {
         Analyze {
             sql: "CREATE TABLE employees (id SOMETHING, name VARCHAR(30));",
             ctx: &[],
-            expected: Err(AnalyzerError::InvalidUserDefinedType("SOMETHING".into()).into()),
+            expected: Err(AnalyzerError::InvalidUserDefinedType("id".into()).into()),
         }
         .assert()
     }
