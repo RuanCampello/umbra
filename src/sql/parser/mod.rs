@@ -319,7 +319,9 @@ impl<'input> Parser<'input> {
 
     fn parse_type(&mut self) -> ParserResult<Type> {
         // first we try to match against known types
-        if let Ok(keyword) = self.expect_one(&Self::supported_types()) {
+        let keyword = self.consume_one(&Self::supported_types());
+        
+        if keyword != Keyword::None {
             if Self::is_integer(&keyword) {
                 let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
                 return Ok(match (keyword, unsigned) {
