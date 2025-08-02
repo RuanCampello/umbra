@@ -1224,4 +1224,26 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn test_enum_happy_path() -> AnalyzerResult {
+        let create = "CREATE TYPE flavor AS ENUM ('salty', 'sweet', 'sour');";
+
+        Analyze {
+            sql: "SELECT * FROM cake WHERE flavor = 'sweet';",
+            ctx: &[
+                "CREATE TABLE cake (id SERIAL PRIMARY KEY, flavor FLAVOR);",
+                create,
+            ],
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: create,
+            ctx: &[],
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }

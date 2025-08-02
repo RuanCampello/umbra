@@ -173,7 +173,7 @@ impl EnumRegistry {
 
     /// Encodes an enum with a given `label` and `variant`.
     /// Returns its representation in `u16` if some.
-    pub(crate) fn encode(&self, label: &str, variant: &str) -> Option<u16> {
+    pub(crate) fn insert_into(&self, label: &str, variant: &str) -> Option<u16> {
         self.enums
             .get(label)
             .and_then(|enum_def| enum_def.map.get(variant).copied())
@@ -181,7 +181,7 @@ impl EnumRegistry {
 
     /// Decodes an enum with a given `label` and `code` to is `variant` string representation.
     /// Returns it if some.
-    pub(crate) fn decode(&self, label: &str, code: u16) -> Option<&str> {
+    pub(crate) fn get_from(&self, label: &str, code: u16) -> Option<&str> {
         self.enums
             .get(label)
             .and_then(|enum_def| enum_def.variants.get(code as usize).map(String::as_str))
