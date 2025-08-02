@@ -164,10 +164,27 @@ impl EnumRegistry {
         }
     }
 
+    /// Returns the enum variant labels for a given enum.
     pub(crate) fn get(&self, identifier: &str) -> Option<Vec<&str>> {
         self.enums
             .get(identifier)
             .map(|enum_def| enum_def.variants.iter().map(String::as_str).collect())
+    }
+
+    /// Encodes an enum with a given `label` and `variant`.
+    /// Returns its representation in `u16` if some.
+    pub(crate) fn encode(&self, label: &str, variant: &str) -> Option<u16> {
+        self.enums
+            .get(label)
+            .and_then(|enum_def| enum_def.map.get(variant).copied())
+    }
+
+    /// Decodes an enum with a given `label` and `code` to is `variant` string representation.
+    /// Returns it if some.
+    pub(crate) fn decode(&self, label: &str, code: u16) -> Option<&str> {
+        self.enums
+            .get(label)
+            .and_then(|enum_def| enum_def.variants.get(code as usize).map(String::as_str))
     }
 
     pub(crate) fn add(&mut self, name: String, variants: Vec<String>) {
