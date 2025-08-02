@@ -329,6 +329,10 @@ pub enum Function {
     UuidV4,
 }
 
+/// This indicates that the user might have entered a not known at compile time type.
+/// The `parser` doesn't know its value, so it passes it to the `analyzer` to valuate it.
+pub const USER_DEFINED_TYPE: u16 = 0x7574;
+
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
         Self {

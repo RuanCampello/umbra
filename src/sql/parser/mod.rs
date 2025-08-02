@@ -25,7 +25,7 @@ use tokens::Token;
 
 pub use tokens::Keyword;
 
-use super::statement::{Delete, Insert, Select, Update};
+use super::statement::{Delete, Insert, Select, Update, USER_DEFINED_TYPE};
 
 pub(crate) struct Parser<'input> {
     input: &'input str,
@@ -318,54 +318,64 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_type(&mut self) -> ParserResult<Type> {
-        match self.expect_one(&Self::supported_types())? {
-            int if Self::is_integer(&int) => {
+        // first we try to match against known types
+        if let Ok(keyword) = self.expect_one(&Self::supported_types()) {
+            if Self::is_integer(&keyword) {
                 let unsigned = self.consume_optional(Token::Keyword(Keyword::Unsigned));
-
-                match (int, unsigned) {
-                    (Keyword::SmallInt, true) => Ok(Type::UnsignedSmallInt),
-                    (Keyword::SmallInt, false) => Ok(Type::SmallInt),
-                    (Keyword::Int, true) => Ok(Type::UnsignedInteger),
-                    (Keyword::Int, false) => Ok(Type::Integer),
-                    (Keyword::BigInt, true) => Ok(Type::UnsignedBigInteger),
-                    (Keyword::BigInt, false) => Ok(Type::BigInteger),
-                    (Keyword::SmallSerial, _) => Ok(Type::SmallSerial),
-                    (Keyword::Serial, _) => Ok(Type::Serial),
-                    (Keyword::BigSerial, _) => Ok(Type::BigSerial),
-                    (Keyword::Uuid, _) => Ok(Type::Uuid),
+                return Ok(match (keyword, unsigned) {
+                    (Keyword::SmallInt, true) => Type::UnsignedSmallInt,
+                    (Keyword::SmallInt, false) => Type::SmallInt,
+                    (Keyword::Int, true) => Type::UnsignedInteger,
+                    (Keyword::Int, false) => Type::Integer,
+                    (Keyword::BigInt, true) => Type::UnsignedBigInteger,
+                    (Keyword::BigInt, false) => Type::BigInteger,
+                    (Keyword::SmallSerial, _) => Type::SmallSerial,
+                    (Keyword::Serial, _) => Type::Serial,
+                    (Keyword::BigSerial, _) => Type::BigSerial,
+                    (Keyword::Uuid, _) => Type::Uuid,
                     _ => unreachable!("unknown integer"),
+                });
+            }
+
+            match keyword {
+                Keyword::Varchar => {
+                    self.expect_token(Token::LeftParen)?;
+                    let len = match self.next_token()? {
+                        Token::Number(number) => number
+                            .parse()
+                            .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
+                        token => {
+                            return Err(self.error(ErrorKind::Expected {
+                                expected: Token::Number(Default::default()),
+                                found: token,
+                            }))
+                        }
+                    };
+                    self.expect_token(Token::RightParen)?;
+                    return Ok(Type::Varchar(len));
                 }
+                Keyword::Double => {
+                    self.expect_keyword(Keyword::Precision)?;
+                    return Ok(Type::DoublePrecision);
+                }
+                Keyword::Real => return Ok(Type::Real),
+                Keyword::Bool => return Ok(Type::Boolean),
+                Keyword::Timestamp => return Ok(Type::DateTime),
+                Keyword::Date => return Ok(Type::Date),
+                Keyword::Time => return Ok(Type::Time),
+                Keyword::Text => return Ok(Type::Text),
+                _ => {}
             }
-            Keyword::Varchar => {
-                self.expect_token(Token::LeftParen)?;
+        }
 
-                let len = match self.next_token()? {
-                    Token::Number(number) => number.parse().map_err(|_| {
-                        // TODO: add correct error to incorrect varchar length
-                        self.error(ErrorKind::UnexpectedEof)
-                    })?,
-                    token => {
-                        return Err(self.error(ErrorKind::Expected {
-                            expected: Token::Number(Default::default()),
-                            found: token,
-                        }))?
-                    }
-                };
-
-                self.expect_token(Token::RightParen)?;
-                Ok(Type::Varchar(len))
-            }
-            Keyword::Double => {
-                self.expect_keyword(Keyword::Precision)?;
-                Ok(Type::DoublePrecision)
-            }
-            Keyword::Real => Ok(Type::Real),
-            Keyword::Bool => Ok(Type::Boolean),
-            Keyword::Timestamp => Ok(Type::DateTime),
-            Keyword::Date => Ok(Type::Date),
-            Keyword::Time => Ok(Type::Time),
-            Keyword::Text => Ok(Type::Text),
-            keyword => unreachable!("unexpected column token: {keyword}"),
+        // if we get here, it's not a known type - try to parse as user-defined enum
+        // and let the analyzer validate it
+        match self.next_token()? {
+            Token::Identifier(_) => Ok(Type::Enum(USER_DEFINED_TYPE)),
+            token => Err(self.error(ErrorKind::ExpectedOneOf {
+                expected: Self::tokens_from_keywords(&Self::supported_types()),
+                found: token.clone(),
+            })),
         }
     }
 
@@ -799,7 +809,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::{self, Expression, OrderBy, OrderDirection};
+    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
 
     #[test]
     fn test_parse_select() {
@@ -1158,24 +1168,6 @@ mod tests {
                     ],
                     found: Token::Keyword(Keyword::Values)
                 }
-            })
-        )
-    }
-
-    #[test]
-    fn test_invalid_type() {
-        let sql = "CREATE TABLE employees (id SOMETHING, name VARCHAR)";
-        let statement = Parser::new(sql).parse_statement();
-
-        assert_eq!(
-            statement,
-            Err(ParserError {
-                input: sql.into(),
-                location: Location::new(1, 28),
-                kind: ErrorKind::ExpectedOneOf {
-                    expected: Parser::tokens_from_keywords(&Parser::supported_types()),
-                    found: Token::Identifier("SOMETHING".into())
-                },
             })
         )
     }
