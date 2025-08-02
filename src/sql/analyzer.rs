@@ -1214,4 +1214,14 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn test_create_duplicated_enum() -> AnalyzerResult {
+        Analyze {
+            sql: "CREATE TYPE mood AS ENUM ('bored', 'angry', 'excited');",
+            ctx: &["CREATE TYPE mood AS ENUM ('confident', 'happy', 'sick');"],
+            expected: Err(AnalyzerError::AlreadyExists(AlreadyExists::Enum("mood".into())).into()),
+        }
+        .assert()
+    }
 }

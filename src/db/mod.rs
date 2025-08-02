@@ -565,6 +565,7 @@ impl TryFrom<&[&str]> for Context {
 
                     context.insert(metadata);
                 }
+
                 Statement::Create(Create::Index { name, column, unique, .. }) if unique => {
                     let table = context.metadata(&name)?;
                     let index_col = &table.schema.columns[table.schema.index_of(&column).unwrap()];
@@ -578,6 +579,10 @@ impl TryFrom<&[&str]> for Context {
                     });
 
                     root += 1;
+                }
+
+                Statement::Create(Create::Enum { name, variants }) => {
+                    context.enums.add(name, variants);
                 }
 
                 statement => {

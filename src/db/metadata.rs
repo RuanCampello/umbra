@@ -49,7 +49,14 @@ pub(crate) struct SequenceMetadata {
 /// Basic lookup table for evaluating enums during runtime.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct EnumRegistry {
-    enums: HashMap<String, Vec<String>>,
+    enums: HashMap<String, Enum>,
+}
+
+/// A single enum definition.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Enum {
+    variants: Vec<String>,
+    map: HashMap<String, u16>, // maps the enum name to it's actual value
 }
 
 /// That our dispatch for relation types.
@@ -160,7 +167,22 @@ impl EnumRegistry {
     pub(crate) fn get(&self, identifier: &str) -> Option<Vec<&str>> {
         self.enums
             .get(identifier)
-            .map(|variants| variants.iter().map(String::as_str).collect())
+            .map(|enum_def| enum_def.variants.iter().map(String::as_str).collect())
+    }
+
+    pub(crate) fn add(&mut self, name: String, variants: Vec<String>) {
+        self.enums.insert(name, Enum::new(variants));
+    }
+}
+
+impl Enum {
+    fn new(variants: Vec<String>) -> Self {
+        let mut map = HashMap::with_capacity(variants.len());
+        variants.iter().enumerate().for_each(|(idx, variant)| {
+            map.insert(variant.to_string(), (idx + 1) as u16);
+        });
+
+        Self { variants, map }
     }
 }
 
