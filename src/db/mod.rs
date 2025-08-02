@@ -7,7 +7,7 @@ mod metadata;
 mod schema;
 
 use metadata::SequenceMetadata;
-pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
+pub(crate) use metadata::{EnumRegistry, IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
 
 use crate::core::date::DateParseError;
@@ -17,7 +17,6 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
 use crate::core::uuid::UuidError;
-use crate::db::metadata::EnumRegistry;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};

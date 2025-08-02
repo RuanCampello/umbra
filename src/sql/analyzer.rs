@@ -4,10 +4,12 @@
 //! After this analysis, we should be able to handle the execution without almost no runtime error
 //! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
 
-use super::statement::{Delete, Insert, Select, Update, USER_DEFINED_TYPE};
+use super::statement::{Delete, Insert, Select, Update};
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
-use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
+use crate::db::{
+    Ctx, DatabaseError, EnumRegistry, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID,
+};
 use crate::sql::statement::{
     BinaryOperator, Constraint, Create, Drop, Expression, Function, Statement, Type, UnaryOperator,
     Value,
@@ -134,6 +136,7 @@ pub(in crate::sql) fn analyze<'s>(
             values: rows,
             columns,
         }) => {
+            let enums = ctx.enums().clone();
             let metadata = ctx.metadata(into)?;
             if into.eq(DB_METADATA) {
                 return Err(AnalyzerError::MetadataAssignment.into());
@@ -187,7 +190,11 @@ pub(in crate::sql) fn analyze<'s>(
                 }
 
                 for (expr, col) in row.iter().zip(&columns) {
-                    analyze_assignment(metadata, col, expr, false)?;
+                    let schema = &metadata.schema;
+                    if let Type::Enum(_) = schema.columns[schema.index_of(col).unwrap()].data_type {
+                        analyze_enum(&enums, &col, expr)?;
+                    }
+                    analyze_assignment(metadata, &col, expr, false)?;
                 }
             }
         }
@@ -320,6 +327,30 @@ fn analyze_assignment<'exp, 'id>(
                 return Err(AnalyzerError::Overflow(data_type.to_owned(), *max).into());
             }
         }
+    }
+
+    Ok(())
+}
+
+fn analyze_enum(registry: &EnumRegistry, label: &str, value: &Expression) -> Result<(), SqlError> {
+    let value = match value {
+        Expression::Value(Value::String(string)) => string.as_str(),
+        _ => unreachable!(),
+    };
+
+    let labels =
+        registry
+            .get(label)
+            .ok_or(SqlError::Analyzer(AnalyzerError::InvalidUserDefinedType(
+                label.into(),
+            )))?;
+
+    if !labels.contains(&value) {
+        return Err(SqlError::Type(TypeError::InvalidEnumVariant {
+            label: label.to_string(),
+            expected: labels.iter().map(|s| s.to_string()).collect(),
+            found: value.into(),
+        }));
     }
 
     Ok(())
@@ -1263,6 +1294,21 @@ mod tests {
             sql: "CREATE TABLE employees (id SOMETHING, name VARCHAR(30));",
             ctx: &[],
             expected: Err(AnalyzerError::InvalidUserDefinedType("id".into()).into()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_insert_valid_enum() -> AnalyzerResult {
+        let ctx = &[
+            "CREATE TYPE flavor AS ENUM ('salty', 'sweet', 'sour');",
+            "CREATE TABLE cake (id SERIAL PRIMARY KEY, name VARCHAR(30), flavor FLAVOR);",
+        ];
+
+        Analyze {
+            sql: "INSERT INTO cake (name, flavor) VALUES ('chocolate bomb', 'sweet');",
+            ctx,
+            expected: Ok(()),
         }
         .assert()
     }

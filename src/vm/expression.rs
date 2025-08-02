@@ -43,6 +43,11 @@ pub enum TypeError {
     ExpectedOneOfTypes {
         expected: Vec<VmType>,
     },
+    InvalidEnumVariant {
+        label: String,
+        expected: Vec<String>,
+        found: String,
+    },
     InvalidDate(DateParseError),
     UuidError(UuidError),
 }
@@ -375,6 +380,26 @@ impl Display for TypeError {
                 }
 
                 Ok(())
+            }
+            TypeError::InvalidEnumVariant {
+                label,
+                expected,
+                found,
+            } => {
+                write!(
+                    f,
+                    "Invalid enum variant for {label}. Expected one of the variants "
+                )?;
+
+                for (idx, name) in expected.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+
+                    write!(f, "'{name}'")?;
+                }
+
+                write!(f, " but found '{found}'")
             }
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
