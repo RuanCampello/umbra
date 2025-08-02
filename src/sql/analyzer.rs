@@ -28,6 +28,7 @@ pub enum AnalyzerError {
     DuplicateCols(String),
     MultiplePrimaryKeys,
     DuplicateVariant,
+    InvalidUserDefinedType(String),
     AlreadyExists(AlreadyExists),
     /// Attempt to assign Row Id special column manually.
     RowIdAssignment,
@@ -586,6 +587,9 @@ impl Display for AnalyzerError {
             AnalyzerError::MissingCols => write!(f, "all columns must be specified"),
             AnalyzerError::DuplicateCols(col) => write!(f, "column {col} was already declared"),
             AnalyzerError::AlreadyExists(name) => f.write_str(&name.to_string()),
+            AnalyzerError::InvalidUserDefinedType(name) => {
+                write!(f, "type '{name}' does not exists")
+            }
             AnalyzerError::DuplicateVariant => {
                 f.write_str("all variants of enumerables must be unique")
             }
@@ -1243,6 +1247,16 @@ mod tests {
             sql: create,
             ctx: &[],
             expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_invalid_type() -> AnalyzerResult {
+        Analyze {
+            sql: "CREATE TABLE employees (id SOMETHING, name VARCHAR(30));",
+            ctx: &[],
+            expected: Err(AnalyzerError::InvalidUserDefinedType("SOMETHING".into()).into()),
         }
         .assert()
     }
