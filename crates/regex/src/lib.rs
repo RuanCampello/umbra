@@ -4,6 +4,7 @@
 
 mod dfa;
 mod fsm;
+mod look;
 mod nfa;
 mod search;
 mod string;
