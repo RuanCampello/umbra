@@ -1079,70 +1079,139 @@ mod tests {
     }
 }
 
-fn plan_select<File: Seek + Read + Write + FileOperations>(
+struct SelectPlanner<File: Seek + Read + Write + FileOperations> {
     select: Select,
-    db: &mut Database<File>,
-) -> Result<Planner<File>, DatabaseError> {
-    let Select {
-        columns,
-        from,
-        r#where,
-        order_by,
-        group_by,
-        distinct,
-    } = select;
+    source: Planner<File>,
+    page_size: usize,
+    work_dir: std::path::PathBuf,
+    schema: Schema,
+    output: Schema,
+}
 
-    let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
-    let page_size = db.pager.borrow().page_size;
-    let work_dir = db.work_dir.clone();
-    let table = db.metadata(&from)?;
-    let schema = &table.schema;
+impl<File: Seek + Read + Write + FileOperations> SelectPlanner<File> {
+    fn new(select: Select, db: &mut Database<File>) -> Result<Self, DatabaseError> {
+        let source = optimiser::generate_seq_plan(&select.from, select.r#where.clone(), db)?;
+        let page_size = db.pager.borrow().page_size;
+        let work_dir = db.work_dir.clone();
+        let table = db.metadata(&select.from)?;
+        let schema = table.schema.clone();
 
-    let output = Schema::new(
-        columns
-            .iter()
-            .map(|expr| match expr {
-                Expression::Identifier(ident) => {
-                    Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
-                }
-                Expression::Alias { expr, alias } => {
-                    Ok(Column::new(alias, resolve_type(schema, expr)?))
-                }
-                _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
-            })
-            .collect::<Result<Vec<_>, SqlError>>()?,
-    );
+        let output = Schema::new(
+            select
+                .columns
+                .iter()
+                .map(|expr| match expr {
+                    Expression::Identifier(ident) => {
+                        Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
+                    }
+                    Expression::Alias { expr, alias } => {
+                        Ok(Column::new(alias, resolve_type(&schema, expr)?))
+                    }
+                    _ => Ok(Column::new(&expr.to_string(), resolve_type(&schema, expr)?)),
+                })
+                .collect::<Result<Vec<_>, SqlError>>()?,
+        );
 
-    let is_grouped = !group_by.is_empty();
-    let aggr_exprs: Vec<(&Expression, String)> = columns
-        .iter()
-        .filter_map(|expr| match expr {
-            Expression::Alias { ref alias, expr } if contains_aggregate(expr) => {
-                Some((expr.as_ref(), alias.to_string()))
-            }
-            expr if contains_aggregate(expr) => Some((expr, expr.to_string())),
-            _ => None,
+        Ok(Self {
+            select,
+            source,
+            page_size,
+            work_dir,
+            schema,
+            output,
         })
-        .collect();
+    }
 
-    let has_aggregates = !aggr_exprs.is_empty();
+    fn build(mut self) -> Result<Planner<File>, DatabaseError> {
+        let is_grouped = !self.select.group_by.is_empty();
+        let has_aggregates = self.has_aggregates();
 
-    // Handle DISTINCT + GROUP BY + aggregates case
-    if is_grouped || has_aggregates {
+        if is_grouped || has_aggregates {
+            self.plan_aggregation()
+        } else if self.select.distinct {
+            self.plan_distinct()
+        } else {
+            self.plan_simple_select()
+        }
+    }
+
+    fn has_aggregates(&self) -> bool {
+        self.select
+            .columns
+            .iter()
+            .any(|expr| contains_aggregate(expr))
+    }
+
+    fn extract_aggregate_expressions(&self) -> Vec<(&Expression, String)> {
+        self.select
+            .columns
+            .iter()
+            .filter_map(|expr| match expr {
+                Expression::Alias { ref alias, expr } if contains_aggregate(expr) => {
+                    Some((expr.as_ref(), alias.to_string()))
+                }
+                expr if contains_aggregate(expr) => Some((expr, expr.to_string())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn plan_aggregation(&mut self) -> Result<Planner<File>, DatabaseError> {
+        let aggr_exprs = self.extract_aggregate_expressions();
+        let aggr_exprs_cloned: Vec<Expression> = aggr_exprs.iter().map(|expr| expr.0.clone()).collect();
+        let aggr_schema = self.build_aggregate_schema(&aggr_exprs)?;
+
+        // Sort before aggregating if needed
+        if self.select.group_by.is_empty() && !self.select.order_by.is_empty() {
+            self.apply_sorting_before_aggregation()?;
+        }
+
+        let resolved_group_by = self.resolve_group_by_expressions();
+
+        let mut plan = Planner::Aggregate(
+            AggregateBuilder {
+                source: Box::new(std::mem::replace(&mut self.source, Planner::Values(Values { values: VecDeque::new() }))),
+                aggr_exprs: aggr_exprs_cloned,
+                page_size: self.page_size,
+                group_by: resolved_group_by,
+                output: aggr_schema.clone(),
+            }
+            .into(),
+        );
+
+        // Handle DISTINCT with GROUP BY
+        if self.select.distinct && !self.select.group_by.is_empty() {
+            plan = self.add_distinct_layer(plan)?;
+        }
+
+        // Sort after aggregation if needed
+        if !self.select.group_by.is_empty() && !self.select.order_by.is_empty() {
+            plan = self.apply_sorting_after_aggregation(plan, &aggr_schema)?;
+        }
+
+        // Add projection if needed
+        if self.output.ne(&aggr_schema) {
+            plan = self.add_projection(plan, aggr_schema)?;
+        }
+
+        Ok(plan)
+    }
+
+    fn build_aggregate_schema(&self, aggr_exprs: &[(&Expression, String)]) -> Result<Schema, DatabaseError> {
         let mut aggr_schema = Schema::empty();
 
-        for expr in &group_by {
+        for expr in &self.select.group_by {
             match expr {
                 Expression::Identifier(ident) => {
-                    if let Some(expr) = columns.iter().find_map(|col_expr| match col_expr {
+                    if let Some(expr) = self.select.columns.iter().find_map(|col_expr| match col_expr {
                         Expression::Alias { alias, expr } if alias == ident => {
                             Some(expr.as_ref())
                         }
                         _ => None,
                     }) {
-                        aggr_schema.push(Column::new(ident, resolve_type(schema, expr)?));
-                    } else if let Some(idx) = schema.index_of(ident) {
-                        aggr_schema.push(schema.columns[idx].clone());
+                        aggr_schema.push(Column::new(ident, resolve_type(&self.schema, expr)?));
+                    } else if let Some(idx) = self.schema.index_of(ident) {
+                        aggr_schema.push(self.schema.columns[idx].clone());
                     } else {
                         return Err(SqlError::InvalidColumn(ident.clone()).into());
                     }
@@ -1150,163 +1219,171 @@ fn plan_select<File: Seek + Read + Write + FileOperations>(
                 other => {
                     aggr_schema.push(Column::new(
                         &other.to_string(),
-                        resolve_type(schema, other)?,
+                        resolve_type(&self.schema, other)?,
                     ));
                 }
             }
         }
 
-        for (aggr_fn, name) in &aggr_exprs {
-            aggr_schema.push(Column::new(name, resolve_type(schema, &aggr_fn)?))
+        for (aggr_fn, name) in aggr_exprs {
+            aggr_schema.push(Column::new(name, resolve_type(&self.schema, aggr_fn)?))
         }
 
-        if group_by.is_empty() && !order_by.is_empty() {
-            let (indexes, directions) =
-                extract_order_indexes_and_directions(schema, &columns, &order_by)?;
+        Ok(aggr_schema)
+    }
 
-            source = Planner::Sort(Sort::from(SortBuilder {
-                page_size,
-                work_dir: work_dir.clone(),
-                input_buffers: DEFAULT_SORT_BUFFER_SIZE,
-                collection: Collect::from(CollectBuilder {
-                    source: Box::new(source),
-                    schema: schema.clone(),
-                    work_dir: work_dir.clone(),
-                    mem_buff_size: page_size,
-                }),
-                comparator: TupleComparator::new(
-                    schema.clone(),
-                    schema.clone(),
-                    indexes,
-                    directions,
-                ),
-            }));
-        }
-
-        let resolved_group_by: Vec<Expression> = group_by
+    fn resolve_group_by_expressions(&self) -> Vec<Expression> {
+        self.select
+            .group_by
             .iter()
             .map(|expr| {
                 if let Expression::Identifier(ident) = expr {
-                    for col_expr in &columns {
+                    for col_expr in &self.select.columns {
                         if col_expr.unwrap_name().as_ref() == ident {
                             return (*col_expr).clone();
                         }
                     }
                 }
-
                 expr.clone()
+            })
+            .collect()
+    }
+
+    fn apply_sorting_before_aggregation(&mut self) -> Result<(), DatabaseError> {
+        let (indexes, directions) =
+            extract_order_indexes_and_directions(&self.schema, &self.select.columns, &self.select.order_by)?;
+
+        self.source = Planner::Sort(Sort::from(SortBuilder {
+            page_size: self.page_size,
+            work_dir: self.work_dir.clone(),
+            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+            collection: Collect::from(CollectBuilder {
+                source: Box::new(std::mem::replace(&mut self.source, Planner::Values(Values { values: VecDeque::new() }))),
+                schema: self.schema.clone(),
+                work_dir: self.work_dir.clone(),
+                mem_buff_size: self.page_size,
+            }),
+            comparator: TupleComparator::new(
+                self.schema.clone(),
+                self.schema.clone(),
+                indexes,
+                directions,
+            ),
+        }));
+
+        Ok(())
+    }
+
+    fn add_distinct_layer(&self, plan: Planner<File>) -> Result<Planner<File>, DatabaseError> {
+        let distinct_group_by: Vec<Expression> = self.select.columns.iter().cloned().collect();
+        Ok(Planner::Aggregate(
+            AggregateBuilder {
+                source: Box::new(plan),
+                aggr_exprs: vec![],
+                page_size: self.page_size,
+                group_by: distinct_group_by,
+                output: self.output.clone(),
+            }
+            .into(),
+        ))
+    }
+
+    fn apply_sorting_after_aggregation(&self, plan: Planner<File>, aggr_schema: &Schema) -> Result<Planner<File>, DatabaseError> {
+        let (indexes, directions) =
+            extract_order_indexes_and_directions(aggr_schema, &self.select.columns, &self.select.order_by)?;
+
+        Ok(Planner::Sort(Sort::from(SortBuilder {
+            page_size: self.page_size,
+            work_dir: self.work_dir.clone(),
+            input_buffers: DEFAULT_SORT_BUFFER_SIZE,
+            collection: Collect::from(CollectBuilder {
+                source: Box::new(plan),
+                schema: aggr_schema.clone(),
+                work_dir: self.work_dir.clone(),
+                mem_buff_size: self.page_size,
+            }),
+            comparator: TupleComparator::new(
+                aggr_schema.clone(),
+                aggr_schema.clone(),
+                indexes,
+                directions,
+            ),
+        })))
+    }
+
+    fn add_projection(&self, plan: Planner<File>, input_schema: Schema) -> Result<Planner<File>, DatabaseError> {
+        let projection: Vec<Expression> = self.select
+            .columns
+            .iter()
+            .map(|expr| match expr {
+                Expression::Alias { .. } => {
+                    Expression::Identifier(expr.unwrap_name().into())
+                }
+                Expression::Function { func, .. } => {
+                    Expression::Identifier(func.to_string())
+                }
+                other => other.clone(),
             })
             .collect();
 
-        let mut plan = Planner::Aggregate(
-            AggregateBuilder {
-                source: Box::new(source),
-                aggr_exprs: aggr_exprs.iter().map(|expr| expr.0.clone()).collect(),
-                page_size,
-                group_by: resolved_group_by,
-                output: aggr_schema.clone(),
-            }
-            .into(),
-        );
-
-        // If DISTINCT is requested with GROUP BY, add another aggregation layer
-        if distinct && is_grouped {
-            let distinct_group_by: Vec<Expression> = columns.iter().cloned().collect();
-            plan = Planner::Aggregate(
-                AggregateBuilder {
-                    source: Box::new(plan),
-                    aggr_exprs: vec![], // No additional aggregate functions
-                    page_size,
-                    group_by: distinct_group_by,
-                    output: output.clone(),
-                }
-                .into(),
-            );
-        }
-
-        if is_grouped && !order_by.is_empty() {
-            let (indexes, directions) =
-                extract_order_indexes_and_directions(&aggr_schema, &columns, &order_by)?;
-
-            plan = Planner::Sort(Sort::from(SortBuilder {
-                page_size,
-                work_dir: work_dir.clone(),
-                input_buffers: DEFAULT_SORT_BUFFER_SIZE,
-                collection: Collect::from(CollectBuilder {
-                    source: Box::new(plan),
-                    schema: aggr_schema.clone(),
-                    work_dir: work_dir.clone(),
-                    mem_buff_size: page_size,
-                }),
-                comparator: TupleComparator::new(
-                    aggr_schema.clone(),
-                    aggr_schema.clone(),
-                    indexes,
-                    directions,
-                ),
-            }));
-        }
-
-        if output.ne(&aggr_schema) {
-            let projection: Vec<Expression> = columns
-                .iter()
-                .map(|expr| match expr {
-                    Expression::Alias { .. } => {
-                        Expression::Identifier(expr.unwrap_name().into())
-                    }
-                    Expression::Function { func, .. } => {
-                        Expression::Identifier(func.to_string())
-                    }
-                    other => other.clone(),
-                })
-                .collect();
-
-            plan = Planner::Project(Project {
-                output,
-                projection,
-                input: aggr_schema,
-                source: Box::new(plan),
-            });
-        }
-
-        return Ok(plan);
+        Ok(Planner::Project(Project {
+            output: self.output.clone(),
+            projection,
+            input: input_schema,
+            source: Box::new(plan),
+        }))
     }
 
-    // Handle DISTINCT without GROUP BY or aggregates - use hash aggregation for distinctness
-    if distinct {
-        let distinct_group_by: Vec<Expression> = columns.iter().cloned().collect();
-        let plan = Planner::Aggregate(
+    fn plan_distinct(&mut self) -> Result<Planner<File>, DatabaseError> {
+        let distinct_group_by: Vec<Expression> = self.select.columns.iter().cloned().collect();
+        Ok(Planner::Aggregate(
             AggregateBuilder {
-                source: Box::new(source),
-                aggr_exprs: vec![], // No aggregate functions, just grouping for distinctness
-                page_size,
+                source: Box::new(std::mem::replace(&mut self.source, Planner::Values(Values { values: VecDeque::new() }))),
+                aggr_exprs: vec![],
+                page_size: self.page_size,
                 group_by: distinct_group_by,
-                output: output.clone(),
+                output: self.output.clone(),
             }
             .into(),
-        );
-
-        return Ok(plan);
+        ))
     }
 
-    // Handle ORDER BY without DISTINCT or aggregates
-    if !order_by.is_empty()
-        && order_by != [Expression::Identifier(schema.columns[0].name.clone()).into()]
-    {
-        let mut sorted_schema = schema.clone();
+    fn plan_simple_select(&mut self) -> Result<Planner<File>, DatabaseError> {
+        // Handle ORDER BY
+        if !self.select.order_by.is_empty()
+            && self.select.order_by != [Expression::Identifier(self.schema.columns[0].name.clone()).into()]
+        {
+            self.apply_simple_sorting()?;
+        }
+
+        // Handle projection
+        if self.schema.eq(&self.output) {
+            Ok(std::mem::replace(&mut self.source, Planner::Values(Values { values: VecDeque::new() })))
+        } else {
+            Ok(Planner::Project(Project {
+                output: self.output.clone(),
+                source: Box::new(std::mem::replace(&mut self.source, Planner::Values(Values { values: VecDeque::new() }))),
+                projection: self.select.columns.clone(),
+                input: self.schema.clone(),
+            }))
+        }
+    }
+
+    fn apply_simple_sorting(&mut self) -> Result<(), DatabaseError> {
+        let mut sorted_schema = self.schema.clone();
         let mut indexes = Vec::new();
         let mut extra_exprs = Vec::new();
         let mut directions = Vec::new();
 
-        for order in &order_by {
+        for order in &self.select.order_by {
             match order.expr {
                 Expression::Identifier(ref ident) => {
-                    let idx = resolve_order_index(schema, &columns, ident)?;
+                    let idx = resolve_order_index(&self.schema, &self.select.columns, ident)?;
                     indexes.push(idx);
                     directions.push(order.direction);
                 }
                 _ => {
-                    let ty = resolve_type(schema, &order.expr)?;
+                    let ty = resolve_type(&self.schema, &order.expr)?;
                     indexes.push(sorted_schema.len());
                     directions.push(order.direction);
                     sorted_schema.push(Column::new(&order.expr.to_string(), ty));
@@ -1316,41 +1393,38 @@ fn plan_select<File: Seek + Read + Write + FileOperations>(
         }
 
         if !extra_exprs.is_empty() {
-            source = Planner::SortKeys(SortKeys {
+            self.source = Planner::SortKeys(SortKeys {
                 expressions: extra_exprs,
-                schema: schema.clone(),
-                source: Box::new(source),
+                schema: self.schema.clone(),
+                source: Box::new(std::mem::replace(&mut self.source, Planner::Values(Values { values: VecDeque::new() }))),
             });
         }
 
-        source = Planner::Sort(Sort::from(SortBuilder {
-            page_size,
-            work_dir: work_dir.clone(),
+        self.source = Planner::Sort(Sort::from(SortBuilder {
+            page_size: self.page_size,
+            work_dir: self.work_dir.clone(),
             input_buffers: DEFAULT_SORT_BUFFER_SIZE,
             collection: Collect::from(CollectBuilder {
-                source: Box::new(source),
+                source: Box::new(std::mem::replace(&mut self.source, Planner::Values(Values { values: VecDeque::new() }))),
                 schema: sorted_schema.clone(),
-                work_dir,
-                mem_buff_size: page_size,
+                work_dir: self.work_dir.clone(),
+                mem_buff_size: self.page_size,
             }),
             comparator: TupleComparator::new(
-                schema.clone(),
+                self.schema.clone(),
                 sorted_schema,
                 indexes,
                 directions,
             ),
         }));
-    }
 
-    // Handle simple projection
-    if schema.eq(&output) {
-        return Ok(source);
+        Ok(())
     }
+}
 
-    Ok(Planner::Project(Project {
-        output,
-        source: Box::new(source),
-        projection: columns,
-        input: schema.clone(),
-    }))
+fn plan_select<File: Seek + Read + Write + FileOperations>(
+    select: Select,
+    db: &mut Database<File>,
+) -> Result<Planner<File>, DatabaseError> {
+    SelectPlanner::new(select, db)?.build()
 }
