@@ -1,0 +1,60 @@
+//! Provides non-deterministic finite automata (NFA) and the engines that use them.
+
+use std::{fmt::Debug, sync::Arc};
+
+use crate::{StateId, U32};
+
+pub(crate) struct Nfa(Arc<Inner>);
+
+pub(crate) struct Inner {
+    states: Vec<State>,
+    start_anchored: StateId,
+    start_unanchored: StateId,
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) struct Transition {
+    pub start: u8,
+    pub end: u8,
+    pub next: StateId,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct SparseTransition {
+    pub transitions: Box<[Transition]>,
+}
+
+pub(crate) enum State {
+    ByteRange { transition: Transition },
+    Sparse(SparseTransition),
+}
+
+impl Transition {
+    fn matches(&self, haystack: &[u8], at: usize) -> bool {
+        haystack
+            .get(at)
+            .map_or(false, |&byte| self.match_byte(byte))
+    }
+
+    fn match_byte(&self, byte: u8) -> bool {
+        self.start <= byte && self.end >= byte
+    }
+}
+
+impl Debug for Transition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use crate::DebugByte;
+
+        let Transition { start, end, next } = *self;
+        match start == end {
+            true => write!(f, "{:?} => {:?}", DebugByte(start), next.as_usize()),
+            false => write!(
+                f,
+                "{:?}-{:?} => {:?}",
+                DebugByte(start),
+                DebugByte(end),
+                next.as_usize()
+            ),
+        }
+    }
+}
