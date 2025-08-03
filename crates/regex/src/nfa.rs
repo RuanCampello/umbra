@@ -2,7 +2,7 @@
 
 use std::{fmt::Debug, sync::Arc};
 
-use crate::{StateId, U32, fsm::PatternId, look::Look};
+use crate::{SmallIdx, StateId, U32, fsm::PatternId, look::Look};
 
 pub(crate) struct Nfa(Arc<Inner>);
 
@@ -45,8 +45,8 @@ pub(crate) enum State {
     Capture {
         next: StateId,
         pattern_id: PatternId,
-        group_idx: u32,
-        slot: u32,
+        group_idx: SmallIdx,
+        slot: SmallIdx,
     },
     BinaryUnion {
         alt1: StateId,
@@ -71,6 +71,58 @@ impl State {
             | State::Look { .. }
             | State::BinaryUnion { .. }
             | State::Capture { .. } => true,
+        }
+    }
+
+    const fn memory_usage(&self) -> usize {
+        match *self {
+            State::ByteRange { .. }
+            | State::BinaryUnion { .. }
+            | State::Capture { .. }
+            | State::Look { .. }
+            | State::Match { .. }
+            | State::Fail => 0,
+            State::Dense { .. } => 256 * core::mem::size_of::<StateId>(),
+            State::Sparse(SparseTransition { ref transitions }) => {
+                transitions.len() * core::mem::size_of::<Transition>()
+            }
+            State::Union { ref alternates } => alternates.len() * core::mem::size_of::<StateId>(),
+        }
+    }
+
+    fn remap(&mut self, remap: &[StateId]) {
+        match *self {
+            State::ByteRange { ref mut transition } => transition.next = remap[transition.next],
+            State::Sparse(SparseTransition {
+                ref mut transitions,
+            }) => {
+                for t in transitions.iter_mut() {
+                    t.next = remap[t.next];
+                }
+            }
+            State::Dense(DenseTransition {
+                ref mut transitions,
+            }) => {
+                for sid in transitions.iter_mut() {
+                    *sid = remap[*sid];
+                }
+            }
+            State::Look { ref mut next, .. } => *next = remap[*next],
+            State::Union { ref mut alternates } => {
+                for alt in alternates.iter_mut() {
+                    *alt = remap[*alt];
+                }
+            }
+            State::BinaryUnion {
+                ref mut alt1,
+                ref mut alt2,
+            } => {
+                *alt1 = remap[*alt1];
+                *alt2 = remap[*alt2];
+            }
+            State::Capture { ref mut next, .. } => *next = remap[*next],
+            State::Fail => {}
+            State::Match { .. } => {}
         }
     }
 }
@@ -116,7 +168,7 @@ impl DenseTransition {
     fn match_byte(&self, byte: u8) -> Option<StateId> {
         let next = self.transitions[usize::from(byte)];
 
-        match next == 0 {
+        match next == StateId(SmallIdx::ZERO) {
             true => None,
             false => Some(next),
         }
