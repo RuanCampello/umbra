@@ -24,9 +24,15 @@ pub(crate) struct SparseTransition {
     pub transitions: Box<[Transition]>,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct DenseTransition {
+    pub transitions: Box<[StateId]>,
+}
+
 pub(crate) enum State {
     ByteRange { transition: Transition },
     Sparse(SparseTransition),
+    Dense(DenseTransition),
 }
 
 impl Transition {
@@ -38,6 +44,42 @@ impl Transition {
 
     fn match_byte(&self, byte: u8) -> bool {
         self.start <= byte && self.end >= byte
+    }
+}
+
+impl SparseTransition {
+    #[inline]
+    fn matches(&self, haystack: &[u8], at: usize) -> Option<StateId> {
+        haystack.get(at).and_then(|&byte| self.match_byte(byte))
+    }
+
+    #[inline]
+    fn match_byte(&self, byte: u8) -> Option<StateId> {
+        for transition in self.transitions.iter() {
+            if transition.start > byte {
+                break;
+            } else if transition.match_byte(byte) {
+                return Some(transition.next);
+            }
+        }
+
+        None
+    }
+}
+
+impl DenseTransition {
+    #[inline]
+    fn matches(&self, haystack: &[u8], at: usize) -> Option<StateId> {
+        haystack.get(at).and_then(|&byte| self.match_byte(byte))
+    }
+
+    fn match_byte(&self, byte: u8) -> Option<StateId> {
+        let next = self.transitions[usize::from(byte)];
+
+        match next == 0 {
+            true => None,
+            false => Some(next),
+        }
     }
 }
 
