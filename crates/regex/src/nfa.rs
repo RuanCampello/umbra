@@ -2,7 +2,7 @@
 
 use std::{fmt::Debug, sync::Arc};
 
-use crate::{StateId, U32};
+use crate::{StateId, U32, fsm::PatternId, look::Look};
 
 pub(crate) struct Nfa(Arc<Inner>);
 
@@ -30,9 +30,49 @@ pub(crate) struct DenseTransition {
 }
 
 pub(crate) enum State {
-    ByteRange { transition: Transition },
+    ByteRange {
+        transition: Transition,
+    },
     Sparse(SparseTransition),
     Dense(DenseTransition),
+    Look {
+        look: Look,
+        next: StateId,
+    },
+    Union {
+        alternates: Box<[StateId]>,
+    },
+    Capture {
+        next: StateId,
+        pattern_id: PatternId,
+        group_idx: u32,
+        slot: u32,
+    },
+    BinaryUnion {
+        alt1: StateId,
+        alt2: StateId,
+    },
+    Fail,
+    Match {
+        pattern_id: PatternId,
+    },
+}
+
+impl State {
+    #[inline]
+    pub const fn is_epsilon(&self) -> bool {
+        match *self {
+            State::ByteRange { .. }
+            | State::Sparse { .. }
+            | State::Dense { .. }
+            | State::Fail
+            | State::Match { .. } => false,
+            State::Union { .. }
+            | State::Look { .. }
+            | State::BinaryUnion { .. }
+            | State::Capture { .. } => true,
+        }
+    }
 }
 
 impl Transition {
