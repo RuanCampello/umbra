@@ -21,7 +21,7 @@ pub enum VmType {
 
 #[derive(Debug, PartialEq)]
 pub enum VmError {
-    DivisionByZero(i128, i128),
+    DivisionByZero,
     NegativeNumSqrt,
 }
 
@@ -103,7 +103,6 @@ pub(crate) fn resolve_expression<'exp>(
             let (left, right) = try_coerce(left, right);
 
             let mismatched_types = || {
-                println!("left {left} right {right}");
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
                     operator: *operator,
@@ -129,17 +128,11 @@ pub(crate) fn resolve_expression<'exp>(
                     _ => Value::Boolean(false),
                 },
 
-                logical @ (BinaryOperator::And | BinaryOperator::Or) => {
-                    let (Value::Boolean(left), Value::Boolean(right)) = (&left, &right) else {
-                        return Err(mismatched_types());
-                    };
-
-                    match logical {
-                        BinaryOperator::And => Value::Boolean(*left && *right),
-                        BinaryOperator::Or => Value::Boolean(*left || *right),
-                        _ => unreachable!(),
-                    }
-                }
+                logical @ (BinaryOperator::And | BinaryOperator::Or) => match logical {
+                    BinaryOperator::And => (left & right)?,
+                    BinaryOperator::Or => (left | right)?,
+                    _ => unreachable!(),
+                },
 
                 arithmetic => {
                     let (left_value, right_value) = left
@@ -148,11 +141,7 @@ pub(crate) fn resolve_expression<'exp>(
 
                     if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
                         // TODO: maybe we should do better here
-                        return Err(VmError::DivisionByZero(
-                            left_value as i128,
-                            right_value as i128,
-                        )
-                        .into());
+                        return Err((VmError::DivisionByZero).into());
                     }
 
                     let result = match arithmetic {
@@ -410,7 +399,7 @@ impl Display for TypeError {
 impl Display for VmError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DivisionByZero(left, right) => write!(f, "Division by zero: {left} / {right}"),
+            Self::DivisionByZero => write!(f, "Division by zero"),
             Self::NegativeNumSqrt => write!(f, "Cannot take square root of a negative number"),
         }
     }

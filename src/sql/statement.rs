@@ -6,13 +6,14 @@
 
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
-use crate::vm::expression::{TypeError, VmType};
+use crate::db::SqlError;
+use crate::vm::expression::{TypeError, VmError, VmType};
 use std::borrow::Borrow;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
-use std::ops::Neg;
+use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Sub};
 use std::str::FromStr;
 
 use super::Keyword;
@@ -576,6 +577,14 @@ impl Default for Expression {
 }
 
 impl Value {
+    const fn is_zero(&self) -> bool {
+        match self {
+            Self::Number(num) => *num == 0,
+            Self::Float(float) => !float.is_normal(),
+            _ => false,
+        }
+    }
+
     pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
         match (self, other) {
             (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),
@@ -595,6 +604,96 @@ impl Temporal {
             (Self::Date(_), Self::DateTime(timestamp)) => (self, Self::Date(timestamp.into())),
             (Self::DateTime(timestamp), Self::Date(_)) => (Self::Date(timestamp.into()), other),
             _ => (self, other),
+        }
+    }
+}
+
+fn cannot_apply_binary(left: Value, right: Value, operator: BinaryOperator) -> SqlError {
+    SqlError::Type(TypeError::CannotApplyBinary {
+        left: Expression::Value(left),
+        right: Expression::Value(right),
+        operator,
+    })
+}
+
+impl Add for Value {
+    type Output = Result<Self, SqlError>;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (Value::Float(a), Value::Float(b)) => Ok((a + b).into()),
+            (Value::Float(a), Value::Number(b)) => Ok((a + (*b as f64)).into()),
+            (Value::Number(a), Value::Float(b)) => Ok(((*a as f64) + b).into()),
+            (Value::Number(a), Value::Number(b)) => Ok((a + b).into()),
+            _ => Err(cannot_apply_binary(self, rhs, BinaryOperator::Plus)),
+        }
+    }
+}
+
+impl Sub for Value {
+    type Output = Result<Self, SqlError>;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (Value::Float(a), Value::Float(b)) => Ok((a - b).into()),
+            (Value::Float(a), Value::Number(b)) => Ok((a - (*b as f64)).into()),
+            (Value::Number(a), Value::Float(b)) => Ok(((*a as f64) - b).into()),
+            (Value::Number(a), Value::Number(b)) => Ok((a - b).into()),
+            _ => Err(cannot_apply_binary(self, rhs, BinaryOperator::Minus)),
+        }
+    }
+}
+
+impl Mul for Value {
+    type Output = Result<Self, SqlError>;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (Value::Float(a), Value::Float(b)) => Ok((a * b).into()),
+            (Value::Float(a), Value::Number(b)) => Ok((a * (*b as f64)).into()),
+            (Value::Number(a), Value::Float(b)) => Ok(((*a as f64) * b).into()),
+            (Value::Number(a), Value::Number(b)) => Ok((a * b).into()),
+            _ => Err(cannot_apply_binary(self, rhs, BinaryOperator::Mul)),
+        }
+    }
+}
+
+impl Div for Value {
+    type Output = Result<Self, SqlError>;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        if rhs.is_zero() {
+            return Err(SqlError::Vm(VmError::DivisionByZero));
+        }
+
+        match (&self, &rhs) {
+            (Value::Float(a), Value::Float(b)) => Ok((a / b).into()),
+            (Value::Float(a), Value::Number(b)) => Ok((a / (*b as f64)).into()),
+            (Value::Number(a), Value::Float(b)) => Ok(((*a as f64) / b).into()),
+            (Value::Number(a), Value::Number(b)) => Ok((a / b).into()),
+            _ => Err(cannot_apply_binary(self, rhs, BinaryOperator::Div)),
+        }
+    }
+}
+
+impl BitAnd for Value {
+    type Output = Result<Self, SqlError>;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (Value::Boolean(a), Value::Boolean(b)) => Ok(Self::Boolean(a & b)),
+            _ => Err(cannot_apply_binary(self, rhs, BinaryOperator::And)),
+        }
+    }
+}
+
+impl BitOr for Value {
+    type Output = Result<Self, SqlError>;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        match (&self, &rhs) {
+            (Value::Boolean(a), Value::Boolean(b)) => Ok(Self::Boolean(a | b)),
+            _ => Err(cannot_apply_binary(self, rhs, BinaryOperator::Or)),
         }
     }
 }
