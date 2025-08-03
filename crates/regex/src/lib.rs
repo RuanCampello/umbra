@@ -1,3 +1,7 @@
+//! Regex implementation for Umbra database.
+//! This is mostly a "lite" version with the things I need from the [Andrew Gallant](https://github.com/rust-lang/regex/tree/master)
+//! implementation, one of the goats of rust community.
+
 mod dfa;
 mod fsm;
 mod nfa;
