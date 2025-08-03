@@ -72,6 +72,7 @@ pub(crate) enum Create {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Select {
+    pub distinct: bool,
     pub columns: Vec<Expression>,
     pub from: String,
     pub r#where: Option<Expression>,
@@ -469,8 +470,13 @@ impl Display for Statement {
                 r#where,
                 order_by,
                 group_by,
+                distinct,
             }) => {
-                write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
+                if *distinct {
+                    write!(f, "SELECT DISTINCT {} FROM {from}", join(columns, ", "))?;
+                } else {
+                    write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
+                }
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
