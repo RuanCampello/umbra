@@ -1,6 +1,6 @@
 use super::{functions, math};
 use crate::core::date::DateParseError;
-use crate::core::uuid::{Uuid, UuidError};
+use crate::core::uuid::UuidError;
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
     BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
@@ -8,7 +8,6 @@ use crate::sql::statement::{
 use std::fmt::{Display, Formatter};
 use std::mem;
 use std::ops::Neg;
-use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
@@ -100,20 +99,6 @@ pub(crate) fn resolve_expression<'exp>(
             let left = resolve_expression(val, schema, left)?;
             let right = resolve_expression(val, schema, right)?;
 
-            let (left, right) = try_coerce(left, right);
-
-            let mismatched_types = || {
-                SqlError::Type(TypeError::CannotApplyBinary {
-                    left: Expression::Value(left.clone()),
-                    operator: *operator,
-                    right: Expression::Value(right.clone()),
-                })
-            };
-
-            if mem::discriminant(&left) != mem::discriminant(&right) {
-                return Err(mismatched_types());
-            }
-
             Ok(match operator {
                 BinaryOperator::Eq => Value::Boolean(left == right),
                 BinaryOperator::Neq => Value::Boolean(left != right),
@@ -134,31 +119,10 @@ pub(crate) fn resolve_expression<'exp>(
                     _ => unreachable!(),
                 },
 
-                arithmetic => {
-                    let (left_value, right_value) = left
-                        .as_arithmetic_pair(&right)
-                        .ok_or_else(mismatched_types)?;
-
-                    if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
-                        // TODO: maybe we should do better here
-                        return Err((VmError::DivisionByZero).into());
-                    }
-
-                    let result = match arithmetic {
-                        BinaryOperator::Plus => left_value + right_value,
-                        BinaryOperator::Minus => left_value - right_value,
-                        BinaryOperator::Mul => left_value * right_value,
-                        BinaryOperator::Div => left_value / right_value,
-                        _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
-                    };
-
-                    match (left, right) {
-                        (Value::Number(_), Value::Number(_)) if result.fract().eq(&0.0) => {
-                            Value::Number(result as i128)
-                        }
-                        _ => Value::Float(result),
-                    }
-                }
+                BinaryOperator::Plus => (left + right)?,
+                BinaryOperator::Minus => (left - right)?,
+                BinaryOperator::Mul => (left * right)?,
+                BinaryOperator::Div => (left / right)?,
             })
         }
         Expression::Function { func, args } => match func {
@@ -277,37 +241,6 @@ pub(crate) fn evaluate_where(
             expected: VmType::Bool,
             found: Expression::Value(other),
         })),
-    }
-}
-
-fn try_coerce(left: Value, right: Value) -> (Value, Value) {
-    match (&left, &right) {
-        (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
-        (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
-        (Value::String(string), Value::Temporal(_)) => match Temporal::try_from(string.as_str()) {
-            Ok(parsed) => (Value::Temporal(parsed), right),
-            Err(_) => (left, right),
-        },
-        (Value::Temporal(from), Value::String(string)) => match Temporal::try_from(string.as_str())
-        {
-            Ok(parsed) => match mem::discriminant(from) == mem::discriminant(&parsed) {
-                true => (left, Value::Temporal(parsed)),
-                false => {
-                    let (left, right) = Temporal::try_coerce(parsed, *from);
-                    (Value::Temporal(left), Value::Temporal(right))
-                }
-            },
-            Err(_) => (left, right),
-        },
-        (Value::Uuid(_), Value::String(s)) => match Uuid::from_str(s) {
-            Ok(parsed) => (left, Value::Uuid(parsed)),
-            _ => (left, right),
-        },
-        (Value::String(s), Value::Uuid(_)) => match Uuid::from_str(s) {
-            Ok(parsed) => (Value::Uuid(parsed), right),
-            _ => (left, right),
-        },
-        _ => (left, right),
     }
 }
 

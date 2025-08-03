@@ -584,16 +584,6 @@ impl Value {
             _ => false,
         }
     }
-
-    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
-        match (self, other) {
-            (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),
-            (Value::Float(a), Value::Float(b)) => Some((*a, *b)),
-            (Value::Number(a), Value::Float(b)) => Some((*a as f64, *b)),
-            (Value::Float(a), Value::Number(b)) => Some((*a, *b as f64)),
-            _ => None,
-        }
-    }
 }
 
 impl Temporal {
@@ -722,12 +712,20 @@ impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
             (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
+            (Value::Float(a), Value::Number(b)) => a.partial_cmp(&(*b as _)),
+            (Value::Number(a), Value::Float(b)) => (&(*a as f64)).partial_cmp(b),
             (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
+            (Value::String(a), Value::Temporal(b)) => {
+                Some(Temporal::try_from(a.as_str()).unwrap().cmp(b))
+            }
+            (Value::Temporal(a), Value::String(b)) => {
+                Some(a.cmp(&Temporal::try_from(b.as_str()).unwrap()))
+            }
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
-            _ => panic!("those values are not comparable"),
+            _ => panic!("those values are not comparable: left: {self}, right: {other}"),
         }
     }
 }
