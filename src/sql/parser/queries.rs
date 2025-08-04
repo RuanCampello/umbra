@@ -9,6 +9,8 @@ use super::{
 
 impl<'sql> Sql<'sql> for Select {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
+        let distinct = parser.consume_optional(Token::Keyword(Keyword::Distinct));
+        
         let columns = parser.parse_separated_tokens(
             |parser| {
                 let expr = parser.parse_expr(None)?;
@@ -38,6 +40,7 @@ impl<'sql> Sql<'sql> for Select {
         })?;
 
         Ok(Select {
+            distinct,
             columns,
             from,
             r#where,

@@ -820,6 +820,7 @@ mod tests {
         assert_eq!(
             statement,
             Ok(Statement::Select(Select {
+                distinct: false,
                 columns: vec![
                     Expression::Identifier("id".to_string()),
                     Expression::Identifier("price".to_string())
@@ -840,6 +841,7 @@ mod tests {
         assert_eq!(
             statement,
             Ok(Statement::Select(Select {
+                distinct: false,
                 columns: vec![
                     Expression::Identifier("title".to_string()),
                     Expression::Identifier("author".to_string())
@@ -866,6 +868,7 @@ mod tests {
         assert_eq!(
             statement,
             Ok(Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Wildcard],
                 from: "users".to_string(),
                 r#where: None,
@@ -1079,6 +1082,7 @@ mod tests {
                     ],
                 }),
                 Statement::Select(Select {
+                distinct: false,
                     columns: vec![Expression::Wildcard],
                     from: "employees".to_string(),
                     r#where: None,
@@ -1101,6 +1105,7 @@ mod tests {
         assert_eq!(
             statement,
             Ok(Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Wildcard],
                 from: "schedule".to_string(),
                 r#where: Some(Expression::BinaryOperation {
@@ -1378,6 +1383,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 from: "film".to_string(),
                 order_by: vec![],
                 group_by: vec![],
@@ -1430,6 +1436,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 order_by: vec![],
                 group_by: vec![],
                 from: "customer".into(),
@@ -1471,6 +1478,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Substring,
                     args: vec![
@@ -1495,6 +1503,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Identifier("name".into())],
                 from: "users".into(),
                 r#where: None,
@@ -1518,6 +1527,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Concat,
                     args: vec![
@@ -1541,6 +1551,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Position,
                     args: vec![
@@ -1564,6 +1575,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Count,
                     args: vec![Expression::Wildcard]
@@ -1584,6 +1596,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Avg,
                     args: vec![Expression::Identifier("price".into())]
@@ -1604,6 +1617,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![
                     Expression::Identifier("id".into()),
                     Expression::Function {
@@ -1627,6 +1641,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![
                     Expression::Identifier("name".into()),
                     Expression::Function {
@@ -1650,6 +1665,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Abs,
                     args: vec![Expression::Identifier("amount".into())],
@@ -1670,6 +1686,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Power,
                     args: vec![
@@ -1693,6 +1710,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Trunc,
                     args: vec![Expression::Identifier("amount".into())],
@@ -1710,6 +1728,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Trunc,
                     args: vec![
@@ -1737,6 +1756,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Function {
                     func: Function::Concat,
                     args: vec![
@@ -1764,6 +1784,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![
                     Expression::Alias {
                         expr: Box::new(Expression::BinaryOperation {
@@ -1794,6 +1815,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Alias {
                     expr: Box::new(Expression::BinaryOperation {
                         operator: BinaryOperator::Plus,
@@ -1828,6 +1850,7 @@ mod tests {
         assert_eq!(
             statement.unwrap(),
             Statement::Select(Select {
+                distinct: false,
                 columns: vec![Expression::Alias {
                     alias: "user_count".into(),
                     expr: Box::new(Expression::Function {
@@ -1908,6 +1931,45 @@ mod tests {
                 location: Location::new(1, 28),
                 input: sql.into()
             }
+        );
+    }
+
+    #[test]
+    fn test_distinct_select() {
+        let input = "SELECT DISTINCT title FROM notes;";
+        let statement = Parser::new(input).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Select(Select {
+                distinct: true,
+                columns: vec![Expression::Identifier("title".to_string())],
+                from: "notes".to_string(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
+            }))
+        );
+    }
+
+    #[test]
+    fn test_distinct_multiple_columns() {
+        let input = "SELECT DISTINCT title, author FROM books;";
+        let statement = Parser::new(input).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Select(Select {
+                distinct: true,
+                columns: vec![
+                    Expression::Identifier("title".to_string()),
+                    Expression::Identifier("author".to_string())
+                ],
+                from: "books".to_string(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
+            }))
         );
     }
 }
