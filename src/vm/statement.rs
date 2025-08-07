@@ -87,6 +87,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 exec(Statement::Create(index), db)?;
             }
         }
+
         Statement::Create(Create::Index {
             name,
             table,
@@ -150,6 +151,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             db.context.invalidate(&table);
         }
+
         Statement::Create(Create::Sequence {
             name,
             r#type,
@@ -169,6 +171,20 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(name.clone()),
                     Value::Number(root as _),
                     Value::String(table),
+                    Value::String(sql),
+                ],
+            )?;
+        }
+
+        Statement::Create(Create::Enum { name, variants }) => {
+            let root = allocate_root(db)?;
+            insert_into_metadata(
+                db,
+                vec![
+                    Value::String("enum".into()),
+                    Value::String(name.into()),
+                    Value::Number(root as _),
+                    Value::String(variants.join(", ")),
                     Value::String(sql),
                 ],
             )?;
