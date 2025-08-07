@@ -79,7 +79,7 @@ pub(in crate::sql) fn analyze<'s>(
                 }
 
                 if let Type::Enum(code) = col.data_type {
-                    if ctx.enums().get_from(&col.name, code).is_none() {
+                    if ctx.enums()?.get_from(&col.name, code).is_none() {
                         return Err(
                             AnalyzerError::InvalidUserDefinedType(col.name.to_string()).into()
                         );
@@ -118,7 +118,7 @@ pub(in crate::sql) fn analyze<'s>(
         }
 
         Statement::Create(Create::Enum { name, variants }) => {
-            let enums = ctx.enums();
+            let enums = ctx.enums()?;
             if enums.get(name).is_some() {
                 return Err(AnalyzerError::AlreadyExists(AlreadyExists::Enum(name.into())).into());
             }
@@ -136,7 +136,7 @@ pub(in crate::sql) fn analyze<'s>(
             values: rows,
             columns,
         }) => {
-            let enums = ctx.enums().clone();
+            let enums = ctx.enums()?.clone();
             let metadata = ctx.metadata(into)?;
             if into.eq(DB_METADATA) {
                 return Err(AnalyzerError::MetadataAssignment.into());

@@ -11,8 +11,9 @@ use crate::{
         tuple::{self, serialize_tuple},
     },
     db::{
-        has_btree_key, umbra_schema, Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
-        SqlError, DB_METADATA,
+        has_btree_key, umbra_schema, umbra_enum_schema, umbra_sequence_schema, umbra_index_schema, 
+        Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
+        SqlError, DB_METADATA, MetadataTableType,
     },
     index,
     sql::{
@@ -101,6 +102,8 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             }
 
             let root = allocate_root(db)?;
+            
+            // Store basic index info in the main metadata catalog
             insert_into_metadata(
                 db,
                 vec![
@@ -109,6 +112,18 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::Number(root.into()),
                     Value::String(table.clone()),
                     Value::String(sql),
+                ],
+            )?;
+
+            // Store index-specific info in the specialized index metadata table
+            insert_into_specialized_metadata(
+                db,
+                MetadataTableType::Index,
+                vec![
+                    Value::String(name.clone()),
+                    Value::String(table.clone()),
+                    Value::String(column.clone()),
+                    Value::Boolean(unique),
                 ],
             )?;
 
@@ -164,30 +179,70 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             }
 
             let root = allocate_root(db)?;
+            
+            // Store basic sequence info in the main metadata catalog
             insert_into_metadata(
                 db,
                 vec![
                     Value::String("sequence".into()),
                     Value::String(name.clone()),
                     Value::Number(root as _),
-                    Value::String(table),
+                    Value::String(table.clone()),
                     Value::String(sql),
+                ],
+            )?;
+
+            // Store sequence-specific info in the specialized sequence metadata table
+            // Extract column name from sequence name (format: table_column_seq)
+            let column_name = name
+                .strip_prefix(&format!("{}_", table))
+                .and_then(|s| s.strip_suffix("_seq"))
+                .unwrap_or("");
+
+            insert_into_specialized_metadata(
+                db,
+                MetadataTableType::Sequence,
+                vec![
+                    Value::String(name.clone()),
+                    Value::String(r#type.to_string()),
+                    Value::String(table),
+                    Value::String(column_name.to_string()),
+                    Value::Number(0), // initial value
                 ],
             )?;
         }
 
         Statement::Create(Create::Enum { name, variants }) => {
             let root = allocate_root(db)?;
+            
+            // Store basic enum info in the main metadata catalog
             insert_into_metadata(
                 db,
                 vec![
                     Value::String("enum".into()),
-                    Value::String(name.into()),
+                    Value::String(name.clone()),
                     Value::Number(root as _),
-                    Value::String(variants.join(", ")),
+                    Value::String("".into()), // No longer store variants here
                     Value::String(sql),
                 ],
             )?;
+
+            // Store enum variants in the specialized enum metadata table
+            for (variant_id, variant_name) in variants.iter().enumerate() {
+                insert_into_specialized_metadata(
+                    db,
+                    MetadataTableType::Enum,
+                    vec![
+                        Value::String(name.clone()),
+                        Value::Number(0), // enum_id will be assigned when needed
+                        Value::String(variant_name.clone()),
+                        Value::Number(variant_id as i128 + 1), // variant_id starts from 1
+                    ],
+                )?;
+            }
+
+            // Update the enum registry in the context
+            db.context.add_enum(name, variants);
         }
 
         Statement::Drop(Drop::Table(name)) => {
@@ -274,6 +329,45 @@ fn insert_into_metadata<File: Write + Seek + Read + FileOperations>(
 
     let mut pager = db.pager.borrow_mut();
     let mut btree = BTree::new(&mut pager, 0, FixedSizeCmp::new::<RowId>());
+
+    btree.insert(tuple::serialize_tuple(&schema, &values))?;
+
+    Ok(())
+}
+
+/// Insert data into specialized metadata tables (enum, sequence, index)
+fn insert_into_specialized_metadata<File: Write + Seek + Read + FileOperations>(
+    db: &mut Database<File>,
+    table_type: MetadataTableType,
+    mut values: Vec<Value>,
+) -> Result<(), DatabaseError> {
+    let schema = match table_type {
+        MetadataTableType::Enum => {
+            let mut schema = umbra_enum_schema();
+            schema.prepend_id();
+            schema
+        },
+        MetadataTableType::Sequence => {
+            let mut schema = umbra_sequence_schema();
+            schema.prepend_id();
+            schema
+        },
+        MetadataTableType::Index => {
+            let mut schema = umbra_index_schema();
+            schema.prepend_id();
+            schema
+        },
+        MetadataTableType::Main => return Err(DatabaseError::Other("Cannot insert into main metadata table using specialized function".into()))
+    };
+
+    // Get metadata for the specialized table (this will create it if it doesn't exist)
+    let table_metadata = db.metadata(table_type.table_name())?;
+    let root = table_metadata.root;
+    
+    values.insert(0, Value::Number(table_metadata.next_id().into()));
+
+    let mut pager = db.pager.borrow_mut();
+    let mut btree = BTree::new(&mut pager, root, FixedSizeCmp::new::<RowId>());
 
     btree.insert(tuple::serialize_tuple(&schema, &values))?;
 
