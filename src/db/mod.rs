@@ -3374,4 +3374,13 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_enum_creation() -> DatabaseResult {
+        let mut db = Database::default();
+        db.exec("CREATE TYPE mood AS ENUM ('sad', 'happy', 'bored');")?;
+        db.exec("CREATE TABLE people (id SERIAL, age INT UNSIGNED, mood MOOD);")?;
+
+        Ok(())
+    }
 }
