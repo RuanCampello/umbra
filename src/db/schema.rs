@@ -81,3 +81,34 @@ pub(crate) fn umbra_schema() -> Schema {
         Column::new("sql", Type::Varchar(65535)),
     ])
 }
+
+/// Schema for the umbra_enum table - stores enum-specific metadata
+pub(crate) fn umbra_enum_schema() -> Schema {
+    Schema::from(&[
+        Column::new("enum_name", Type::Varchar(255)),
+        Column::new("enum_id", Type::UnsignedSmallInt),
+        Column::new("variant_name", Type::Varchar(255)),
+        Column::new("variant_id", Type::UnsignedSmallInt),
+    ])
+}
+
+/// Schema for the umbra_sequence table - stores sequence-specific metadata  
+pub(crate) fn umbra_sequence_schema() -> Schema {
+    Schema::from(&[
+        Column::new("sequence_name", Type::Varchar(255)),
+        Column::new("data_type", Type::Varchar(50)),
+        Column::new("table_name", Type::Varchar(255)),
+        Column::new("column_name", Type::Varchar(255)),
+        Column::new("current_value", Type::UnsignedBigInteger),
+    ])
+}
+
+/// Schema for the umbra_index table - stores index-specific metadata
+pub(crate) fn umbra_index_schema() -> Schema {
+    Schema::from(&[
+        Column::new("index_name", Type::Varchar(255)),
+        Column::new("table_name", Type::Varchar(255)),
+        Column::new("column_name", Type::Varchar(255)),
+        Column::new("is_unique", Type::Boolean),
+    ])
+}

@@ -11,8 +11,9 @@ use crate::{
         tuple::{self, serialize_tuple},
     },
     db::{
-        has_btree_key, umbra_schema, Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
-        SqlError, DB_METADATA,
+        has_btree_key, umbra_schema, umbra_enum_schema, umbra_sequence_schema, umbra_index_schema, 
+        Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
+        SqlError, DB_METADATA, DB_ENUM_METADATA, DB_SEQUENCE_METADATA, DB_INDEX_METADATA,
     },
     index,
     sql::{
@@ -178,16 +179,35 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
         Statement::Create(Create::Enum { name, variants }) => {
             let root = allocate_root(db)?;
+            
+            // Store basic enum info in the main metadata catalog
             insert_into_metadata(
                 db,
                 vec![
                     Value::String("enum".into()),
-                    Value::String(name.into()),
+                    Value::String(name.clone()),
                     Value::Number(root as _),
-                    Value::String(variants.join(", ")),
+                    Value::String("".into()), // No longer store variants here
                     Value::String(sql),
                 ],
             )?;
+
+            // Store enum variants in the specialized enum metadata table
+            for (variant_id, variant_name) in variants.iter().enumerate() {
+                insert_into_specialized_metadata(
+                    db,
+                    DB_ENUM_METADATA,
+                    vec![
+                        Value::String(name.clone()),
+                        Value::Number(0), // enum_id will be assigned when needed
+                        Value::String(variant_name.clone()),
+                        Value::Number(variant_id as i128 + 1), // variant_id starts from 1
+                    ],
+                )?;
+            }
+
+            // Update the enum registry in the context
+            db.context.add_enum(name, variants);
         }
 
         Statement::Drop(Drop::Table(name)) => {
@@ -274,6 +294,45 @@ fn insert_into_metadata<File: Write + Seek + Read + FileOperations>(
 
     let mut pager = db.pager.borrow_mut();
     let mut btree = BTree::new(&mut pager, 0, FixedSizeCmp::new::<RowId>());
+
+    btree.insert(tuple::serialize_tuple(&schema, &values))?;
+
+    Ok(())
+}
+
+/// Insert data into specialized metadata tables (enum, sequence, index)
+fn insert_into_specialized_metadata<File: Write + Seek + Read + FileOperations>(
+    db: &mut Database<File>,
+    table_name: &str,
+    mut values: Vec<Value>,
+) -> Result<(), DatabaseError> {
+    let schema = match table_name {
+        DB_ENUM_METADATA => {
+            let mut schema = umbra_enum_schema();
+            schema.prepend_id();
+            schema
+        },
+        DB_SEQUENCE_METADATA => {
+            let mut schema = umbra_sequence_schema();
+            schema.prepend_id();
+            schema
+        },
+        DB_INDEX_METADATA => {
+            let mut schema = umbra_index_schema();
+            schema.prepend_id();
+            schema
+        },
+        _ => return Err(DatabaseError::Other(format!("Unknown specialized metadata table: {}", table_name)))
+    };
+
+    // Get metadata for the specialized table (this will create it if it doesn't exist)
+    let table_metadata = db.metadata(table_name)?;
+    let root = table_metadata.root;
+    
+    values.insert(0, Value::Number(table_metadata.next_id().into()));
+
+    let mut pager = db.pager.borrow_mut();
+    let mut btree = BTree::new(&mut pager, root, FixedSizeCmp::new::<RowId>());
 
     btree.insert(tuple::serialize_tuple(&schema, &values))?;
 

@@ -8,11 +8,11 @@ mod schema;
 
 use metadata::SequenceMetadata;
 pub(crate) use metadata::{EnumRegistry, IndexMetadata, Relation, TableMetadata};
-pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
+pub(crate) use schema::{has_btree_key, umbra_schema, umbra_enum_schema, umbra_sequence_schema, umbra_index_schema, Schema};
 
 use crate::core::date::DateParseError;
 use crate::core::storage::btree::{BTree, FixedSizeCmp};
-use crate::core::storage::page::PageNumber;
+use crate::core::storage::page::{Page, PageNumber};
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
@@ -48,6 +48,7 @@ pub(crate) struct Context {
     tables: HashMap<String, TableMetadata>,
     enums: EnumRegistry,
     max_size: Option<usize>,
+    enums_loaded: bool,
 }
 
 #[derive(Debug)]
@@ -112,11 +113,14 @@ pub(crate) type RowId = u64;
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
 pub(crate) const DB_METADATA: &str = "umbra_db_meta";
+pub(crate) const DB_ENUM_METADATA: &str = "umbra_enum";
+pub(crate) const DB_SEQUENCE_METADATA: &str = "umbra_sequence";
+pub(crate) const DB_INDEX_METADATA: &str = "umbra_index";
 const DEFAULT_CACHE_SIZE: usize = 512;
 
 pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
-    fn enums(&self) -> &EnumRegistry;
+    fn enums(&mut self) -> Result<&EnumRegistry, DatabaseError>;
 }
 
 macro_rules! temporal {
@@ -290,6 +294,115 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             });
         }
 
+        // Handle specialized metadata tables
+        if table == DB_ENUM_METADATA {
+            let mut schema = umbra_enum_schema();
+            schema.prepend_id();
+            
+            // Try to find existing root from metadata, or allocate new one
+            let root = match self.find_metadata_root(DB_ENUM_METADATA)? {
+                Some(root) => root,
+                None => {
+                    // Create the specialized metadata table if it doesn't exist
+                    let root = {
+                        let mut pager = self.pager.borrow_mut();
+                        pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
+                    };
+                    // Store this table's metadata in the main catalog
+                    self.insert_metadata(
+                        vec![
+                            Value::String("table".into()),
+                            Value::String(DB_ENUM_METADATA.into()),
+                            Value::Number(root as _),
+                            Value::String(DB_ENUM_METADATA.into()),
+                            Value::String(format!("CREATE TABLE {} (...);", DB_ENUM_METADATA)),
+                        ],
+                    )?;
+                    root
+                }
+            };
+            
+            let row_id = self.load_next_row_id(root)?;
+            return Ok(TableMetadata {
+                root,
+                name: String::from(table),
+                row_id,
+                indexes: vec![],
+                serials: HashMap::new(),
+                schema,
+            });
+        }
+
+        if table == DB_SEQUENCE_METADATA {
+            let mut schema = umbra_sequence_schema();
+            schema.prepend_id();
+            
+            let root = match self.find_metadata_root(DB_SEQUENCE_METADATA)? {
+                Some(root) => root,
+                None => {
+                    let root = {
+                        let mut pager = self.pager.borrow_mut();
+                        pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
+                    };
+                    self.insert_metadata(
+                        vec![
+                            Value::String("table".into()),
+                            Value::String(DB_SEQUENCE_METADATA.into()),
+                            Value::Number(root as _),
+                            Value::String(DB_SEQUENCE_METADATA.into()),
+                            Value::String(format!("CREATE TABLE {} (...);", DB_SEQUENCE_METADATA)),
+                        ],
+                    )?;
+                    root
+                }
+            };
+            
+            let row_id = self.load_next_row_id(root)?;
+            return Ok(TableMetadata {
+                root,
+                name: String::from(table),
+                row_id,
+                indexes: vec![],
+                serials: HashMap::new(),
+                schema,
+            });
+        }
+
+        if table == DB_INDEX_METADATA {
+            let mut schema = umbra_index_schema();
+            schema.prepend_id();
+            
+            let root = match self.find_metadata_root(DB_INDEX_METADATA)? {
+                Some(root) => root,
+                None => {
+                    let root = {
+                        let mut pager = self.pager.borrow_mut();
+                        pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
+                    };
+                    self.insert_metadata(
+                        vec![
+                            Value::String("table".into()),
+                            Value::String(DB_INDEX_METADATA.into()),
+                            Value::Number(root as _),
+                            Value::String(DB_INDEX_METADATA.into()),
+                            Value::String(format!("CREATE TABLE {} (...);", DB_INDEX_METADATA)),
+                        ],
+                    )?;
+                    root
+                }
+            };
+            
+            let row_id = self.load_next_row_id(root)?;
+            return Ok(TableMetadata {
+                root,
+                name: String::from(table),
+                row_id,
+                indexes: vec![],
+                serials: HashMap::new(),
+                schema,
+            });
+        }
+
         let mut metadata = TableMetadata {
             root: 1,
             row_id: 1,
@@ -436,6 +549,86 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         Ok(row_id)
     }
+
+    /// Insert data into the main metadata catalog
+    fn insert_metadata(&mut self, mut values: Vec<Value>) -> Result<(), DatabaseError> {
+        let mut schema = umbra_schema();
+        schema.prepend_id();
+        values.insert(0, Value::Number(self.metadata(DB_METADATA)?.next_id().into()));
+
+        let mut pager = self.pager.borrow_mut();
+        let mut btree = BTree::new(&mut pager, 0, FixedSizeCmp::new::<RowId>());
+
+        btree.insert(tuple::serialize_tuple(&schema, &values))?;
+
+        Ok(())
+    }
+
+    /// Find the root page for a specialized metadata table by querying the main metadata catalog
+    fn find_metadata_root(&mut self, table_name: &str) -> Result<Option<PageNumber>, DatabaseError> {
+        let query = self.exec(&format!(
+            "SELECT root FROM {DB_METADATA} WHERE name = '{table_name}' AND type = 'table';"
+        ))?;
+
+        if query.is_empty() {
+            return Ok(None);
+        }
+
+        let root = query
+            .get(0, "root")
+            .and_then(|value| match value {
+                Value::Number(root) => Some(*root as PageNumber),
+                _ => None,
+            });
+
+        Ok(root)
+    }
+
+    /// Load all enums from the specialized enum metadata table
+    fn load_enums(&mut self) -> Result<(), DatabaseError> {
+        // Check if enum metadata table exists
+        if self.find_metadata_root(DB_ENUM_METADATA)?.is_none() {
+            // No enum metadata table exists yet
+            return Ok(());
+        }
+
+        let query = self.exec(&format!(
+            "SELECT enum_name, variant_name FROM {DB_ENUM_METADATA} ORDER BY enum_name, variant_id;"
+        ))?;
+
+        let mut current_enum: Option<String> = None;
+        let mut current_variants: Vec<String> = Vec::new();
+
+        for tuple in &query.tuples {
+            let enum_name = match &tuple[query.schema.index_of("enum_name").unwrap()] {
+                Value::String(name) => name.clone(),
+                _ => continue,
+            };
+            
+            let variant_name = match &tuple[query.schema.index_of("variant_name").unwrap()] {
+                Value::String(name) => name.clone(),
+                _ => continue,
+            };
+
+            if let Some(ref current) = current_enum {
+                if current != &enum_name {
+                    // We've moved to a new enum, add the previous one
+                    self.context.add_enum(current.clone(), current_variants);
+                    current_variants = Vec::new();
+                }
+            }
+
+            current_enum = Some(enum_name);
+            current_variants.push(variant_name);
+        }
+
+        // Add the last enum if any
+        if let Some(enum_name) = current_enum {
+            self.context.add_enum(enum_name, current_variants);
+        }
+
+        Ok(())
+    }
 }
 
 impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
@@ -448,8 +641,12 @@ impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
         self.context.metadata(table)
     }
 
-    fn enums(&self) -> &EnumRegistry {
-        &self.context.enums
+    fn enums(&mut self) -> Result<&EnumRegistry, DatabaseError> {
+        if !self.context.enums_loaded {
+            self.load_enums()?;
+            self.context.enums_loaded = true;
+        }
+        Ok(&self.context.enums)
     }
 }
 
@@ -487,6 +684,7 @@ impl Context {
             tables: HashMap::new(),
             max_size: None,
             enums: EnumRegistry::empty(),
+            enums_loaded: false,
         }
     }
 
@@ -495,6 +693,7 @@ impl Context {
             tables: HashMap::with_capacity(size),
             max_size: Some(size),
             enums: EnumRegistry::empty(),
+            enums_loaded: false,
         }
     }
 
@@ -513,6 +712,10 @@ impl Context {
 
     pub fn invalidate(&mut self, table: &str) {
         self.tables.remove(table);
+    }
+
+    pub fn add_enum(&mut self, name: String, variants: Vec<String>) {
+        self.enums.add(name, variants);
     }
 }
 
@@ -581,7 +784,7 @@ impl TryFrom<&[&str]> for Context {
                 }
 
                 Statement::Create(Create::Enum { name, variants }) => {
-                    context.enums.add(name, variants);
+                    context.add_enum(name, variants);
                 }
 
                 statement => {
@@ -601,8 +804,8 @@ impl Ctx for Context {
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
     }
 
-    fn enums(&self) -> &EnumRegistry {
-        &self.enums
+    fn enums(&mut self) -> Result<&EnumRegistry, DatabaseError> {
+        Ok(&self.enums)
     }
 }
 
