@@ -102,6 +102,8 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             }
 
             let root = allocate_root(db)?;
+            
+            // Store basic index info in the main metadata catalog
             insert_into_metadata(
                 db,
                 vec![
@@ -110,6 +112,18 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::Number(root.into()),
                     Value::String(table.clone()),
                     Value::String(sql),
+                ],
+            )?;
+
+            // Store index-specific info in the specialized index metadata table
+            insert_into_specialized_metadata(
+                db,
+                DB_INDEX_METADATA,
+                vec![
+                    Value::String(name.clone()),
+                    Value::String(table.clone()),
+                    Value::String(column.clone()),
+                    Value::Boolean(unique),
                 ],
             )?;
 
@@ -165,14 +179,35 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             }
 
             let root = allocate_root(db)?;
+            
+            // Store basic sequence info in the main metadata catalog
             insert_into_metadata(
                 db,
                 vec![
                     Value::String("sequence".into()),
                     Value::String(name.clone()),
                     Value::Number(root as _),
-                    Value::String(table),
+                    Value::String(table.clone()),
                     Value::String(sql),
+                ],
+            )?;
+
+            // Store sequence-specific info in the specialized sequence metadata table
+            // Extract column name from sequence name (format: table_column_seq)
+            let column_name = name
+                .strip_prefix(&format!("{}_", table))
+                .and_then(|s| s.strip_suffix("_seq"))
+                .unwrap_or("");
+
+            insert_into_specialized_metadata(
+                db,
+                DB_SEQUENCE_METADATA,
+                vec![
+                    Value::String(name.clone()),
+                    Value::String(r#type.to_string()),
+                    Value::String(table),
+                    Value::String(column_name.to_string()),
+                    Value::Number(0), // initial value
                 ],
             )?;
         }

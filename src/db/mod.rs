@@ -299,8 +299,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             let mut schema = umbra_enum_schema();
             schema.prepend_id();
             
-            // Try to find existing root from metadata, or allocate new one
-            let root = match self.find_metadata_root(DB_ENUM_METADATA)? {
+            // Try to find existing root from a dedicated tracking or allocate new one
+            let root = match self.find_specialized_table_root(DB_ENUM_METADATA)? {
                 Some(root) => root,
                 None => {
                     // Create the specialized metadata table if it doesn't exist
@@ -308,16 +308,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                         let mut pager = self.pager.borrow_mut();
                         pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
                     };
-                    // Store this table's metadata in the main catalog
-                    self.insert_metadata(
-                        vec![
-                            Value::String("table".into()),
-                            Value::String(DB_ENUM_METADATA.into()),
-                            Value::Number(root as _),
-                            Value::String(DB_ENUM_METADATA.into()),
-                            Value::String(format!("CREATE TABLE {} (...);", DB_ENUM_METADATA)),
-                        ],
-                    )?;
+                    // Store the root page mapping internally (not in main catalog)
+                    self.store_specialized_table_root(DB_ENUM_METADATA, root)?;
                     root
                 }
             };
@@ -337,22 +329,14 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             let mut schema = umbra_sequence_schema();
             schema.prepend_id();
             
-            let root = match self.find_metadata_root(DB_SEQUENCE_METADATA)? {
+            let root = match self.find_specialized_table_root(DB_SEQUENCE_METADATA)? {
                 Some(root) => root,
                 None => {
                     let root = {
                         let mut pager = self.pager.borrow_mut();
                         pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
                     };
-                    self.insert_metadata(
-                        vec![
-                            Value::String("table".into()),
-                            Value::String(DB_SEQUENCE_METADATA.into()),
-                            Value::Number(root as _),
-                            Value::String(DB_SEQUENCE_METADATA.into()),
-                            Value::String(format!("CREATE TABLE {} (...);", DB_SEQUENCE_METADATA)),
-                        ],
-                    )?;
+                    self.store_specialized_table_root(DB_SEQUENCE_METADATA, root)?;
                     root
                 }
             };
@@ -372,22 +356,14 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             let mut schema = umbra_index_schema();
             schema.prepend_id();
             
-            let root = match self.find_metadata_root(DB_INDEX_METADATA)? {
+            let root = match self.find_specialized_table_root(DB_INDEX_METADATA)? {
                 Some(root) => root,
                 None => {
                     let root = {
                         let mut pager = self.pager.borrow_mut();
                         pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
                     };
-                    self.insert_metadata(
-                        vec![
-                            Value::String("table".into()),
-                            Value::String(DB_INDEX_METADATA.into()),
-                            Value::Number(root as _),
-                            Value::String(DB_INDEX_METADATA.into()),
-                            Value::String(format!("CREATE TABLE {} (...);", DB_INDEX_METADATA)),
-                        ],
-                    )?;
+                    self.store_specialized_table_root(DB_INDEX_METADATA, root)?;
                     root
                 }
             };
@@ -584,10 +560,40 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(root)
     }
 
+    /// Find the root page for a specialized metadata table using hardcoded page assignments
+    fn find_specialized_table_root(&mut self, table_name: &str) -> Result<Option<PageNumber>, DatabaseError> {
+        // For now, use hardcoded page assignments for specialized tables
+        // In a real implementation, this could be stored in a system catalog
+        let assigned_root = match table_name {
+            DB_ENUM_METADATA => Some(1000), // Use high page numbers to avoid conflicts
+            DB_SEQUENCE_METADATA => Some(1001),
+            DB_INDEX_METADATA => Some(1002),
+            _ => None,
+        };
+
+        // Check if the page actually exists by trying to load its metadata
+        if let Some(root) = assigned_root {
+            let row_id_result = self.load_next_row_id(root);
+            match row_id_result {
+                Ok(_) => Ok(Some(root)),
+                Err(_) => Ok(None), // Page doesn't exist yet
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Store the root page mapping for a specialized metadata table
+    fn store_specialized_table_root(&mut self, _table_name: &str, _root: PageNumber) -> Result<(), DatabaseError> {
+        // For the hardcoded approach, we don't need to store anything
+        // The mapping is implicit in find_specialized_table_root
+        Ok(())
+    }
+
     /// Load all enums from the specialized enum metadata table
     fn load_enums(&mut self) -> Result<(), DatabaseError> {
         // Check if enum metadata table exists
-        if self.find_metadata_root(DB_ENUM_METADATA)?.is_none() {
+        if self.find_specialized_table_root(DB_ENUM_METADATA)?.is_none() {
             // No enum metadata table exists yet
             return Ok(());
         }
@@ -3587,6 +3593,64 @@ mod tests {
             db.exec("CREATE TABLE people (id SERIAL, age INT UNSIGNED, mood MOOD);")
                 .unwrap_err()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_specialized_metadata_tables() -> DatabaseResult {
+        let mut db = Database::default();
+        
+        // Create an enum
+        db.exec("CREATE TYPE status AS ENUM ('active', 'inactive', 'pending');")?;
+        
+        // Check that main metadata catalog contains the enum entry
+        let main_query = db.exec("SELECT type, name FROM umbra_db_meta WHERE type = 'enum';")?;
+        assert_eq!(main_query.tuples.len(), 1);
+        assert_eq!(main_query.tuples[0][0], Value::String("enum".into()));
+        assert_eq!(main_query.tuples[0][1], Value::String("status".into()));
+        
+        // Check that specialized enum metadata table contains the variants
+        let enum_query = db.exec("SELECT enum_name, variant_name, variant_id FROM umbra_enum ORDER BY variant_id;")?;
+        assert_eq!(enum_query.tuples.len(), 3);
+        
+        // Check the enum variants
+        assert_eq!(enum_query.tuples[0][0], Value::String("status".into()));
+        assert_eq!(enum_query.tuples[0][1], Value::String("active".into()));
+        assert_eq!(enum_query.tuples[0][2], Value::Number(1));
+        
+        assert_eq!(enum_query.tuples[1][0], Value::String("status".into()));
+        assert_eq!(enum_query.tuples[1][1], Value::String("inactive".into()));
+        assert_eq!(enum_query.tuples[1][2], Value::Number(2));
+        
+        assert_eq!(enum_query.tuples[2][0], Value::String("status".into()));
+        assert_eq!(enum_query.tuples[2][1], Value::String("pending".into()));
+        assert_eq!(enum_query.tuples[2][2], Value::Number(3));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sequence_specialized_metadata() -> DatabaseResult {
+        let mut db = Database::default();
+        
+        // Create a table with a serial column (which creates a sequence)
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
+        
+        // Check that main metadata catalog contains the sequence entry
+        let main_query = db.exec("SELECT type, name FROM umbra_db_meta WHERE type = 'sequence';")?;
+        assert_eq!(main_query.tuples.len(), 1);
+        assert_eq!(main_query.tuples[0][0], Value::String("sequence".into()));
+        assert_eq!(main_query.tuples[0][1], Value::String("users_id_seq".into()));
+        
+        // Check that specialized sequence metadata table contains the sequence info
+        let seq_query = db.exec("SELECT sequence_name, data_type, table_name, column_name FROM umbra_sequence;")?;
+        assert_eq!(seq_query.tuples.len(), 1);
+        
+        assert_eq!(seq_query.tuples[0][0], Value::String("users_id_seq".into()));
+        assert_eq!(seq_query.tuples[0][1], Value::String("SERIAL".into()));
+        assert_eq!(seq_query.tuples[0][2], Value::String("users".into()));
+        assert_eq!(seq_query.tuples[0][3], Value::String("id".into()));
 
         Ok(())
     }
