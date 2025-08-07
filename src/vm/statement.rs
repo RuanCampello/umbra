@@ -13,7 +13,7 @@ use crate::{
     db::{
         has_btree_key, umbra_schema, umbra_enum_schema, umbra_sequence_schema, umbra_index_schema, 
         Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
-        SqlError, DB_METADATA, DB_ENUM_METADATA, DB_SEQUENCE_METADATA, DB_INDEX_METADATA,
+        SqlError, DB_METADATA, MetadataTableType,
     },
     index,
     sql::{
@@ -118,7 +118,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             // Store index-specific info in the specialized index metadata table
             insert_into_specialized_metadata(
                 db,
-                DB_INDEX_METADATA,
+                MetadataTableType::Index,
                 vec![
                     Value::String(name.clone()),
                     Value::String(table.clone()),
@@ -201,7 +201,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             insert_into_specialized_metadata(
                 db,
-                DB_SEQUENCE_METADATA,
+                MetadataTableType::Sequence,
                 vec![
                     Value::String(name.clone()),
                     Value::String(r#type.to_string()),
@@ -231,7 +231,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             for (variant_id, variant_name) in variants.iter().enumerate() {
                 insert_into_specialized_metadata(
                     db,
-                    DB_ENUM_METADATA,
+                    MetadataTableType::Enum,
                     vec![
                         Value::String(name.clone()),
                         Value::Number(0), // enum_id will be assigned when needed
@@ -338,30 +338,30 @@ fn insert_into_metadata<File: Write + Seek + Read + FileOperations>(
 /// Insert data into specialized metadata tables (enum, sequence, index)
 fn insert_into_specialized_metadata<File: Write + Seek + Read + FileOperations>(
     db: &mut Database<File>,
-    table_name: &str,
+    table_type: MetadataTableType,
     mut values: Vec<Value>,
 ) -> Result<(), DatabaseError> {
-    let schema = match table_name {
-        DB_ENUM_METADATA => {
+    let schema = match table_type {
+        MetadataTableType::Enum => {
             let mut schema = umbra_enum_schema();
             schema.prepend_id();
             schema
         },
-        DB_SEQUENCE_METADATA => {
+        MetadataTableType::Sequence => {
             let mut schema = umbra_sequence_schema();
             schema.prepend_id();
             schema
         },
-        DB_INDEX_METADATA => {
+        MetadataTableType::Index => {
             let mut schema = umbra_index_schema();
             schema.prepend_id();
             schema
         },
-        _ => return Err(DatabaseError::Other(format!("Unknown specialized metadata table: {}", table_name)))
+        MetadataTableType::Main => return Err(DatabaseError::Other("Cannot insert into main metadata table using specialized function".into()))
     };
 
     // Get metadata for the specialized table (this will create it if it doesn't exist)
-    let table_metadata = db.metadata(table_name)?;
+    let table_metadata = db.metadata(table_type.table_name())?;
     let root = table_metadata.root;
     
     values.insert(0, Value::Number(table_metadata.next_id().into()));

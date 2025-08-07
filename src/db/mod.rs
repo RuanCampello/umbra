@@ -49,6 +49,7 @@ pub(crate) struct Context {
     enums: EnumRegistry,
     max_size: Option<usize>,
     enums_loaded: bool,
+    system_table_roots: HashMap<MetadataTableType, PageNumber>,
 }
 
 #[derive(Debug)]
@@ -113,10 +114,36 @@ pub(crate) type RowId = u64;
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
 pub(crate) const DB_METADATA: &str = "umbra_db_meta";
-pub(crate) const DB_ENUM_METADATA: &str = "umbra_enum";
-pub(crate) const DB_SEQUENCE_METADATA: &str = "umbra_sequence";
-pub(crate) const DB_INDEX_METADATA: &str = "umbra_index";
 const DEFAULT_CACHE_SIZE: usize = 512;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum MetadataTableType {
+    Main,
+    Enum,
+    Sequence,
+    Index,
+}
+
+impl MetadataTableType {
+    pub(crate) fn table_name(&self) -> &'static str {
+        match self {
+            MetadataTableType::Main => "umbra_db_meta",
+            MetadataTableType::Enum => "umbra_enum",
+            MetadataTableType::Sequence => "umbra_sequence", 
+            MetadataTableType::Index => "umbra_index",
+        }
+    }
+    
+    pub(crate) fn from_table_name(name: &str) -> Option<Self> {
+        match name {
+            "umbra_db_meta" => Some(MetadataTableType::Main),
+            "umbra_enum" => Some(MetadataTableType::Enum),
+            "umbra_sequence" => Some(MetadataTableType::Sequence),
+            "umbra_index" => Some(MetadataTableType::Index),
+            _ => None,
+        }
+    }
+}
 
 pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
@@ -295,88 +322,41 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         // Handle specialized metadata tables
-        if table == DB_ENUM_METADATA {
-            let mut schema = umbra_enum_schema();
-            schema.prepend_id();
-            
-            // Try to find existing root from a dedicated tracking or allocate new one
-            let root = match self.find_specialized_table_root(DB_ENUM_METADATA)? {
-                Some(root) => root,
-                None => {
-                    // Create the specialized metadata table if it doesn't exist
-                    let root = {
-                        let mut pager = self.pager.borrow_mut();
-                        pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
-                    };
-                    // Store the root page mapping internally (not in main catalog)
-                    self.store_specialized_table_root(DB_ENUM_METADATA, root)?;
-                    root
-                }
-            };
-            
-            let row_id = self.load_next_row_id(root)?;
-            return Ok(TableMetadata {
-                root,
-                name: String::from(table),
-                row_id,
-                indexes: vec![],
-                serials: HashMap::new(),
-                schema,
-            });
-        }
-
-        if table == DB_SEQUENCE_METADATA {
-            let mut schema = umbra_sequence_schema();
-            schema.prepend_id();
-            
-            let root = match self.find_specialized_table_root(DB_SEQUENCE_METADATA)? {
-                Some(root) => root,
-                None => {
-                    let root = {
-                        let mut pager = self.pager.borrow_mut();
-                        pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
-                    };
-                    self.store_specialized_table_root(DB_SEQUENCE_METADATA, root)?;
-                    root
-                }
-            };
-            
-            let row_id = self.load_next_row_id(root)?;
-            return Ok(TableMetadata {
-                root,
-                name: String::from(table),
-                row_id,
-                indexes: vec![],
-                serials: HashMap::new(),
-                schema,
-            });
-        }
-
-        if table == DB_INDEX_METADATA {
-            let mut schema = umbra_index_schema();
-            schema.prepend_id();
-            
-            let root = match self.find_specialized_table_root(DB_INDEX_METADATA)? {
-                Some(root) => root,
-                None => {
-                    let root = {
-                        let mut pager = self.pager.borrow_mut();
-                        pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
-                    };
-                    self.store_specialized_table_root(DB_INDEX_METADATA, root)?;
-                    root
-                }
-            };
-            
-            let row_id = self.load_next_row_id(root)?;
-            return Ok(TableMetadata {
-                root,
-                name: String::from(table),
-                row_id,
-                indexes: vec![],
-                serials: HashMap::new(),
-                schema,
-            });
+        if let Some(metadata_type) = MetadataTableType::from_table_name(table) {
+            if metadata_type != MetadataTableType::Main {
+                let schema = match metadata_type {
+                    MetadataTableType::Enum => {
+                        let mut schema = umbra_enum_schema();
+                        schema.prepend_id();
+                        schema
+                    },
+                    MetadataTableType::Sequence => {
+                        let mut schema = umbra_sequence_schema();
+                        schema.prepend_id();
+                        schema
+                    },
+                    MetadataTableType::Index => {
+                        let mut schema = umbra_index_schema();
+                        schema.prepend_id();
+                        schema
+                    },
+                    MetadataTableType::Main => unreachable!(),
+                };
+                
+                // For specialized metadata tables, use a dedicated system area
+                // We'll allocate pages on demand but not register them in the main catalog
+                let root = self.get_or_create_system_table_root(metadata_type)?;
+                
+                let row_id = self.load_next_row_id(root)?;
+                return Ok(TableMetadata {
+                    root,
+                    name: String::from(table),
+                    row_id,
+                    indexes: vec![],
+                    serials: HashMap::new(),
+                    schema,
+                });
+            }
         }
 
         let mut metadata = TableMetadata {
@@ -560,46 +540,17 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(root)
     }
 
-    /// Find the root page for a specialized metadata table using hardcoded page assignments
-    fn find_specialized_table_root(&mut self, table_name: &str) -> Result<Option<PageNumber>, DatabaseError> {
-        // For now, use hardcoded page assignments for specialized tables
-        // In a real implementation, this could be stored in a system catalog
-        let assigned_root = match table_name {
-            DB_ENUM_METADATA => Some(1000), // Use high page numbers to avoid conflicts
-            DB_SEQUENCE_METADATA => Some(1001),
-            DB_INDEX_METADATA => Some(1002),
-            _ => None,
-        };
-
-        // Check if the page actually exists by trying to load its metadata
-        if let Some(root) = assigned_root {
-            let row_id_result = self.load_next_row_id(root);
-            match row_id_result {
-                Ok(_) => Ok(Some(root)),
-                Err(_) => Ok(None), // Page doesn't exist yet
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Store the root page mapping for a specialized metadata table
-    fn store_specialized_table_root(&mut self, _table_name: &str, _root: PageNumber) -> Result<(), DatabaseError> {
-        // For the hardcoded approach, we don't need to store anything
-        // The mapping is implicit in find_specialized_table_root
-        Ok(())
-    }
-
     /// Load all enums from the specialized enum metadata table
     fn load_enums(&mut self) -> Result<(), DatabaseError> {
-        // Check if enum metadata table exists
-        if self.find_specialized_table_root(DB_ENUM_METADATA)?.is_none() {
+        // Check if enum metadata table exists by checking if we have a root for it
+        if !self.context.system_table_roots.contains_key(&MetadataTableType::Enum) {
             // No enum metadata table exists yet
             return Ok(());
         }
 
         let query = self.exec(&format!(
-            "SELECT enum_name, variant_name FROM {DB_ENUM_METADATA} ORDER BY enum_name, variant_id;"
+            "SELECT enum_name, variant_name FROM {} ORDER BY enum_name, variant_id;",
+            MetadataTableType::Enum.table_name()
         ))?;
 
         let mut current_enum: Option<String> = None;
@@ -634,6 +585,25 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         Ok(())
+    }
+    
+    /// Get or create a root page for a system table (specialized metadata tables)
+    fn get_or_create_system_table_root(&mut self, table_type: MetadataTableType) -> Result<PageNumber, DatabaseError> {
+        // Check if we already have a root for this system table type
+        if let Some(&root) = self.context.system_table_roots.get(&table_type) {
+            return Ok(root);
+        }
+        
+        // Allocate a new page for this system table
+        let root = {
+            let mut pager = self.pager.borrow_mut();
+            pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
+        };
+        
+        // Store the mapping in our context
+        self.context.system_table_roots.insert(table_type, root);
+        
+        Ok(root)
     }
 }
 
@@ -691,6 +661,7 @@ impl Context {
             max_size: None,
             enums: EnumRegistry::empty(),
             enums_loaded: false,
+            system_table_roots: HashMap::new(),
         }
     }
 
@@ -700,6 +671,7 @@ impl Context {
             max_size: Some(size),
             enums: EnumRegistry::empty(),
             enums_loaded: false,
+            system_table_roots: HashMap::new(),
         }
     }
 
