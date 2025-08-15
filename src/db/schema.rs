@@ -10,6 +10,9 @@ pub struct Schema {
     index: HashMap<String, usize>,
 }
 
+const NAME: Type = Type::Varchar(64);
+const OID: Type = Type::UnsignedInteger;
+
 impl Schema {
     pub fn new(columns: Vec<Column>) -> Self {
         let index = columns
@@ -72,12 +75,40 @@ pub(crate) fn has_btree_key(columns: &[Column]) -> bool {
         && !matches!(columns[0].data_type, Type::Varchar(_) | Type::Boolean)
 }
 
-pub(crate) fn umbra_schema() -> Schema {
+pub(super) fn umbra_schema() -> Schema {
     Schema::from(&[
-        Column::new("type", Type::Varchar(255)),
-        Column::new("name", Type::Varchar(255)),
-        Column::new("root", Type::UnsignedInteger),
-        Column::new("table_name", Type::Varchar(255)),
-        Column::new("sql", Type::Varchar(65535)),
+        Column::new("type", NAME),
+        Column::new("name", NAME),
+        Column::new("root", OID),
+        Column::new("table_name", NAME),
+        Column::new("sql", Type::Text),
+    ])
+}
+
+pub(super) fn umbra_enum_schema() -> Schema {
+    Schema::from(&[
+        Column::new("enum_name", NAME),
+        Column::new("enum_id", OID),
+        Column::new("enum_label", NAME),
+        Column::new("enum_sort_order", Type::UnsignedSmallInt),
+    ])
+}
+
+pub(crate) fn umbra_sequence_schema() -> Schema {
+    Schema::from(&[
+        Column::new("rel_name", NAME),
+        Column::new("seq_type_id", OID),
+        Column::new("owning_table", NAME),
+        Column::new("owning_column", NAME),
+        Column::new("last_value", Type::UnsignedBigInteger),
+    ])
+}
+
+pub(crate) fn umbra_index_schema() -> Schema {
+    Schema::from(&[
+        Column::new("index_rel_id", OID),
+        Column::new("owning_table", NAME),
+        Column::new("owning_column", NAME),
+        Column::new("is_unique", Type::Boolean),
     ])
 }

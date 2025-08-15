@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, FixedSizeCmp};
@@ -66,6 +67,15 @@ pub(crate) enum Relation {
     Index(IndexMetadata),
     Table(TableMetadata),
     Sequence(SequenceMetadata),
+}
+
+#[derive(Debug, Default, PartialEq, Clone, Copy)]
+pub(crate) enum CatalogEntry {
+    #[default]
+    Meta,
+    Enum,
+    Sequence,
+    Index,
 }
 
 #[macro_export]
@@ -249,6 +259,43 @@ impl Relation {
             Self::Sequence(_) => 2,
             Self::Index(_) => 1,
             Self::Table(_) => 0,
+        }
+    }
+}
+
+impl CatalogEntry {
+    fn schema(&self) -> Schema {
+        use crate::db::schema::{umbra_enum_schema, umbra_index_schema, umbra_sequence_schema};
+
+        match self {
+            Self::Meta => umbra_schema(),
+            Self::Enum => umbra_enum_schema(),
+            Self::Sequence => umbra_sequence_schema(),
+            Self::Index => umbra_index_schema(),
+        }
+    }
+}
+
+// impl From<CatalogEntry> for &str {
+//     fn from(value: CatalogEntry) -> Self {
+//         match value {
+//             CatalogEntry::Meta => "umbra_catalog",
+//             CatalogEntry::Enum => "umbra_enum",
+//             CatalogEntry::Sequence => "umbra_sequence",
+//             CatalogEntry::Index => "umbra_index",
+//         }
+//     }
+// }
+
+impl FromStr for CatalogEntry {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "umbra_catalog" => Ok(Self::Meta),
+            "umbra_enum" => Ok(Self::Enum),
+            "umbra_index" => Ok(Self::Index),
+            "umbra_sequence" => Ok(Self::Sequence),
+            _ => Err(()),
         }
     }
 }
