@@ -17,6 +17,8 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
 use crate::core::uuid::UuidError;
+use crate::db::metadata::CatalogEntry;
+use crate::db::schema::{umbra_enum_schema, umbra_index_schema, umbra_sequence_schema};
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
@@ -48,6 +50,7 @@ pub(crate) struct Context {
     tables: HashMap<String, TableMetadata>,
     enums: EnumRegistry,
     max_size: Option<usize>,
+    catalog_roots: HashMap<CatalogEntry, PageNumber>,
 }
 
 #[derive(Debug)]
@@ -290,6 +293,34 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             });
         }
 
+        if let Some(catalog_kind) = table.parse::<CatalogEntry>().ok() {
+            if catalog_kind != CatalogEntry::Meta {
+                let schema = {
+                    let mut schema = match catalog_kind {
+                        CatalogEntry::Enum => umbra_enum_schema(),
+                        CatalogEntry::Sequence => umbra_sequence_schema(),
+                        CatalogEntry::Index => umbra_index_schema(),
+                        CatalogEntry::Meta => unreachable!(),
+                    };
+
+                    schema.prepend_id();
+                    schema
+                };
+
+                let root = self.get_catalog_table_root(catalog_kind)?;
+                let row_id = self.load_next_row_id(root)?;
+
+                return Ok(TableMetadata {
+                    root,
+                    row_id,
+                    schema,
+                    indexes: vec![],
+                    name: table.to_string(),
+                    serials: HashMap::new(),
+                });
+            }
+        }
+
         let mut metadata = TableMetadata {
             root: 1,
             row_id: 1,
@@ -436,6 +467,39 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         Ok(row_id)
     }
+
+    /// Retrives or creates a new root page for a system specialised table.
+    fn get_catalog_table_root(&mut self, kind: CatalogEntry) -> Result<PageNumber, DatabaseError> {
+        use crate::core::storage::page::Page;
+
+        if let Some(&root) = self.context.catalog_roots.get(&kind) {
+            return Ok(root);
+        }
+
+        let root = {
+            let mut pager = self.pager.borrow_mut();
+            pager.allocate_page::<Page>()?
+        };
+
+        self.context.catalog_roots.insert(kind, root);
+        Ok(root)
+    }
+
+    fn load_enums(&mut self) -> Result<(), DatabaseError> {
+        if !self.context.catalog_roots.contains_key(&CatalogEntry::Enum) {
+            return Ok(());
+        }
+
+        let enum_table: &str = CatalogEntry::Enum.into();
+        let query = self.exec(
+            format!(
+                "SELECT enum_name, enum_label FROM {enum_table} ORDER BY enum_name, enum_label;"
+            )
+            .as_str(),
+        )?;
+
+        todo!()
+    }
 }
 
 impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
@@ -487,6 +551,7 @@ impl Context {
             tables: HashMap::new(),
             max_size: None,
             enums: EnumRegistry::empty(),
+            catalog_roots: HashMap::new(),
         }
     }
 
@@ -495,6 +560,7 @@ impl Context {
             tables: HashMap::with_capacity(size),
             max_size: Some(size),
             enums: EnumRegistry::empty(),
+            catalog_roots: HashMap::new(),
         }
     }
 

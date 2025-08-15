@@ -69,7 +69,7 @@ pub(crate) enum Relation {
     Sequence(SequenceMetadata),
 }
 
-#[derive(Debug, Default, PartialEq, Clone, Copy)]
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum CatalogEntry {
     #[default]
     Meta,
@@ -276,16 +276,16 @@ impl CatalogEntry {
     }
 }
 
-// impl From<CatalogEntry> for &str {
-//     fn from(value: CatalogEntry) -> Self {
-//         match value {
-//             CatalogEntry::Meta => "umbra_catalog",
-//             CatalogEntry::Enum => "umbra_enum",
-//             CatalogEntry::Sequence => "umbra_sequence",
-//             CatalogEntry::Index => "umbra_index",
-//         }
-//     }
-// }
+impl From<CatalogEntry> for &str {
+    fn from(value: CatalogEntry) -> Self {
+        match value {
+            CatalogEntry::Meta => "umbra_catalog",
+            CatalogEntry::Enum => "umbra_enum",
+            CatalogEntry::Sequence => "umbra_sequence",
+            CatalogEntry::Index => "umbra_index",
+        }
+    }
+}
 
 impl FromStr for CatalogEntry {
     type Err = ();
