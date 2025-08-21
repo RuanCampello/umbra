@@ -46,6 +46,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         Statement::Select(Select {
             columns,
             from,
+            joins: _,
             r#where,
             order_by,
             group_by,
