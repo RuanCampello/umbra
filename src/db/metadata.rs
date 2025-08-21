@@ -51,6 +51,7 @@ pub(crate) struct SequenceMetadata {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct EnumRegistry {
     enums: HashMap<String, Enum>,
+    loaded: bool,
 }
 
 /// A single enum definition.
@@ -171,6 +172,7 @@ impl EnumRegistry {
     pub(in crate::db) fn empty() -> Self {
         Self {
             enums: HashMap::new(),
+            loaded: false,
         }
     }
 
@@ -199,6 +201,14 @@ impl EnumRegistry {
 
     pub(crate) fn add(&mut self, name: String, variants: Vec<String>) {
         self.enums.insert(name, Enum::new(variants));
+    }
+
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    pub(crate) fn loaded(&mut self) {
+        self.loaded = true;
     }
 }
 

@@ -120,7 +120,7 @@ const DEFAULT_CACHE_SIZE: usize = 512;
 
 pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
-    fn enums(&self) -> &EnumRegistry;
+    fn enums(&mut self) -> Result<&EnumRegistry, DatabaseError>;
 }
 
 macro_rules! temporal {
@@ -303,6 +303,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                         CatalogEntry::Index => umbra_index_schema(),
                         CatalogEntry::Meta => unreachable!(),
                     };
+
+                    println!("schema: {schema:?}");
 
                     schema.prepend_id();
                     schema
@@ -517,8 +519,13 @@ impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
         self.context.metadata(table)
     }
 
-    fn enums(&self) -> &EnumRegistry {
-        &self.context.enums
+    fn enums(&mut self) -> Result<&EnumRegistry, DatabaseError> {
+        if !self.context.enums.is_loaded() {
+            self.load_enums()?;
+            self.context.enums.loaded();
+        }
+
+        Ok(&self.context.enums)
     }
 }
 
@@ -672,8 +679,8 @@ impl Ctx for Context {
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
     }
 
-    fn enums(&self) -> &EnumRegistry {
-        &self.enums
+    fn enums(&mut self) -> Result<&EnumRegistry, DatabaseError> {
+        Ok(&self.enums)
     }
 }
 
