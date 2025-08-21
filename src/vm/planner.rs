@@ -8,7 +8,7 @@ use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSiz
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
-use crate::core::storage::tuple::{self, deserialize};
+use crate::core::storage::tuple::{self, deserialize, empty_null_map};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{join, Assignment, Expression, Function, OrderDirection, Value};
 use crate::vm;
@@ -1077,7 +1077,9 @@ impl<File: PlanExecutor> Execute for Collect<File> {
             };
 
             if has_data_left {
-                return Ok(Some(tuple::read_from(reader, &self.schema)?));
+                let mut null_map = empty_null_map(self.schema.len());
+                reader.read_exact(&mut null_map)?;
+                return Ok(Some(tuple::read_from(reader, &self.schema, &null_map)?));
             }
 
             self.drop_file()?;

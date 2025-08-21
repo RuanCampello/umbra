@@ -60,7 +60,13 @@ const fn varlena_header_len(byte: u8) -> usize {
 }
 
 pub(crate) fn deserialize(buff: &[u8], schema: &Schema) -> Vec<Value> {
-    read_from(&mut io::Cursor::new(buff), schema).unwrap()
+    let cursor = &mut io::Cursor::new(buff);
+    let mut null_map = empty_null_map(schema.len());
+    cursor
+        .read_exact(&mut null_map)
+        .expect("Failed to read null bit map");
+
+    read_from(cursor, schema, &null_map).unwrap()
 }
 
 pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
@@ -92,7 +98,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
-        Value::Null => todo!("serialize into null"),
+        Value::Null => {}
     }
 }
 
@@ -105,6 +111,14 @@ pub(crate) fn serialize_tuple<'value>(
     values: impl IntoIterator<Item = &'value Value> + Copy,
 ) -> Vec<u8> {
     let mut buff = Vec::new();
+    let mut null_map = empty_null_map(schema.len());
+
+    for (i, value) in values.into_iter().enumerate() {
+        if let Value::Null = value {
+            null_map[i / 8] |= 1 << (i % 8);
+        }
+    }
+    buff.extend_from_slice(&null_map);
 
     debug_assert_eq!(
         schema.len(),
@@ -154,131 +168,145 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
         .sum()
 }
 
-pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
-    let values = schema.columns.iter().map(|col| match &col.data_type {
-        Type::Varchar(size) => {
-            let mut len = [0; mem::size_of::<usize>()];
-            let prefix = utf_8_length_bytes(*size);
+pub(crate) fn empty_null_map(schema_len: usize) -> Vec<u8> {
+    return vec![0u8; (schema_len + 7) / 8];
+}
 
-            reader.read_exact(&mut len[..prefix])?;
-            let len = usize::from_le_bytes(len);
+pub(crate) fn read_from(
+    reader: &mut impl Read,
+    schema: &Schema,
+    null_map: &[u8],
+) -> io::Result<Vec<Value>> {
+    let values = schema.columns.iter().enumerate().map(|(idx, col)| {
+        if (null_map[idx / 8] >> (idx % 8)) & 1 == 1 {
+            return Ok(Value::Null);
+        };
 
-            let mut string = vec![0; len];
-            reader.read_exact(&mut string)?;
+        match &col.data_type {
+            Type::Varchar(size) => {
+                let mut len = [0; mem::size_of::<usize>()];
+                let prefix = utf_8_length_bytes(*size);
 
-            Ok(Value::String(
-                String::from_utf8(string).expect("Couldn't parse string from utf8"),
-            ))
-        }
+                reader.read_exact(&mut len[..prefix])?;
+                let len = usize::from_le_bytes(len);
 
-        Type::Text => {
-            let mut header = [0; 4];
-            reader.read_exact(&mut header[..1])?;
-            let header_len = varlena_header_len(header[0]);
+                let mut string = vec![0; len];
+                reader.read_exact(&mut string)?;
 
-            let length = match header_len == 1 {
-                false => {
-                    reader.read_exact(&mut header[1..4])?;
-                    let be = [0, header[1], header[2], header[3]];
-                    u32::from_be_bytes(be) as usize
-                }
-                _ => header[0] as usize,
-            };
+                Ok(Value::String(
+                    String::from_utf8(string).expect("Couldn't parse string from utf8"),
+                ))
+            }
 
-            let mut buf = vec![0; length];
-            reader.read_exact(&mut buf)?;
-            Ok(Value::String(
-                String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
-            ))
-        }
+            Type::Text => {
+                let mut header = [0; 4];
+                reader.read_exact(&mut header[..1])?;
+                let header_len = varlena_header_len(header[0]);
 
-        Type::Boolean => {
-            let mut byte = [0; byte_len_of_type(&Type::Boolean)];
-            reader.read_exact(&mut byte)?;
-            Ok(Value::Boolean(byte[0] != 0))
-        }
+                let length = match header_len == 1 {
+                    false => {
+                        reader.read_exact(&mut header[1..4])?;
+                        let be = [0, header[1], header[2], header[3]];
+                        u32::from_be_bytes(be) as usize
+                    }
+                    _ => header[0] as usize,
+                };
 
-        Type::SmallInt => {
-            let mut buf = [0; byte_len_of_type(&Type::SmallInt)];
-            reader.read_exact(&mut buf)?;
-            let n = i16::from_be_bytes(buf) as i128;
-            Ok(Value::Number(n))
-        }
+                let mut buf = vec![0; length];
+                reader.read_exact(&mut buf)?;
+                Ok(Value::String(
+                    String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
+                ))
+            }
 
-        Type::UnsignedSmallInt | Type::SmallSerial => {
-            let mut buf = [0; byte_len_of_type(&Type::UnsignedSmallInt)];
-            reader.read_exact(&mut buf)?;
-            let n = u16::from_be_bytes(buf) as i128;
-            Ok(Value::Number(n))
-        }
+            Type::Boolean => {
+                let mut byte = [0; byte_len_of_type(&Type::Boolean)];
+                reader.read_exact(&mut byte)?;
+                Ok(Value::Boolean(byte[0] != 0))
+            }
 
-        Type::Integer => {
-            let mut buf = [0; byte_len_of_type(&Type::Integer)];
-            reader.read_exact(&mut buf)?;
-            let n = i32::from_be_bytes(buf) as i128;
-            Ok(Value::Number(n))
-        }
+            Type::SmallInt => {
+                let mut buf = [0; byte_len_of_type(&Type::SmallInt)];
+                reader.read_exact(&mut buf)?;
+                let n = i16::from_be_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
 
-        Type::UnsignedInteger | Type::Serial => {
-            let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
-            reader.read_exact(&mut buf)?;
-            let n = u32::from_be_bytes(buf) as i128;
-            Ok(Value::Number(n))
-        }
+            Type::UnsignedSmallInt | Type::SmallSerial => {
+                let mut buf = [0; byte_len_of_type(&Type::UnsignedSmallInt)];
+                reader.read_exact(&mut buf)?;
+                let n = u16::from_be_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
 
-        Type::BigInteger => {
-            let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
-            reader.read_exact(&mut buf)?;
-            let n = i64::from_be_bytes(buf) as i128;
-            Ok(Value::Number(n))
-        }
+            Type::Integer => {
+                let mut buf = [0; byte_len_of_type(&Type::Integer)];
+                reader.read_exact(&mut buf)?;
+                let n = i32::from_be_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
 
-        Type::UnsignedBigInteger | Type::BigSerial => {
-            let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
-            reader.read_exact(&mut buf)?;
-            let n = u64::from_be_bytes(buf) as i128;
-            Ok(Value::Number(n))
-        }
+            Type::UnsignedInteger | Type::Serial => {
+                let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
+                reader.read_exact(&mut buf)?;
+                let n = u32::from_be_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
 
-        Type::Uuid => {
-            let mut buf = [0; byte_len_of_type(&Type::Uuid)];
-            reader.read_exact(&mut buf)?;
-            Ok(Value::Uuid(Uuid::from_bytes(buf)))
-        }
+            Type::BigInteger => {
+                let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
+                reader.read_exact(&mut buf)?;
+                let n = i64::from_be_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
 
-        Type::Real => {
-            let mut bytes = [0; byte_len_of_type(&Type::Real)];
-            reader.read_exact(&mut bytes)?;
-            Ok(Value::Float(f32::from_be_bytes(bytes).into()))
-        }
+            Type::UnsignedBigInteger | Type::BigSerial => {
+                let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
+                reader.read_exact(&mut buf)?;
+                let n = u64::from_be_bytes(buf) as i128;
+                Ok(Value::Number(n))
+            }
 
-        Type::DoublePrecision => {
-            let mut bytes = [0; byte_len_of_type(&Type::DoublePrecision)];
-            reader.read_exact(&mut bytes)?;
-            Ok(Value::Float(f64::from_be_bytes(bytes)))
-        }
+            Type::Uuid => {
+                let mut buf = [0; byte_len_of_type(&Type::Uuid)];
+                reader.read_exact(&mut buf)?;
+                Ok(Value::Uuid(Uuid::from_bytes(buf)))
+            }
 
-        Type::Date => {
-            let mut bytes = [0; byte_len_of_type(&Type::Date)];
-            reader.read_exact(&mut bytes)?;
-            Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
-        }
+            Type::Real => {
+                let mut bytes = [0; byte_len_of_type(&Type::Real)];
+                reader.read_exact(&mut bytes)?;
+                Ok(Value::Float(f32::from_be_bytes(bytes).into()))
+            }
 
-        Type::Time => {
-            let mut bytes = [0; byte_len_of_type(&Type::Time)];
-            reader.read_exact(&mut bytes)?;
-            Ok(Value::Temporal(NaiveTime::from(bytes).into()))
-        }
+            Type::DoublePrecision => {
+                let mut bytes = [0; byte_len_of_type(&Type::DoublePrecision)];
+                reader.read_exact(&mut bytes)?;
+                Ok(Value::Float(f64::from_be_bytes(bytes)))
+            }
 
-        Type::DateTime => {
-            let mut date_bytes = [0; byte_len_of_type(&Type::Date)];
-            reader.read_exact(&mut date_bytes)?;
-            let mut time_bytes = [0; byte_len_of_type(&Type::Time)];
-            reader.read_exact(&mut time_bytes)?;
+            Type::Date => {
+                let mut bytes = [0; byte_len_of_type(&Type::Date)];
+                reader.read_exact(&mut bytes)?;
+                Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
+            }
 
-            let bytes = (date_bytes, time_bytes);
+            Type::Time => {
+                let mut bytes = [0; byte_len_of_type(&Type::Time)];
+                reader.read_exact(&mut bytes)?;
+                Ok(Value::Temporal(NaiveTime::from(bytes).into()))
+            }
 
-            Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
+            Type::DateTime => {
+                let mut date_bytes = [0; byte_len_of_type(&Type::Date)];
+                reader.read_exact(&mut date_bytes)?;
+                let mut time_bytes = [0; byte_len_of_type(&Type::Time)];
+                reader.read_exact(&mut time_bytes)?;
+
+                let bytes = (date_bytes, time_bytes);
+
+                Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
+            }
         }
     });
 
@@ -396,8 +424,13 @@ mod tests {
 
         let mut cursor = Cursor::new(buff);
         let schema = Schema::new(vec![Column::new("col", r#type)]);
+        let mut null_map = empty_null_map(schema.len());
+        cursor
+            .read_exact(&mut null_map)
+            .expect("Failed to read null bit map");
 
-        let mut rows = read_from(&mut cursor, &schema).expect("Failed to read from schema");
+        let mut rows =
+            read_from(&mut cursor, &schema, &null_map).expect("Failed to read from schema");
         rows.pop().expect("No value inside rows")
     }
 
@@ -441,7 +474,8 @@ mod tests {
 
             let mut cursor = Cursor::new(&buf);
             let schema = Schema::new(vec![Column::new("t", Type::Text)]);
-            let row = read_from(&mut cursor, &schema).unwrap();
+            let null_map = vec![0];
+            let row = read_from(&mut cursor, &schema, &null_map).unwrap();
 
             assert_eq!(
                 row[0],
