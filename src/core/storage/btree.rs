@@ -69,11 +69,16 @@ pub(crate) struct FixedSizeCmp(pub usize);
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct StringCmp(pub usize);
 
+/// Compares TEXT type with variable-length header.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct TextCmp;
+
 /// No allocations comparing to [`Box`].
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum BTreeKeyCmp {
     MemCmp(FixedSizeCmp),
     StrCmp(StringCmp),
+    TextCmp(TextCmp),
 }
 
 /// Represents the result of reading content from the [`BTree`].
@@ -751,6 +756,48 @@ impl BytesCmp for StringCmp {
     }
 }
 
+/// Helper function to determine varlena header length from first byte
+const fn varlena_header_len(byte: u8) -> usize {
+    match byte < 0x7f {
+        true => 1,
+        false => 4,
+    }
+}
+
+/// Compares TEXT type with variable-length varlena header
+impl BytesCmp for TextCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        // Read the first byte to determine header length
+        let header_len_a = varlena_header_len(a[0]);
+        let header_len_b = varlena_header_len(b[0]);
+
+        // Extract length from header
+        let len_a = match header_len_a {
+            1 => a[0] as usize,
+            4 => {
+                let be = [0, a[1], a[2], a[3]];
+                u32::from_be_bytes(be) as usize
+            }
+            _ => unreachable!(),
+        };
+
+        let len_b = match header_len_b {
+            1 => b[0] as usize,
+            4 => {
+                let be = [0, b[1], b[2], b[3]];
+                u32::from_be_bytes(be) as usize
+            }
+            _ => unreachable!(),
+        };
+
+        // Compare the actual string content
+        let str_a = std::str::from_utf8(&a[header_len_a..header_len_a + len_a]).unwrap();
+        let str_b = std::str::from_utf8(&b[header_len_b..header_len_b + len_b]).unwrap();
+        
+        str_a.cmp(str_b)
+    }
+}
+
 impl BytesCmp for FixedSizeCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
         a[..self.0].cmp(&b[..self.0])
@@ -761,7 +808,7 @@ impl From<&Type> for Box<dyn BytesCmp> {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Box::new(StringCmp(utf_8_length_bytes(*max))),
-            Type::Text => Box::new(StringCmp(4)), // TEXT uses varlena header with max 4 bytes
+            Type::Text => Box::new(TextCmp),
             not_var_type => Box::new(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
@@ -777,7 +824,7 @@ impl From<&Type> for BTreeKeyCmp {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Self::StrCmp(StringCmp(utf_8_length_bytes(*max))),
-            Type::Text => Self::StrCmp(StringCmp(4)), // TEXT uses varlena header with max 4 bytes
+            Type::Text => Self::TextCmp(TextCmp),
             not_var_type => Self::MemCmp(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
@@ -788,6 +835,7 @@ impl BytesCmp for BTreeKeyCmp {
         match self {
             Self::MemCmp(mem) => mem.cmp(a, b),
             Self::StrCmp(str) => str.cmp(a, b),
+            Self::TextCmp(text) => text.cmp(a, b),
         }
     }
 }

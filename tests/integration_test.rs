@@ -98,3 +98,51 @@ fn serialisation_and_deserialisation() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn unique_column_with_text() -> Result<()> {
+    let mut db = State::new("test_unique_text.db");
+
+    // Create table with TEXT UNIQUE column
+    db.exec(
+        r#"
+            CREATE TABLE users (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255),
+                email TEXT UNIQUE
+            );
+        "#,
+    )?;
+
+    // Insert first record - should succeed
+    db.exec("INSERT INTO users (name, email) VALUES ('John Doe', 'john@example.com');")?;
+
+    // Insert record with different email - should succeed
+    db.exec("INSERT INTO users (name, email) VALUES ('Jane Smith', 'jane@example.com');")?;
+
+    // Try to insert duplicate email - should fail
+    let result = db.exec("INSERT INTO users (name, email) VALUES ('Bob Johnson', 'john@example.com');");
+    assert!(result.is_err(), "Expected unique constraint violation");
+
+    // Test with empty string
+    db.exec("INSERT INTO users (name, email) VALUES ('Empty User', '');")?;
+
+    // Try to insert another empty string - should fail (empty string should also be unique)
+    let result = db.exec("INSERT INTO users (name, email) VALUES ('Another Empty', '');");
+    assert!(result.is_err(), "Expected unique constraint violation for empty string");
+
+    // Test with long TEXT content
+    let long_email = format!("{}@example.com", "a".repeat(1000));
+    db.exec(&format!("INSERT INTO users (name, email) VALUES ('Long Email User', '{}');", long_email))?;
+
+    // Try to insert the same long email - should fail
+    let result = db.exec(&format!("INSERT INTO users (name, email) VALUES ('Another Long User', '{}');", long_email));
+    assert!(result.is_err(), "Expected unique constraint violation for long text");
+
+    // Verify we have the correct number of records
+    let query = db.exec("SELECT COUNT(*) FROM users;")?;
+    assert_eq!(query.tuples.len(), 1);
+    assert_eq!(query.tuples[0][0], Value::Number(4)); // 3 successful inserts + 1 long email
+
+    Ok(())
+}
