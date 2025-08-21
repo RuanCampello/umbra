@@ -149,9 +149,24 @@ CREATE TABLE shadow_agents (
 - [x] `PRIMARY KEY`
   - [x] Auto-incrementing (via `SERIAL`, no manual gear-shifting required)
 - [x] `UNIQUE` (because duplicates are tacky)
+- [x] `NULLABLE` (explicit nullability, because I believe in clarity)
 - [ ] `FOREIGN KEY` (relationships are hard)
 - [ ] `CHECK`
-- [ ] `NOT NULL` (I'm very chill about emptiness)
+
+> [!IMPORTANT]  
+> **NULLABLE Philosophy**  
+> Unlike SQL standard where columns are nullable by default (requiring `NOT NULL` to prevent nulls), 
+> Umbra follows a Rust-like philosophy: columns are **non-null by default** unless explicitly marked as `NULLABLE`.
+> This prevents accidental null-related bugs and makes null handling intentional.
+>
+> ```sql
+> CREATE TABLE users (
+>     id SERIAL PRIMARY KEY,
+>     name VARCHAR(255),              -- Non-null by default
+>     email VARCHAR(255) NULLABLE,    -- Explicitly nullable
+>     phone VARCHAR(15) NULLABLE UNIQUE
+> );
+> ```
 
 ### ⚙️ Operations
 #### 💼 **Table Operations**
