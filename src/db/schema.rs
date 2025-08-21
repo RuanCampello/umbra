@@ -99,6 +99,7 @@ pub(crate) fn umbra_sequence_schema() -> Schema {
         Column::new("table_name", Type::Varchar(255)),
         Column::new("column_name", Type::Varchar(255)),
         Column::new("current_value", Type::UnsignedBigInteger),
+        Column::new("root", Type::UnsignedInteger),
     ])
 }
 
@@ -109,5 +110,6 @@ pub(crate) fn umbra_index_schema() -> Schema {
         Column::new("table_name", Type::Varchar(255)),
         Column::new("column_name", Type::Varchar(255)),
         Column::new("is_unique", Type::Boolean),
+        Column::new("root", Type::UnsignedInteger),
     ])
 }

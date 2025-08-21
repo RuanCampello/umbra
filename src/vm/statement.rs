@@ -103,18 +103,6 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             let root = allocate_root(db)?;
             
-            // Store the index root page in the main metadata table
-            insert_into_metadata(
-                db,
-                vec![
-                    Value::String(String::from("index")),
-                    Value::String(name.clone()),
-                    Value::Number(root.into()),
-                    Value::String(table.clone()),
-                    Value::String(format!("CREATE INDEX {} ON {} ({})", name, table, column)),
-                ],
-            )?;
-            
             // Store index info only in the specialized index metadata table
             insert_into_specialized_metadata(
                 db,
@@ -124,6 +112,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(table.clone()),
                     Value::String(column.clone()),
                     Value::Boolean(unique),
+                    Value::Number(root.into()),
                 ],
             )?;
 
@@ -180,18 +169,6 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             let root = allocate_root(db)?;
             
-            // Store the sequence root page in the main metadata table
-            insert_into_metadata(
-                db,
-                vec![
-                    Value::String(String::from("sequence")),
-                    Value::String(name.clone()),
-                    Value::Number(root.into()),
-                    Value::String(table.clone()),
-                    Value::String(format!("CREATE SEQUENCE {} AS {}", name, r#type)),
-                ],
-            )?;
-            
             // Store sequence info only in the specialized sequence metadata table
             // Extract column name from sequence name (format: table_column_seq)
             let column_name = name
@@ -208,25 +185,12 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(table),
                     Value::String(column_name.to_string()),
                     Value::Number(0), // initial value
+                    Value::Number(root.into()),
                 ],
             )?;
         }
 
         Statement::Create(Create::Enum { name, variants }) => {
-            let root = allocate_root(db)?;
-            
-            // Store the enum root page in the main metadata table
-            insert_into_metadata(
-                db,
-                vec![
-                    Value::String(String::from("enum")),
-                    Value::String(name.clone()),
-                    Value::Number(root.into()),
-                    Value::String(name.clone()),
-                    Value::String(format!("CREATE TYPE {} AS ENUM ({})", name, variants.join(", "))),
-                ],
-            )?;
-            
             // Store enum variants only in the specialized enum metadata table
             for (variant_id, variant_name) in variants.iter().enumerate() {
                 insert_into_specialized_metadata(
@@ -373,14 +337,14 @@ fn insert_into_specialized_metadata<File: Write + Seek + Read + FileOperations>(
         MetadataTableType::Main => return Err(DatabaseError::Other("Cannot insert into main metadata table using specialized function".into()))
     };
 
-    // Get metadata for the specialized table (this will create it if it doesn't exist)
+    // Get metadata for the specialized table using fixed root page
     let table_metadata = db.metadata(table_type.table_name())?;
-    let root = table_metadata.root;
+    let next_id = table_metadata.next_id();
     
-    values.insert(0, Value::Number(table_metadata.next_id().into()));
+    values.insert(0, Value::Number(next_id.into()));
 
     let mut pager = db.pager.borrow_mut();
-    let mut btree = BTree::new(&mut pager, root, FixedSizeCmp::new::<RowId>());
+    let mut btree = BTree::new(&mut pager, table_type.root_page(), FixedSizeCmp::new::<RowId>());
 
     btree.insert(tuple::serialize_tuple(&schema, &values))?;
 

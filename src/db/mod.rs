@@ -116,6 +116,11 @@ pub(crate) const ROW_COL_ID: &str = "row_id";
 pub(crate) const DB_METADATA: &str = "umbra_db_meta";
 const DEFAULT_CACHE_SIZE: usize = 512;
 
+// Fixed page allocations for specialized metadata tables
+const ENUM_METADATA_ROOT: PageNumber = 1000;
+const INDEX_METADATA_ROOT: PageNumber = 1001;
+const SEQUENCE_METADATA_ROOT: PageNumber = 1002;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum MetadataTableType {
     Main,
@@ -131,6 +136,15 @@ impl MetadataTableType {
             MetadataTableType::Enum => "umbra_enum",
             MetadataTableType::Sequence => "umbra_sequence", 
             MetadataTableType::Index => "umbra_index",
+        }
+    }
+    
+    pub(crate) fn root_page(&self) -> PageNumber {
+        match self {
+            MetadataTableType::Main => 0,
+            MetadataTableType::Enum => ENUM_METADATA_ROOT,
+            MetadataTableType::Sequence => SEQUENCE_METADATA_ROOT,
+            MetadataTableType::Index => INDEX_METADATA_ROOT,
         }
     }
     
@@ -217,7 +231,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
     fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
         // Get index details from specialized table
         let index_query = self.exec(&format!(
-            "SELECT table_name, column_name, is_unique FROM {} WHERE index_name = '{index}';",
+            "SELECT table_name, column_name, is_unique, root FROM {} WHERE index_name = '{index}';",
             MetadataTableType::Index.table_name()
         ))?;
 
@@ -225,16 +239,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             return Err(SqlError::Other(format!("Index '{index}' does not exists")).into());
         }
         
-        // Get root page from main metadata table
-        let root_query = self.exec(&format!(
-            "SELECT root FROM {} WHERE name = '{}' AND type = 'index';",
-            DB_METADATA, index
-        ))?;
-        
-        if root_query.is_empty() {
-            return Err(SqlError::Other(format!("Index root not found for '{index}'")).into());
-        }
-
         let table_name = match &index_query.tuples[0][index_query.schema.index_of("table_name").unwrap()] {
             Value::String(name) => name,
             _ => unreachable!(),
@@ -250,7 +254,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             _ => unreachable!(),
         };
 
-        let root = match &root_query.tuples[0][0] {
+        let root = match &index_query.tuples[0][index_query.schema.index_of("root").unwrap()] {
             Value::Number(root) => *root as PageNumber,
             _ => return Err(DatabaseError::Corrupted(format!("Invalid root page for index '{}'", index))),
         };
@@ -376,53 +380,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                     MetadataTableType::Main => unreachable!(),
                 };
                 
-                // Get the root page from the main metadata table
-                let table_type = metadata_type.table_name();
-                let query = self.exec(&format!(
-                    "SELECT root FROM {} WHERE name = '{}' AND type = '{}';",
-                    DB_METADATA, table, match metadata_type {
-                        MetadataTableType::Enum => "enum",
-                        MetadataTableType::Sequence => "sequence", 
-                        MetadataTableType::Index => "index",
-                        MetadataTableType::Main => unreachable!(),
-                    }
-                ))?;
-                
-                let root = if query.is_empty() {
-                    // If the specialized table doesn't exist yet, create its entry in main metadata
-                    let root = {
-                        let mut pager = self.pager.borrow_mut();
-                        pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
-                    };
-                    
-                    let table_type_str = match metadata_type {
-                        MetadataTableType::Enum => "enum",
-                        MetadataTableType::Sequence => "sequence",
-                        MetadataTableType::Index => "index", 
-                        MetadataTableType::Main => unreachable!(),
-                    };
-                    
-                    // Insert the specialized metadata table into main metadata
-                    insert_into_metadata(
-                        self,
-                        vec![
-                            Value::String(String::from(table_type_str)),
-                            Value::String(String::from(table)),
-                            Value::Number(root.into()),
-                            Value::String(String::from(table)),
-                            Value::String(format!("-- System table for {}", table_type_str)),
-                        ],
-                    )?;
-                    
-                    root
-                } else {
-                    // Extract root from query result
-                    match &query.tuples[0][0] {
-                        Value::Number(root) => *root as PageNumber,
-                        _ => return Err(DatabaseError::Corrupted(format!("Invalid root page for {}", table))),
-                    }
-                };
-                
+                // Use fixed root page for specialized metadata tables
+                let root = metadata_type.root_page();
                 let row_id = self.load_next_row_id(root)?;
                 return Ok(TableMetadata {
                     root,
@@ -533,7 +492,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         // Load sequences from specialized sequence metadata table  
         let sequence_query = match self.exec(&format!(
-            "SELECT sequence_name, data_type, column_name FROM {} WHERE table_name = '{}';",
+            "SELECT sequence_name, data_type, column_name, root FROM {} WHERE table_name = '{}';",
             MetadataTableType::Sequence.table_name(),
             table
         )) {
@@ -564,19 +523,9 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 _ => continue,
             };
             
-            // Get sequence root from main metadata table
-            let root_query = self.exec(&format!(
-                "SELECT root FROM {} WHERE name = '{}' AND type = 'sequence';",
-                DB_METADATA, sequence_name
-            ))?;
-
-            let sequence_root = if root_query.is_empty() {
-                continue; // Skip if root not found
-            } else {
-                match &root_query.tuples[0][0] {
-                    Value::Number(root) => *root as PageNumber,
-                    _ => continue,
-                }
+            let sequence_root = match &tuple[sequence_query.schema.index_of("root").unwrap()] {
+                Value::Number(root) => *root as PageNumber,
+                _ => continue,
             };
 
             // Parse the data type string back to Type
@@ -655,21 +604,17 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
     /// Load all enums from the specialized enum metadata table
     fn load_enums(&mut self) -> Result<(), DatabaseError> {
-        // Check if enum metadata table exists in main metadata
-        let enum_table_query = self.exec(&format!(
-            "SELECT name FROM {} WHERE type = 'enum' AND name = '{}';",
-            DB_METADATA, MetadataTableType::Enum.table_name()
-        ))?;
-        
-        if enum_table_query.is_empty() {
-            // No enum metadata table exists yet
-            return Ok(());
-        }
-
-        let query = self.exec(&format!(
+        // Try to query the enum metadata table directly
+        let query = match self.exec(&format!(
             "SELECT enum_name, variant_name FROM {} ORDER BY enum_name, variant_id;",
             MetadataTableType::Enum.table_name()
-        ))?;
+        )) {
+            Ok(query) => query,
+            Err(_) => {
+                // Enum metadata table doesn't exist yet
+                return Ok(());
+            }
+        };
 
         let mut current_enum: Option<String> = None;
         let mut current_variants: Vec<String> = Vec::new();
@@ -3671,13 +3616,6 @@ mod tests {
         // Create an enum
         db.exec("CREATE TYPE status AS ENUM ('active', 'inactive', 'pending');")?;
         
-        // Let's see what's actually in the main metadata catalog
-        let main_query = db.exec("SELECT type, name, table_name FROM umbra_db_meta;")?;
-        println!("Main metadata catalog entries:");
-        for (i, tuple) in main_query.tuples.iter().enumerate() {
-            println!("  {}: {:?}", i, tuple);
-        }
-        
         // Check that main metadata catalog does NOT contain the enum entry (no duplication)
         let main_query = db.exec("SELECT type, name FROM umbra_db_meta WHERE type = 'enum';")?;
         assert_eq!(main_query.tuples.len(), 0);
@@ -3703,24 +3641,50 @@ mod tests {
     }
 
     #[test]
-    fn test_sequence_specialized_metadata() -> DatabaseResult {
+    fn test_clean_main_metadata_schema() -> DatabaseResult {
         let mut db = Database::default();
         
-        // Create a table with a serial column (which creates a sequence)
-        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
+        // Create user tables
+        db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(255), email TEXT UNIQUE);")?;
+        db.exec("CREATE TABLE products (id INT PRIMARY KEY, name VARCHAR(100), price REAL);")?;
         
-        // Check that main metadata catalog does NOT contain the sequence entry (no duplication)
-        let main_query = db.exec("SELECT type, name FROM umbra_db_meta WHERE type = 'sequence';")?;
-        assert_eq!(main_query.tuples.len(), 0);
+        // Create enum
+        db.exec("CREATE TYPE status AS ENUM ('active', 'inactive', 'pending');")?;
         
-        // Check that specialized sequence metadata table contains the sequence info
-        let seq_query = db.exec("SELECT sequence_name, data_type, table_name, column_name FROM umbra_sequence;")?;
-        assert_eq!(seq_query.tuples.len(), 1);
+        // Check that main metadata catalog ONLY contains user tables (no system tables or specialized objects)
+        let main_query = db.exec("SELECT type, name, table_name FROM umbra_db_meta;")?;
         
-        assert_eq!(seq_query.tuples[0][0], Value::String("users_id_seq".into()));
-        assert_eq!(seq_query.tuples[0][1], Value::String("SERIAL".into()));
-        assert_eq!(seq_query.tuples[0][2], Value::String("users".into()));
-        assert_eq!(seq_query.tuples[0][3], Value::String("id".into()));
+        // Should only contain the 2 user tables we created
+        assert_eq!(main_query.tuples.len(), 2);
+        
+        // Verify table entries
+        let mut table_names: Vec<String> = main_query.tuples.iter()
+            .map(|tuple| match &tuple[1] {
+                Value::String(name) => name.clone(),
+                _ => panic!("Expected string table name"),
+            })
+            .collect();
+        table_names.sort();
+        
+        assert_eq!(table_names, vec!["products", "users"]);
+        
+        // Verify all entries are type "table"
+        for tuple in &main_query.tuples {
+            assert_eq!(tuple[0], Value::String("table".into()));
+        }
+        
+        // Specialized metadata should be in their own tables
+        let enum_query = db.exec("SELECT enum_name FROM umbra_enum GROUP BY enum_name;")?;
+        assert_eq!(enum_query.tuples.len(), 1);
+        assert_eq!(enum_query.tuples[0][0], Value::String("status".into()));
+        
+        let index_query = db.exec("SELECT index_name FROM umbra_index;")?;
+        // Should only have the email unique index (SERIAL PRIMARY KEY doesn't create an explicit index)
+        assert_eq!(index_query.tuples.len(), 1);
+        
+        let sequence_query = db.exec("SELECT sequence_name FROM umbra_sequence;")?;
+        assert_eq!(sequence_query.tuples.len(), 1);
+        assert_eq!(sequence_query.tuples[0][0], Value::String("users_id_seq".into()));
 
         Ok(())
     }
