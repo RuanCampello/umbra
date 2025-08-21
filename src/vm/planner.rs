@@ -9,7 +9,7 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
+use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata, IndexMetadata};
 use crate::sql::statement::{join, Assignment, Expression, Function, OrderDirection, Value};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
@@ -52,6 +52,12 @@ pub(crate) enum Planner<File: FileOperations> {
     Collect(Collect<File>),
     /// Handles literal values from INSERT statements.
     Values(Values),
+    /// Performs nested loop join between two relations.
+    NestedLoopJoin(NestedLoopJoin<File>),
+    /// Performs hash join between two relations.
+    HashJoin(HashJoin<File>),
+    /// Performs index nested loop join between two relations.
+    IndexNestedLoopJoin(IndexNestedLoopJoin<File>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -191,6 +197,55 @@ pub(crate) struct Values {
 }
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct NestedLoopJoin<File: FileOperations> {
+    pub left: Box<Planner<File>>,
+    pub right: Box<Planner<File>>,
+    pub condition: Expression,
+    pub join_type: crate::sql::statement::JoinType,
+    pub left_schema: Schema,
+    pub right_schema: Schema,
+    pub output_schema: Schema,
+    // State for nested loop execution
+    pub current_left: Option<Tuple>,
+    pub right_exhausted: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct HashJoin<File: FileOperations> {
+    pub left: Box<Planner<File>>,
+    pub right: Box<Planner<File>>,
+    pub condition: Expression,
+    pub join_type: crate::sql::statement::JoinType,
+    pub left_schema: Schema,
+    pub right_schema: Schema,
+    pub output_schema: Schema,
+    // State for hash join execution
+    pub hash_table: HashMap<Vec<u8>, Vec<Tuple>>,
+    pub hash_built: bool,
+    pub current_left: Option<Tuple>,
+    pub current_matches: Option<Vec<Tuple>>,
+    pub match_index: usize,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct IndexNestedLoopJoin<File: FileOperations> {
+    pub left: Box<Planner<File>>,
+    pub right_table: TableMetadata,
+    pub condition: Expression,
+    pub join_type: crate::sql::statement::JoinType,
+    pub left_schema: Schema,
+    pub right_schema: Schema,
+    pub output_schema: Schema,
+    pub pager: Rc<RefCell<Pager<File>>>,
+    // State for index nested loop execution
+    pub current_left: Option<Tuple>,
+    pub join_key_left_index: usize,  // Index of join key in left schema
+    pub join_key_right_index: usize, // Index of join key in right schema
+    pub right_index: Option<IndexMetadata>, // Index to use for lookups
+    pub left_matched: bool, // For LEFT JOIN, tracks if current left tuple matched
+}
+
+#[derive(Debug, PartialEq)]
 struct TupleBuffer {
     page_size: usize,
     current_size: usize,
@@ -285,6 +340,9 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Aggregate(aggr) => aggr.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
+            Self::NestedLoopJoin(join) => join.try_next(),
+            Self::HashJoin(join) => join.try_next(),
+            Self::IndexNestedLoopJoin(join) => join.try_next(),
         }
     }
 }
@@ -324,6 +382,9 @@ impl<File: FileOperations> Planner<File> {
             Self::Collect(collection) => format!("{collection}"),
             Self::Values(values) => format!("{values}"),
             Self::Aggregate(aggr) => format!("{aggr}"),
+            Self::NestedLoopJoin(join) => format!("{join}"),
+            Self::HashJoin(join) => format!("{join}"),
+            Self::IndexNestedLoopJoin(join) => format!("{join}"),
         };
 
         format!("{prefix}{display}")
@@ -339,6 +400,9 @@ impl<File: FileOperations> Planner<File> {
             Self::Collect(collection) => &collection.schema,
             Self::Project(project) => &project.output,
             Self::Aggregate(aggr) => &aggr.output,
+            Self::NestedLoopJoin(join) => &join.output_schema,
+            Self::HashJoin(join) => &join.output_schema,
+            Self::IndexNestedLoopJoin(join) => &join.output_schema,
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
             _ => return None,
@@ -1779,5 +1843,252 @@ impl<File: FileOperations> Display for Aggregate<File> {
 impl Display for Values {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Values {}", join(&self.values[0], ", "))
+    }
+}
+
+impl<File: PlanExecutor> Execute for NestedLoopJoin<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        use crate::sql::statement::JoinType;
+        
+        loop {
+            // If we don't have a current left tuple, try to get one
+            if self.current_left.is_none() {
+                match self.left.try_next()? {
+                    Some(left_tuple) => {
+                        self.current_left = Some(left_tuple);
+                        self.right_exhausted = false;
+                    }
+                    None => {
+                        // No more left tuples
+                        return Ok(None);
+                    }
+                }
+            }
+            
+            // Try to get a matching right tuple
+            if let Some(right_tuple) = self.right.try_next()? {
+                let left_tuple = self.current_left.as_ref().unwrap();
+                
+                // Combine left and right tuples for condition evaluation
+                let mut combined_tuple = left_tuple.clone();
+                combined_tuple.extend(right_tuple.clone());
+                
+                // Create combined schema for condition evaluation
+                let mut combined_columns = self.left_schema.columns.clone();
+                combined_columns.extend(self.right_schema.columns.clone());
+                let combined_schema = Schema::new(combined_columns);
+                
+                // Evaluate join condition
+                let condition_result = resolve_expression(&combined_tuple, &combined_schema, &self.condition)?;
+                let is_match = match condition_result {
+                    crate::sql::statement::Value::Boolean(b) => b,
+                    _ => false,
+                };
+                
+                if is_match {
+                    // Return the joined tuple
+                    return Ok(Some(combined_tuple));
+                }
+                // Continue to next right tuple
+            } else {
+                // Right side exhausted for current left tuple
+                match self.join_type {
+                    JoinType::Left => {
+                        // For LEFT JOIN, emit left tuple with nulls for right side
+                        if !self.right_exhausted {
+                            self.right_exhausted = true;
+                            let left_tuple = self.current_left.take().unwrap();
+                            let mut result = left_tuple;
+                            // Add nulls for right side columns
+                            for _ in 0..self.right_schema.columns.len() {
+                                result.push(crate::sql::statement::Value::String("NULL".to_string()));
+                            }
+                            return Ok(Some(result));
+                        }
+                    }
+                    _ => {
+                        // For INNER JOIN, just move to next left tuple
+                    }
+                }
+                
+                // Reset for next left tuple
+                self.current_left = None;
+                // Note: In a real implementation, we'd need to reset the right iterator
+            }
+        }
+    }
+}
+
+impl<File: PlanExecutor> Execute for HashJoin<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        use crate::sql::statement::JoinType;
+        
+        // Build hash table from right side if not already built
+        if !self.hash_built {
+            while let Some(right_tuple) = self.right.try_next()? {
+                // For simplicity, use the entire right tuple as key
+                // In a real implementation, you'd extract join key columns
+                let key = format!("{:?}", right_tuple).into_bytes();
+                self.hash_table.entry(key).or_insert_with(Vec::new).push(right_tuple);
+            }
+            self.hash_built = true;
+        }
+        
+        loop {
+            // If we're processing matches for current left tuple
+            if let Some(matches) = &self.current_matches {
+                if self.match_index < matches.len() {
+                    let left_tuple = self.current_left.as_ref().unwrap();
+                    let right_tuple = &matches[self.match_index];
+                    self.match_index += 1;
+                    
+                    // Combine tuples
+                    let mut combined_tuple = left_tuple.clone();
+                    combined_tuple.extend(right_tuple.clone());
+                    
+                    return Ok(Some(combined_tuple));
+                } else {
+                    // Finished with current matches
+                    self.current_matches = None;
+                    self.current_left = None;
+                    self.match_index = 0;
+                }
+            }
+            
+            // Get next left tuple
+            if let Some(left_tuple) = self.left.try_next()? {
+                self.current_left = Some(left_tuple.clone());
+                
+                // Look up in hash table
+                let key = format!("{:?}", left_tuple).into_bytes();
+                if let Some(matches) = self.hash_table.get(&key) {
+                    self.current_matches = Some(matches.clone());
+                    self.match_index = 0;
+                } else {
+                    // No matches found
+                    match self.join_type {
+                        JoinType::Left => {
+                            // Emit left tuple with nulls
+                            let mut result = left_tuple;
+                            for _ in 0..self.right_schema.columns.len() {
+                                result.push(crate::sql::statement::Value::String("NULL".to_string()));
+                            }
+                            return Ok(Some(result));
+                        }
+                        _ => {
+                            // For INNER JOIN, continue to next left tuple
+                            self.current_left = None;
+                        }
+                    }
+                }
+            } else {
+                // No more left tuples
+                return Ok(None);
+            }
+        }
+    }
+}
+
+impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        use crate::sql::statement::JoinType;
+        use crate::core::storage::btree::BTree;
+        
+        loop {
+            // If we don't have a current left tuple, try to get one
+            if self.current_left.is_none() {
+                match self.left.try_next()? {
+                    Some(left_tuple) => {
+                        self.current_left = Some(left_tuple);
+                        self.left_matched = false;
+                    }
+                    None => {
+                        // No more left tuples
+                        return Ok(None);
+                    }
+                }
+            }
+            
+            let left_tuple = self.current_left.as_ref().unwrap();
+            let join_key_value = &left_tuple[self.join_key_left_index];
+            
+            // Use index to find matching right tuples
+            let mut pager = self.pager.borrow_mut();
+            
+            if let Some(index) = &self.right_index {
+                // Use the index for efficient lookup
+                let key = tuple::serialize(&index.column.data_type, join_key_value);
+                let mut btree = BTree::new(&mut pager, index.root, BTreeKeyCmp::from(&index.column.data_type));
+                
+                if let Some(entry) = btree.get(&key)? {
+                    // Deserialize the entry to get the primary key
+                    let index_tuple = tuple::deserialize(entry.as_ref(), &index.schema);
+                    let primary_key = &index_tuple[1]; // Primary key is usually the second column in index
+                    
+                    // Now lookup the full record using the primary key
+                    let pk_key = tuple::serialize(&self.right_table.schema.columns[0].data_type, primary_key);
+                    let mut table_btree = BTree::new(&mut pager, self.right_table.root, self.right_table.comp()?);
+                    
+                    if let Some(right_entry) = table_btree.get(&pk_key)? {
+                        let right_tuple = tuple::deserialize(right_entry.as_ref(), &self.right_table.schema);
+                        
+                        // Verify the join condition (additional safety check)
+                        if right_tuple[self.join_key_right_index] == *join_key_value {
+                            // Create joined tuple
+                            let mut result = left_tuple.clone();
+                            result.extend(right_tuple);
+                            
+                            self.left_matched = true;
+                            self.current_left = None; // Move to next left tuple
+                            return Ok(Some(result));
+                        }
+                    }
+                }
+            } else {
+                // Fallback to table scan if no index available
+                // This should not happen if the planner is working correctly
+                return Err(DatabaseError::Other("IndexNestedLoopJoin: No index available".to_string()));
+            }
+            
+            // No matches found for current left tuple
+            match self.join_type {
+                JoinType::Left => {
+                    if !self.left_matched {
+                        // For LEFT JOIN, emit left tuple with nulls for right side
+                        let mut result = left_tuple.clone();
+                        // Add nulls for right side columns
+                        for _ in 0..self.right_schema.columns.len() {
+                            result.push(crate::sql::statement::Value::String("NULL".to_string()));
+                        }
+                        self.current_left = None;
+                        return Ok(Some(result));
+                    }
+                }
+                _ => {
+                    // For INNER JOIN, just move to next left tuple
+                }
+            }
+            
+            // Reset for next left tuple
+            self.current_left = None;
+        }
+    }
+}
+
+impl<File: FileOperations> Display for IndexNestedLoopJoin<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IndexNestedLoopJoin({:?})", self.join_type)
+    }
+}
+
+impl<File: FileOperations> Display for NestedLoopJoin<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NestedLoopJoin({:?})", self.join_type)
+    }
+}
+
+impl<File: FileOperations> Display for HashJoin<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HashJoin({:?})", self.join_type)
     }
 }

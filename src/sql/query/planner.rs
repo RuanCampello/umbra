@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     core::storage::pagination::io::FileOperations,
-    db::{Ctx, Database, DatabaseError, Schema, SqlError},
+    db::{Ctx, Database, DatabaseError, Schema, SqlError, TableMetadata},
     sql::{
         analyzer::{self, contains_aggregate},
         query::optimiser,
@@ -15,7 +15,7 @@ use crate::{
     },
     vm::{
         expression::VmType,
-        planner::{AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+        planner::{AggregateBuilder, Insert as InsertPlan, NestedLoopJoin, IndexNestedLoopJoin, Planner, Sort, SortKeys, Values},
     },
 };
 use crate::{
@@ -46,6 +46,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         Statement::Select(Select {
             columns,
             from,
+            joins,
             r#where,
             order_by,
             group_by,
@@ -53,8 +54,56 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
-            let table = db.metadata(&from)?;
-            let schema = &table.schema;
+            let table = db.metadata(&from)?.clone();
+            let mut schema = table.schema.clone();
+
+            // Collect all table metadata first to avoid borrowing issues
+            let mut join_metadata = Vec::new();
+            for join_clause in &joins {
+                let right_table = db.metadata(&join_clause.table)?.clone();
+                join_metadata.push((join_clause.clone(), right_table));
+            }
+
+            // Handle JOINs
+            for (join_clause, right_table) in join_metadata {
+                let right_source = optimiser::generate_seq_plan(&join_clause.table, None, db)?;
+                
+                // Extend schema with joined table columns
+                schema.columns.extend(right_table.schema.columns.clone());
+                
+                let left_schema = if let Some(s) = source.schema() {
+                    s
+                } else {
+                    table.schema.clone()
+                };
+                
+                // Try to use IndexNestedLoopJoin, but if not possible, it will create a regular NestedLoopJoin
+                let index_join_result = try_create_index_nested_loop_join(
+                    source,
+                    &join_clause,
+                    &right_table,
+                    &left_schema,
+                    db,
+                )?;
+                
+                // Check if we got an IndexNestedLoopJoin (indicated by the planner type)
+                if matches!(index_join_result, Planner::IndexNestedLoopJoin(_)) {
+                    source = index_join_result;
+                } else {
+                    // Fallback to regular NestedLoopJoin
+                    source = Planner::NestedLoopJoin(NestedLoopJoin {
+                        left: Box::new(index_join_result),
+                        right: Box::new(right_source),
+                        condition: join_clause.condition,
+                        join_type: join_clause.join_type,
+                        left_schema,
+                        right_schema: right_table.schema.clone(),
+                        output_schema: Schema::new(schema.columns.clone()),
+                        current_left: None,
+                        right_exhausted: false,
+                    });
+                }
+            }
 
             // this is a special case for `type_of` function
             if let Some((col_name, type_of)) = single_typeof_column(&columns, &schema) {
@@ -79,9 +128,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
                         }
                         Expression::Alias { expr, alias } => {
-                            Ok(Column::new(alias, resolve_type(schema, expr)?))
+                            Ok(Column::new(alias, resolve_type(&schema, expr)?))
                         }
-                        _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                        _ => Ok(Column::new(&expr.to_string(), resolve_type(&schema, expr)?)),
                     })
                     .collect::<Result<Vec<_>, SqlError>>()?,
             );
@@ -110,7 +159,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                                 }
                                 _ => None,
                             }) {
-                                aggr_schema.push(Column::new(ident, resolve_type(schema, expr)?));
+                                aggr_schema.push(Column::new(ident, resolve_type(&schema, expr)?));
                             } else if let Some(idx) = schema.index_of(ident) {
                                 aggr_schema.push(schema.columns[idx].clone());
                             } else {
@@ -120,19 +169,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         other => {
                             aggr_schema.push(Column::new(
                                 &other.to_string(),
-                                resolve_type(schema, other)?,
+                                resolve_type(&schema, other)?,
                             ));
                         }
                     }
                 }
 
                 for (aggr_fn, name) in &aggr_exprs {
-                    aggr_schema.push(Column::new(name, resolve_type(schema, &aggr_fn)?))
+                    aggr_schema.push(Column::new(name, resolve_type(&schema, &aggr_fn)?))
                 }
 
                 if group_by.is_empty() && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(schema, &columns, &order_by)?;
+                        extract_order_indexes_and_directions(&schema, &columns, &order_by)?;
 
                     source = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -238,12 +287,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 for order in &order_by {
                     match order.expr {
                         Expression::Identifier(ref ident) => {
-                            let idx = resolve_order_index(schema, &columns, ident)?;
+                            let idx = resolve_order_index(&schema, &columns, ident)?;
                             indexes.push(idx);
                             directions.push(order.direction);
                         }
                         _ => {
-                            let ty = resolve_type(schema, &order.expr)?;
+                            let ty = resolve_type(&schema, &order.expr)?;
                             indexes.push(sorted_schema.len());
                             directions.push(order.direction);
                             sorted_schema.push(Column::new(&order.expr.to_string(), ty));
@@ -454,6 +503,69 @@ fn resolve_order_index<'a>(
         .ok_or(SqlError::InvalidColumn(ident.into()))
 }
 
+/// Attempts to create an IndexNestedLoopJoin if the join condition allows using an index.
+/// Returns the left source wrapped in IndexNestedLoopJoin if successful, or the original left source if not.
+fn try_create_index_nested_loop_join<File: FileOperations>(
+    left_source: Planner<File>,
+    join_clause: &crate::sql::statement::JoinClause,
+    right_table: &TableMetadata,
+    left_schema: &Schema,
+    db: &Database<File>,
+) -> Result<Planner<File>, DatabaseError> {
+    use crate::sql::statement::{BinaryOperator, Expression};
+    
+    // Analyze the join condition to see if it's a simple equality between columns
+    if let Expression::BinaryOperation {
+        operator: BinaryOperator::Eq,
+        left: left_expr,
+        right: right_expr,
+    } = &join_clause.condition {
+        
+        // Check if this is a column-to-column equality
+        let (left_col, right_col) = match (left_expr.as_ref(), right_expr.as_ref()) {
+            (Expression::Identifier(left_name), Expression::Identifier(right_name)) => {
+                (left_name, right_name)
+            }
+            _ => return Ok(left_source), // Not a simple column equality, return original
+        };
+        
+        // Find the column indices
+        let left_col_index = left_schema.index_of(left_col);
+        let right_col_index = right_table.schema.index_of(right_col);
+        
+        if let (Some(left_idx), Some(right_idx)) = (left_col_index, right_col_index) {
+            // Look for an index on the right table's join column
+            let suitable_index = right_table.indexes.iter()
+                .find(|index| index.column.name == *right_col);
+            
+            if let Some(index) = suitable_index {
+                // We can use IndexNestedLoopJoin!
+                let mut output_columns = left_schema.columns.clone();
+                output_columns.extend(right_table.schema.columns.clone());
+                
+                return Ok(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
+                    left: Box::new(left_source),
+                    right_table: right_table.clone(),
+                    condition: join_clause.condition.clone(),
+                    join_type: join_clause.join_type.clone(),
+                    left_schema: left_schema.clone(),
+                    right_schema: right_table.schema.clone(),
+                    output_schema: Schema::new(output_columns),
+                    pager: Rc::clone(&db.pager),
+                    current_left: None,
+                    join_key_left_index: left_idx,
+                    join_key_right_index: right_idx,
+                    right_index: Some(index.clone()),
+                    left_matched: false,
+                }));
+            }
+        }
+    }
+    
+    // Return the original left source if we can't use indexed join
+    Ok(left_source)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::sql::statement::Function;
@@ -475,7 +587,7 @@ mod tests {
             statement::{Create, Value},
         },
         vm::planner::{
-            CollectBuilder, ExactMatch, Filter, KeyScan, RangeScan, RangeScanBuilder, SeqScan,
+            CollectBuilder, ExactMatch, Filter, IndexNestedLoopJoin, KeyScan, RangeScan, RangeScanBuilder, SeqScan,
             SortBuilder,
         },
     };
@@ -1243,6 +1355,68 @@ mod tests {
                 .into()
             )
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_indexed_nested_loop_join() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));",
+            "CREATE TABLE orders (id INT PRIMARY KEY, user_id INT UNIQUE, amount REAL);",
+        ])?;
+
+        let plan = db.gen_plan("SELECT * FROM users JOIN orders ON id = user_id;")?;
+        
+        // Check if we got an IndexNestedLoopJoin wrapped in a Project
+        match plan {
+            Planner::Project(project) => {
+                match project.source.as_ref() {
+                    Planner::IndexNestedLoopJoin(join) => {
+                        assert_eq!(join.join_type, crate::sql::statement::JoinType::Inner);
+                        assert!(join.right_index.is_some());
+                        let index = join.right_index.as_ref().unwrap();
+                        assert_eq!(index.column.name, "user_id");
+                    }
+                    _ => panic!("Expected IndexNestedLoopJoin inside Project but got: {:?}", project.source),
+                }
+            }
+            Planner::IndexNestedLoopJoin(join) => {
+                assert_eq!(join.join_type, crate::sql::statement::JoinType::Inner);
+                assert!(join.right_index.is_some());
+                let index = join.right_index.as_ref().unwrap();
+                assert_eq!(index.column.name, "user_id");
+            }
+            _ => panic!("Expected IndexNestedLoopJoin or Project(IndexNestedLoopJoin) but got: {:?}", plan),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fallback_to_nested_loop_join() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));",
+            "CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount REAL);",
+        ])?;
+
+        let plan = db.gen_plan("SELECT * FROM users JOIN orders ON id = user_id;")?;
+        
+        // Check if we got a regular NestedLoopJoin when no index is available
+        match plan {
+            Planner::Project(project) => {
+                match project.source.as_ref() {
+                    Planner::NestedLoopJoin(_) => {
+                        // This is expected when no index is available
+                    }
+                    _ => panic!("Expected NestedLoopJoin inside Project but got: {:?}", project.source),
+                }
+            }
+            Planner::NestedLoopJoin(_) => {
+                // This is also acceptable
+            }
+            _ => panic!("Expected NestedLoopJoin or Project(NestedLoopJoin) but got: {:?}", plan),
+        }
+
         Ok(())
     }
 }

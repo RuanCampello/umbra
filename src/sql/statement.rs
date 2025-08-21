@@ -70,10 +70,26 @@ pub(crate) enum Create {
 pub(crate) struct Select {
     pub columns: Vec<Expression>,
     pub from: String,
+    pub joins: Vec<JoinClause>,
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
     // TODO: limit
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct JoinClause {
+    pub join_type: JoinType,
+    pub table: String,
+    pub condition: Expression,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum JoinType {
+    Inner,
+    Left,
+    Right,
+    Full,
 }
 
 #[derive(Debug, PartialEq)]
@@ -448,6 +464,7 @@ impl Display for Statement {
             Statement::Select(Select {
                 columns,
                 from,
+                joins: _,
                 r#where,
                 order_by,
                 group_by,
