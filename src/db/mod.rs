@@ -24,6 +24,7 @@ use crate::sql::query;
 use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
 use crate::vm::expression::{TypeError, VmError};
 use crate::vm::planner::{Execute, Planner, Tuple};
+use crate::vm::statement::insert_into_metadata;
 use crate::{index, vm};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -49,7 +50,6 @@ pub(crate) struct Context {
     enums: EnumRegistry,
     max_size: Option<usize>,
     enums_loaded: bool,
-    system_table_roots: HashMap<MetadataTableType, PageNumber>,
 }
 
 #[derive(Debug)]
@@ -215,46 +215,45 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
     }
 
     fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
-        let query = self.exec(&format!(
-            "SELECT table_name, column_name, is_unique, root FROM {} WHERE index_name = '{index}';",
+        // Get index details from specialized table
+        let index_query = self.exec(&format!(
+            "SELECT table_name, column_name, is_unique FROM {} WHERE index_name = '{index}';",
             MetadataTableType::Index.table_name()
         ))?;
 
-        if query.is_empty() {
+        if index_query.is_empty() {
             return Err(SqlError::Other(format!("Index '{index}' does not exists")).into());
         }
+        
+        // Get root page from main metadata table
+        let root_query = self.exec(&format!(
+            "SELECT root FROM {} WHERE name = '{}' AND type = 'index';",
+            DB_METADATA, index
+        ))?;
+        
+        if root_query.is_empty() {
+            return Err(SqlError::Other(format!("Index root not found for '{index}'")).into());
+        }
 
-        let table_name = query
-            .get(0, "table_name")
-            .map(|value| match value {
-                Value::String(name) => name,
-                _ => unreachable!(),
-            })
-            .unwrap();
+        let table_name = match &index_query.tuples[0][index_query.schema.index_of("table_name").unwrap()] {
+            Value::String(name) => name,
+            _ => unreachable!(),
+        };
 
-        let column_name = query
-            .get(0, "column_name") 
-            .map(|value| match value {
-                Value::String(name) => name,
-                _ => unreachable!(),
-            })
-            .unwrap();
+        let column_name = match &index_query.tuples[0][index_query.schema.index_of("column_name").unwrap()] {
+            Value::String(name) => name,
+            _ => unreachable!(),
+        };
 
-        let is_unique = query
-            .get(0, "is_unique")
-            .map(|value| match value {
-                Value::Boolean(unique) => *unique,
-                _ => unreachable!(),
-            })
-            .unwrap();
+        let is_unique = match &index_query.tuples[0][index_query.schema.index_of("is_unique").unwrap()] {
+            Value::Boolean(unique) => *unique,
+            _ => unreachable!(),
+        };
 
-        let root = query
-            .get(0, "root")
-            .map(|value| match value {
-                Value::Number(root) => *root as PageNumber,
-                _ => unreachable!(),
-            })
-            .unwrap();
+        let root = match &root_query.tuples[0][0] {
+            Value::Number(root) => *root as PageNumber,
+            _ => return Err(DatabaseError::Corrupted(format!("Invalid root page for index '{}'", index))),
+        };
 
         let metadata = self.metadata(table_name)?;
         let col_idx = metadata
@@ -377,9 +376,52 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                     MetadataTableType::Main => unreachable!(),
                 };
                 
-                // For specialized metadata tables, use a dedicated system area
-                // We'll allocate pages on demand but not register them in the main catalog
-                let root = self.get_or_create_system_table_root(metadata_type)?;
+                // Get the root page from the main metadata table
+                let table_type = metadata_type.table_name();
+                let query = self.exec(&format!(
+                    "SELECT root FROM {} WHERE name = '{}' AND type = '{}';",
+                    DB_METADATA, table, match metadata_type {
+                        MetadataTableType::Enum => "enum",
+                        MetadataTableType::Sequence => "sequence", 
+                        MetadataTableType::Index => "index",
+                        MetadataTableType::Main => unreachable!(),
+                    }
+                ))?;
+                
+                let root = if query.is_empty() {
+                    // If the specialized table doesn't exist yet, create its entry in main metadata
+                    let root = {
+                        let mut pager = self.pager.borrow_mut();
+                        pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
+                    };
+                    
+                    let table_type_str = match metadata_type {
+                        MetadataTableType::Enum => "enum",
+                        MetadataTableType::Sequence => "sequence",
+                        MetadataTableType::Index => "index", 
+                        MetadataTableType::Main => unreachable!(),
+                    };
+                    
+                    // Insert the specialized metadata table into main metadata
+                    insert_into_metadata(
+                        self,
+                        vec![
+                            Value::String(String::from(table_type_str)),
+                            Value::String(String::from(table)),
+                            Value::Number(root.into()),
+                            Value::String(String::from(table)),
+                            Value::String(format!("-- System table for {}", table_type_str)),
+                        ],
+                    )?;
+                    
+                    root
+                } else {
+                    // Extract root from query result
+                    match &query.tuples[0][0] {
+                        Value::Number(root) => *root as PageNumber,
+                        _ => return Err(DatabaseError::Corrupted(format!("Invalid root page for {}", table))),
+                    }
+                };
                 
                 let row_id = self.load_next_row_id(root)?;
                 return Ok(TableMetadata {
@@ -402,7 +444,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             serials: HashMap::new(),
         };
 
-        let mut serials_to_load = Vec::new();
         let mut found_table_def = false;
 
         let (schema, mut results) = self.prepare(&format!(
@@ -492,7 +533,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         // Load sequences from specialized sequence metadata table  
         let sequence_query = self.exec(&format!(
-            "SELECT sequence_name, data_type, column_name, root FROM {} WHERE table_name = '{}';",
+            "SELECT sequence_name, data_type, column_name FROM {} WHERE table_name = '{}';",
             MetadataTableType::Sequence.table_name(),
             table
         ))?;
@@ -513,9 +554,19 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 _ => continue,
             };
             
-            let sequence_root = match &tuple[sequence_query.schema.index_of("root").unwrap()] {
-                Value::Number(root) => *root as PageNumber,
-                _ => continue,
+            // Get sequence root from main metadata table
+            let root_query = self.exec(&format!(
+                "SELECT root FROM {} WHERE name = '{}' AND type = 'sequence';",
+                DB_METADATA, sequence_name
+            ))?;
+
+            let sequence_root = if root_query.is_empty() {
+                continue; // Skip if root not found
+            } else {
+                match &root_query.tuples[0][0] {
+                    Value::Number(root) => *root as PageNumber,
+                    _ => continue,
+                }
             };
 
             // Parse the data type string back to Type
@@ -535,47 +586,10 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                     data_type: data_type.clone(),
                 },
             );
-
-            serials_to_load.push((sequence_name, table.to_string(), data_type));
         }
 
         if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {
             metadata.row_id = self.load_next_row_id(metadata.root)?;
-        }
-
-        for (name, table, data_type) in serials_to_load {
-            let column = name
-                .strip_prefix(&format!("{}_", table))
-                .expect("Sequence name doesn't start with table name")
-                .strip_suffix("_seq")
-                .expect("Sequence name doesn't end with '_seq'");
-
-            let col_idx = metadata
-                .schema
-                .index_of(column)
-                .expect("No column found with this name");
-
-            let mut pager = self.pager.borrow_mut();
-            let mut btree = BTree::new(
-                &mut pager,
-                metadata.root,
-                FixedSizeCmp::try_from(&data_type).unwrap_or(FixedSizeCmp::new::<RowId>()),
-            );
-
-            let curr_val = match btree.max()? {
-                Some(max_row) => {
-                    let row = tuple::deserialize(max_row.as_ref(), &metadata.schema);
-                    match &row[col_idx] {
-                        Value::Number(n) => *n as u64,
-                        _ => 0,
-                    }
-                }
-                None => 0,
-            };
-
-            if let Some(seq) = metadata.serials.get_mut(&name) {
-                seq.value = AtomicU64::new(curr_val);
-            }
         }
 
         Ok(metadata)
@@ -617,20 +631,27 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             return Ok(None);
         }
 
-        let root = query
-            .get(0, "root")
-            .and_then(|value| match value {
+        let root = if query.is_empty() {
+            None
+        } else {
+            match &query.tuples[0][0] {
                 Value::Number(root) => Some(*root as PageNumber),
                 _ => None,
-            });
+            }
+        };
 
         Ok(root)
     }
 
     /// Load all enums from the specialized enum metadata table
     fn load_enums(&mut self) -> Result<(), DatabaseError> {
-        // Check if enum metadata table exists by checking if we have a root for it
-        if !self.context.system_table_roots.contains_key(&MetadataTableType::Enum) {
+        // Check if enum metadata table exists in main metadata
+        let enum_table_query = self.exec(&format!(
+            "SELECT name FROM {} WHERE type = 'enum' AND name = '{}';",
+            DB_METADATA, MetadataTableType::Enum.table_name()
+        ))?;
+        
+        if enum_table_query.is_empty() {
             // No enum metadata table exists yet
             return Ok(());
         }
@@ -672,25 +693,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         Ok(())
-    }
-    
-    /// Get or create a root page for a system table (specialized metadata tables)
-    fn get_or_create_system_table_root(&mut self, table_type: MetadataTableType) -> Result<PageNumber, DatabaseError> {
-        // Check if we already have a root for this system table type
-        if let Some(&root) = self.context.system_table_roots.get(&table_type) {
-            return Ok(root);
-        }
-        
-        // Allocate a new page for this system table
-        let root = {
-            let mut pager = self.pager.borrow_mut();
-            pager.allocate_page::<Page>().map_err(DatabaseError::Io)?
-        };
-        
-        // Store the mapping in our context
-        self.context.system_table_roots.insert(table_type, root);
-        
-        Ok(root)
     }
 }
 
@@ -748,7 +750,6 @@ impl Context {
             max_size: None,
             enums: EnumRegistry::empty(),
             enums_loaded: false,
-            system_table_roots: HashMap::new(),
         }
     }
 
@@ -758,7 +759,6 @@ impl Context {
             max_size: Some(size),
             enums: EnumRegistry::empty(),
             enums_loaded: false,
-            system_table_roots: HashMap::new(),
         }
     }
 

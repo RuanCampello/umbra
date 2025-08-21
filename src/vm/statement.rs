@@ -103,6 +103,18 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             let root = allocate_root(db)?;
             
+            // Store the index root page in the main metadata table
+            insert_into_metadata(
+                db,
+                vec![
+                    Value::String(String::from("index")),
+                    Value::String(name.clone()),
+                    Value::Number(root.into()),
+                    Value::String(table.clone()),
+                    Value::String(format!("CREATE INDEX {} ON {} ({})", name, table, column)),
+                ],
+            )?;
+            
             // Store index info only in the specialized index metadata table
             insert_into_specialized_metadata(
                 db,
@@ -112,7 +124,6 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(table.clone()),
                     Value::String(column.clone()),
                     Value::Boolean(unique),
-                    Value::Number(root.into()), // Add root to specialized table
                 ],
             )?;
 
@@ -169,6 +180,18 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             let root = allocate_root(db)?;
             
+            // Store the sequence root page in the main metadata table
+            insert_into_metadata(
+                db,
+                vec![
+                    Value::String(String::from("sequence")),
+                    Value::String(name.clone()),
+                    Value::Number(root.into()),
+                    Value::String(table.clone()),
+                    Value::String(format!("CREATE SEQUENCE {} AS {}", name, r#type)),
+                ],
+            )?;
+            
             // Store sequence info only in the specialized sequence metadata table
             // Extract column name from sequence name (format: table_column_seq)
             let column_name = name
@@ -185,13 +208,24 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(table),
                     Value::String(column_name.to_string()),
                     Value::Number(0), // initial value
-                    Value::Number(root as _), // Add root to specialized table
                 ],
             )?;
         }
 
         Statement::Create(Create::Enum { name, variants }) => {
             let root = allocate_root(db)?;
+            
+            // Store the enum root page in the main metadata table
+            insert_into_metadata(
+                db,
+                vec![
+                    Value::String(String::from("enum")),
+                    Value::String(name.clone()),
+                    Value::Number(root.into()),
+                    Value::String(name.clone()),
+                    Value::String(format!("CREATE TYPE {} AS ENUM ({})", name, variants.join(", "))),
+                ],
+            )?;
             
             // Store enum variants only in the specialized enum metadata table
             for (variant_id, variant_name) in variants.iter().enumerate() {
@@ -200,7 +234,6 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     MetadataTableType::Enum,
                     vec![
                         Value::String(name.clone()),
-                        Value::Number(root as _), // Add root to specialized table
                         Value::String(variant_name.clone()),
                         Value::Number(variant_id as i128 + 1), // variant_id starts from 1
                     ],
@@ -299,7 +332,7 @@ fn free_btree<File: Seek + Read + Write + FileOperations>(
     Ok(removed_cells)
 }
 
-fn insert_into_metadata<File: Write + Seek + Read + FileOperations>(
+pub(crate) fn insert_into_metadata<File: Write + Seek + Read + FileOperations>(
     db: &mut Database<File>,
     mut values: Vec<Value>,
 ) -> Result<(), DatabaseError> {
