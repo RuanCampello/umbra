@@ -812,7 +812,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
+    use crate::sql::statement::{Expression, OrderBy, OrderDirection, JoinType, BinaryOperator};
 
     #[test]
     fn test_parse_select() {
@@ -1960,5 +1960,75 @@ mod tests {
                 group_by: vec![],
             }))
         );
+    }
+
+    #[test]
+    fn test_join_end_to_end_parsing() {
+        // Test parsing a complex JOIN query
+        let sql = "SELECT name, title FROM users JOIN posts ON user_id = post_user_id WHERE active = true;";
+        let result = Parser::new(sql).parse_statement();
+        
+        match result {
+            Ok(Statement::Select(select)) => {
+                assert_eq!(select.from, "users");
+                assert_eq!(select.joins.len(), 1);
+                
+                let join = &select.joins[0];
+                assert_eq!(join.table, "posts");
+                assert_eq!(join.join_type, JoinType::Inner);
+                
+                // Verify the join condition
+                match &join.condition {
+                    Expression::BinaryOperation { operator, left, right } => {
+                        assert_eq!(*operator, BinaryOperator::Eq);
+                        assert!(matches!(**left, Expression::Identifier(ref name) if name == "user_id"));
+                        assert!(matches!(**right, Expression::Identifier(ref name) if name == "post_user_id"));
+                    }
+                    _ => panic!("Expected binary operation for join condition"),
+                }
+                
+                // Verify WHERE clause is preserved
+                assert!(select.r#where.is_some());
+            }
+            _ => panic!("Expected SELECT statement"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_joins() {
+        let sql = "SELECT name, title, content FROM users JOIN posts ON user_id = post_user_id LEFT JOIN comments ON post_id = comment_post_id;";
+        let result = Parser::new(sql).parse_statement();
+        
+        match result {
+            Ok(Statement::Select(select)) => {
+                assert_eq!(select.joins.len(), 2);
+                
+                // First join
+                let first_join = &select.joins[0];
+                assert_eq!(first_join.join_type, JoinType::Inner);
+                assert_eq!(first_join.table, "posts");
+                
+                // Second join  
+                let second_join = &select.joins[1];
+                assert_eq!(second_join.join_type, JoinType::Left);
+                assert_eq!(second_join.table, "comments");
+            }
+            _ => panic!("Expected SELECT statement with multiple joins"),
+        }
+    }
+
+    #[test]
+    fn test_right_join() {
+        let sql = "SELECT name, title FROM users RIGHT JOIN posts ON user_id = post_user_id;";
+        let result = Parser::new(sql).parse_statement();
+        
+        match result {
+            Ok(Statement::Select(select)) => {
+                assert_eq!(select.joins.len(), 1);
+                let join = &select.joins[0];
+                assert_eq!(join.join_type, JoinType::Right);
+            }
+            _ => panic!("Expected SELECT statement with RIGHT JOIN"),
+        }
     }
 }
