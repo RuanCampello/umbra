@@ -310,6 +310,22 @@ impl FromStr for CatalogEntry {
     }
 }
 
+impl From<CatalogEntry> for Schema {
+    fn from(value: CatalogEntry) -> Self {
+        use crate::db::schema::{umbra_enum_schema, umbra_index_schema, umbra_sequence_schema};
+
+        let mut schema = match value {
+            CatalogEntry::Enum => umbra_enum_schema(),
+            CatalogEntry::Sequence => umbra_sequence_schema(),
+            CatalogEntry::Index => umbra_index_schema(),
+            CatalogEntry::Meta => unreachable!(),
+        };
+
+        schema.prepend_id();
+        schema
+    }
+}
+
 impl PartialEq for SequenceMetadata {
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root

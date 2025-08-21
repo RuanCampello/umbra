@@ -7,7 +7,7 @@ mod metadata;
 mod schema;
 
 use metadata::SequenceMetadata;
-pub(crate) use metadata::{EnumRegistry, IndexMetadata, Relation, TableMetadata};
+pub(crate) use metadata::{CatalogEntry, EnumRegistry, IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
 
 use crate::core::date::DateParseError;
@@ -18,7 +18,6 @@ use crate::core::storage::{
     tuple,
 };
 use crate::core::uuid::UuidError;
-use crate::db::metadata::CatalogEntry;
 use crate::db::schema::{umbra_enum_schema, umbra_index_schema, umbra_sequence_schema};
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
@@ -296,20 +295,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         if let Some(catalog_kind) = table.parse::<CatalogEntry>().ok() {
             if catalog_kind != CatalogEntry::Meta {
-                let schema = {
-                    let mut schema = match catalog_kind {
-                        CatalogEntry::Enum => umbra_enum_schema(),
-                        CatalogEntry::Sequence => umbra_sequence_schema(),
-                        CatalogEntry::Index => umbra_index_schema(),
-                        CatalogEntry::Meta => unreachable!(),
-                    };
-
-                    println!("schema: {schema:?}");
-
-                    schema.prepend_id();
-                    schema
-                };
-
+                let schema = Schema::from(catalog_kind);
                 let root = self.get_catalog_table_root(catalog_kind)?;
                 let row_id = self.load_next_row_id(root)?;
 
@@ -591,6 +577,10 @@ impl Context {
 
     pub fn invalidate(&mut self, table: &str) {
         self.tables.remove(table);
+    }
+
+    pub fn add_enum(&mut self, name: String, variants: Vec<String>) {
+        self.enums.add(name, variants)
     }
 }
 

@@ -11,8 +11,8 @@ use crate::{
         tuple::{self, serialize_tuple},
     },
     db::{
-        has_btree_key, umbra_schema, Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
-        SqlError, DB_METADATA,
+        has_btree_key, umbra_schema, CatalogEntry, Ctx, Database, DatabaseError, IndexMetadata,
+        RowId, Schema, SqlError, DB_METADATA,
     },
     index,
     sql::{
@@ -101,14 +101,15 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             }
 
             let root = allocate_root(db)?;
-            insert_into_metadata(
+            insert_into_specialised_metadata(
                 db,
+                CatalogEntry::Index,
                 vec![
-                    Value::String("index".into()),
                     Value::String(name.clone()),
-                    Value::Number(root.into()),
                     Value::String(table.clone()),
-                    Value::String(sql),
+                    Value::String(column.clone()),
+                    Value::Boolean(unique),
+                    Value::Number(root.into()),
                 ],
             )?;
 
@@ -163,31 +164,45 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 );
             }
 
+            // TODO: we should pass the owning column in the statement
+            let column_name = name
+                .strip_prefix(&format!("{}_", table))
+                .and_then(|s| s.strip_suffix("_seq"))
+                .unwrap_or("");
+
             let root = allocate_root(db)?;
-            insert_into_metadata(
+            insert_into_specialised_metadata(
                 db,
+                CatalogEntry::Sequence,
                 vec![
-                    Value::String("sequence".into()),
                     Value::String(name.clone()),
-                    Value::Number(root as _),
+                    Value::String(r#type.to_string()),
                     Value::String(table),
-                    Value::String(sql),
+                    Value::String(column_name.to_string()),
+                    Value::Number(0),
+                    Value::Number(root as _),
                 ],
             )?;
         }
 
         Statement::Create(Create::Enum { name, variants }) => {
             let root = allocate_root(db)?;
-            insert_into_metadata(
-                db,
-                vec![
-                    Value::String("enum".into()),
-                    Value::String(name.into()),
-                    Value::Number(root as _),
-                    Value::String(variants.join(", ")),
-                    Value::String(sql),
-                ],
-            )?;
+
+            // FIXME: should we use this kind of id?
+            for (id, var_name) in variants.iter().enumerate() {
+                insert_into_specialised_metadata(
+                    db,
+                    CatalogEntry::Enum,
+                    vec![
+                        Value::String(name.clone()),
+                        Value::Number(root as _),
+                        Value::String(var_name.clone()),
+                        Value::Number(id as i128 + 1),
+                    ],
+                )?;
+            }
+
+            db.context.add_enum(name, variants);
         }
 
         Statement::Drop(Drop::Table(name)) => {
@@ -277,6 +292,25 @@ fn insert_into_metadata<File: Write + Seek + Read + FileOperations>(
 
     btree.insert(tuple::serialize_tuple(&schema, &values))?;
 
+    Ok(())
+}
+
+fn insert_into_specialised_metadata<File: Write + Read + Seek + FileOperations>(
+    db: &mut Database<File>,
+    category_kind: CatalogEntry,
+    mut values: Vec<Value>,
+) -> Result<(), DatabaseError> {
+    let schema = Schema::from(category_kind);
+
+    let metadata = db.metadata(category_kind.into())?;
+    let root = metadata.root;
+
+    values.insert(0, Value::Number(metadata.next_id().into()));
+
+    let mut pager = db.pager.borrow_mut();
+    let mut btree = BTree::new(&mut pager, root, FixedSizeCmp::new::<RowId>());
+
+    btree.insert(tuple::serialize_tuple(&schema, &values))?;
     Ok(())
 }
 
