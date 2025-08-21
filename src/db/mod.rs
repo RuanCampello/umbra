@@ -532,13 +532,23 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         // Load sequences from specialized sequence metadata table  
-        let sequence_query = self.exec(&format!(
+        let sequence_query = match self.exec(&format!(
             "SELECT sequence_name, data_type, column_name FROM {} WHERE table_name = '{}';",
             MetadataTableType::Sequence.table_name(),
             table
-        ))?;
+        )) {
+            Ok(query) => query,
+            Err(_) => {
+                // Sequence metadata table doesn't exist yet, skip sequence loading
+                QuerySet::new(Schema::new(vec![]), vec![])
+            }
+        };
 
         for tuple in &sequence_query.tuples {
+            if sequence_query.schema.len() == 0 {
+                break; // No schema, skip processing
+            }
+            
             let sequence_name = match &tuple[sequence_query.schema.index_of("sequence_name").unwrap()] {
                 Value::String(name) => name.clone(),
                 _ => continue,
