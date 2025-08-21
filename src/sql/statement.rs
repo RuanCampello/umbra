@@ -1064,6 +1064,19 @@ impl From<Expression> for OrderBy {
     }
 }
 
+trait AsStringable {}
+impl AsStringable for &str {}
+impl AsStringable for String {}
+
+impl<S> From<S> for Value
+where
+    S: AsStringable + Into<String>,
+{
+    fn from(s: S) -> Self {
+        Value::String(s.into())
+    }
+}
+
 impl From<i128> for Value {
     fn from(value: i128) -> Self {
         Self::Number(value)
@@ -1079,12 +1092,6 @@ impl From<f64> for Value {
 impl From<f32> for Value {
     fn from(value: f32) -> Self {
         Self::Float(value as f64)
-    }
-}
-
-impl From<&str> for Value {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_string())
     }
 }
 

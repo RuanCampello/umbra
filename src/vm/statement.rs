@@ -207,7 +207,8 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
         Statement::Drop(Drop::Table(name)) => {
             let comparator = db.metadata(DB_METADATA)?.comp()?;
-            let mut planner = collect_from_metadata(db, &format!("table_name = '{name}'"))?;
+            let mut planner =
+                collect_from_metadata(db, &format!("table_name = '{name}' AND type = 'table'"))?;
             let schema = planner.schema().ok_or(DatabaseError::Corrupted(format!(
                 "Could not obtain schema of {DB_METADATA} table"
             )))?;
