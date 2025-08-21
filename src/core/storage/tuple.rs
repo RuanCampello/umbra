@@ -136,8 +136,11 @@ pub(crate) fn serialize_tuple<'value>(
 }
 
 // FIXME: use of sorting with different type from schema
+#[rustfmt::skip]
 pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
-    schema
+    let null_bitmap_size = (schema.len() + 7) / 8;
+
+    null_bitmap_size + schema
         .columns
         .iter()
         .enumerate()
@@ -145,6 +148,10 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
             Type::Boolean => 1,
             Type::Varchar(max) => {
                 let Value::String(string) = &tuple[idx] else {
+                    if tuple[idx].is_null() {
+                        return 0;
+                    }
+
                     panic!(
                         "Expected data type {} but found {}",
                         Type::Varchar(max),
@@ -155,6 +162,10 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                 utf_8_length_bytes(max) + string.as_bytes().len()
             }
             Type::Text => {
+                if tuple[idx].is_null() {
+                    return 0;
+                }
+
                 let Value::String(string) = &tuple[idx] else {
                     panic!("Expected data type TEXT but found {}", tuple[idx]);
                 };
@@ -165,7 +176,7 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
             }
             other => byte_len_of_type(&other),
         })
-        .sum()
+        .sum::<usize>()
 }
 
 pub(crate) fn empty_null_map(schema_len: usize) -> Vec<u8> {
