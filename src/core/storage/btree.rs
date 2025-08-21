@@ -722,7 +722,7 @@ impl TryFrom<&Type> for FixedSizeCmp {
 
     fn try_from(data_type: &Type) -> Result<Self, Self::Error> {
         match data_type {
-            Type::Varchar(_) | Type::Boolean => Err(()),
+            Type::Varchar(_) | Type::Text | Type::Boolean => Err(()),
             fixed => Ok(Self(byte_len_of_type(fixed))),
         }
     }
@@ -761,6 +761,7 @@ impl From<&Type> for Box<dyn BytesCmp> {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Box::new(StringCmp(utf_8_length_bytes(*max))),
+            Type::Text => Box::new(StringCmp(4)), // TEXT uses varlena header with max 4 bytes
             not_var_type => Box::new(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
@@ -776,6 +777,7 @@ impl From<&Type> for BTreeKeyCmp {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Self::StrCmp(StringCmp(utf_8_length_bytes(*max))),
+            Type::Text => Self::StrCmp(StringCmp(4)), // TEXT uses varlena header with max 4 bytes
             not_var_type => Self::MemCmp(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
