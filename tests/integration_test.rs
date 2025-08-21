@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use umbra::db::{Database, DatabaseError, QuerySet};
 use umbra::sql::statement::Value;
 
@@ -9,7 +11,7 @@ struct State {
 }
 
 impl State {
-    fn new(path: impl AsRef<std::path::Path>) -> Self {
+    fn new(path: impl AsRef<Path>) -> Self {
         Self {
             db: Database::init(&path).unwrap(),
             path: path.as_ref().to_path_buf(),
@@ -21,6 +23,25 @@ impl State {
     }
 }
 
+impl Default for State {
+    #[track_caller]
+    fn default() -> Self {
+        let caller = std::panic::Location::caller();
+        let path = format!(
+            "{}-{}.db",
+            Path::new(caller.file())
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            caller.line()
+        );
+        let path = Path::new(path.as_str());
+
+        Self::new(path)
+    }
+}
+
 impl Drop for State {
     fn drop(&mut self) {
         std::fs::remove_file(&self.path).expect("Failed to drop State")
@@ -29,7 +50,7 @@ impl Drop for State {
 
 #[test]
 fn serialisation_and_deserialisation() -> Result<()> {
-    let mut db = State::new("test.db");
+    let mut db = State::default();
 
     db.exec(
         r#"
@@ -95,6 +116,36 @@ fn serialisation_and_deserialisation() -> Result<()> {
             ]
         ]
     );
+
+    Ok(())
+}
+
+#[test]
+fn unique_column_with_text() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE logs (id SERIAL PRIMARY KEY, log TEXT UNIQUE);")?;
+
+    let mut keys = ["zebra", "banana", "fig", "cherry", "apple"];
+    for key in keys {
+        let text = format!(
+            r#"The system logs are processed nightly to ensure data integrity and performance.
+            This process involves parsing, cleaning, and aggregating terabytes of data.
+            The critical keyword for this specific entry is: {key}"#
+        );
+        db.exec(format!("INSERT INTO logs (log) VALUES ('{text}');").as_str())?;
+    }
+
+    let query = db.exec("SELECT SUBSTRING(log FROM 230) FROM logs ORDER BY log;")?;
+    keys.sort_unstable();
+    for (idx, key) in keys.iter().enumerate() {
+        assert_eq!(query.tuples[idx][0], Value::String(key.to_string()))
+    }
+
+    let query = db.exec("SELECT SUBSTRING(log FROM 230) FROM logs ORDER BY log DESC;")?;
+    keys.reverse();
+    for (idx, key) in keys.iter().enumerate() {
+        assert_eq!(query.tuples[idx][0], Value::String(key.to_string()))
+    }
 
     Ok(())
 }
