@@ -216,7 +216,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
     fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
         let query = self.exec(&format!(
-            "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index';"
+            "SELECT table_name, column_name, is_unique, root FROM {} WHERE index_name = '{index}';",
+            MetadataTableType::Index.table_name()
         ))?;
 
         if query.is_empty() {
@@ -231,15 +232,48 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             })
             .unwrap();
 
-        let metadata = self.metadata(table_name)?;
+        let column_name = query
+            .get(0, "column_name") 
+            .map(|value| match value {
+                Value::String(name) => name,
+                _ => unreachable!(),
+            })
+            .unwrap();
 
-        // FIXME: make this more efficient
-        Ok(metadata
-            .indexes
-            .iter()
-            .find(|idx| idx.name.eq(index))
-            .unwrap()
-            .clone())
+        let is_unique = query
+            .get(0, "is_unique")
+            .map(|value| match value {
+                Value::Boolean(unique) => *unique,
+                _ => unreachable!(),
+            })
+            .unwrap();
+
+        let root = query
+            .get(0, "root")
+            .map(|value| match value {
+                Value::Number(root) => *root as PageNumber,
+                _ => unreachable!(),
+            })
+            .unwrap();
+
+        let metadata = self.metadata(table_name)?;
+        let col_idx = metadata
+            .schema
+            .index_of(column_name)
+            .ok_or(SqlError::InvalidColumn(column_name.clone()))?;
+
+        let column = metadata.schema.columns[col_idx].clone();
+
+        Ok(IndexMetadata {
+            root,
+            name: index.to_string(),
+            unique: is_unique,
+            column: column.clone(),
+            schema: Schema::new(vec![
+                column,
+                metadata.schema.columns[0].clone(),
+            ]),
+        })
     }
 
     fn sequence_metadata(&mut self, sequence: &str) -> Result<SequenceMetadata, DatabaseError> {
@@ -372,7 +406,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         let mut found_table_def = false;
 
         let (schema, mut results) = self.prepare(&format!(
-            "SELECT root, sql FROM {DB_METADATA} WHERE table_name = '{table}';"
+            "SELECT root, sql FROM {DB_METADATA} WHERE table_name = '{table}' AND type = 'table';"
         ))?;
 
         let corrupted_err = || {
@@ -400,48 +434,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
                         found_table_def = true;
                     }
-                    Statement::Create(Create::Index {
-                        name,
-                        column,
-                        unique,
-                        ..
-                    }) => {
-                        let col_idx =
-                            metadata
-                                .schema
-                                .index_of(&column)
-                                .ok_or(SqlError::Other(format!(
-                                    "Couldn't find index column {column} in table {table}"
-                                )))?;
-
-                        let idx_col = metadata.schema.columns[col_idx].clone();
-
-                        metadata.indexes.push(IndexMetadata {
-                            root: *root as PageNumber,
-                            name,
-                            column: idx_col.clone(),
-                            schema: Schema::new(vec![idx_col, metadata.schema.columns[0].clone()]),
-                            unique,
-                        });
-                    }
-                    Statement::Create(Create::Sequence {
-                        name,
-                        table,
-                        r#type,
-                    }) => {
-                        let root = *root as PageNumber;
-                        metadata.serials.insert(
-                            name.clone(),
-                            SequenceMetadata {
-                                root,
-                                name: name.clone(),
-                                value: AtomicU64::new(0),
-                                data_type: r#type.clone(),
-                            },
-                        );
-
-                        serials_to_load.push((name, table, r#type));
-                    }
                     _ => return Err(corrupted_err()),
                 },
                 _ => return Err(corrupted_err()),
@@ -450,6 +442,101 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
         if !found_table_def {
             return Err(DatabaseError::Sql(SqlError::InvalidTable(table.into())));
+        }
+
+        // Load indexes from specialized index metadata table
+        let index_query = self.exec(&format!(
+            "SELECT index_name, column_name, is_unique, root FROM {} WHERE table_name = '{}';",
+            MetadataTableType::Index.table_name(),
+            table
+        ))?;
+
+        for tuple in &index_query.tuples {
+            let index_name = match &tuple[index_query.schema.index_of("index_name").unwrap()] {
+                Value::String(name) => name.clone(),
+                _ => continue,
+            };
+            
+            let column_name = match &tuple[index_query.schema.index_of("column_name").unwrap()] {
+                Value::String(name) => name.clone(),
+                _ => continue,
+            };
+            
+            let is_unique = match &tuple[index_query.schema.index_of("is_unique").unwrap()] {
+                Value::Boolean(unique) => *unique,
+                _ => continue,
+            };
+            
+            let index_root = match &tuple[index_query.schema.index_of("root").unwrap()] {
+                Value::Number(root) => *root as PageNumber,
+                _ => continue,
+            };
+
+            let col_idx = metadata
+                .schema
+                .index_of(&column_name)
+                .ok_or(SqlError::Other(format!(
+                    "Couldn't find index column {column_name} in table {table}"
+                )))?;
+
+            let idx_col = metadata.schema.columns[col_idx].clone();
+
+            metadata.indexes.push(IndexMetadata {
+                root: index_root,
+                name: index_name,
+                column: idx_col.clone(),
+                schema: Schema::new(vec![idx_col, metadata.schema.columns[0].clone()]),
+                unique: is_unique,
+            });
+        }
+
+        // Load sequences from specialized sequence metadata table  
+        let sequence_query = self.exec(&format!(
+            "SELECT sequence_name, data_type, column_name, root FROM {} WHERE table_name = '{}';",
+            MetadataTableType::Sequence.table_name(),
+            table
+        ))?;
+
+        for tuple in &sequence_query.tuples {
+            let sequence_name = match &tuple[sequence_query.schema.index_of("sequence_name").unwrap()] {
+                Value::String(name) => name.clone(),
+                _ => continue,
+            };
+            
+            let data_type_str = match &tuple[sequence_query.schema.index_of("data_type").unwrap()] {
+                Value::String(dt) => dt.clone(),
+                _ => continue,
+            };
+            
+            let column_name = match &tuple[sequence_query.schema.index_of("column_name").unwrap()] {
+                Value::String(name) => name.clone(),
+                _ => continue,
+            };
+            
+            let sequence_root = match &tuple[sequence_query.schema.index_of("root").unwrap()] {
+                Value::Number(root) => *root as PageNumber,
+                _ => continue,
+            };
+
+            // Parse the data type string back to Type
+            let data_type = match data_type_str.as_str() {
+                "SERIAL" => Type::Serial,
+                "SMALLSERIAL" => Type::SmallSerial,
+                "BIGSERIAL" => Type::BigSerial,
+                _ => Type::Serial, // fallback
+            };
+
+            metadata.serials.insert(
+                sequence_name.clone(),
+                SequenceMetadata {
+                    root: sequence_root,
+                    name: sequence_name.clone(),
+                    value: AtomicU64::new(0),
+                    data_type: data_type.clone(),
+                },
+            );
+
+            serials_to_load.push((sequence_name, table.to_string(), data_type));
         }
 
         if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {
@@ -1124,8 +1211,9 @@ mod tests {
         let sql = "CREATE TABLE users (name VARCHAR(255), id INTEGER PRIMARY KEY);";
 
         db.exec(sql)?;
+        
+        // Check main metadata catalog contains only the table (no duplication of index)
         let query = db.exec("SELECT * FROM umbra_db_meta;")?;
-
         assert_eq!(
             query,
             QuerySet::new(
@@ -1138,20 +1226,17 @@ mod tests {
                         Value::String("users".into()),
                         Value::String(Parser::new(sql).parse_statement()?.to_string()),
                     ],
-                    vec![
-                        Value::String("index".into()),
-                        Value::String(index!(primary on users)),
-                        Value::Number(2),
-                        Value::String("users".into()),
-                        Value::String(
-                            Parser::new("CREATE UNIQUE INDEX users_pk_index ON users(id);")
-                                .parse_statement()?
-                                .to_string()
-                        )
-                    ],
                 ]
             )
         );
+
+        // Check that the index is in the specialized index metadata table
+        let index_query = db.exec("SELECT index_name, table_name, column_name, is_unique FROM umbra_index;")?;
+        assert_eq!(index_query.tuples.len(), 1);
+        assert_eq!(index_query.tuples[0][0], Value::String(index!(primary on users)));
+        assert_eq!(index_query.tuples[0][1], Value::String("users".into()));
+        assert_eq!(index_query.tuples[0][2], Value::String("id".into()));
+        assert_eq!(index_query.tuples[0][3], Value::Boolean(true));
 
         Ok(())
     }
@@ -3576,11 +3661,9 @@ mod tests {
         // Create an enum
         db.exec("CREATE TYPE status AS ENUM ('active', 'inactive', 'pending');")?;
         
-        // Check that main metadata catalog contains the enum entry
+        // Check that main metadata catalog does NOT contain the enum entry (no duplication)
         let main_query = db.exec("SELECT type, name FROM umbra_db_meta WHERE type = 'enum';")?;
-        assert_eq!(main_query.tuples.len(), 1);
-        assert_eq!(main_query.tuples[0][0], Value::String("enum".into()));
-        assert_eq!(main_query.tuples[0][1], Value::String("status".into()));
+        assert_eq!(main_query.tuples.len(), 0);
         
         // Check that specialized enum metadata table contains the variants
         let enum_query = db.exec("SELECT enum_name, variant_name, variant_id FROM umbra_enum ORDER BY variant_id;")?;
@@ -3609,11 +3692,9 @@ mod tests {
         // Create a table with a serial column (which creates a sequence)
         db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
         
-        // Check that main metadata catalog contains the sequence entry
+        // Check that main metadata catalog does NOT contain the sequence entry (no duplication)
         let main_query = db.exec("SELECT type, name FROM umbra_db_meta WHERE type = 'sequence';")?;
-        assert_eq!(main_query.tuples.len(), 1);
-        assert_eq!(main_query.tuples[0][0], Value::String("sequence".into()));
-        assert_eq!(main_query.tuples[0][1], Value::String("users_id_seq".into()));
+        assert_eq!(main_query.tuples.len(), 0);
         
         // Check that specialized sequence metadata table contains the sequence info
         let seq_query = db.exec("SELECT sequence_name, data_type, table_name, column_name FROM umbra_sequence;")?;

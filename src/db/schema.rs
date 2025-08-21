@@ -86,7 +86,7 @@ pub(crate) fn umbra_schema() -> Schema {
 pub(crate) fn umbra_enum_schema() -> Schema {
     Schema::from(&[
         Column::new("enum_name", Type::Varchar(255)),
-        Column::new("enum_id", Type::UnsignedSmallInt),
+        Column::new("root", Type::UnsignedInteger),
         Column::new("variant_name", Type::Varchar(255)),
         Column::new("variant_id", Type::UnsignedSmallInt),
     ])
@@ -100,6 +100,7 @@ pub(crate) fn umbra_sequence_schema() -> Schema {
         Column::new("table_name", Type::Varchar(255)),
         Column::new("column_name", Type::Varchar(255)),
         Column::new("current_value", Type::UnsignedBigInteger),
+        Column::new("root", Type::UnsignedInteger),
     ])
 }
 
@@ -110,5 +111,6 @@ pub(crate) fn umbra_index_schema() -> Schema {
         Column::new("table_name", Type::Varchar(255)),
         Column::new("column_name", Type::Varchar(255)),
         Column::new("is_unique", Type::Boolean),
+        Column::new("root", Type::UnsignedInteger),
     ])
 }

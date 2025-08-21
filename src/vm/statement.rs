@@ -103,19 +103,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             let root = allocate_root(db)?;
             
-            // Store basic index info in the main metadata catalog
-            insert_into_metadata(
-                db,
-                vec![
-                    Value::String("index".into()),
-                    Value::String(name.clone()),
-                    Value::Number(root.into()),
-                    Value::String(table.clone()),
-                    Value::String(sql),
-                ],
-            )?;
-
-            // Store index-specific info in the specialized index metadata table
+            // Store index info only in the specialized index metadata table
             insert_into_specialized_metadata(
                 db,
                 MetadataTableType::Index,
@@ -124,6 +112,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(table.clone()),
                     Value::String(column.clone()),
                     Value::Boolean(unique),
+                    Value::Number(root.into()), // Add root to specialized table
                 ],
             )?;
 
@@ -180,19 +169,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
 
             let root = allocate_root(db)?;
             
-            // Store basic sequence info in the main metadata catalog
-            insert_into_metadata(
-                db,
-                vec![
-                    Value::String("sequence".into()),
-                    Value::String(name.clone()),
-                    Value::Number(root as _),
-                    Value::String(table.clone()),
-                    Value::String(sql),
-                ],
-            )?;
-
-            // Store sequence-specific info in the specialized sequence metadata table
+            // Store sequence info only in the specialized sequence metadata table
             // Extract column name from sequence name (format: table_column_seq)
             let column_name = name
                 .strip_prefix(&format!("{}_", table))
@@ -208,6 +185,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                     Value::String(table),
                     Value::String(column_name.to_string()),
                     Value::Number(0), // initial value
+                    Value::Number(root as _), // Add root to specialized table
                 ],
             )?;
         }
@@ -215,26 +193,14 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
         Statement::Create(Create::Enum { name, variants }) => {
             let root = allocate_root(db)?;
             
-            // Store basic enum info in the main metadata catalog
-            insert_into_metadata(
-                db,
-                vec![
-                    Value::String("enum".into()),
-                    Value::String(name.clone()),
-                    Value::Number(root as _),
-                    Value::String("".into()), // No longer store variants here
-                    Value::String(sql),
-                ],
-            )?;
-
-            // Store enum variants in the specialized enum metadata table
+            // Store enum variants only in the specialized enum metadata table
             for (variant_id, variant_name) in variants.iter().enumerate() {
                 insert_into_specialized_metadata(
                     db,
                     MetadataTableType::Enum,
                     vec![
                         Value::String(name.clone()),
-                        Value::Number(0), // enum_id will be assigned when needed
+                        Value::Number(root as _), // Add root to specialized table
                         Value::String(variant_name.clone()),
                         Value::Number(variant_id as i128 + 1), // variant_id starts from 1
                     ],
@@ -246,37 +212,51 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
         }
 
         Statement::Drop(Drop::Table(name)) => {
+            // First, get the table metadata to free the table's btree
+            let table_metadata = db.metadata(&name)?;
+            let table_root = table_metadata.root;
+            affected_rows = free_btree(db, table_root)?;
+
+            // Remove from main metadata catalog (table entry)
             let comparator = db.metadata(DB_METADATA)?.comp()?;
-            let mut planner = collect_from_metadata(db, &format!("table_name = '{name}'"))?;
+            let mut planner = collect_from_metadata(db, &format!("table_name = '{name}' AND type = 'table'"))?;
             let schema = planner.schema().ok_or(DatabaseError::Corrupted(format!(
                 "Could not obtain schema of {DB_METADATA} table"
             )))?;
 
             while let Some(tuple) = planner.try_next()? {
-                let Some(Value::Number(root)) =
-                    schema.index_of("root").and_then(|index| tuple.get(index))
-                else {
-                    return Err(DatabaseError::Corrupted(format!(
-                        "Could not read root of table {name}"
-                    )));
-                };
-
-                let removed_cells = free_btree(db, *root as PageNumber)?;
-
-                if affected_rows == 0 {
-                    schema
-                        .index_of("type")
-                        .and_then(|index| tuple.get(index))
-                        .inspect(|value| match value {
-                            Value::String(relation) if relation == "table" => {
-                                affected_rows = removed_cells;
-                            }
-                            _ => {}
-                        });
-                }
-
                 BTree::new(&mut db.pager.borrow_mut(), 0, comparator.clone())
                     .remove(&tuple::serialize(&schema.columns[0].data_type, &tuple[0]))?;
+            }
+
+            // Clean up from specialized metadata tables
+            // Remove indexes for this table
+            let index_query = db.exec(&format!(
+                "SELECT index_name, root FROM {} WHERE table_name = '{}';",
+                MetadataTableType::Index.table_name(),
+                name
+            ))?;
+
+            for tuple in &index_query.tuples {
+                if let Some(Value::Number(index_root)) = tuple.get(index_query.schema.index_of("root").unwrap()) {
+                    free_btree(db, *index_root as PageNumber)?;
+                    // TODO: Also remove entries from specialized metadata tables
+                    // This requires more complex logic to find and remove specific entries
+                }
+            }
+
+            // Remove sequences for this table  
+            let sequence_query = db.exec(&format!(
+                "SELECT sequence_name, root FROM {} WHERE table_name = '{}';",
+                MetadataTableType::Sequence.table_name(),
+                name
+            ))?;
+
+            for tuple in &sequence_query.tuples {
+                if let Some(Value::Number(sequence_root)) = tuple.get(sequence_query.schema.index_of("root").unwrap()) {
+                    free_btree(db, *sequence_root as PageNumber)?;
+                    // TODO: Also remove entries from specialized metadata tables
+                }
             }
 
             db.context.invalidate(&name);
