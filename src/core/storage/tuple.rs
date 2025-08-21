@@ -52,7 +52,7 @@ pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usi
 /// If the first byte greater or equal to 128: 4-byte header (long string, length is in the next 3 bytes)
 ///
 /// *Note*: the first byte being equal to 0x7f is reserved and cannot be used.
-const fn varlena_header_len(byte: u8) -> usize {
+pub(in crate::core::storage) const fn varlena_header_len(byte: u8) -> usize {
     match byte < 0x7f {
         true => 1,
         false => 4,
@@ -92,6 +92,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
+        #[allow(unused)]
         Value::Enum { id, variant } => unimplemented!(),
     }
 }
@@ -281,6 +282,7 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
         }
 
+        #[allow(unused)]
         Type::Enum(id) => unimplemented!(),
     });
 

@@ -11,11 +11,12 @@ pub(crate) use metadata::{EnumRegistry, IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
 
 use crate::core::date::DateParseError;
-use crate::core::storage::btree::{BTree, FixedSizeCmp};
-use crate::core::storage::page::PageNumber;
-use crate::core::storage::pagination::io::FileOperations;
-use crate::core::storage::pagination::pager::Pager;
-use crate::core::storage::tuple;
+use crate::core::storage::{
+    btree::{BTree, FixedSizeCmp},
+    page::PageNumber,
+    pagination::{io::FileOperations, pager::Pager},
+    tuple,
+};
 use crate::core::uuid::UuidError;
 use crate::db::metadata::CatalogEntry;
 use crate::db::schema::{umbra_enum_schema, umbra_index_schema, umbra_sequence_schema};
@@ -348,64 +349,68 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             else {
                 return Err(corrupted_err());
             };
+
             match &tuple[schema.index_of("sql").ok_or(corrupted_err())?] {
-                Value::String(sql) => match Parser::new(sql).parse_statement()? {
-                    Statement::Create(Create::Table { columns, .. }) => {
-                        assert!(!found_table_def, "Multiple definitions of table {table}");
+                Value::String(sql) => {
+                    println!("sql: {sql} len: {}", sql.to_string().len());
+                    match Parser::new(sql).parse_statement()? {
+                        Statement::Create(Create::Table { columns, .. }) => {
+                            assert!(!found_table_def, "Multiple definitions of table {table}");
 
-                        metadata.root = *root as PageNumber;
-                        metadata.schema = Schema::new(columns);
+                            metadata.root = *root as PageNumber;
+                            metadata.schema = Schema::new(columns);
 
-                        if !metadata.schema.has_btree_key() {
-                            metadata.schema.prepend_id();
+                            if !metadata.schema.has_btree_key() {
+                                metadata.schema.prepend_id();
+                            }
+
+                            found_table_def = true;
                         }
-
-                        found_table_def = true;
-                    }
-                    Statement::Create(Create::Index {
-                        name,
-                        column,
-                        unique,
-                        ..
-                    }) => {
-                        let col_idx =
-                            metadata
-                                .schema
-                                .index_of(&column)
-                                .ok_or(SqlError::Other(format!(
-                                    "Couldn't find index column {column} in table {table}"
-                                )))?;
-
-                        let idx_col = metadata.schema.columns[col_idx].clone();
-
-                        metadata.indexes.push(IndexMetadata {
-                            root: *root as PageNumber,
+                        Statement::Create(Create::Index {
                             name,
-                            column: idx_col.clone(),
-                            schema: Schema::new(vec![idx_col, metadata.schema.columns[0].clone()]),
+                            column,
                             unique,
-                        });
-                    }
-                    Statement::Create(Create::Sequence {
-                        name,
-                        table,
-                        r#type,
-                    }) => {
-                        let root = *root as PageNumber;
-                        metadata.serials.insert(
-                            name.clone(),
-                            SequenceMetadata {
-                                root,
-                                name: name.clone(),
-                                value: AtomicU64::new(0),
-                                data_type: r#type.clone(),
-                            },
-                        );
+                            ..
+                        }) => {
+                            let col_idx =
+                                metadata.schema.index_of(&column).ok_or(SqlError::Other(
+                                    format!("Couldn't find index column {column} in table {table}"),
+                                ))?;
 
-                        serials_to_load.push((name, table, r#type));
+                            let idx_col = metadata.schema.columns[col_idx].clone();
+
+                            metadata.indexes.push(IndexMetadata {
+                                root: *root as PageNumber,
+                                name,
+                                column: idx_col.clone(),
+                                schema: Schema::new(vec![
+                                    idx_col,
+                                    metadata.schema.columns[0].clone(),
+                                ]),
+                                unique,
+                            });
+                        }
+                        Statement::Create(Create::Sequence {
+                            name,
+                            table,
+                            r#type,
+                        }) => {
+                            let root = *root as PageNumber;
+                            metadata.serials.insert(
+                                name.clone(),
+                                SequenceMetadata {
+                                    root,
+                                    name: name.clone(),
+                                    value: AtomicU64::new(0),
+                                    data_type: r#type.clone(),
+                                },
+                            );
+
+                            serials_to_load.push((name, table, r#type));
+                        }
+                        _ => return Err(corrupted_err()),
                     }
-                    _ => return Err(corrupted_err()),
-                },
+                }
                 _ => return Err(corrupted_err()),
             }
         }

@@ -5,7 +5,7 @@
 use super::page::{Cell, OverflowPage, Page, PageNumber, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
-use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
+use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes, varlena_header_len};
 use crate::sql::statement::Type;
 use std::cmp::{min, Ordering, Reverse};
 use std::collections::{BinaryHeap, HashSet, VecDeque};
@@ -69,11 +69,16 @@ pub(crate) struct FixedSizeCmp(pub usize);
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct StringCmp(pub usize);
 
+/// Compares variable length text strings.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct TextCmp;
+
 /// No allocations comparing to [`Box`].
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum BTreeKeyCmp {
     MemCmp(FixedSizeCmp),
     StrCmp(StringCmp),
+    TextCmp(TextCmp),
 }
 
 /// Represents the result of reading content from the [`BTree`].
@@ -722,7 +727,7 @@ impl TryFrom<&Type> for FixedSizeCmp {
 
     fn try_from(data_type: &Type) -> Result<Self, Self::Error> {
         match data_type {
-            Type::Varchar(_) | Type::Boolean => Err(()),
+            Type::Varchar(_) | Type::Boolean | Type::Text => Err(()),
             fixed => Ok(Self(byte_len_of_type(fixed))),
         }
     }
@@ -744,10 +749,36 @@ impl BytesCmp for StringCmp {
         buffer[..self.0].copy_from_slice(&b[..self.0]);
         let len_b = usize::from_le_bytes(buffer);
 
-        // TODO: check those unwraps
-        std::str::from_utf8(&a[self.0..self.0 + len_a])
-            .unwrap()
-            .cmp(std::str::from_utf8(&b[self.0..self.0 + len_b]).unwrap())
+        unsafe {
+            std::str::from_utf8_unchecked(&a[self.0..self.0 + len_a])
+                .cmp(std::str::from_utf8_unchecked(&b[self.0..self.0 + len_b]))
+        }
+    }
+}
+
+impl BytesCmp for TextCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        let header_a = varlena_header_len(a[0]);
+        let header_b = varlena_header_len(b[0]);
+
+        let len_a = match header_a {
+            1 => a[0] as usize,
+            4 => u32::from_be_bytes([0, a[1], a[2], a[3]]) as usize,
+            _ => unreachable!(),
+        };
+
+        let len_b = match header_b {
+            1 => b[0] as usize,
+            4 => u32::from_be_bytes([0, b[1], b[2], b[3]]) as usize,
+            _ => unreachable!(),
+        };
+
+        unsafe {
+            let str_a = std::str::from_utf8_unchecked(&a[header_a..header_a + len_a]);
+            let str_b = std::str::from_utf8_unchecked(&b[header_b..header_b + len_b]);
+
+            str_a.cmp(str_b)
+        }
     }
 }
 
@@ -761,6 +792,7 @@ impl From<&Type> for Box<dyn BytesCmp> {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Box::new(StringCmp(utf_8_length_bytes(*max))),
+            Type::Text => Box::new(StringCmp(4)),
             not_var_type => Box::new(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
@@ -776,6 +808,7 @@ impl From<&Type> for BTreeKeyCmp {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Self::StrCmp(StringCmp(utf_8_length_bytes(*max))),
+            Type::Text => Self::TextCmp(TextCmp),
             not_var_type => Self::MemCmp(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
@@ -786,6 +819,7 @@ impl BytesCmp for BTreeKeyCmp {
         match self {
             Self::MemCmp(mem) => mem.cmp(a, b),
             Self::StrCmp(str) => str.cmp(a, b),
+            Self::TextCmp(text) => text.cmp(a, b),
         }
     }
 }
