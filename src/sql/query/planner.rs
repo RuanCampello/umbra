@@ -15,7 +15,7 @@ use crate::{
     },
     vm::{
         expression::VmType,
-        planner::{AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+        planner::{AggregateBuilder, Insert as InsertPlan, NestedLoopJoin, Planner, Sort, SortKeys, Values},
     },
 };
 use crate::{
@@ -46,7 +46,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         Statement::Select(Select {
             columns,
             from,
-            joins: _,
+            joins,
             r#where,
             order_by,
             group_by,
@@ -54,8 +54,38 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
-            let table = db.metadata(&from)?;
-            let schema = &table.schema;
+            let table = db.metadata(&from)?.clone();
+            let mut schema = table.schema.clone();
+
+            // Collect all table metadata first to avoid borrowing issues
+            let mut join_metadata = Vec::new();
+            for join_clause in &joins {
+                let right_table = db.metadata(&join_clause.table)?.clone();
+                join_metadata.push((join_clause.clone(), right_table));
+            }
+
+            // Handle JOINs
+            for (join_clause, right_table) in join_metadata {
+                let right_source = optimiser::generate_seq_plan(&join_clause.table, None, db)?;
+                
+                // Extend schema with joined table columns
+                schema.columns.extend(right_table.schema.columns.clone());
+                
+                // Create nested loop join (for simplicity, we'll use nested loop join for now)
+                let left_schema = table.schema.clone();
+                
+                source = Planner::NestedLoopJoin(NestedLoopJoin {
+                    left: Box::new(source),
+                    right: Box::new(right_source),
+                    condition: join_clause.condition,
+                    join_type: join_clause.join_type,
+                    left_schema,
+                    right_schema: right_table.schema.clone(),
+                    output_schema: Schema::new(schema.columns.clone()),
+                    current_left: None,
+                    right_exhausted: false,
+                });
+            }
 
             // this is a special case for `type_of` function
             if let Some((col_name, type_of)) = single_typeof_column(&columns, &schema) {
@@ -80,9 +110,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
                         }
                         Expression::Alias { expr, alias } => {
-                            Ok(Column::new(alias, resolve_type(schema, expr)?))
+                            Ok(Column::new(alias, resolve_type(&schema, expr)?))
                         }
-                        _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                        _ => Ok(Column::new(&expr.to_string(), resolve_type(&schema, expr)?)),
                     })
                     .collect::<Result<Vec<_>, SqlError>>()?,
             );
@@ -111,7 +141,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                                 }
                                 _ => None,
                             }) {
-                                aggr_schema.push(Column::new(ident, resolve_type(schema, expr)?));
+                                aggr_schema.push(Column::new(ident, resolve_type(&schema, expr)?));
                             } else if let Some(idx) = schema.index_of(ident) {
                                 aggr_schema.push(schema.columns[idx].clone());
                             } else {
@@ -121,19 +151,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         other => {
                             aggr_schema.push(Column::new(
                                 &other.to_string(),
-                                resolve_type(schema, other)?,
+                                resolve_type(&schema, other)?,
                             ));
                         }
                     }
                 }
 
                 for (aggr_fn, name) in &aggr_exprs {
-                    aggr_schema.push(Column::new(name, resolve_type(schema, &aggr_fn)?))
+                    aggr_schema.push(Column::new(name, resolve_type(&schema, &aggr_fn)?))
                 }
 
                 if group_by.is_empty() && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(schema, &columns, &order_by)?;
+                        extract_order_indexes_and_directions(&schema, &columns, &order_by)?;
 
                     source = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -239,12 +269,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 for order in &order_by {
                     match order.expr {
                         Expression::Identifier(ref ident) => {
-                            let idx = resolve_order_index(schema, &columns, ident)?;
+                            let idx = resolve_order_index(&schema, &columns, ident)?;
                             indexes.push(idx);
                             directions.push(order.direction);
                         }
                         _ => {
-                            let ty = resolve_type(schema, &order.expr)?;
+                            let ty = resolve_type(&schema, &order.expr)?;
                             indexes.push(sorted_schema.len());
                             directions.push(order.direction);
                             sorted_schema.push(Column::new(&order.expr.to_string(), ty));
