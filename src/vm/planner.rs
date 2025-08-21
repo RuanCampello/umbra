@@ -1196,9 +1196,11 @@ impl<File: PlanExecutor> Aggregate<File> {
         };
 
         match func {
-            Function::Count => Ok(Value::Number(values.len() as _)),
+            Function::Count => Ok(Value::Number(
+                values.iter().filter(|v| !v.is_null()).count() as i128,
+            )),
             Function::Sum | Function::Avg => {
-                let sum = values.iter().fold(0.0, |acc, v| {
+                let sum = values.iter().filter(|v| !v.is_null()).fold(0.0, |acc, v| {
                     acc + match v {
                         Value::Float(f) => *f,
                         Value::Number(n) => *n as f64,
@@ -1213,11 +1215,13 @@ impl<File: PlanExecutor> Aggregate<File> {
             }
             Function::Min => Ok(values
                 .iter()
+                .filter(|v| !v.is_null())
                 .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
                 .cloned()
                 .unwrap_or(Value::Number(0))),
             Function::Max => Ok(values
                 .iter()
+                .filter(|v| !v.is_null())
                 .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
                 .cloned()
                 .unwrap_or(Value::Number(0))),

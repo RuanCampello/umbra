@@ -219,6 +219,7 @@ impl<'input> Parser<'input> {
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
+            Token::Keyword(Keyword::Nullable) => Ok(Expression::Value(Value::Null)),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
             }
@@ -284,7 +285,7 @@ impl<'input> Parser<'input> {
 
         let mut constraints = Vec::new();
         while let Some(constraint) = self
-            .consume_one(&[Keyword::Primary, Keyword::Unique])
+            .consume_one(&[Keyword::Primary, Keyword::Unique, Keyword::Nullable])
             .as_optional()
         {
             match constraint {
@@ -293,6 +294,7 @@ impl<'input> Parser<'input> {
                     constraints.push(Constraint::PrimaryKey);
                 }
                 Keyword::Unique => constraints.push(Constraint::Unique),
+                Keyword::Nullable => constraints.push(Constraint::Nullable),
                 _ => unreachable!(),
             }
         }
@@ -1837,6 +1839,24 @@ mod tests {
                     Column::primary_key("id", Type::Serial),
                     Column::new("content", Type::Text),
                     Column::new("created_at", Type::DateTime)
+                ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_nullable_column() {
+        let sql = "CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT UNIQUE, profile_url TEXT NULLABLE);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Table {
+                name: "users".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Serial),
+                    Column::unique("email", Type::Text),
+                    Column::nullable("profile_url", Type::Text)
                 ]
             })
         )

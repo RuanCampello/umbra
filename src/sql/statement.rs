@@ -194,12 +194,14 @@ pub enum Value {
     Boolean(bool),
     Temporal(Temporal),
     Uuid(Uuid),
+    Null,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Constraint {
     PrimaryKey,
     Unique,
+    Nullable,
     Default(Expression),
 }
 
@@ -342,6 +344,18 @@ impl Column {
             data_type,
             constraints: vec![Constraint::Unique],
         }
+    }
+
+    pub fn nullable(name: &str, data_type: Type) -> Self {
+        Self {
+            name: name.to_string(),
+            data_type,
+            constraints: vec![Constraint::Nullable],
+        }
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.constraints.contains(&Constraint::Nullable)
     }
 }
 
@@ -558,6 +572,10 @@ impl Default for Expression {
 }
 
 impl Value {
+    pub(crate) fn is_null(&self) -> bool {
+        self == &Value::Null
+    }
+
     pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
         match (self, other) {
             (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),
@@ -594,6 +612,8 @@ impl PartialEq for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
+            // NULL is not equal to anything
+            (Value::Null, _) | (_, Value::Null) => false,
             _ => false,
         }
     }
@@ -610,7 +630,9 @@ impl PartialOrd for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
-            _ => panic!("those values are not comparable"),
+            // NULL is not comparable to anything
+            (Value::Null, _) | (_, Value::Null) => None,
+            _ => panic!("these values are not comparable"),
         }
     }
 }
@@ -641,6 +663,7 @@ impl Hash for Value {
             Value::Boolean(b) => b.hash(state),
             Value::Temporal(t) => t.hash(state),
             Value::Uuid(u) => u.hash(state),
+            Value::Null => panic!("Null value cannot be hashed"),
         }
     }
 }
@@ -651,6 +674,7 @@ impl Neg for Value {
         match self {
             Value::Number(num) => Ok(Value::Number(-num)),
             Value::Float(float) => Ok(Value::Float(-float)),
+            Value::Null => Ok(Value::Null),
             v => Err(TypeError::CannotApplyUnary {
                 operator: UnaryOperator::Minus,
                 value: v,
@@ -668,6 +692,7 @@ impl Display for Column {
             f.write_str(match constraint {
                 Constraint::PrimaryKey => "PRIMARY KEY",
                 Constraint::Unique => "UNIQUE",
+                Constraint::Nullable => "NULLABLE",
                 Constraint::Default(value) => "DEFAULT {value}",
             })?;
         }
@@ -768,6 +793,7 @@ impl Display for Value {
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
+            Value::Null => write!(f, "NULL"),
         }
     }
 }
