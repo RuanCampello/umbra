@@ -3671,6 +3671,13 @@ mod tests {
         // Create an enum
         db.exec("CREATE TYPE status AS ENUM ('active', 'inactive', 'pending');")?;
         
+        // Let's see what's actually in the main metadata catalog
+        let main_query = db.exec("SELECT type, name, table_name FROM umbra_db_meta;")?;
+        println!("Main metadata catalog entries:");
+        for (i, tuple) in main_query.tuples.iter().enumerate() {
+            println!("  {}: {:?}", i, tuple);
+        }
+        
         // Check that main metadata catalog does NOT contain the enum entry (no duplication)
         let main_query = db.exec("SELECT type, name FROM umbra_db_meta WHERE type = 'enum';")?;
         assert_eq!(main_query.tuples.len(), 0);
