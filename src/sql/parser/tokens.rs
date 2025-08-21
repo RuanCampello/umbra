@@ -118,6 +118,8 @@ pub enum Keyword {
     Timestamp,
     Date,
     Time,
+    Nullable,
+    Null,
     /// This is not an actual SQL keyword, but it's used for convenience.
     None,
 }
@@ -256,6 +258,8 @@ impl Borrow<str> for Keyword {
             Self::Date => "DATE",
             Self::Time => "TIME",
             Self::Timestamp => "TIMESTAMP",
+            Self::Nullable => "NULLABLE",
+            Self::Null => "NULL",
             Self::Count => "COUNT",
             Self::Abs => "ABS",
             Self::Sqrt => "SQRT",
@@ -348,6 +352,8 @@ impl FromStr for Keyword {
             "TIMESTAMP" => Keyword::Timestamp,
             "DATE" => Keyword::Date,
             "TIME" => Keyword::Time,
+            "NULLABLE" => Keyword::Nullable,
+            "NULL" => Keyword::Null,
             _ => Keyword::None,
         };
 

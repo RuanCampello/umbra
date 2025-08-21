@@ -194,6 +194,7 @@ pub enum Value {
     Boolean(bool),
     Temporal(Temporal),
     Uuid(Uuid),
+    Null,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -201,6 +202,7 @@ pub enum Constraint {
     PrimaryKey,
     Unique,
     Default(Expression),
+    Nullable,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
@@ -584,6 +586,7 @@ impl Temporal {
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Value::Null, _) | (_, Value::Null) => false, // NULL is never equal to anything
             (Value::Number(a), Value::Number(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
             // we do this because we can coerce them later to do a comparison between floats and
@@ -604,6 +607,7 @@ impl Eq for Value {}
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
+            (Value::Null, _) | (_, Value::Null) => None, // NULL cannot be compared
             (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
             (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
             (Value::String(a), Value::String(b)) => a.partial_cmp(b),
@@ -635,6 +639,7 @@ impl Hash for Value {
         }
 
         match self {
+            Self::Null => 0u8.hash(state), // Assign a unique hash for NULL
             Self::Float(f) => encode_float(f).hash(state),
             Value::Number(n) => n.hash(state),
             Value::String(s) => s.hash(state),
@@ -651,6 +656,7 @@ impl Neg for Value {
         match self {
             Value::Number(num) => Ok(Value::Number(-num)),
             Value::Float(float) => Ok(Value::Float(-float)),
+            Value::Null => Ok(Value::Null), // Negating null returns null
             v => Err(TypeError::CannotApplyUnary {
                 operator: UnaryOperator::Minus,
                 value: v,
@@ -669,6 +675,7 @@ impl Display for Column {
                 Constraint::PrimaryKey => "PRIMARY KEY",
                 Constraint::Unique => "UNIQUE",
                 Constraint::Default(value) => "DEFAULT {value}",
+                Constraint::Nullable => "NULLABLE",
             })?;
         }
 
@@ -768,6 +775,7 @@ impl Display for Value {
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
+            Value::Null => write!(f, "NULL"),
         }
     }
 }

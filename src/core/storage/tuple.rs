@@ -92,6 +92,11 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
+        Value::Null => {
+            // For null values, we write a special marker byte (0x00)
+            // This is memory efficient - just one byte to indicate null
+            buff.push(0x00);
+        }
     }
 }
 

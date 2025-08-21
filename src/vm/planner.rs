@@ -1196,9 +1196,24 @@ impl<File: PlanExecutor> Aggregate<File> {
         };
 
         match func {
-            Function::Count => Ok(Value::Number(values.len() as _)),
+            Function::Count => {
+                // COUNT(*) counts all rows, COUNT(column) counts non-null values
+                if matches!(args.first(), Some(Expression::Wildcard)) {
+                    Ok(Value::Number(values.len() as _))
+                } else {
+                    let non_null_count = values.iter().filter(|v| !matches!(v, Value::Null)).count();
+                    Ok(Value::Number(non_null_count as _))
+                }
+            }
             Function::Sum | Function::Avg => {
-                let sum = values.iter().fold(0.0, |acc, v| {
+                // Filter out null values for numeric aggregations
+                let non_null_values: Vec<_> = values.iter().filter(|v| !matches!(v, Value::Null)).collect();
+                
+                if non_null_values.is_empty() {
+                    return Ok(Value::Null); // SQL standard: aggregates on empty sets return NULL
+                }
+                
+                let sum = non_null_values.iter().fold(0.0, |acc, v| {
                     acc + match v {
                         Value::Float(f) => *f,
                         Value::Number(n) => *n as f64,
@@ -1208,19 +1223,37 @@ impl<File: PlanExecutor> Aggregate<File> {
 
                 match func.eq(&Function::Sum) {
                     true => Ok(Value::Float(sum)),
-                    _ => Ok(Value::Float(sum / values.len() as f64)),
+                    _ => Ok(Value::Float(sum / non_null_values.len() as f64)),
                 }
             }
-            Function::Min => Ok(values
-                .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-                .cloned()
-                .unwrap_or(Value::Number(0))),
-            Function::Max => Ok(values
-                .iter()
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-                .cloned()
-                .unwrap_or(Value::Number(0))),
+            Function::Min => {
+                let non_null_values: Vec<_> = values.iter().filter(|v| !matches!(v, Value::Null)).collect();
+                
+                if non_null_values.is_empty() {
+                    Ok(Value::Null)
+                } else {
+                    Ok(non_null_values
+                        .iter()
+                        .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+                        .cloned()
+                        .cloned()
+                        .unwrap_or(Value::Null))
+                }
+            }
+            Function::Max => {
+                let non_null_values: Vec<_> = values.iter().filter(|v| !matches!(v, Value::Null)).collect();
+                
+                if non_null_values.is_empty() {
+                    Ok(Value::Null)
+                } else {
+                    Ok(non_null_values
+                        .iter()
+                        .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+                        .cloned()
+                        .cloned()
+                        .unwrap_or(Value::Null))
+                }
+            }
 
             _ => unreachable!("this ain't a aggregate function"),
         }
