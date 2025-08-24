@@ -47,6 +47,7 @@ pub(in crate::sql) enum Whitespace {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Keyword {
     Select,
+    Distinct,
     Create,
     Update,
     Delete,
@@ -197,6 +198,7 @@ impl Borrow<str> for Keyword {
     fn borrow(&self) -> &str {
         match self {
             Self::Select => "SELECT",
+            Self::Distinct => "DISTINCT",
             Self::Create => "CREATE",
             Self::Update => "UPDATE",
             Self::Delete => "DELETE",
@@ -286,6 +288,7 @@ impl FromStr for Keyword {
 
         let keyword = match s.to_uppercase().as_str() {
             "SELECT" => Keyword::Select,
+            "DISTINCT" => Keyword::Distinct,
             "CREATE" => Keyword::Create,
             "UPDATE" => Keyword::Update,
             "DELETE" => Keyword::Delete,
