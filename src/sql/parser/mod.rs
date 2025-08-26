@@ -219,7 +219,7 @@ impl<'input> Parser<'input> {
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
-            Token::Keyword(Keyword::Nullable) => Ok(Expression::Value(Value::Null)),
+            Token::Keyword(Keyword::Null) => Ok(Expression::Value(Value::Null)),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
             }

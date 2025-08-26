@@ -622,18 +622,6 @@ mod tests {
     }
 
     type AnalyzerResult = Result<(), DatabaseError>;
-
-    impl PartialEq for DatabaseError {
-        fn eq(&self, other: &Self) -> bool {
-            match (self, other) {
-                (Self::Io(a), Self::Io(b)) => a.kind().eq(&b.kind()),
-                (Self::Parser(a), Self::Parser(b)) => a.eq(b),
-                (Self::Sql(a), Self::Sql(b)) => a.eq(b),
-                _ => false,
-            }
-        }
-    }
-
     #[test]
     fn select_from_invalid_table() -> AnalyzerResult {
         // we cannot select from a table not created yet
