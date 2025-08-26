@@ -14,7 +14,7 @@ use crate::{
         date::{NaiveDate, NaiveTime, Parse},
         uuid::Uuid,
     },
-    sql::statement::{Type, Value},
+    sql::statement::{Type, Value, Constraint},
 };
 
 trait ValueSerialize {
@@ -44,6 +44,73 @@ pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usi
         0..64 => 1,
         64..16384 => 2,
         _ => 4,
+    }
+}
+
+/// Returns the size in bytes of the varlena header, given its first byte.
+/// If the first byte less than 127: 1-byte header (short string, length is the first byte)
+/// If the first byte greater or equal to 128: 4-byte header (long string, length is in the next 3 bytes)
+///
+/// *Note*: the first byte being equal to 0x7f is reserved and cannot be used.
+/// Checks if a column is nullable (has the Nullable constraint)
+fn is_nullable(col: &crate::sql::statement::Column) -> bool {
+    col.constraints.contains(&Constraint::Nullable)
+}
+
+/// Serializes a value into the buffer, taking into account column constraints
+fn serialize_into_with_column(buff: &mut Vec<u8>, col: &crate::sql::statement::Column, value: &Value) {
+    match value {
+        Value::Null => {
+            // For null values, we write a special marker byte (0x00)
+            // This is memory efficient - just one byte to indicate null
+            buff.push(0x00);
+        }
+        Value::String(string) => match &col.data_type {
+            Type::Varchar(max) => {
+                if is_nullable(col) {
+                    // For nullable VARCHAR columns, we need to distinguish between NULL and empty string
+                    // NULL is handled above as 0x00
+                    // Empty string gets encoded as 0x01 followed by length 0
+                    // Non-empty strings get encoded as length+1 followed by data
+                    
+                    if string.is_empty() {
+                        // Empty string: special marker 0x01 followed by length 0
+                        buff.push(0x01);
+                        let len_prefix = utf_8_length_bytes(*max);
+                        let zero_len = 0u32.to_le_bytes();
+                        buff.extend_from_slice(&zero_len[..len_prefix]);
+                    } else {
+                        // Non-empty string: encode length+1 to avoid collision with NULL marker
+                        if string.as_bytes().len() > u32::MAX as usize - 1 {
+                            todo!("Strings too long are not supported {}", u32::MAX - 1);
+                        }
+                        
+                        let adjusted_len = (string.as_bytes().len() + 1).to_le_bytes();
+                        let len_prefix = utf_8_length_bytes(*max);
+                        
+                        buff.extend_from_slice(&adjusted_len[..len_prefix]);
+                        buff.extend_from_slice(string.as_bytes());
+                    }
+                } else {
+                    // For non-nullable VARCHAR columns, use the original encoding
+                    if string.as_bytes().len() > u32::MAX as usize {
+                        todo!("Strings too long are not supported {}", u32::MAX);
+                    }
+
+                    let b_len = string.as_bytes().len().to_le_bytes();
+                    let len_prefix = utf_8_length_bytes(*max);
+
+                    buff.extend_from_slice(&b_len[..len_prefix]);
+                    buff.extend_from_slice(string.as_bytes());
+                }
+            }
+
+            _ => string.serialize(buff, &col.data_type),
+        },
+        _ => {
+            // For non-string values, use the original serialization
+            serialize_into(buff, &col.data_type, value);
+        }
     }
 }
 
@@ -120,7 +187,7 @@ pub(crate) fn serialize_tuple<'value>(
         .columns
         .iter()
         .zip(values)
-        .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
+        .for_each(|(col, val)| serialize_into_with_column(&mut buff, col, val));
 
     buff
 }
@@ -134,26 +201,52 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
         .map(|(idx, col)| match col.data_type {
             Type::Boolean => 1,
             Type::Varchar(max) => {
-                let Value::String(string) = &tuple[idx] else {
-                    panic!(
-                        "Expected data type {} but found {}",
-                        Type::Varchar(max),
+                match &tuple[idx] {
+                    Value::Null => {
+                        // NULL values are serialized as 1 byte
+                        1
+                    }
+                    Value::String(string) => {
+                        if is_nullable(col) {
+                            if string.is_empty() {
+                                // Empty string in nullable column: marker (1) + length prefix
+                                1 + utf_8_length_bytes(max)
+                            } else {
+                                // Non-empty string in nullable column: length prefix + data
+                                utf_8_length_bytes(max) + string.as_bytes().len()
+                            }
+                        } else {
+                            // Non-nullable column: original encoding
+                            utf_8_length_bytes(max) + string.as_bytes().len()
+                        }
+                    }
+                    _ => panic!(
+                        "Expected VARCHAR or NULL for column {} but found {}",
+                        col.name,
                         tuple[idx]
-                    );
-                };
-
-                utf_8_length_bytes(max) + string.as_bytes().len()
+                    ),
+                }
             }
             Type::Text => {
-                let Value::String(string) = &tuple[idx] else {
-                    panic!("Expected data type TEXT but found {}", tuple[idx]);
-                };
-
-                let len = string.as_bytes().len();
-                let header_len = varlena_header_len(len as _);
-                header_len + len
+                match &tuple[idx] {
+                    Value::Null => {
+                        // NULL values are serialized as 1 byte
+                        1
+                    }
+                    Value::String(string) => {
+                        let len = string.as_bytes().len();
+                        let header_len = varlena_header_len(len as _);
+                        header_len + len
+                    }
+                    _ => panic!("Expected TEXT or NULL but found {}", tuple[idx]),
+                }
             }
-            other => byte_len_of_type(&other),
+            other => {
+                match &tuple[idx] {
+                    Value::Null => 1, // NULL values are always 1 byte
+                    _ => byte_len_of_type(&other),
+                }
+            }
         })
         .sum()
 }
@@ -161,18 +254,57 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
     let values = schema.columns.iter().map(|col| match &col.data_type {
         Type::Varchar(size) => {
-            let mut len = [0; mem::size_of::<usize>()];
-            let prefix = utf_8_length_bytes(*size);
+            if is_nullable(col) {
+                // For nullable VARCHAR columns, check for NULL or empty string markers
+                let mut first_byte = [0u8; 1];
+                reader.read_exact(&mut first_byte)?;
+                
+                if first_byte[0] == 0x00 {
+                    // This is a NULL value
+                    return Ok(Value::Null);
+                } else if first_byte[0] == 0x01 {
+                    // This is an empty string - read the length bytes (should be 0)
+                    let mut len = [0; mem::size_of::<usize>()];
+                    let prefix = utf_8_length_bytes(*size);
+                    reader.read_exact(&mut len[..prefix])?;
+                    // The length should be 0, but we don't need to verify it
+                    return Ok(Value::String(String::new()));
+                } else {
+                    // This is a non-empty string with length+1 encoding
+                    // The first byte is part of the length, so put it back in the length array
+                    let mut len = [0; mem::size_of::<usize>()];
+                    len[0] = first_byte[0];
+                    
+                    let prefix = utf_8_length_bytes(*size);
+                    if prefix > 1 {
+                        reader.read_exact(&mut len[1..prefix])?;
+                    }
+                    
+                    let encoded_len = usize::from_le_bytes(len);
+                    let actual_len = encoded_len - 1; // Subtract 1 to get the original length
+                    
+                    let mut string = vec![0; actual_len];
+                    reader.read_exact(&mut string)?;
+                    
+                    return Ok(Value::String(
+                        String::from_utf8(string).expect("Couldn't parse string from utf8"),
+                    ));
+                }
+            } else {
+                // For non-nullable VARCHAR columns, use the original encoding
+                let mut len = [0; mem::size_of::<usize>()];
+                let prefix = utf_8_length_bytes(*size);
 
-            reader.read_exact(&mut len[..prefix])?;
-            let len = usize::from_le_bytes(len);
+                reader.read_exact(&mut len[..prefix])?;
+                let len = usize::from_le_bytes(len);
 
-            let mut string = vec![0; len];
-            reader.read_exact(&mut string)?;
+                let mut string = vec![0; len];
+                reader.read_exact(&mut string)?;
 
-            Ok(Value::String(
-                String::from_utf8(string).expect("Couldn't parse string from utf8"),
-            ))
+                return Ok(Value::String(
+                    String::from_utf8(string).expect("Couldn't parse string from utf8"),
+                ));
+            }
         }
 
         Type::Text => {

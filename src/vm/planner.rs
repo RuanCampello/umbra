@@ -1206,7 +1206,6 @@ impl<File: PlanExecutor> Aggregate<File> {
                 }
             }
             Function::Sum | Function::Avg => {
-                // Filter out null values for numeric aggregations
                 let non_null_values: Vec<_> = values.iter().filter(|v| !matches!(v, Value::Null)).collect();
                 
                 if non_null_values.is_empty() {
@@ -1221,40 +1220,27 @@ impl<File: PlanExecutor> Aggregate<File> {
                     }
                 });
 
-                match func.eq(&Function::Sum) {
-                    true => Ok(Value::Float(sum)),
-                    _ => Ok(Value::Float(sum / non_null_values.len() as f64)),
+                match func {
+                    Function::Sum => Ok(Value::Float(sum)),
+                    Function::Avg => Ok(Value::Float(sum / non_null_values.len() as f64)),
+                    _ => unreachable!(),
                 }
             }
-            Function::Min => {
+            Function::Min | Function::Max => {
                 let non_null_values: Vec<_> = values.iter().filter(|v| !matches!(v, Value::Null)).collect();
                 
                 if non_null_values.is_empty() {
-                    Ok(Value::Null)
-                } else {
-                    Ok(non_null_values
-                        .iter()
-                        .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-                        .cloned()
-                        .cloned()
-                        .unwrap_or(Value::Null))
+                    return Ok(Value::Null);
                 }
-            }
-            Function::Max => {
-                let non_null_values: Vec<_> = values.iter().filter(|v| !matches!(v, Value::Null)).collect();
-                
-                if non_null_values.is_empty() {
-                    Ok(Value::Null)
-                } else {
-                    Ok(non_null_values
-                        .iter()
-                        .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-                        .cloned()
-                        .cloned()
-                        .unwrap_or(Value::Null))
-                }
-            }
 
+                let result = match func {
+                    Function::Min => non_null_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)),
+                    Function::Max => non_null_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)),
+                    _ => unreachable!(),
+                };
+
+                Ok(result.cloned().cloned().unwrap_or(Value::Null))
+            }
             _ => unreachable!("this ain't a aggregate function"),
         }
     }
