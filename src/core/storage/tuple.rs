@@ -7,7 +7,7 @@ use std::{
 use crate::{
     core::date::{NaiveDateTime, Serialize},
     db::{RowId, Schema},
-    sql::statement::Temporal,
+    sql::statement::{Column, Temporal},
 };
 use crate::{
     core::{
@@ -93,7 +93,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
-        Value::Null => {}
+        Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
 
@@ -105,6 +105,8 @@ pub(crate) fn serialize_tuple<'value>(
     schema: &Schema,
     values: impl IntoIterator<Item = &'value Value> + Copy,
 ) -> Vec<u8> {
+    use crate::sql::statement::Column;
+
     let mut buff = Vec::new();
 
     debug_assert_eq!(
@@ -113,10 +115,20 @@ pub(crate) fn serialize_tuple<'value>(
         "Lenght of schema and values length mismatch"
     );
 
+    let filter: fn(&(&Column, &Value)) -> bool = match schema.has_nullable() {
+        true => {
+            let bitmap = null_bitmap(schema.len(), values);
+            buff.extend_from_slice(&bitmap);
+
+            |(col, _)| !col.is_nullable()
+        }
+        false => |_| true, // no filter needed
+    };
     schema
         .columns
         .iter()
         .zip(values)
+        .filter(filter)
         .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
 
     buff
@@ -125,29 +137,20 @@ pub(crate) fn serialize_tuple<'value>(
 // FIXME: use of sorting with different type from schema
 #[rustfmt::skip]
 pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
-     schema
+    let bitmap_size = match schema.has_nullable() {
+        true => (schema.columns.len() + 7) / 8,
+        _ => 0,
+    };
+
+     bitmap_size + schema
         .columns
         .iter()
         .enumerate()
-        .map(|(idx, col)| match col.data_type {
-            Type::Boolean => 1,
-            Type::Varchar(max) => {
-                let Value::String(string) = &tuple[idx] else {
+        .map(|(idx, col)| match &tuple[idx] {
+            Value::String(string) => match col.data_type{
+                Type::Varchar(max) => utf_8_length_bytes(max) + string.as_bytes().len(),
+                Type::Text => {
                     if tuple[idx].is_null() {
-                        return 0;
-                    }
-
-                    panic!(
-                        "Expected data type {} but found {}",
-                        Type::Varchar(max),
-                        tuple[idx]
-                    );
-                };
-
-                utf_8_length_bytes(max) + string.as_bytes().len()
-            }
-            Type::Text => {
-                if tuple[idx].is_null() {
                     return 0;
                 }
 
@@ -158,17 +161,46 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                 let len = string.as_bytes().len();
                 let header_len = varlena_header_len(len as _);
                 header_len + len
+                }
+                _ => unreachable!()
             }
-            other => byte_len_of_type(&other),
+            
+            _ => byte_len_of_type(&col.data_type)
         })
         .sum::<usize>()
 }
 
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
-    let values = schema.columns.iter().map(|col| match &col.data_type {
+    let bitmap = match schema.has_nullable() {
+        true => {
+            let bitmap_size = (schema.len() + 7) / 8;
+            let mut bitmap = vec![0u8; bitmap_size];
+            reader.read_exact(&mut bitmap)?;
+            Some(bitmap)
+        }
+
+        false => None,
+    };
+
+    let values = schema.columns.iter().enumerate().map(|(i, col)| {
+        if bitmap
+            .as_ref()
+            .map_or(false, |b| (b[i / 8] & (1 << (i % 8))) != 0)
+        {
+            return Ok(Value::Null);
+        }
+
+        read_value(reader, col)
+    });
+
+    values.collect()
+}
+
+fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
+    match col.data_type {
         Type::Varchar(size) => {
             let mut len = [0; mem::size_of::<usize>()];
-            let prefix = utf_8_length_bytes(*size);
+            let prefix = utf_8_length_bytes(size);
 
             reader.read_exact(&mut len[..prefix])?;
             let len = usize::from_le_bytes(len);
@@ -290,9 +322,22 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
 
             Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
         }
-    });
+    }
+}
 
-    values.collect()
+fn null_bitmap<'value, V>(schema_length: usize, values: V) -> Vec<u8>
+where
+    V: IntoIterator<Item = &'value Value>,
+{
+    let mut bitmap = vec![0u8; schema_length];
+
+    values
+        .into_iter()
+        .filter(|value| value.is_null())
+        .enumerate()
+        .for_each(|(idx, _)| bitmap[idx / 8] |= 1 << (idx % 8));
+
+    bitmap
 }
 
 impl ValueSerialize for String {

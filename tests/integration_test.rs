@@ -1259,30 +1259,31 @@ fn nullable_column() -> Result<()> {
             id SERIAL PRIMARY KEY,
             name VARCHAR(255),
             email VARCHAR(255) UNIQUE,
-            phone VARCHAR(15) NULLABLE UNIQUE
+            phone VARCHAR(15) NULLABLE UNIQUE,
+            age SMALLINT UNSIGNED NULLABLE
         );
         "#,
     )?;
 
     db.exec(
         r#"
-        INSERT INTO users (name, email, phone)
+        INSERT INTO users (name, email, phone, age)
         VALUES
-            ('Alice Smith',  'alice@example.com',   '+15551234567'),
-            ('Bob Johnson',  'bob@example.com',     '+15559876543'),
-            ('Carol Perez',  'carol@example.com',   NULL),
-            ('Daniel Silva', 'daniel@example.com',  '+15557654321');
+            ('Alice Smith',  'alice@example.com',   '+15551234567', 33),
+            ('Bob Johnson',  'bob@example.com',     '+15559876543', 27),
+            ('Carol Perez',  'carol@example.com',   NULL, NULL),
+            ('Daniel Silva', 'daniel@example.com',  '+15557654321, NULL');
         "#,
     )?;
 
-    let query = db.exec("SELECT name, phone FROM users;")?;
+    let query = db.exec("SELECT name, phone, age FROM users;")?;
     assert_eq!(
         query.tuples,
         vec![
-            vec!["Alice Smith".into(), "+15551234567".into()],
-            vec!["Bob Johnson".into(), "+15559876543".into()],
-            vec!["Carol Perez".into(), Value::Null],
-            vec!["Daniel Silva".into(), "+15557654321".into()],
+            vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
+            vec!["Bob Johnson".into(), "+15559876543".into(), 27.into()],
+            vec!["Carol Perez".into(), Value::Null, Value::Null],
+            vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
         ]
     );
     Ok(())
