@@ -780,18 +780,7 @@ impl BytesCmp for BitmapFixedSizeCmp {
         // Skip bitmap header and compare primary key value
         let a_pk = &a[self.bitmap_size..self.bitmap_size + self.pk_size];
         let b_pk = &b[self.bitmap_size..self.bitmap_size + self.pk_size];
-        
-        // Debug: print the data being compared
-        println!("BitmapFixedSizeCmp debug:");
-        println!("  bitmap_size: {}, pk_size: {}", self.bitmap_size, self.pk_size);
-        println!("  a: {:?}", a);
-        println!("  b: {:?}", b);
-        println!("  a_pk: {:?}", a_pk);
-        println!("  b_pk: {:?}", b_pk);
-        
-        let result = a_pk.cmp(b_pk);
-        println!("  result: {:?}", result);
-        result
+        a_pk.cmp(b_pk)
     }
 }
 

@@ -4,7 +4,7 @@
 
 use super::expression::{resolve_expression, resolve_only_expression};
 use crate::core::random::Rng;
-use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor, FixedSizeCmp};
+use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
@@ -89,7 +89,7 @@ pub(crate) struct RangeScan<File> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct KeyScan<File: FileOperations> {
-    pub comparator: FixedSizeCmp,
+    pub comparator: BTreeKeyCmp,
     pub table: TableMetadata,
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
@@ -127,7 +127,7 @@ pub(crate) struct Insert<File: FileOperations> {
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
     pub table: TableMetadata,
-    pub comparator: FixedSizeCmp,
+    pub comparator: BTreeKeyCmp,
 }
 
 #[derive(Debug, PartialEq)]
@@ -136,13 +136,13 @@ pub(crate) struct Update<File: FileOperations> {
     pub assigments: Vec<Assignment>,
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
-    pub comparator: FixedSizeCmp,
+    pub comparator: BTreeKeyCmp,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Delete<File: FileOperations> {
     pub table: TableMetadata,
-    pub comparator: FixedSizeCmp,
+    pub comparator: BTreeKeyCmp,
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
 }

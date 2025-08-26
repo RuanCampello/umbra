@@ -127,13 +127,50 @@ impl TableMetadata {
         Ok(current + 1)
     }
 
-    pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
-        FixedSizeCmp::try_from(&self.schema.columns[0].data_type).map_err(|e| {
-            DatabaseError::Corrupted(format!(
-                "Table {} is using a non-int Btree key with type {:#?}",
-                self.name, self.schema.columns[0].data_type
-            ))
-        })
+    pub fn comp(&self) -> Result<BTreeKeyCmp, DatabaseError> {
+        let pk_type = &self.schema.columns[0].data_type;
+        
+        if self.schema_has_nullable_columns() {
+            // Use bitmap-aware comparator for tables with nullable columns
+            let bitmap_size = self.null_bitmap_size();
+            match pk_type {
+                Type::Varchar(max) => Ok(BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp {
+                    bitmap_size,
+                    len_prefix: utf_8_length_bytes(*max),
+                })),
+                _ => {
+                    let pk_size = byte_len_of_type(pk_type);
+                    Ok(BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp {
+                        bitmap_size,
+                        pk_size,
+                    }))
+                }
+            }
+        } else {
+            // Use original comparator for tables without nullable columns
+            FixedSizeCmp::try_from(pk_type)
+                .map(BTreeKeyCmp::MemCmp)
+                .map_err(|_e| {
+                    DatabaseError::Corrupted(format!(
+                        "Table {} is using a non-int Btree key with type {:#?}",
+                        self.name, pk_type
+                    ))
+                })
+        }
+    }
+
+    /// Check if schema has any nullable columns
+    fn schema_has_nullable_columns(&self) -> bool {
+        self.schema.columns.iter().any(|col| col.constraints.contains(&Constraint::Nullable))
+    }
+
+    /// Calculate bitmap size in bytes for a schema
+    fn null_bitmap_size(&self) -> usize {
+        if self.schema_has_nullable_columns() {
+            (self.schema.columns.len() + 7) / 8
+        } else {
+            0
+        }
     }
 
     pub fn keys(&self) -> &Column {
@@ -174,30 +211,21 @@ impl Relation {
             Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
             Self::Table(table) => {
                 let pk_type = &table.schema.columns[0].data_type;
-                println!("Table comp() debug: table={}, has_nullable={}", 
-                         table.name, Self::schema_has_nullable_columns(&table.schema));
-                
                 if Self::schema_has_nullable_columns(&table.schema) {
                     // Use bitmap-aware comparator for tables with nullable columns
                     let bitmap_size = Self::null_bitmap_size(&table.schema);
-                    println!("Using bitmap comparator: bitmap_size={}", bitmap_size);
                     match pk_type {
                         Type::Varchar(max) => BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp {
                             bitmap_size,
                             len_prefix: utf_8_length_bytes(*max),
                         }),
-                        _ => {
-                            let pk_size = byte_len_of_type(pk_type);
-                            println!("Creating BitmapMemCmp with pk_size={}", pk_size);
-                            BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp {
-                                bitmap_size,
-                                pk_size,
-                            })
-                        }
+                        _ => BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp {
+                            bitmap_size,
+                            pk_size: byte_len_of_type(pk_type),
+                        }),
                     }
                 } else {
                     // Use original comparator for tables without nullable columns
-                    println!("Using original comparator");
                     BTreeKeyCmp::from(pk_type)
                 }
             }

@@ -5,7 +5,10 @@ use std::{
 };
 
 use crate::{
-    core::storage::pagination::io::FileOperations,
+    core::storage::{
+        pagination::io::FileOperations,
+        btree::BTreeKeyCmp,
+    },
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
     sql::{
         analyzer::{self, contains_aggregate},
@@ -667,7 +670,7 @@ mod tests {
             Planner::KeyScan(KeyScan {
                 pager: db.pager(),
                 table: db.tables["employees"].to_owned(),
-                comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                comparator: BTreeKeyCmp::MemCmp(FixedSizeCmp(byte_len_of_type(&Type::Integer))),
                 source: Box::new(Planner::ExactMatch(ExactMatch {
                     done: false,
                     emit_only_key: true,
@@ -740,7 +743,7 @@ mod tests {
         assert_eq!(
             db.gen_plan("SELECT * FROM employees WHERE email <= 'johndoe@email.com';")?,
             Planner::KeyScan(KeyScan {
-                comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                comparator: BTreeKeyCmp::MemCmp(FixedSizeCmp(byte_len_of_type(&Type::Integer))),
                 pager: db.pager(),
                 table: db.tables["employees"].to_owned(),
                 source: Box::new(Planner::Sort(Sort::from(SortBuilder {
@@ -1192,7 +1195,7 @@ mod tests {
                     source: Box::new(Planner::KeyScan(KeyScan {
                         pager: db.pager(),
                         table: db.tables["users"].to_owned(),
-                        comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                        comparator: BTreeKeyCmp::MemCmp(FixedSizeCmp(byte_len_of_type(&Type::Integer))),
                         source: Box::new(Planner::Sort(sort))
                     })),
                     group_by: vec![],
