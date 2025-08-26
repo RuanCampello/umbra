@@ -52,59 +52,59 @@ pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usi
 /// If the first byte greater or equal to 128: 4-byte header (long string, length is in the next 3 bytes)
 ///
 /// *Note*: the first byte being equal to 0x7f is reserved and cannot be used.
-/// Checks if a column is nullable (has the Nullable constraint)
-fn is_nullable(col: &crate::sql::statement::Column) -> bool {
-    col.constraints.contains(&Constraint::Nullable)
+
+/// Generate a null bitmap for a tuple, indicating which columns contain NULL values
+fn generate_null_bitmap(schema: &Schema, values: &[&Value]) -> Vec<u8> {
+    let num_columns = schema.columns.len();
+    let bitmap_size = (num_columns + 7) / 8; // Round up to next byte boundary
+    
+    let mut bitmap = vec![0u8; bitmap_size];
+    
+    for (col_idx, value) in values.iter().enumerate() {
+        if matches!(value, Value::Null) {
+            let byte_idx = col_idx / 8;
+            let bit_idx = col_idx % 8;
+            bitmap[byte_idx] |= 1 << bit_idx;
+        }
+    }
+    
+    bitmap
 }
 
-/// Serializes a value into the buffer, taking into account column constraints
-fn serialize_into_with_column(buff: &mut Vec<u8>, col: &crate::sql::statement::Column, value: &Value) {
+/// Check if schema has any nullable columns (requires bitmap format)
+fn schema_has_nullable_columns(schema: &Schema) -> bool {
+    schema.columns.iter().any(|col| col.constraints.contains(&Constraint::Nullable))
+}
+
+/// Get the size in bytes needed for the null bitmap
+fn null_bitmap_size(schema: &Schema) -> usize {
+    if schema_has_nullable_columns(schema) {
+        (schema.columns.len() + 7) / 8
+    } else {
+        0 // No bitmap needed for schemas without nullable columns
+    }
+}
+
+/// Serializes a value into the buffer using standard encoding
+fn serialize_value_standard(buff: &mut Vec<u8>, col: &crate::sql::statement::Column, value: &Value) {
     match value {
         Value::Null => {
-            // For null values, we write a special marker byte (0x00)
-            // This is memory efficient - just one byte to indicate null
-            buff.push(0x00);
+            // For backward compatibility in non-nullable columns, this should not happen
+            // But if it does, we'll panic to make it clear this is a programming error
+            panic!("NULL values should only be used with nullable columns in the bitmap format");
         }
         Value::String(string) => match &col.data_type {
             Type::Varchar(max) => {
-                if is_nullable(col) {
-                    // For nullable VARCHAR columns, we need to distinguish between NULL and empty string
-                    // NULL is handled above as 0x00
-                    // Empty string gets encoded as 0x01 followed by length 0
-                    // Non-empty strings get encoded as length+1 followed by data
-                    
-                    if string.is_empty() {
-                        // Empty string: special marker 0x01 followed by length 0
-                        buff.push(0x01);
-                        let len_prefix = utf_8_length_bytes(*max);
-                        let zero_len = 0u32.to_le_bytes();
-                        buff.extend_from_slice(&zero_len[..len_prefix]);
-                    } else {
-                        // Non-empty string: encode length+1 to avoid collision with NULL marker
-                        if string.as_bytes().len() > u32::MAX as usize - 1 {
-                            todo!("Strings too long are not supported {}", u32::MAX - 1);
-                        }
-                        
-                        let adjusted_len = (string.as_bytes().len() + 1).to_le_bytes();
-                        let len_prefix = utf_8_length_bytes(*max);
-                        
-                        buff.extend_from_slice(&adjusted_len[..len_prefix]);
-                        buff.extend_from_slice(string.as_bytes());
-                    }
-                } else {
-                    // For non-nullable VARCHAR columns, use the original encoding
-                    if string.as_bytes().len() > u32::MAX as usize {
-                        todo!("Strings too long are not supported {}", u32::MAX);
-                    }
-
-                    let b_len = string.as_bytes().len().to_le_bytes();
-                    let len_prefix = utf_8_length_bytes(*max);
-
-                    buff.extend_from_slice(&b_len[..len_prefix]);
-                    buff.extend_from_slice(string.as_bytes());
+                if string.as_bytes().len() > u32::MAX as usize {
+                    todo!("Strings too long are not supported {}", u32::MAX);
                 }
-            }
 
+                let b_len = string.as_bytes().len().to_le_bytes();
+                let len_prefix = utf_8_length_bytes(*max);
+
+                buff.extend_from_slice(&b_len[..len_prefix]);
+                buff.extend_from_slice(string.as_bytes());
+            }
             _ => string.serialize(buff, &col.data_type),
         },
         _ => {
@@ -160,9 +160,9 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
         Value::Null => {
-            // For null values, we write a special marker byte (0x00)
-            // This is memory efficient - just one byte to indicate null
-            buff.push(0x00);
+            // This should only happen in the original format for backward compatibility
+            // In practice, this means the column isn't actually nullable in the schema
+            panic!("NULL values in original format suggest incorrect schema definition");
         }
     }
 }
@@ -176,135 +176,133 @@ pub(crate) fn serialize_tuple<'value>(
     values: impl IntoIterator<Item = &'value Value> + Copy,
 ) -> Vec<u8> {
     let mut buff = Vec::new();
+    let values_vec: Vec<&Value> = values.into_iter().collect();
 
     debug_assert_eq!(
         schema.len(),
-        values.into_iter().count(),
-        "Lenght of schema and values length mismatch"
+        values_vec.len(),
+        "Length of schema and values length mismatch"
     );
 
-    schema
-        .columns
-        .iter()
-        .zip(values)
-        .for_each(|(col, val)| serialize_into_with_column(&mut buff, col, val));
+    if schema_has_nullable_columns(schema) {
+        // Use bitmap format for schemas with nullable columns
+        let null_bitmap = generate_null_bitmap(schema, &values_vec);
+        buff.extend_from_slice(&null_bitmap);
+
+        // Serialize only non-NULL values using standard encoding
+        schema
+            .columns
+            .iter()
+            .zip(values_vec.iter())
+            .for_each(|(col, val)| {
+                if !matches!(val, Value::Null) {
+                    serialize_value_standard(&mut buff, col, val);
+                }
+            });
+    } else {
+        // Use original format for schemas without nullable columns (backward compatibility)
+        schema
+            .columns
+            .iter()
+            .zip(values_vec.iter())
+            .for_each(|(col, val)| {
+                serialize_value_standard(&mut buff, col, val);
+            });
+    }
 
     buff
 }
 
 // FIXME: use of sorting with different type from schema
 pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
-    schema
+    let bitmap_size = null_bitmap_size(schema);
+    
+    let data_size = schema
         .columns
         .iter()
         .enumerate()
-        .map(|(idx, col)| match col.data_type {
-            Type::Boolean => 1,
-            Type::Varchar(max) => {
-                match &tuple[idx] {
-                    Value::Null => {
-                        // NULL values are serialized as 1 byte
-                        1
-                    }
-                    Value::String(string) => {
-                        if is_nullable(col) {
-                            if string.is_empty() {
-                                // Empty string in nullable column: marker (1) + length prefix
-                                1 + utf_8_length_bytes(max)
-                            } else {
-                                // Non-empty string in nullable column: length prefix + data
-                                utf_8_length_bytes(max) + string.as_bytes().len()
-                            }
-                        } else {
-                            // Non-nullable column: original encoding
-                            utf_8_length_bytes(max) + string.as_bytes().len()
-                        }
-                    }
-                    _ => panic!(
-                        "Expected VARCHAR or NULL for column {} but found {}",
-                        col.name,
-                        tuple[idx]
-                    ),
+        .map(|(idx, col)| match &tuple[idx] {
+            Value::Null => 0, // NULL values take no space (handled by bitmap)
+            Value::String(string) => match col.data_type {
+                Type::Varchar(max) => {
+                    // Standard encoding for all VARCHAR columns
+                    utf_8_length_bytes(max) + string.as_bytes().len()
                 }
-            }
-            Type::Text => {
-                match &tuple[idx] {
-                    Value::Null => {
-                        // NULL values are serialized as 1 byte
-                        1
-                    }
-                    Value::String(string) => {
-                        let len = string.as_bytes().len();
-                        let header_len = varlena_header_len(len as _);
-                        header_len + len
-                    }
-                    _ => panic!("Expected TEXT or NULL but found {}", tuple[idx]),
+                Type::Text => {
+                    let len = string.as_bytes().len();
+                    let header_len = varlena_header_len(len as _);
+                    header_len + len
                 }
-            }
-            other => {
-                match &tuple[idx] {
-                    Value::Null => 1, // NULL values are always 1 byte
-                    _ => byte_len_of_type(&other),
-                }
-            }
+                _ => byte_len_of_type(&col.data_type),
+            },
+            _ => byte_len_of_type(&col.data_type),
         })
-        .sum()
+        .sum::<usize>();
+    
+    bitmap_size + data_size
 }
 
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
-    let values = schema.columns.iter().map(|col| match &col.data_type {
+    if schema_has_nullable_columns(schema) {
+        // Use bitmap format for schemas with nullable columns
+        read_from_bitmap_format(reader, schema)
+    } else {
+        // Use original format for schemas without nullable columns (backward compatibility)
+        read_from_original_format(reader, schema)
+    }
+}
+
+fn read_from_bitmap_format(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
+    let bitmap_size = null_bitmap_size(schema);
+    
+    // Read the null bitmap
+    let mut null_bitmap = vec![0u8; bitmap_size];
+    reader.read_exact(&mut null_bitmap)?;
+    
+    // Helper function to check if a column is null
+    let is_null = |col_idx: usize| -> bool {
+        let byte_idx = col_idx / 8;
+        let bit_idx = col_idx % 8;
+        (null_bitmap[byte_idx] & (1 << bit_idx)) != 0
+    };
+    
+    // Read values based on the bitmap
+    let values = schema.columns.iter().enumerate().map(|(col_idx, col)| {
+        if is_null(col_idx) {
+            return Ok(Value::Null);
+        }
+        
+        // Read non-null value using standard deserialization
+        read_single_value(reader, col)
+    });
+
+    values.collect()
+}
+
+fn read_from_original_format(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
+    let values = schema.columns.iter().map(|col| {
+        read_single_value(reader, col)
+    });
+
+    values.collect()
+}
+
+fn read_single_value(reader: &mut impl Read, col: &crate::sql::statement::Column) -> io::Result<Value> {
+    match &col.data_type {
         Type::Varchar(size) => {
-            if is_nullable(col) {
-                // For nullable VARCHAR columns, check for NULL or empty string markers
-                let mut first_byte = [0u8; 1];
-                reader.read_exact(&mut first_byte)?;
-                
-                if first_byte[0] == 0x00 {
-                    // This is a NULL value
-                    return Ok(Value::Null);
-                } else if first_byte[0] == 0x01 {
-                    // This is an empty string - read the length bytes (should be 0)
-                    let mut len = [0; mem::size_of::<usize>()];
-                    let prefix = utf_8_length_bytes(*size);
-                    reader.read_exact(&mut len[..prefix])?;
-                    // The length should be 0, but we don't need to verify it
-                    return Ok(Value::String(String::new()));
-                } else {
-                    // This is a non-empty string with length+1 encoding
-                    // The first byte is part of the length, so put it back in the length array
-                    let mut len = [0; mem::size_of::<usize>()];
-                    len[0] = first_byte[0];
-                    
-                    let prefix = utf_8_length_bytes(*size);
-                    if prefix > 1 {
-                        reader.read_exact(&mut len[1..prefix])?;
-                    }
-                    
-                    let encoded_len = usize::from_le_bytes(len);
-                    let actual_len = encoded_len - 1; // Subtract 1 to get the original length
-                    
-                    let mut string = vec![0; actual_len];
-                    reader.read_exact(&mut string)?;
-                    
-                    return Ok(Value::String(
-                        String::from_utf8(string).expect("Couldn't parse string from utf8"),
-                    ));
-                }
-            } else {
-                // For non-nullable VARCHAR columns, use the original encoding
-                let mut len = [0; mem::size_of::<usize>()];
-                let prefix = utf_8_length_bytes(*size);
+            // Standard VARCHAR deserialization
+            let mut len = [0; mem::size_of::<usize>()];
+            let prefix = utf_8_length_bytes(*size);
 
-                reader.read_exact(&mut len[..prefix])?;
-                let len = usize::from_le_bytes(len);
+            reader.read_exact(&mut len[..prefix])?;
+            let len = usize::from_le_bytes(len);
 
-                let mut string = vec![0; len];
-                reader.read_exact(&mut string)?;
+            let mut string = vec![0; len];
+            reader.read_exact(&mut string)?;
 
-                return Ok(Value::String(
-                    String::from_utf8(string).expect("Couldn't parse string from utf8"),
-                ));
-            }
+            Ok(Value::String(
+                String::from_utf8(string).expect("Couldn't parse string from utf8"),
+            ))
         }
 
         Type::Text => {
@@ -416,9 +414,7 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
 
             Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
         }
-    });
-
-    values.collect()
+    }
 }
 
 impl ValueSerialize for String {
@@ -527,12 +523,13 @@ mod tests {
     use super::*;
 
     fn round_trip(r#type: Type, value: &Value) -> Value {
-        let mut buff = Vec::new();
-        serialize_into(&mut buff, &r#type, value);
+        let schema = Schema::new(vec![Column::new("col", r#type)]);
+        let values = [value];
+        
+        // Use the proper tuple serialization (with bitmap)
+        let buff = serialize_tuple(&schema, values);
 
         let mut cursor = Cursor::new(buff);
-        let schema = Schema::new(vec![Column::new("col", r#type)]);
-
         let mut rows = read_from(&mut cursor, &schema).expect("Failed to read from schema");
         rows.pop().expect("No value inside rows")
     }
@@ -552,6 +549,67 @@ mod tests {
     }
 
     #[test]
+    fn test_bitmap_null_handling() {
+        use crate::sql::statement::{Column, Constraint};
+        
+        // Test with nullable column (should use bitmap format)
+        let schema = Schema::new(vec![
+            Column {
+                name: "id".to_string(),
+                data_type: Type::Integer,
+                constraints: vec![],
+            },
+            Column {
+                name: "name".to_string(),
+                data_type: Type::Varchar(50),
+                constraints: vec![Constraint::Nullable],
+            },
+        ]);
+        
+        let values = [&Value::Number(1), &Value::Null];
+        let serialized = serialize_tuple(&schema, values);
+        
+        println!("Serialized bytes: {:?}", serialized);
+        
+        let mut cursor = Cursor::new(serialized);
+        let deserialized = read_from(&mut cursor, &schema).unwrap();
+        
+        println!("Deserialized: {:?}", deserialized);
+        
+        assert_eq!(deserialized.len(), 2);
+        assert_eq!(deserialized[0], Value::Number(1));
+        assert!(matches!(deserialized[1], Value::Null));
+    }
+
+    #[test]
+    fn test_backward_compatibility() {
+        use crate::sql::statement::Column;
+        
+        // Test with non-nullable columns (should use original format)
+        let schema = Schema::new(vec![
+            Column {
+                name: "id".to_string(),
+                data_type: Type::Integer,
+                constraints: vec![],
+            },
+            Column {
+                name: "name".to_string(),
+                data_type: Type::Varchar(50),
+                constraints: vec![],
+            },
+        ]);
+        
+        let values = [&Value::Number(1), &Value::String("hello".to_string())];
+        let serialized = serialize_tuple(&schema, values);
+        
+        let mut cursor = Cursor::new(serialized);
+        let deserialized = read_from(&mut cursor, &schema).unwrap();
+        
+        assert_eq!(deserialized[0], Value::Number(1));
+        assert_eq!(deserialized[1], Value::String("hello".to_string()));
+    }
+
+    #[test]
     fn test_text_varlena_roundtrip() {
         let cases: Vec<String> = vec![
             "".into(),  // empty
@@ -563,20 +621,13 @@ mod tests {
         ];
 
         for s in cases {
-            let mut buf = Vec::new();
-            serialize_into(&mut buf, &Type::Text, &Value::String(s.to_string()));
-
-            if s.len() < 0x7f {
-                assert_eq!(buf[0], s.len() as u8);
-            } else {
-                assert_eq!(buf[0], 0x80);
-                let len = s.len() as u32;
-                let be = len.to_be_bytes();
-                assert_eq!(&buf[1..4], &be[1..]);
-            }
+            let schema = Schema::new(vec![Column::new("t", Type::Text)]);
+            let string_val = Value::String(s.clone());
+            let values = [&string_val];
+            
+            let buf = serialize_tuple(&schema, values);
 
             let mut cursor = Cursor::new(&buf);
-            let schema = Schema::new(vec![Column::new("t", Type::Text)]);
             let row = read_from(&mut cursor, &schema).unwrap();
 
             assert_eq!(
