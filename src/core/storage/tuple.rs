@@ -39,7 +39,7 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
 }
 
 /// Returns the length of bytes needed to storage a given `Varchar` [`Type`].
-pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usize {
+pub(crate) const fn utf_8_length_bytes(max_size: usize) -> usize {
     match max_size {
         0..64 => 1,
         64..16384 => 2,
@@ -636,5 +636,61 @@ mod tests {
                 "Failed roundtrip for text: {s:?}",
             );
         }
+    }
+
+    #[test]
+    fn test_bitmap_comparator_logic() {
+        use crate::core::storage::btree::{BTreeKeyCmp, BitmapFixedSizeCmp, BytesCmp};
+        use crate::sql::statement::{Column, Constraint};
+        
+        // Create a schema with nullable columns (should use bitmap format)
+        let schema = Schema::new(vec![
+            Column {
+                name: "id".to_string(),
+                data_type: Type::Integer,
+                constraints: vec![],
+            },
+            Column {
+                name: "name".to_string(),
+                data_type: Type::Varchar(50),
+                constraints: vec![Constraint::Nullable],
+            },
+        ]);
+        
+        // Create two tuples with different primary keys
+        let tuple1 = [&Value::Number(1), &Value::String("Alice".to_string())];
+        let tuple2 = [&Value::Number(2), &Value::String("Bob".to_string())];
+        let tuple3 = [&Value::Number(3), &Value::Null]; // NULL case
+        
+        // Serialize all tuples (should use bitmap format)
+        let serialized1 = serialize_tuple(&schema, tuple1);
+        let serialized2 = serialize_tuple(&schema, tuple2);
+        let serialized3 = serialize_tuple(&schema, tuple3);
+        
+        println!("Tuple1 serialized: {:?}", serialized1);
+        println!("Tuple2 serialized: {:?}", serialized2);
+        println!("Tuple3 serialized: {:?}", serialized3);
+        
+        // Create bitmap comparator
+        let bitmap_size = (schema.columns.len() + 7) / 8; // Should be 1 byte for 2 columns
+        let pk_size = 4; // Integer is 4 bytes
+        let comparator = BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp {
+            bitmap_size,
+            pk_size,
+        });
+        
+        // Test comparisons
+        let cmp_1_2 = comparator.cmp(&serialized1, &serialized2);
+        let cmp_2_3 = comparator.cmp(&serialized2, &serialized3);
+        let cmp_1_3 = comparator.cmp(&serialized1, &serialized3);
+        
+        println!("Comparison 1 vs 2: {:?}", cmp_1_2);
+        println!("Comparison 2 vs 3: {:?}", cmp_2_3);
+        println!("Comparison 1 vs 3: {:?}", cmp_1_3);
+        
+        // Should be Less since 1 < 2 < 3
+        assert_eq!(cmp_1_2, std::cmp::Ordering::Less);
+        assert_eq!(cmp_2_3, std::cmp::Ordering::Less);
+        assert_eq!(cmp_1_3, std::cmp::Ordering::Less);
     }
 }

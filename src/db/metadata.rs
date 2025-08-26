@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::storage::btree::{BTree, BTreeKeyCmp, FixedSizeCmp};
+use crate::core::storage::btree::{BTree, BTreeKeyCmp, FixedSizeCmp, BitmapFixedSizeCmp, BitmapStringCmp};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::db::{DatabaseError, RowId, Schema};
 use crate::sql::analyzer::AnalyzerError;
-use crate::sql::statement::{Column, Type, Value};
+use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
+use crate::sql::statement::{Column, Type, Value, Constraint};
 
 use super::schema::umbra_schema;
 use super::Database;
@@ -153,11 +154,53 @@ impl Relation {
         }
     }
 
+    /// Check if schema has any nullable columns
+    fn schema_has_nullable_columns(schema: &Schema) -> bool {
+        schema.columns.iter().any(|col| col.constraints.contains(&Constraint::Nullable))
+    }
+
+    /// Calculate bitmap size in bytes for a schema
+    fn null_bitmap_size(schema: &Schema) -> usize {
+        if Self::schema_has_nullable_columns(schema) {
+            (schema.columns.len() + 7) / 8
+        } else {
+            0
+        }
+    }
+
     pub fn comp(&self) -> BTreeKeyCmp {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
             Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
-            Self::Table(table) => BTreeKeyCmp::from(&table.schema.columns[0].data_type),
+            Self::Table(table) => {
+                let pk_type = &table.schema.columns[0].data_type;
+                println!("Table comp() debug: table={}, has_nullable={}", 
+                         table.name, Self::schema_has_nullable_columns(&table.schema));
+                
+                if Self::schema_has_nullable_columns(&table.schema) {
+                    // Use bitmap-aware comparator for tables with nullable columns
+                    let bitmap_size = Self::null_bitmap_size(&table.schema);
+                    println!("Using bitmap comparator: bitmap_size={}", bitmap_size);
+                    match pk_type {
+                        Type::Varchar(max) => BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp {
+                            bitmap_size,
+                            len_prefix: utf_8_length_bytes(*max),
+                        }),
+                        _ => {
+                            let pk_size = byte_len_of_type(pk_type);
+                            println!("Creating BitmapMemCmp with pk_size={}", pk_size);
+                            BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp {
+                                bitmap_size,
+                                pk_size,
+                            })
+                        }
+                    }
+                } else {
+                    // Use original comparator for tables without nullable columns
+                    println!("Using original comparator");
+                    BTreeKeyCmp::from(pk_type)
+                }
+            }
         }
     }
 

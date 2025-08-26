@@ -69,11 +69,29 @@ pub(crate) struct FixedSizeCmp(pub usize);
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct StringCmp(pub usize);
 
+/// Fixed-size comparator for bitmap format tuples.
+/// Skips the bitmap header and compares the primary key value.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct BitmapFixedSizeCmp {
+    pub bitmap_size: usize,
+    pub pk_size: usize,
+}
+
+/// String comparator for bitmap format tuples.
+/// Skips the bitmap header and compares the VARCHAR primary key value.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct BitmapStringCmp {
+    pub bitmap_size: usize,
+    pub len_prefix: usize,
+}
+
 /// No allocations comparing to [`Box`].
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum BTreeKeyCmp {
     MemCmp(FixedSizeCmp),
     StrCmp(StringCmp),
+    BitmapMemCmp(BitmapFixedSizeCmp),
+    BitmapStrCmp(BitmapStringCmp),
 }
 
 /// Represents the result of reading content from the [`BTree`].
@@ -757,6 +775,46 @@ impl BytesCmp for FixedSizeCmp {
     }
 }
 
+impl BytesCmp for BitmapFixedSizeCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        // Skip bitmap header and compare primary key value
+        let a_pk = &a[self.bitmap_size..self.bitmap_size + self.pk_size];
+        let b_pk = &b[self.bitmap_size..self.bitmap_size + self.pk_size];
+        
+        // Debug: print the data being compared
+        println!("BitmapFixedSizeCmp debug:");
+        println!("  bitmap_size: {}, pk_size: {}", self.bitmap_size, self.pk_size);
+        println!("  a: {:?}", a);
+        println!("  b: {:?}", b);
+        println!("  a_pk: {:?}", a_pk);
+        println!("  b_pk: {:?}", b_pk);
+        
+        let result = a_pk.cmp(b_pk);
+        println!("  result: {:?}", result);
+        result
+    }
+}
+
+impl BytesCmp for BitmapStringCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        // Skip bitmap header and compare VARCHAR primary key value
+        let a_data = &a[self.bitmap_size..];
+        let b_data = &b[self.bitmap_size..];
+        
+        let mut buffer = [0; size_of::<usize>()];
+        buffer[..self.len_prefix].copy_from_slice(&a_data[..self.len_prefix]);
+        let len_a = usize::from_le_bytes(buffer);
+        buffer.fill(0);
+        buffer[..self.len_prefix].copy_from_slice(&b_data[..self.len_prefix]);
+        let len_b = usize::from_le_bytes(buffer);
+
+        // Compare the actual string content
+        std::str::from_utf8(&a_data[self.len_prefix..self.len_prefix + len_a])
+            .unwrap()
+            .cmp(std::str::from_utf8(&b_data[self.len_prefix..self.len_prefix + len_b]).unwrap())
+    }
+}
+
 impl From<&Type> for Box<dyn BytesCmp> {
     fn from(value: &Type) -> Self {
         match value {
@@ -786,6 +844,8 @@ impl BytesCmp for BTreeKeyCmp {
         match self {
             Self::MemCmp(mem) => mem.cmp(a, b),
             Self::StrCmp(str) => str.cmp(a, b),
+            Self::BitmapMemCmp(bitmap_mem) => bitmap_mem.cmp(a, b),
+            Self::BitmapStrCmp(bitmap_str) => bitmap_str.cmp(a, b),
         }
     }
 }

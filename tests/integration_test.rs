@@ -229,3 +229,93 @@ fn test_aggregate_functions_cleaned_up() -> Result<()> {
     db.drop()?;
     Ok(())
 }
+
+#[test]
+fn test_serial_primary_key_with_nullable_columns() -> Result<()> {
+    let mut db = State::new("test_serial.db");
+    
+    println!("Creating table with SERIAL primary key and nullable columns...");
+    db.exec(
+        r#"
+        CREATE TABLE test_users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255),
+            phone VARCHAR(15) NULLABLE
+        );
+        "#,
+    )?;
+    
+    println!("Inserting first row...");
+    db.exec(
+        r#"
+        INSERT INTO test_users (name, phone) VALUES ('Alice Smith', '+15551234567');
+        "#,
+    )?;
+    
+    println!("Inserting second row...");
+    db.exec(
+        r#"
+        INSERT INTO test_users (name, phone) VALUES ('Bob Johnson', '+15559876543');
+        "#,
+    )?;
+    
+    println!("Querying all rows...");
+    let result = db.exec("SELECT id, name, phone FROM test_users;")?;
+    
+    println!("Results:");
+    for (i, tuple) in result.tuples.iter().enumerate() {
+        println!("  Row {}: {:?}", i + 1, tuple);
+    }
+    
+    assert_eq!(result.tuples.len(), 2);
+    assert_eq!(result.tuples[0][0], Value::Number(1));
+    assert_eq!(result.tuples[1][0], Value::Number(2));
+    
+    db.drop()?;
+    Ok(())
+}
+
+#[test]
+fn test_manual_primary_key_with_nullable_columns() -> Result<()> {
+    let mut db = State::new("test_manual.db");
+    
+    println!("Creating table with manual primary key and nullable columns...");
+    db.exec(
+        r#"
+        CREATE TABLE test_users (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR(255),
+            phone VARCHAR(15) NULLABLE
+        );
+        "#,
+    )?;
+    
+    println!("Inserting first row...");
+    db.exec(
+        r#"
+        INSERT INTO test_users (id, name, phone) VALUES (1, 'Alice Smith', '+15551234567');
+        "#,
+    )?;
+    
+    println!("Inserting second row...");
+    db.exec(
+        r#"
+        INSERT INTO test_users (id, name, phone) VALUES (2, 'Bob Johnson', '+15559876543');
+        "#,
+    )?;
+    
+    println!("Querying all rows...");
+    let result = db.exec("SELECT id, name, phone FROM test_users;")?;
+    
+    println!("Results:");
+    for (i, tuple) in result.tuples.iter().enumerate() {
+        println!("  Row {}: {:?}", i + 1, tuple);
+    }
+    
+    assert_eq!(result.tuples.len(), 2);
+    assert_eq!(result.tuples[0][0], Value::Number(1));
+    assert_eq!(result.tuples[1][0], Value::Number(2));
+    
+    db.drop()?;
+    Ok(())
+}
