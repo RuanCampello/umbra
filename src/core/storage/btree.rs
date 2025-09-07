@@ -72,15 +72,15 @@ pub(crate) struct StringCmp(pub usize);
 /// Fixed-size comparator for nullable tuples with the bitmap header.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct BitMapSizedCmp {
-    bitmap_len: usize,
-    key_size: usize,
+    pub bitmap_len: usize,
+    pub key_size: usize,
 }
 
 /// UFT-8 string comparator for nullable tuples with the bitmap header.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct BitMapStringCmp {
-    bitmap_len: usize,
-    prefix_len: usize,
+    pub bitmap_len: usize,
+    pub prefix_len: usize,
 }
 
 /// No allocations comparing to [`Box`].

@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::storage::btree::{BTree, BTreeKeyCmp, FixedSizeCmp};
+use crate::core::storage::btree::{
+    BTree, BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp,
+};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
+use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
 use crate::db::{DatabaseError, RowId, Schema};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::statement::{Column, Type, Value};
@@ -157,7 +160,27 @@ impl Relation {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
             Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
-            Self::Table(table) => BTreeKeyCmp::from(&table.schema.columns[0].data_type),
+            Self::Table(table) => {
+                let pk = &table.schema.columns[0].data_type;
+
+                match &table.schema.has_nullable() {
+                    false => BTreeKeyCmp::from(pk),
+                    _ => {
+                        let bitmap_len = (&table.schema.len() + 7) / 8;
+
+                        match pk {
+                            Type::Varchar(max) => BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                                bitmap_len,
+                                prefix_len: utf_8_length_bytes(*max),
+                            }),
+                            _ => BTreeKeyCmp::MapMemCmp(BitMapSizedCmp {
+                                bitmap_len,
+                                key_size: byte_len_of_type(pk),
+                            }),
+                        }
+                    }
+                }
+            }
         }
     }
 

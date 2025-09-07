@@ -5,16 +5,10 @@ use std::{
 };
 
 use crate::{
-    core::date::{NaiveDateTime, Serialize},
+    core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse, Serialize},
+    core::uuid::Uuid,
     db::{RowId, Schema},
-    sql::statement::{Column, Temporal},
-};
-use crate::{
-    core::{
-        date::{NaiveDate, NaiveTime, Parse},
-        uuid::Uuid,
-    },
-    sql::statement::{Type, Value},
+    sql::statement::{Column, Temporal, Type, Value},
 };
 
 trait ValueSerialize {
@@ -39,7 +33,7 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
 }
 
 /// Returns the length of bytes needed to storage a given `Varchar` [`Type`].
-pub(in crate::core::storage) const fn utf_8_length_bytes(max_size: usize) -> usize {
+pub(crate) const fn utf_8_length_bytes(max_size: usize) -> usize {
     match max_size {
         0..64 => 1,
         64..16384 => 2,
