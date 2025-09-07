@@ -125,7 +125,8 @@ pub(crate) fn serialize_tuple<'value>(
             let bitmap = null_bitmap(schema.len(), values);
             buff.extend_from_slice(&bitmap);
 
-            |(col, _)| !col.is_nullable()
+            // Serialize all non-NULL values (both nullable and non-nullable columns)
+            |(_, val)| !val.is_null()
         }
         false => |_| true, // no filter needed
     };
@@ -211,9 +212,11 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             .as_ref()
             .map_or(false, |b| (b[i / 8] & (1 << (i % 8))) != 0)
         {
+            // Column is NULL according to bitmap, don't read from stream
             return Ok(Value::Null);
         }
 
+        // Column is not NULL, read its value from stream
         read_value(reader, col)
     });
 

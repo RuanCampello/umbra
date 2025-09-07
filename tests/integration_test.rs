@@ -323,6 +323,8 @@ fn test_manual_primary_key_with_nullable_columns() -> Result<()> {
 #[test]
 fn nullable_column() -> Result<()> {
     let mut db = State::new("nullable_test.db");
+    
+    println!("Creating table...");
     db.exec(
         r#"
         CREATE TABLE test_nullable_users (
@@ -335,14 +337,35 @@ fn nullable_column() -> Result<()> {
         "#,
     )?;
 
+    println!("Inserting Alice...");
     db.exec(
         r#"
-        INSERT INTO test_nullable_users (name, email, phone, age)
-        VALUES
-            ('Alice Smith',  'alice@example.com',   '+15551234567', 33),
-            ('Bob Johnson',  'bob@example.com',     '+15559876543', 27),
-            ('Carol Perez',  'carol@example.com',   NULL, NULL),
-            ('Daniel Silva', 'daniel@example.com',  '+15557654321', NULL);
+        INSERT INTO test_nullable_users (name, email, phone, age) 
+        VALUES ('Alice Smith', 'alice@example.com', '+15551234567', 33);
+        "#,
+    )?;
+
+    println!("Inserting Bob...");
+    db.exec(
+        r#"
+        INSERT INTO test_nullable_users (name, email, phone, age) 
+        VALUES ('Bob Johnson', 'bob@example.com', '+15559876543', 27);
+        "#,
+    )?;
+
+    println!("Inserting Carol...");
+    db.exec(
+        r#"
+        INSERT INTO test_nullable_users (name, email, phone, age) 
+        VALUES ('Carol Perez', 'carol@example.com', NULL, NULL);
+        "#,
+    )?;
+
+    println!("Inserting Daniel...");
+    db.exec(
+        r#"
+        INSERT INTO test_nullable_users (name, email, phone, age) 
+        VALUES ('Daniel Silva', 'daniel@example.com', '+15557654321', NULL);
         "#,
     )?;
 

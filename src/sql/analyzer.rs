@@ -503,6 +503,14 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
             // treat it as a plain string.
             None => Ok(VmType::String),
         },
+        Value::Null => {
+            // NULL values are compatible with any type if we have a column type context
+            // If no column type is provided, default to a generic type
+            match col_type {
+                Some(ty) => Ok(ty.into()),
+                None => Ok(VmType::String), // Default when no type context
+            }
+        }
         _ => Ok(VmType::Date),
     };
 

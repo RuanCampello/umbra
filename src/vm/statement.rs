@@ -125,10 +125,18 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 name,
                 unique,
                 column: metadata.schema.columns[col].clone(),
-                schema: Schema::new(vec![
-                    metadata.schema.columns[col].clone(),
-                    metadata.schema.columns[0].clone(),
-                ]),
+                schema: {
+                    // Create index schema without nullable constraints
+                    // Indexes store [column_value, primary_key] and should not use bitmap format
+                    let mut index_col = metadata.schema.columns[col].clone();
+                    let mut pk_col = metadata.schema.columns[0].clone();
+                    
+                    // Remove nullable constraint from index columns
+                    index_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
+                    pk_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
+                    
+                    Schema::new(vec![index_col, pk_col])
+                },
             };
 
             let mut scan = Planner::SeqScan(SeqScan {
