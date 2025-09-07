@@ -383,3 +383,48 @@ fn nullable_column() -> Result<()> {
     db.drop()?;
     Ok(())
 }
+
+#[test]
+fn debug_phone_unique_index() -> Result<()> {
+    let mut db = State::new("debug_phone.db");
+    
+    println!("=== Creating table ===");
+    db.exec(
+        r#"
+        CREATE TABLE debug_users (
+            id SERIAL PRIMARY KEY,
+            phone VARCHAR(15) NULLABLE UNIQUE
+        );
+        "#,
+    )?;
+
+    println!("=== Inserting Alice ===");
+    db.exec(
+        r#"
+        INSERT INTO debug_users (phone) VALUES ('+15551234567');
+        "#,
+    )?;
+    
+    println!("=== Alice inserted successfully ===");
+
+    println!("=== Inserting Bob ===");
+    let result = db.exec(
+        r#"
+        INSERT INTO debug_users (phone) VALUES ('+15559876543');
+        "#,
+    );
+    
+    match result {
+        Ok(_) => println!("=== Bob inserted successfully ==="),
+        Err(e) => println!("=== Bob insertion failed: {:?} ===", e),
+    }
+
+    println!("=== Querying results ===");
+    let query = db.exec("SELECT id, phone FROM debug_users;")?;
+    for (i, tuple) in query.tuples.iter().enumerate() {
+        println!("  Row {}: {:?}", i + 1, tuple);
+    }
+    
+    db.drop()?;
+    Ok(())
+}
