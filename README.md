@@ -165,7 +165,7 @@ CREATE TABLE users (
     name VARCHAR(255),              -- non-null by default
     email VARCHAR(255) NULLABLE,    -- explicitly nullable
 );
-> ```
+```
 
 ### ⚙️ Operations
 #### 💼 **Table Operations**
