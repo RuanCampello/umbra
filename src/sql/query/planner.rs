@@ -7,7 +7,6 @@ use std::{
 use crate::{
     core::storage::{
         pagination::io::FileOperations,
-        btree::BTreeKeyCmp,
     },
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
     sql::{

@@ -887,6 +887,12 @@ impl<File: PlanExecutor> Execute for Insert<File> {
                     )),
                 )?;
 
+                // Skip index entry if the indexed column value is NULL
+                // This is standard behavior for unique indexes - NULL values don't participate in uniqueness
+                if tuple[col].is_null() {
+                    return Ok(());
+                }
+
                 let index_relation = Relation::Index(index.clone());
                 let comparator = index_relation.comp();
 
@@ -955,15 +961,20 @@ impl<File: PlanExecutor> Execute for Update<File> {
             );
 
             if let Some((old, new)) = updated_cols.get(&index.column.name) {
-                btree
-                    .try_insert(tuple::serialize_tuple(
-                        &index.schema,
-                        [&tuple[*new], &tuple[0]],
-                    ))?
-                    .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(*new)))?;
+                // Insert new value if it's not NULL
+                if !tuple[*new].is_null() {
+                    btree
+                        .try_insert(tuple::serialize_tuple(
+                            &index.schema,
+                            [&tuple[*new], &tuple[0]],
+                        ))?
+                        .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(*new)))?;
+                }
 
-                // For unique indexes, we need to remove the old [index_value, primary_key] entry
-                btree.remove(&tuple::serialize_tuple(&index.schema, [old, &tuple[0]]))?;
+                // Remove old value if it wasn't NULL
+                if !old.is_null() {
+                    btree.remove(&tuple::serialize_tuple(&index.schema, [old, &tuple[0]]))?;
+                }
             } else if updated_cols.contains_key(&self.table.schema.columns[0].name) {
                 let index_col = self.table.schema.index_of(&index.column.name).unwrap();
 
@@ -994,6 +1005,12 @@ impl<File: PlanExecutor> Execute for Delete<File> {
 
         for index in &self.table.indexes {
             let col = self.table.schema.index_of(&index.column.name).unwrap();
+            
+            // Skip removing index entry if the value is NULL (wasn't indexed in the first place)
+            if tuple[col].is_null() {
+                continue;
+            }
+            
             // For unique indexes, the key is [index_value, primary_key] to match the insert format
             let key = tuple::serialize_tuple(&index.schema, [&tuple[col], &tuple[0]]);
 

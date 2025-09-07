@@ -370,15 +370,33 @@ fn nullable_column() -> Result<()> {
     )?;
 
     let query = db.exec("SELECT name, phone, age FROM test_nullable_users;")?;
-    assert_eq!(
-        query.tuples,
-        vec![
-            vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
-            vec!["Bob Johnson".into(), "+15559876543".into(), 27.into()],
-            vec!["Carol Perez".into(), Value::Null, Value::Null],
-            vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
-        ]
-    );
+    
+    // Check results manually to avoid NULL comparison issues
+    assert_eq!(query.tuples.len(), 4);
+    
+    // Row 0: Alice
+    assert_eq!(query.tuples[0].len(), 3);
+    assert!(matches!(query.tuples[0][0], Value::String(ref s) if s == "Alice Smith"));
+    assert!(matches!(query.tuples[0][1], Value::String(ref s) if s == "+15551234567"));
+    assert!(matches!(query.tuples[0][2], Value::Number(33)));
+    
+    // Row 1: Bob  
+    assert_eq!(query.tuples[1].len(), 3);
+    assert!(matches!(query.tuples[1][0], Value::String(ref s) if s == "Bob Johnson"));
+    assert!(matches!(query.tuples[1][1], Value::String(ref s) if s == "+15559876543"));
+    assert!(matches!(query.tuples[1][2], Value::Number(27)));
+    
+    // Row 2: Carol (with NULLs)
+    assert_eq!(query.tuples[2].len(), 3);
+    assert!(matches!(query.tuples[2][0], Value::String(ref s) if s == "Carol Perez"));
+    assert!(matches!(query.tuples[2][1], Value::Null));
+    assert!(matches!(query.tuples[2][2], Value::Null));
+    
+    // Row 3: Daniel (with NULL age)
+    assert_eq!(query.tuples[3].len(), 3);
+    assert!(matches!(query.tuples[3][0], Value::String(ref s) if s == "Daniel Silva"));
+    assert!(matches!(query.tuples[3][1], Value::String(ref s) if s == "+15557654321"));
+    assert!(matches!(query.tuples[3][2], Value::Null));
     
     db.drop()?;
     Ok(())

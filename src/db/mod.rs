@@ -343,13 +343,18 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                                     "Couldn't find index column {column} in table {table}"
                                 )))?;
 
-                        let idx_col = metadata.schema.columns[col_idx].clone();
+                        let mut idx_col = metadata.schema.columns[col_idx].clone();
+                        let mut pk_col = metadata.schema.columns[0].clone();
+                        
+                        // Remove nullable constraints from index columns (same as during index creation)
+                        idx_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
+                        pk_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
 
                         metadata.indexes.push(IndexMetadata {
                             root: *root as PageNumber,
                             name,
                             column: idx_col.clone(),
-                            schema: Schema::new(vec![idx_col, metadata.schema.columns[0].clone()]),
+                            schema: Schema::new(vec![idx_col, pk_col]),
                             unique,
                         });
                     }
@@ -542,9 +547,15 @@ impl TryFrom<&[&str]> for Context {
                                 _ => unreachable!("This ain't a index")
                             };
 
+                            // Remove nullable constraints from index columns (consistent with index creation)
+                            let mut idx_col = col.clone();
+                            let mut pk_col = columns[0].clone();
+                            idx_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
+                            pk_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
+
                             metadata.indexes.push(IndexMetadata {
-                                column: col.clone(),
-                                schema: Schema::new(vec![col.clone(), columns[0].clone()]),
+                                column: idx_col.clone(),
+                                schema: Schema::new(vec![idx_col, pk_col]),
                                 name: index,
                                 root,
                                 unique: true,
