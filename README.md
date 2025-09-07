@@ -153,8 +153,8 @@ CREATE TABLE shadow_agents (
 - [ ] `FOREIGN KEY` (relationships are hard)
 - [ ] `CHECK`
 
-> [!IMPORTANT]
-> **Nullability Philosophy**
+> [!IMPORTANT]  
+> **Nullability Philosophy**  
 > Unlike SQL standard where columns are nullable by default, requiring `NOT NULL` to prevent it.
 > Umbra follows Rust philosophy: columns are **not null** by default, unless explicit marked as `NULLABLE`.
 > This makes null handling intentional and not condescending.
