@@ -14,7 +14,7 @@ use crate::{
         date::{NaiveDate, NaiveTime, Parse},
         uuid::Uuid,
     },
-    sql::statement::{Type, Value, Constraint},
+    sql::statement::{Type, Value},
 };
 
 trait ValueSerialize {
@@ -52,67 +52,6 @@ pub(crate) const fn utf_8_length_bytes(max_size: usize) -> usize {
 /// If the first byte greater or equal to 128: 4-byte header (long string, length is in the next 3 bytes)
 ///
 /// *Note*: the first byte being equal to 0x7f is reserved and cannot be used.
-
-/// Generate a null bitmap for a tuple, indicating which columns contain NULL values
-fn generate_null_bitmap(schema: &Schema, values: &[&Value]) -> Vec<u8> {
-    let num_columns = schema.columns.len();
-    let bitmap_size = (num_columns + 7) / 8; // Round up to next byte boundary
-    
-    let mut bitmap = vec![0u8; bitmap_size];
-    
-    for (col_idx, value) in values.iter().enumerate() {
-        if matches!(value, Value::Null) {
-            let byte_idx = col_idx / 8;
-            let bit_idx = col_idx % 8;
-            bitmap[byte_idx] |= 1 << bit_idx;
-        }
-    }
-    
-    bitmap
-}
-
-/// Check if schema has any nullable columns (requires bitmap format)
-fn schema_has_nullable_columns(schema: &Schema) -> bool {
-    schema.columns.iter().any(|col| col.constraints.contains(&Constraint::Nullable))
-}
-
-/// Get the size in bytes needed for the null bitmap
-fn null_bitmap_size(schema: &Schema) -> usize {
-    if schema_has_nullable_columns(schema) {
-        (schema.columns.len() + 7) / 8
-    } else {
-        0 // No bitmap needed for schemas without nullable columns
-    }
-}
-
-/// Serializes a value into the buffer using standard encoding
-fn serialize_value_standard(buff: &mut Vec<u8>, col: &crate::sql::statement::Column, value: &Value) {
-    match value {
-        Value::Null => {
-            // For backward compatibility in non-nullable columns, this should not happen
-            // But if it does, we'll panic to make it clear this is a programming error
-            panic!("NULL values should only be used with nullable columns in the bitmap format");
-        }
-        Value::String(string) => match &col.data_type {
-            Type::Varchar(max) => {
-                if string.as_bytes().len() > u32::MAX as usize {
-                    todo!("Strings too long are not supported {}", u32::MAX);
-                }
-
-                let b_len = string.as_bytes().len().to_le_bytes();
-                let len_prefix = utf_8_length_bytes(*max);
-
-                buff.extend_from_slice(&b_len[..len_prefix]);
-                buff.extend_from_slice(string.as_bytes());
-            }
-            _ => string.serialize(buff, &col.data_type),
-        },
-        _ => {
-            // For non-string values, use the original serialization
-            serialize_into(buff, &col.data_type, value);
-        }
-    }
-}
 
 /// Returns the size in bytes of the varlena header, given its first byte.
 /// If the first byte less than 127: 1-byte header (short string, length is the first byte)
@@ -159,11 +98,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
-        Value::Null => {
-            // This should only happen in the original format for backward compatibility
-            // In practice, this means the column isn't actually nullable in the schema
-            panic!("NULL values in original format suggest incorrect schema definition");
-        }
+        Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
 
@@ -175,119 +110,117 @@ pub(crate) fn serialize_tuple<'value>(
     schema: &Schema,
     values: impl IntoIterator<Item = &'value Value> + Copy,
 ) -> Vec<u8> {
+    use crate::sql::statement::Column;
+
     let mut buff = Vec::new();
-    let values_vec: Vec<&Value> = values.into_iter().collect();
 
     debug_assert_eq!(
         schema.len(),
-        values_vec.len(),
+        values.into_iter().count(),
         "Length of schema and values length mismatch"
     );
 
-    if schema_has_nullable_columns(schema) {
-        // Use bitmap format for schemas with nullable columns
-        let null_bitmap = generate_null_bitmap(schema, &values_vec);
-        buff.extend_from_slice(&null_bitmap);
+    let filter: fn(&(&Column, &Value)) -> bool = match schema.has_nullable() {
+        true => {
+            let bitmap = null_bitmap(schema.len(), values);
+            buff.extend_from_slice(&bitmap);
 
-        // Serialize only non-NULL values using standard encoding
-        schema
-            .columns
-            .iter()
-            .zip(values_vec.iter())
-            .for_each(|(col, val)| {
-                if !matches!(val, Value::Null) {
-                    serialize_value_standard(&mut buff, col, val);
-                }
-            });
-    } else {
-        // Use original format for schemas without nullable columns (backward compatibility)
-        schema
-            .columns
-            .iter()
-            .zip(values_vec.iter())
-            .for_each(|(col, val)| {
-                serialize_value_standard(&mut buff, col, val);
-            });
-    }
+            |(col, _)| !col.is_nullable()
+        }
+        false => |_| true, // no filter needed
+    };
+    
+    schema
+        .columns
+        .iter()
+        .zip(values)
+        .filter(filter)
+        .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
 
     buff
 }
 
+fn null_bitmap<'value, V>(schema_length: usize, values: V) -> Vec<u8>
+where
+    V: IntoIterator<Item = &'value Value>,
+{
+    let mut bitmap = vec![0u8; (schema_length + 7) / 8];
+
+    values
+        .into_iter()
+        .enumerate()
+        .filter(|(_, value)| value.is_null())
+        .for_each(|(idx, _)| bitmap[idx / 8] |= 1 << (idx % 8));
+
+    bitmap
+}
+
 // FIXME: use of sorting with different type from schema
+// FIXME: use of sorting with different type from schema
+#[rustfmt::skip]
 pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
-    let bitmap_size = null_bitmap_size(schema);
-    
-    let data_size = schema
+    let bitmap_size = match schema.has_nullable() {
+        true => (schema.columns.len() + 7) / 8,
+        _ => 0,
+    };
+
+     bitmap_size + schema
         .columns
         .iter()
         .enumerate()
         .map(|(idx, col)| match &tuple[idx] {
-            Value::Null => 0, // NULL values take no space (handled by bitmap)
-            Value::String(string) => match col.data_type {
-                Type::Varchar(max) => {
-                    // Standard encoding for all VARCHAR columns
-                    utf_8_length_bytes(max) + string.as_bytes().len()
-                }
+            Value::String(string) => match col.data_type{
+                Type::Varchar(max) => utf_8_length_bytes(max) + string.as_bytes().len(),
                 Type::Text => {
-                    let len = string.as_bytes().len();
-                    let header_len = varlena_header_len(len as _);
-                    header_len + len
+                    if tuple[idx].is_null() {
+                    return 0;
                 }
+
+                let Value::String(string) = &tuple[idx] else {
+                    panic!("Expected data type TEXT but found {}", tuple[idx]);
+                };
+
+                let len = string.as_bytes().len();
+                if len < 0x7f {
+                    1 + len
+                } else {
+                    4 + len
+                }
+            }
                 _ => byte_len_of_type(&col.data_type),
             },
-            _ => byte_len_of_type(&col.data_type),
+            _ => byte_len_of_type(&col.data_type)
         })
-        .sum::<usize>();
-    
-    bitmap_size + data_size
+        .sum::<usize>()
 }
 
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
-    if schema_has_nullable_columns(schema) {
-        // Use bitmap format for schemas with nullable columns
-        read_from_bitmap_format(reader, schema)
-    } else {
-        // Use original format for schemas without nullable columns (backward compatibility)
-        read_from_original_format(reader, schema)
-    }
-}
+    let bitmap = match schema.has_nullable() {
+        true => {
+            let bitmap_size = (schema.len() + 7) / 8;
+            let mut bitmap = vec![0u8; bitmap_size];
+            reader.read_exact(&mut bitmap)?;
+            Some(bitmap)
+        }
 
-fn read_from_bitmap_format(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
-    let bitmap_size = null_bitmap_size(schema);
-    
-    // Read the null bitmap
-    let mut null_bitmap = vec![0u8; bitmap_size];
-    reader.read_exact(&mut null_bitmap)?;
-    
-    // Helper function to check if a column is null
-    let is_null = |col_idx: usize| -> bool {
-        let byte_idx = col_idx / 8;
-        let bit_idx = col_idx % 8;
-        (null_bitmap[byte_idx] & (1 << bit_idx)) != 0
+        false => None,
     };
-    
-    // Read values based on the bitmap
-    let values = schema.columns.iter().enumerate().map(|(col_idx, col)| {
-        if is_null(col_idx) {
+
+    let values = schema.columns.iter().enumerate().map(|(i, col)| {
+        if bitmap
+            .as_ref()
+            .map_or(false, |b| (b[i / 8] & (1 << (i % 8))) != 0)
+        {
             return Ok(Value::Null);
         }
-        
-        // Read non-null value using standard deserialization
-        read_single_value(reader, col)
+
+        read_value(reader, col)
     });
 
     values.collect()
 }
 
-fn read_from_original_format(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
-    let values = schema.columns.iter().map(|col| {
-        read_single_value(reader, col)
-    });
-
-    values.collect()
-}
-
-fn read_single_value(reader: &mut impl Read, col: &crate::sql::statement::Column) -> io::Result<Value> {
+fn read_value(reader: &mut impl Read, col: &crate::sql::statement::Column) -> io::Result<Value> {
     match &col.data_type {
         Type::Varchar(size) => {
             // Standard VARCHAR deserialization

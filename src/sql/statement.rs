@@ -345,6 +345,18 @@ impl Column {
             constraints: vec![Constraint::Unique],
         }
     }
+
+    pub fn nullable(name: &str, data_type: Type) -> Self {
+        Self {
+            name: name.to_string(),
+            data_type,
+            constraints: vec![Constraint::Nullable],
+        }
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.constraints.contains(&Constraint::Nullable)
+    }
 }
 
 impl Type {
@@ -560,6 +572,10 @@ impl Default for Expression {
 }
 
 impl Value {
+    pub(crate) fn is_null(&self) -> bool {
+        self == &Value::Null
+    }
+
     pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
         match (self, other) {
             (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),

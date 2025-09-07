@@ -130,9 +130,9 @@ impl TableMetadata {
     pub fn comp(&self) -> Result<BTreeKeyCmp, DatabaseError> {
         let pk_type = &self.schema.columns[0].data_type;
         
-        if self.schema_has_nullable_columns() {
+        if self.schema.has_nullable() {
             // Use bitmap-aware comparator for tables with nullable columns
-            let bitmap_size = self.null_bitmap_size();
+            let bitmap_size = (self.schema.len() + 7) / 8;
             match pk_type {
                 Type::Varchar(max) => Ok(BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp {
                     bitmap_size,
@@ -159,20 +159,6 @@ impl TableMetadata {
         }
     }
 
-    /// Check if schema has any nullable columns
-    fn schema_has_nullable_columns(&self) -> bool {
-        self.schema.columns.iter().any(|col| col.constraints.contains(&Constraint::Nullable))
-    }
-
-    /// Calculate bitmap size in bytes for a schema
-    fn null_bitmap_size(&self) -> usize {
-        if self.schema_has_nullable_columns() {
-            (self.schema.columns.len() + 7) / 8
-        } else {
-            0
-        }
-    }
-
     pub fn keys(&self) -> &Column {
         self.schema.keys()
     }
@@ -191,29 +177,15 @@ impl Relation {
         }
     }
 
-    /// Check if schema has any nullable columns
-    fn schema_has_nullable_columns(schema: &Schema) -> bool {
-        schema.columns.iter().any(|col| col.constraints.contains(&Constraint::Nullable))
-    }
-
-    /// Calculate bitmap size in bytes for a schema
-    fn null_bitmap_size(schema: &Schema) -> usize {
-        if Self::schema_has_nullable_columns(schema) {
-            (schema.columns.len() + 7) / 8
-        } else {
-            0
-        }
-    }
-
     pub fn comp(&self) -> BTreeKeyCmp {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
             Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
             Self::Table(table) => {
                 let pk_type = &table.schema.columns[0].data_type;
-                if Self::schema_has_nullable_columns(&table.schema) {
+                if table.schema.has_nullable() {
                     // Use bitmap-aware comparator for tables with nullable columns
-                    let bitmap_size = Self::null_bitmap_size(&table.schema);
+                    let bitmap_size = (table.schema.len() + 7) / 8;
                     match pk_type {
                         Type::Varchar(max) => BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp {
                             bitmap_size,
