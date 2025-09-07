@@ -744,6 +744,12 @@ impl TryFrom<&Type> for FixedSizeCmp {
     }
 }
 
+impl From<FixedSizeCmp> for BTreeKeyCmp {
+    fn from(value: FixedSizeCmp) -> Self {
+        Self::MemCmp(value)
+    }
+}
+
 /// Computes the length of a string reading its first `self.0` as a big endian.
 impl BytesCmp for StringCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {

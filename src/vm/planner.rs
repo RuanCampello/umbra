@@ -89,7 +89,7 @@ pub(crate) struct RangeScan<File> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct KeyScan<File: FileOperations> {
-    pub comparator: FixedSizeCmp,
+    pub comparator: BTreeKeyCmp,
     pub table: TableMetadata,
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
