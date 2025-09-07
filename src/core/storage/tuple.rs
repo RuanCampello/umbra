@@ -165,32 +165,41 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
         _ => 0,
     };
 
-     bitmap_size + schema
+    bitmap_size + schema
         .columns
         .iter()
         .enumerate()
-        .map(|(idx, col)| match &tuple[idx] {
-            Value::String(string) => match col.data_type{
-                Type::Varchar(max) => utf_8_length_bytes(max) + string.as_bytes().len(),
-                Type::Text => {
-                    if tuple[idx].is_null() {
-                    return 0;
-                }
-
-                let Value::String(string) = &tuple[idx] else {
-                    panic!("Expected data type TEXT but found {}", tuple[idx]);
-                };
-
-                let len = string.as_bytes().len();
-                if len < 0x7f {
-                    1 + len
-                } else {
-                    4 + len
-                }
+        .filter_map(|(idx, col)| {
+            // For nullable schemas, skip NULL values (they don't get serialized)
+            if schema.has_nullable() && tuple[idx].is_null() {
+                return None;
             }
-                _ => byte_len_of_type(&col.data_type),
-            },
-            _ => byte_len_of_type(&col.data_type)
+            
+            let size = match &tuple[idx] {
+                Value::String(string) => match col.data_type{
+                    Type::Varchar(max) => utf_8_length_bytes(max) + string.as_bytes().len(),
+                    Type::Text => {
+                        if tuple[idx].is_null() {
+                        return None;
+                    }
+
+                    let Value::String(string) = &tuple[idx] else {
+                        panic!("Expected data type TEXT but found {}", tuple[idx]);
+                    };
+
+                    let len = string.as_bytes().len();
+                    if len < 0x7f {
+                        1 + len
+                    } else {
+                        4 + len
+                    }
+                }
+                    _ => byte_len_of_type(&col.data_type),
+                },
+                _ => byte_len_of_type(&col.data_type)
+            };
+            
+            Some(size)
         })
         .sum::<usize>()
 }

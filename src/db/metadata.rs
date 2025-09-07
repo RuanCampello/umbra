@@ -180,6 +180,7 @@ impl Relation {
     pub fn comp(&self) -> BTreeKeyCmp {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
+            // Indexes always use regular comparators regardless of parent table's nullable columns
             Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
             Self::Table(table) => {
                 let pk_type = &table.schema.columns[0].data_type;

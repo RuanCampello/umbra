@@ -322,7 +322,7 @@ fn test_manual_primary_key_with_nullable_columns() -> Result<()> {
 
 #[test]
 fn nullable_column() -> Result<()> {
-    let mut db = State::new("nullable_test.db");
+    let mut db = State::new("nullable_test_unique.db");
     
     println!("Creating table...");
     db.exec(

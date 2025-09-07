@@ -887,7 +887,8 @@ impl<File: PlanExecutor> Execute for Insert<File> {
                     )),
                 )?;
 
-                let comparator = BTreeKeyCmp::from(&index.column.data_type);
+                let index_relation = Relation::Index(index.clone());
+                let comparator = index_relation.comp();
 
                 BTree::new(&mut pager, index.root, comparator)
                     .try_insert(tuple::serialize_tuple(
@@ -946,10 +947,11 @@ impl<File: PlanExecutor> Execute for Update<File> {
         }
 
         for index in &self.table.indexes {
+            let index_relation = Relation::Index(index.clone());
             let mut btree = BTree::new(
                 &mut pager,
                 index.root,
-                BTreeKeyCmp::from(&index.column.data_type),
+                index_relation.comp(),
             );
 
             if let Some((old, new)) = updated_cols.get(&index.column.name) {
@@ -960,7 +962,8 @@ impl<File: PlanExecutor> Execute for Update<File> {
                     ))?
                     .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(*new)))?;
 
-                btree.remove(&tuple::serialize(&index.column.data_type, old))?;
+                // For unique indexes, we need to remove the old [index_value, primary_key] entry
+                btree.remove(&tuple::serialize_tuple(&index.schema, [old, &tuple[0]]))?;
             } else if updated_cols.contains_key(&self.table.schema.columns[0].name) {
                 let index_col = self.table.schema.index_of(&index.column.name).unwrap();
 
@@ -991,12 +994,14 @@ impl<File: PlanExecutor> Execute for Delete<File> {
 
         for index in &self.table.indexes {
             let col = self.table.schema.index_of(&index.column.name).unwrap();
-            let key = tuple::serialize(&index.column.data_type, &tuple[col]);
+            // For unique indexes, the key is [index_value, primary_key] to match the insert format
+            let key = tuple::serialize_tuple(&index.schema, [&tuple[col], &tuple[0]]);
 
+            let index_relation = Relation::Index(index.clone());
             let mut btree = BTree::new(
                 &mut pager,
                 index.root,
-                BTreeKeyCmp::from(&index.column.data_type),
+                index_relation.comp(),
             );
 
             btree.remove(&key)?;
