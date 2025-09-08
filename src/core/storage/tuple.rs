@@ -114,7 +114,7 @@ pub(crate) fn serialize_tuple<'value>(
             let bitmap = null_bitmap(schema.len(), values);
             buff.extend_from_slice(&bitmap);
 
-            |(col, _)| !col.is_nullable()
+            |(_, value)| !value.is_null()
         }
         false => |_| true, // no filter needed
     };

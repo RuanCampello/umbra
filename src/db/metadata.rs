@@ -129,13 +129,33 @@ impl TableMetadata {
         Ok(current + 1)
     }
 
-    pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
-        FixedSizeCmp::try_from(&self.schema.columns[0].data_type).map_err(|e| {
-            DatabaseError::Corrupted(format!(
-                "Table {} is using a non-int Btree key with type {:#?}",
-                self.name, self.schema.columns[0].data_type
-            ))
-        })
+    pub fn comp(&self) -> Result<BTreeKeyCmp, DatabaseError> {
+        let pk = self.schema.columns[0].data_type;
+        match self.schema.has_nullable() {
+            true => {
+                let bitmap_len = (&self.schema.len() + 7) / 8;
+                match pk {
+                    Type::Varchar(max) => Ok(BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                        bitmap_len,
+                        prefix_len: max,
+                    })),
+
+                    _ => Ok(BTreeKeyCmp::MapMemCmp(BitMapSizedCmp {
+                        bitmap_len,
+                        key_size: byte_len_of_type(&pk),
+                    })),
+                }
+            }
+
+            _ => FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
+                .map(BTreeKeyCmp::MemCmp)
+                .map_err(|e| {
+                    DatabaseError::Corrupted(format!(
+                        "Table {} is using a non-int Btree key with type {:#?}",
+                        self.name, self.schema.columns[0].data_type
+                    ))
+                }),
+        }
     }
 
     pub fn keys(&self) -> &Column {

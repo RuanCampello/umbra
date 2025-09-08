@@ -134,6 +134,7 @@ pub(in crate::sql) fn analyze<'s>(
 
             for row in rows {
                 if row.len().ne(&columns.len()) {
+                    print!("row {row:#?} with columns {columns:#?}");
                     return Err(AnalyzerError::MissingCols.into());
                 }
 
@@ -501,6 +502,10 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
 
             // if we don’t know the target type, we can only
             // treat it as a plain string.
+            None => Ok(VmType::String),
+        },
+        Value::Null => match col_type {
+            Some(ty) => Ok(ty.into()),
             None => Ok(VmType::String),
         },
         _ => Ok(VmType::Date),
