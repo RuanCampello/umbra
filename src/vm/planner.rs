@@ -891,7 +891,7 @@ impl<File: PlanExecutor> Execute for Insert<File> {
                     return Ok(());
                 }
 
-                let comparator = BTreeKeyCmp::from(&index.column.data_type);
+                let comparator = Relation::Index(index.clone()).comp();
 
                 BTree::new(&mut pager, index.root, comparator)
                     .try_insert(tuple::serialize_tuple(
@@ -997,13 +997,14 @@ impl<File: PlanExecutor> Execute for Delete<File> {
 
         for index in &self.table.indexes {
             let col = self.table.schema.index_of(&index.column.name).unwrap();
-            let key = tuple::serialize(&index.column.data_type, &tuple[col]);
 
-            let mut btree = BTree::new(
-                &mut pager,
-                index.root,
-                BTreeKeyCmp::from(&index.column.data_type),
-            );
+            if tuple[col].is_null() {
+                continue;
+            }
+
+            let key = tuple::serialize_tuple(&index.schema, [&tuple[col], &tuple[0]]);
+            let comp = Relation::Index(index.clone()).comp();
+            let mut btree = BTree::new(&mut pager, index.root, comp);
 
             btree.remove(&key)?;
         }

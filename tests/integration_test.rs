@@ -1272,7 +1272,7 @@ fn nullable_column() -> Result<()> {
             ('Alice Smith',  'alice@example.com',   '+15551234567', 33),
             ('Bob Johnson',  'bob@example.com',     '+15559876543', 27),
             ('Carol Perez',  'carol@example.com',   NULL, NULL),
-            ('Daniel Silva', 'daniel@example.com',  '+15557654321', 'NULL');
+            ('Daniel Silva', 'daniel@example.com',  '+15557654321', NULL);
         "#,
     )?;
 
