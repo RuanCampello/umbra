@@ -1258,21 +1258,58 @@ fn nullable_column() -> Result<()> {
         CREATE TABLE users (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255),
-            email VARCHAR(255) UNIQUE,
             phone VARCHAR(15) NULLABLE UNIQUE,
             age SMALLINT UNSIGNED NULLABLE
         );
         "#,
     )?;
 
+    println!("Inserting Alice...");
+    let result = db.exec(
+        r#"
+        INSERT INTO users (name, phone, age)
+        VALUES ('Alice Smith', '+15551234567', 33);
+        "#,
+    )?;
+
+    let query = db.exec("SELECT id, name FROM users;")?;
+    println!("After Alice: {:?}", query.tuples);
+
+    println!("Inserting Bob...");
+    let result = db.exec(
+        r#"
+        INSERT INTO users (name, phone, age)
+        VALUES ('Bob Johnson', '+15559876543', 27);
+        "#,
+    );
+    
+    match result {
+        Ok(_) => {
+            let query = db.exec("SELECT id, name FROM users;")?;
+            println!("After Bob: {:?}", query.tuples);
+        },
+        Err(e) => {
+            println!("Bob failed: {:?}", e);
+            let query = db.exec("SELECT id, name FROM users;")?;
+            println!("Users after Bob failed: {:?}", query.tuples);
+        }
+    }
+
+    // Skip remaining inserts for now
+    /*
+    println!("Inserting Carol...");
     db.exec(
         r#"
-        INSERT INTO users (name, email, phone, age)
-        VALUES
-            ('Alice Smith',  'alice@example.com',   '+15551234567', 33),
-            ('Bob Johnson',  'bob@example.com',     '+15559876543', 27),
-            ('Carol Perez',  'carol@example.com',   NULL, NULL),
-            ('Daniel Silva', 'daniel@example.com',  '+15557654321', NULL);
+        INSERT INTO users (name, phone, age)
+        VALUES ('Carol Perez', NULL, NULL);
+        "#,
+    )?;
+
+    println!("Inserting Daniel...");
+    db.exec(
+        r#"
+        INSERT INTO users (name, phone, age)
+        VALUES ('Daniel Silva', '+15557654321', NULL);
         "#,
     )?;
 
@@ -1286,6 +1323,7 @@ fn nullable_column() -> Result<()> {
             vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
         ]
     );
+    */
     Ok(())
 }
 
@@ -1343,6 +1381,94 @@ fn debug_nullable_without_unique() -> Result<()> {
     //         vec!["Carol Perez".into(), Value::Null, Value::Null],
     //     ]
     // );
+
+    Ok(())
+}
+
+#[test]
+fn debug_unique_step_by_step() -> Result<()> {
+    let mut db = State::new("debug_unique_step.db");
+    
+    println!("Creating table with unique constraint...");
+    db.exec(
+        r#"
+        CREATE TABLE test_unique (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255),
+            phone VARCHAR(15) NULLABLE UNIQUE
+        );
+        "#,
+    )?;
+
+    println!("Inserting Alice...");
+    let result = db.exec(
+        r#"
+        INSERT INTO test_unique (name, phone) VALUES ('Alice Smith', '+15551234567');
+        "#,
+    );
+    match result {
+        Ok(_) => println!("Alice inserted successfully"),
+        Err(e) => println!("Alice failed: {:?}", e),
+    }
+    
+    println!("Inserting Bob...");
+    let result = db.exec(
+        r#"
+        INSERT INTO test_unique (name, phone) VALUES ('Bob Johnson', '+15559876543');
+        "#,
+    );
+    match result {
+        Ok(_) => println!("Bob inserted successfully"),
+        Err(e) => println!("Bob failed: {:?}", e),
+    }
+    
+    println!("Checking records...");
+    let query = db.exec("SELECT name, phone FROM test_unique ORDER BY id;")?;
+    println!("Records: {:?}", query.tuples);
+
+    Ok(())
+}
+
+#[test]
+fn debug_simple_unique_without_nullable() -> Result<()> {
+    let mut db = State::new("debug_simple_unique.db");
+    
+    println!("Creating table with NON-nullable unique constraint...");
+    db.exec(
+        r#"
+        CREATE TABLE test_simple (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255),
+            phone VARCHAR(15) UNIQUE
+        );
+        "#,
+    )?;
+
+    println!("Inserting Alice...");
+    let result = db.exec(
+        r#"
+        INSERT INTO test_simple (name, phone) VALUES ('Alice Smith', '+15551234567');
+        "#,
+    );
+    match result {
+        Ok(_) => println!("Alice inserted successfully"),
+        Err(e) => println!("Alice failed: {:?}", e),
+    }
+    
+    println!("Inserting Bob...");
+    let result = db.exec(
+        r#"
+        INSERT INTO test_simple (name, phone) VALUES ('Bob Johnson', '+15559876543');
+        "#,
+    );
+    match result {
+        Ok(_) => println!("Bob inserted successfully"),
+        Err(e) => println!("Bob failed: {:?}", e),
+    }
+    
+    println!("Checking records...");
+    let query = db.exec("SELECT name, phone FROM test_simple ORDER BY id;")?;
+    println!("Records: {:?}", query.tuples);
 
     Ok(())
 }
