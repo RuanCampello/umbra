@@ -404,14 +404,33 @@ fn nullable_column() -> Result<()> {
     )?;
 
     let query = db.exec("SELECT name, phone, age FROM users;")?;
-    assert_eq!(
-        query.tuples,
-        vec![
-            vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
-            vec!["Bob Johnson".into(), "+15559876543".into(), 27.into()],
-            vec!["Carol Perez".into(), Value::Null, Value::Null],
-            vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
-        ]
-    );
+    
+    println!("Actual query results:");
+    for (i, tuple) in query.tuples.iter().enumerate() {
+        println!("  Row {}: {:?}", i + 1, tuple);
+    }
+    
+    // Check the results structure without using direct equality for NULL values
+    assert_eq!(query.tuples.len(), 4, "Should have 4 rows");
+    
+    // Check row 1 (Alice)
+    assert_eq!(query.tuples[0][0], Value::String("Alice Smith".to_string()));
+    assert_eq!(query.tuples[0][1], Value::String("+15551234567".to_string()));
+    assert_eq!(query.tuples[0][2], Value::Number(33));
+    
+    // Check row 2 (Bob)
+    assert_eq!(query.tuples[1][0], Value::String("Bob Johnson".to_string()));
+    assert_eq!(query.tuples[1][1], Value::String("+15559876543".to_string()));
+    assert_eq!(query.tuples[1][2], Value::Number(27));
+    
+    // Check row 3 (Carol) - has NULL values
+    assert_eq!(query.tuples[2][0], Value::String("Carol Perez".to_string()));
+    assert!(matches!(query.tuples[2][1], Value::Null), "Carol's phone should be NULL");
+    assert!(matches!(query.tuples[2][2], Value::Null), "Carol's age should be NULL");
+    
+    // Check row 4 (Daniel) - has one NULL value
+    assert_eq!(query.tuples[3][0], Value::String("Daniel Silva".to_string()));
+    assert_eq!(query.tuples[3][1], Value::String("+15557654321".to_string()));
+    assert!(matches!(query.tuples[3][2], Value::Null), "Daniel's age should be NULL");
     Ok(())
 }

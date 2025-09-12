@@ -356,7 +356,7 @@ impl<File: PlanExecutor> Execute for SeqScan<File> {
             return Ok(None);
         };
 
-        Ok(Some(deserialize(
+        Ok(Some(tuple::deserialize_table_tuple(
             reassemble_content(&mut pager, page, slot)?.as_ref(),
             &self.table.schema,
         )))
@@ -553,7 +553,7 @@ impl<File: PlanExecutor> Execute for KeyScan<File> {
                 ))
             })?;
 
-        Ok(Some(tuple::deserialize(entry.as_ref(), &self.table.schema)))
+        Ok(Some(tuple::deserialize_table_tuple(entry.as_ref(), &self.table.schema)))
     }
 }
 

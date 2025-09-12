@@ -69,6 +69,48 @@ pub(crate) fn deserialize(buff: &[u8], schema: &Schema) -> Vec<Value> {
     read_from(&mut io::Cursor::new(buff), schema).unwrap()
 }
 
+/// Deserialize table tuples that use the hybrid format: [primary_key][bitmap_data]
+pub(crate) fn deserialize_table_tuple(buff: &[u8], schema: &Schema) -> Vec<Value> {
+    let mut cursor = io::Cursor::new(buff);
+    
+    // Always read the primary key first (it's in regular format)
+    let pk_column = &schema.columns[0];
+    let mut values = vec![read_value(&mut cursor, pk_column).unwrap()];
+    
+    // If there are more columns, read them using appropriate format
+    if schema.len() > 1 {
+        let remaining_columns = &schema.columns[1..];
+        
+        // Check if remaining columns have nullable ones
+        let has_nullable_remaining = remaining_columns.iter().any(|col| col.is_nullable());
+        
+        if has_nullable_remaining {
+            // Read bitmap for remaining columns
+            let bitmap_size = (remaining_columns.len() + 7) / 8;
+            let mut bitmap = vec![0u8; bitmap_size];
+            cursor.read_exact(&mut bitmap).unwrap();
+            
+            // Read values for remaining columns based on bitmap
+            for (i, col) in remaining_columns.iter().enumerate() {
+                if (bitmap[i / 8] & (1 << (i % 8))) != 0 {
+                    // Column is NULL according to bitmap
+                    values.push(Value::Null);
+                } else {
+                    // Column is not NULL, read its value
+                    values.push(read_value(&mut cursor, col).unwrap());
+                }
+            }
+        } else {
+            // No nullable columns in remaining columns, read directly
+            for col in remaining_columns {
+                values.push(read_value(&mut cursor, col).unwrap());
+            }
+        }
+    }
+    
+    values
+}
+
 pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
     let mut buff = Vec::new();
     serialize_into(&mut buff, r#type, value);
