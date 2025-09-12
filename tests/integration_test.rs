@@ -364,3 +364,43 @@ fn debug_phone_unique_index() -> Result<()> {
     db.drop()?;
     Ok(())
 }
+
+#[test]
+fn nullable_column() -> Result<()> {
+    let mut db = State::new("nullable_column_test.db");
+    
+    println!("Creating table with nullable primary key...");
+    db.exec(
+        r#"
+        CREATE TABLE test_table (
+            id SMALLINT UNSIGNED NULLABLE PRIMARY KEY,
+            name VARCHAR(255)
+        );
+        "#,
+    )?;
+    
+    println!("Inserting first row with id=1...");
+    db.exec(
+        r#"
+        INSERT INTO test_table (id, name) VALUES (1, 'first');
+        "#,
+    )?;
+    
+    println!("First insert successful, now inserting second row with id=2...");
+    db.exec(
+        r#"
+        INSERT INTO test_table (id, name) VALUES (2, 'second');
+        "#,
+    )?;
+    
+    println!("Both inserts successful! Querying results...");
+    let query = db.exec("SELECT id, name FROM test_table;")?;
+    println!("Query results: {:?}", query.tuples);
+    
+    assert_eq!(query.tuples.len(), 2);
+    assert_eq!(query.tuples[0][0], Value::Number(1));
+    assert_eq!(query.tuples[1][0], Value::Number(2));
+    
+    db.drop()?;
+    Ok(())
+}
