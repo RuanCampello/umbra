@@ -109,20 +109,17 @@ pub(crate) fn serialize_tuple<'value>(
         "Lenght of schema and values length mismatch"
     );
 
-    let filter: fn(&(&Column, &Value)) -> bool = match schema.has_nullable() {
-        true => {
-            let bitmap = null_bitmap(schema.len(), values);
-            buff.extend_from_slice(&bitmap);
+    if schema.has_nullable() {
+        let bitmap = null_bitmap(schema.len(), values);
+        buff.extend_from_slice(&bitmap);
+    }
 
-            |(_, value)| !value.is_null()
-        }
-        false => |_| true, // no filter needed
-    };
+    // Only serialize non-null values
     schema
         .columns
         .iter()
         .zip(values)
-        .filter(filter)
+        .filter(|(_, value)| !value.is_null())
         .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
 
     buff
@@ -140,26 +137,24 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
         .columns
         .iter()
         .enumerate()
-        .map(|(idx, col)| match &tuple[idx] {
-            Value::String(string) => match col.data_type{
-                Type::Varchar(max) => utf_8_length_bytes(max) + string.as_bytes().len(),
-                Type::Text => {
-                    if tuple[idx].is_null() {
-                    return 0;
-                }
-
-                let Value::String(string) = &tuple[idx] else {
-                    panic!("Expected data type TEXT but found {}", tuple[idx]);
-                };
-
-                let len = string.as_bytes().len();
-                let header_len = varlena_header_len(len as _);
-                header_len + len
-                }
-                _ => unreachable!()
+        .map(|(idx, col)| {
+            if tuple[idx].is_null() {
+                return 0;
             }
+            
+            match &tuple[idx] {
+                Value::String(string) => match col.data_type{
+                    Type::Varchar(max) => utf_8_length_bytes(max) + string.as_bytes().len(),
+                    Type::Text => {
+                        let len = string.as_bytes().len();
+                        let header_len = varlena_header_len(len as _);
+                        header_len + len
+                    }
+                    _ => unreachable!()
+                }
 
-            _ => byte_len_of_type(&col.data_type)
+                _ => byte_len_of_type(&col.data_type)
+            }
         })
         .sum::<usize>()
 }
@@ -323,12 +318,13 @@ fn null_bitmap<'value, V>(schema_length: usize, values: V) -> Vec<u8>
 where
     V: IntoIterator<Item = &'value Value>,
 {
-    let mut bitmap = vec![0u8; schema_length];
+    let bitmap_size = (schema_length + 7) / 8;
+    let mut bitmap = vec![0u8; bitmap_size];
 
     values
         .into_iter()
-        .filter(|value| value.is_null())
         .enumerate()
+        .filter(|(_, value)| value.is_null())
         .for_each(|(idx, _)| bitmap[idx / 8] |= 1 << (idx % 8));
 
     bitmap
@@ -498,5 +494,60 @@ mod tests {
                 "Failed roundtrip for text: {s:?}",
             );
         }
+    }
+
+    // Helper function for testing: compare values including NULL equality
+    fn values_equal_for_test(a: &[Value], b: &[Value]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        
+        a.iter().zip(b.iter()).all(|(v1, v2)| {
+            match (v1, v2) {
+                (Value::Null, Value::Null) => true,
+                (Value::Null, _) | (_, Value::Null) => false,
+                _ => v1 == v2
+            }
+        })
+    }
+    
+    #[test]
+    fn test_mixed_nullable() {
+        use crate::sql::statement::Constraint;
+        
+        // Create a schema with mixed nullable and non-nullable columns
+        let schema = Schema::new(vec![
+            Column {
+                name: "name".to_string(),
+                data_type: Type::Varchar(50),
+                constraints: vec![],
+            },
+            Column {
+                name: "phone".to_string(),
+                data_type: Type::Varchar(15),
+                constraints: vec![Constraint::Nullable],
+            },
+            Column {
+                name: "age".to_string(),
+                data_type: Type::SmallInt,
+                constraints: vec![Constraint::Nullable],
+            },
+        ]);
+
+        // Test case: [non-null, null, non-null]
+        let values = vec![
+            Value::String("Alice".to_string()),
+            Value::Null,
+            Value::Number(25),
+        ];
+
+        // Serialize
+        let serialized = serialize_tuple(&schema, &values);
+        
+        // Deserialize
+        let deserialized = deserialize(&serialized, &schema);
+        
+        // Check if they match using our custom comparison
+        assert!(values_equal_for_test(&values, &deserialized));
     }
 }

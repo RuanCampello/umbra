@@ -573,7 +573,7 @@ impl Default for Expression {
 
 impl Value {
     pub(crate) fn is_null(&self) -> bool {
-        self == &Value::Null
+        matches!(self, Value::Null)
     }
 
     pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
