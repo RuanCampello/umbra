@@ -276,7 +276,8 @@ fn analyze_assignment<'exp, 'id>(
         .schema
         .index_of(column)
         .ok_or(SqlError::InvalidColumn(column.into()))?;
-    let data_type = &table.schema.columns[idx].data_type;
+    let column_info = &table.schema.columns[idx];
+    let data_type = &column_info.data_type;
     let expect_type = VmType::from(data_type);
 
     let evaluate_type = match allow_id {
@@ -284,7 +285,16 @@ fn analyze_assignment<'exp, 'id>(
         false => analyze_expression(&Schema::empty(), Some(data_type), value)?,
     };
 
-    if expect_type.ne(&evaluate_type) {
+    // Allow NULL values for nullable columns regardless of the column's base type
+    if let Expression::Value(Value::Null) = value {
+        if !column_info.is_nullable() {
+            return Err(SqlError::Type(TypeError::ExpectedType {
+                expected: expect_type,
+                found: value.clone(),
+            }));
+        }
+        // NULL is allowed for nullable columns, skip type validation
+    } else if expect_type.ne(&evaluate_type) {
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
             found: value.clone(),

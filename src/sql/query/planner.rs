@@ -464,7 +464,7 @@ mod tests {
     use super::*;
     use crate::{
         core::storage::{
-            btree::{Cursor, FixedSizeCmp},
+            btree::{Cursor, FixedSizeCmp, BTreeKeyCmp},
             pagination::pager::Pager,
             tuple::{byte_len_of_type, serialize},
             MemoryBuffer,
