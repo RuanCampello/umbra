@@ -790,7 +790,7 @@ impl BytesCmp for BitMapSizedCmp {
 
 impl BytesCmp for BitMapStringCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
-        use std::str::from_utf8_unchecked;
+        use std::str::from_utf8;
 
         let a = &a[self.bitmap_len..];
         let b = &b[self.bitmap_len..];
@@ -804,11 +804,9 @@ impl BytesCmp for BitMapStringCmp {
         buff[..self.prefix_len].copy_from_slice(&b[..self.prefix_len]);
         let length_b = usize::from_le_bytes(buff);
 
-        unsafe {
-            from_utf8_unchecked(&a[self.prefix_len..self.prefix_len + length_a]).cmp(
-                from_utf8_unchecked(&b[self.prefix_len..self.prefix_len + length_b]),
-            )
-        }
+        from_utf8(&a[self.prefix_len..self.prefix_len + length_a])
+            .unwrap()
+            .cmp(from_utf8(&b[self.prefix_len..self.prefix_len + length_b]).unwrap())
     }
 }
 

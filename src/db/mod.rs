@@ -543,9 +543,15 @@ impl TryFrom<&[&str]> for Context {
                                 _ => unreachable!("This ain't a index")
                             };
 
+                            let mut index_col = col.clone();
+                            let mut pk_col = columns[0].clone();
+
+                            index_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
+                            pk_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
+
                             metadata.indexes.push(IndexMetadata {
                                 column: col.clone(),
-                                schema: Schema::new(vec![col.clone(), columns[0].clone()]),
+                                schema: Schema::new(vec![index_col, pk_col]),
                                 name: index,
                                 root,
                                 unique: true,
