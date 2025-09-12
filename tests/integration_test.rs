@@ -1258,58 +1258,21 @@ fn nullable_column() -> Result<()> {
         CREATE TABLE users (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255),
+            email VARCHAR(255) UNIQUE,
             phone VARCHAR(15) NULLABLE UNIQUE,
             age SMALLINT UNSIGNED NULLABLE
         );
         "#,
     )?;
 
-    println!("Inserting Alice...");
-    let result = db.exec(
-        r#"
-        INSERT INTO users (name, phone, age)
-        VALUES ('Alice Smith', '+15551234567', 33);
-        "#,
-    )?;
-
-    let query = db.exec("SELECT id, name FROM users;")?;
-    println!("After Alice: {:?}", query.tuples);
-
-    println!("Inserting Bob...");
-    let result = db.exec(
-        r#"
-        INSERT INTO users (name, phone, age)
-        VALUES ('Bob Johnson', '+15559876543', 27);
-        "#,
-    );
-    
-    match result {
-        Ok(_) => {
-            let query = db.exec("SELECT id, name FROM users;")?;
-            println!("After Bob: {:?}", query.tuples);
-        },
-        Err(e) => {
-            println!("Bob failed: {:?}", e);
-            let query = db.exec("SELECT id, name FROM users;")?;
-            println!("Users after Bob failed: {:?}", query.tuples);
-        }
-    }
-
-    // Skip remaining inserts for now
-    /*
-    println!("Inserting Carol...");
     db.exec(
         r#"
-        INSERT INTO users (name, phone, age)
-        VALUES ('Carol Perez', NULL, NULL);
-        "#,
-    )?;
-
-    println!("Inserting Daniel...");
-    db.exec(
-        r#"
-        INSERT INTO users (name, phone, age)
-        VALUES ('Daniel Silva', '+15557654321', NULL);
+        INSERT INTO users (name, email, phone, age)
+        VALUES
+            ('Alice Smith',  'alice@example.com',   '+15551234567', 33),
+            ('Bob Johnson',  'bob@example.com',     '+15559876543', 27),
+            ('Carol Perez',  'carol@example.com',   NULL, NULL),
+            ('Daniel Silva', 'daniel@example.com',  '+15557654321', NULL);
         "#,
     )?;
 
@@ -1323,7 +1286,6 @@ fn nullable_column() -> Result<()> {
             vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
         ]
     );
-    */
     Ok(())
 }
 
