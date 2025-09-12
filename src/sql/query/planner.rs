@@ -8,7 +8,7 @@ use crate::{
     core::storage::{
         pagination::io::FileOperations,
     },
-    db::{Ctx, Database, DatabaseError, Schema, SqlError},
+    db::{Ctx, Database, DatabaseError, Schema, SqlError, Relation},
     sql::{
         analyzer::{self, contains_aggregate},
         query::optimiser,
@@ -40,7 +40,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
             Planner::Insert(InsertPlan {
                 source,
-                comparator: table.comp()?,
+                comparator: Relation::Table(table.clone()).comp(),
                 table: db.metadata(&into)?.clone(),
                 pager: Rc::clone(&db.pager),
             })
@@ -312,7 +312,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             }
 
             Planner::Update(UpdatePlan {
-                comparator: metadata.comp()?,
+                comparator: Relation::Table(metadata.clone()).comp(),
                 table: metadata.clone(),
                 assigments: columns,
                 pager: Rc::clone(&db.pager),
@@ -341,7 +341,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
             Planner::Delete(DeletePlan {
                 table: metadata.clone(),
-                comparator: metadata.comp()?,
+                comparator: Relation::Table(metadata.clone()).comp(),
                 pager: Rc::clone(&db.pager),
                 source: Box::new(source),
             })

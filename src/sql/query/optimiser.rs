@@ -184,7 +184,7 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
     }
 
     Ok(Some(Planner::KeyScan(KeyScan {
-        comparator: table.comp()?,
+        comparator: Relation::Table(table.clone()).comp(),
         pager: Rc::clone(&db.pager),
         source: Box::new(source),
         table,

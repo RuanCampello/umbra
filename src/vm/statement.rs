@@ -12,7 +12,7 @@ use crate::{
     },
     db::{
         has_btree_key, umbra_schema, Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
-        SqlError, DB_METADATA,
+        SqlError, DB_METADATA, Relation,
     },
     index,
     sql::{
@@ -186,7 +186,8 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
         }
 
         Statement::Drop(Drop::Table(name)) => {
-            let comparator = db.metadata(DB_METADATA)?.comp()?;
+            let metadata_table = db.metadata(DB_METADATA)?;
+            let comparator = Relation::Table(metadata_table.clone()).comp();
             let mut planner = collect_from_metadata(db, &format!("table_name = '{name}'"))?;
             let schema = planner.schema().ok_or(DatabaseError::Corrupted(format!(
                 "Could not obtain schema of {DB_METADATA} table"

@@ -69,47 +69,7 @@ pub(crate) fn deserialize(buff: &[u8], schema: &Schema) -> Vec<Value> {
     read_from(&mut io::Cursor::new(buff), schema).unwrap()
 }
 
-/// Deserialize table tuples that use the hybrid format: [primary_key][bitmap_data]
-pub(crate) fn deserialize_table_tuple(buff: &[u8], schema: &Schema) -> Vec<Value> {
-    let mut cursor = io::Cursor::new(buff);
-    
-    // Always read the primary key first (it's in regular format)
-    let pk_column = &schema.columns[0];
-    let mut values = vec![read_value(&mut cursor, pk_column).unwrap()];
-    
-    // If there are more columns, read them using appropriate format
-    if schema.len() > 1 {
-        let remaining_columns = &schema.columns[1..];
-        
-        // Check if remaining columns have nullable ones
-        let has_nullable_remaining = remaining_columns.iter().any(|col| col.is_nullable());
-        
-        if has_nullable_remaining {
-            // Read bitmap for remaining columns
-            let bitmap_size = (remaining_columns.len() + 7) / 8;
-            let mut bitmap = vec![0u8; bitmap_size];
-            cursor.read_exact(&mut bitmap).unwrap();
-            
-            // Read values for remaining columns based on bitmap
-            for (i, col) in remaining_columns.iter().enumerate() {
-                if (bitmap[i / 8] & (1 << (i % 8))) != 0 {
-                    // Column is NULL according to bitmap
-                    values.push(Value::Null);
-                } else {
-                    // Column is not NULL, read its value
-                    values.push(read_value(&mut cursor, col).unwrap());
-                }
-            }
-        } else {
-            // No nullable columns in remaining columns, read directly
-            for col in remaining_columns {
-                values.push(read_value(&mut cursor, col).unwrap());
-            }
-        }
-    }
-    
-    values
-}
+
 
 pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
     let mut buff = Vec::new();
@@ -179,57 +139,6 @@ pub(crate) fn serialize_tuple<'value>(
         .zip(values)
         .filter(filter)
         .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
-
-    buff
-}
-
-/// Special serialization for table B-trees that need regular comparators
-/// Format: [primary_key_in_regular_format][rest_of_tuple_in_appropriate_format]
-pub(crate) fn serialize_table_tuple<'value>(
-    schema: &Schema,
-    values: impl IntoIterator<Item = &'value Value> + Copy,
-) -> Vec<u8> {
-    let mut buff = Vec::new();
-    let values_vec: Vec<&Value> = values.into_iter().collect();
-    
-    debug_assert_eq!(
-        schema.len(),
-        values_vec.len(),
-        "Length of schema and values length mismatch"
-    );
-
-    // Always serialize the primary key (first column) in regular format at the beginning
-    let pk_column = &schema.columns[0];
-    let pk_value = values_vec[0];
-    serialize_into(&mut buff, &pk_column.data_type, pk_value);
-
-    // If there are more columns, serialize them appropriately
-    if schema.len() > 1 {
-        let remaining_columns = &schema.columns[1..];
-        let remaining_values = &values_vec[1..];
-        
-        // Check if any of the remaining columns are nullable
-        let has_nullable_remaining = remaining_columns.iter().any(|col| col.is_nullable());
-        
-        if has_nullable_remaining {
-            // Create a bitmap for the remaining columns
-            let bitmap = null_bitmap(remaining_columns.len(), remaining_values.iter().cloned());
-            buff.extend_from_slice(&bitmap);
-            
-            // Serialize non-NULL values from remaining columns
-            remaining_columns
-                .iter()
-                .zip(remaining_values)
-                .filter(|(_, val)| !val.is_null())
-                .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
-        } else {
-            // No nullable columns in remaining columns, use regular serialization
-            remaining_columns
-                .iter()
-                .zip(remaining_values)
-                .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
-        }
-    }
 
     buff
 }

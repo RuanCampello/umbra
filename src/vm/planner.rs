@@ -8,7 +8,7 @@ use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
-use crate::core::storage::tuple::{self, deserialize};
+use crate::core::storage::tuple::{self};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{join, Assignment, Expression, Function, OrderDirection, Value};
 use crate::vm;
@@ -356,7 +356,7 @@ impl<File: PlanExecutor> Execute for SeqScan<File> {
             return Ok(None);
         };
 
-        Ok(Some(tuple::deserialize_table_tuple(
+        Ok(Some(tuple::deserialize(
             reassemble_content(&mut pager, page, slot)?.as_ref(),
             &self.table.schema,
         )))
@@ -553,7 +553,7 @@ impl<File: PlanExecutor> Execute for KeyScan<File> {
                 ))
             })?;
 
-        Ok(Some(tuple::deserialize_table_tuple(entry.as_ref(), &self.table.schema)))
+        Ok(Some(tuple::deserialize(entry.as_ref(), &self.table.schema)))
     }
 }
 
@@ -874,7 +874,7 @@ impl<File: PlanExecutor> Execute for Insert<File> {
         let mut pager = self.pager.borrow_mut();
 
         BTree::new(&mut pager, self.table.root, self.comparator.clone())
-            .try_insert(tuple::serialize_table_tuple(&self.table.schema, &tuple))?
+            .try_insert(tuple::serialize_tuple(&self.table.schema, &tuple))?
             .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(0)))?;
 
         (self.table.indexes)
@@ -937,7 +937,7 @@ impl<File: PlanExecutor> Execute for Update<File> {
         let mut pager = self.pager.borrow_mut();
         let mut btree = BTree::new(&mut pager, self.table.root, self.comparator.clone());
 
-        let updated_entry = tuple::serialize_table_tuple(&self.table.schema, &tuple);
+        let updated_entry = tuple::serialize_tuple(&self.table.schema, &tuple);
 
         match updated_cols.get(&self.table.schema.columns[0].name) {
             Some((old, _)) => {

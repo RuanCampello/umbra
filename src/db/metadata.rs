@@ -127,18 +127,7 @@ impl TableMetadata {
         Ok(current + 1)
     }
 
-    pub fn comp(&self) -> Result<BTreeKeyCmp, DatabaseError> {
-        let pk_type = &self.schema.columns[0].data_type;
-        
-        FixedSizeCmp::try_from(pk_type)
-            .map(BTreeKeyCmp::MemCmp)
-            .map_err(|_e| {
-                DatabaseError::Corrupted(format!(
-                    "Table {} is using a non-int Btree key with type {:#?}",
-                    self.name, pk_type
-                ))
-            })
-    }
+
 
     pub fn keys(&self) -> &Column {
         self.schema.keys()
@@ -161,13 +150,42 @@ impl Relation {
     pub fn comp(&self) -> BTreeKeyCmp {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
-            // All indexes use regular comparators regardless of parent table's nullable columns
-            Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
-            // Tables also use regular comparators for primary key comparison
-            // The bitmap format is only for tuple storage, not for B-tree key comparison
+            Self::Index(idx) => {
+                // Indexes use bitmap comparators if they have nullable columns
+                if idx.schema.has_nullable() {
+                    let bitmap_size = (idx.schema.columns.len() + 7) / 8;
+                    match &idx.column.data_type {
+                        Type::Varchar(max_size) => {
+                            let len_prefix = utf_8_length_bytes(*max_size);
+                            BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp { bitmap_size, len_prefix })
+                        }
+                        _ => {
+                            let pk_size = byte_len_of_type(&idx.column.data_type);
+                            BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp { bitmap_size, pk_size })
+                        }
+                    }
+                } else {
+                    BTreeKeyCmp::from(&idx.column.data_type)
+                }
+            }
             Self::Table(table) => {
-                let pk_type = &table.schema.columns[0].data_type;
-                BTreeKeyCmp::from(pk_type)
+                // Tables use bitmap comparators if they have nullable columns
+                if table.schema.has_nullable() {
+                    let bitmap_size = (table.schema.columns.len() + 7) / 8;
+                    let pk_type = &table.schema.columns[0].data_type;
+                    match pk_type {
+                        Type::Varchar(max_size) => {
+                            let len_prefix = utf_8_length_bytes(*max_size);
+                            BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp { bitmap_size, len_prefix })
+                        }
+                        _ => {
+                            let pk_size = byte_len_of_type(pk_type);
+                            BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp { bitmap_size, pk_size })
+                        }
+                    }
+                } else {
+                    BTreeKeyCmp::from(&table.schema.columns[0].data_type)
+                }
             }
         }
     }
