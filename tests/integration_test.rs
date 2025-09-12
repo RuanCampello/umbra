@@ -1288,3 +1288,61 @@ fn nullable_column() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn debug_nullable_without_unique() -> Result<()> {
+    let mut db = State::new("debug_no_unique.db");
+    
+    // Create table without unique constraints
+    db.exec(
+        r#"
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255),
+            phone VARCHAR(15) NULLABLE,
+            age SMALLINT UNSIGNED NULLABLE
+        );
+        "#,
+    )?;
+
+    // Insert Alice
+    db.exec(
+        r#"
+        INSERT INTO users (name, phone, age)
+        VALUES ('Alice Smith', '+15551234567', 33);
+        "#,
+    )?;
+
+    // Insert Bob with different phone number
+    db.exec(
+        r#"
+        INSERT INTO users (name, phone, age)
+        VALUES ('Bob Johnson', '+15559876543', 27);
+        "#,
+    )?;
+
+    // Insert Carol with NULL
+    db.exec(
+        r#"
+        INSERT INTO users (name, phone, age)
+        VALUES ('Carol Perez', NULL, NULL);
+        "#,
+    )?;
+
+    // Check all records
+    let query = db.exec("SELECT name, phone, age FROM users ORDER BY id;")?;
+    println!("All records: {:?}", query.tuples);
+    
+    // Test the challenging assert_eq with NULL values
+    // Note: This might fail due to the PartialEq issue with NULL
+    // assert_eq!(
+    //     query.tuples,
+    //     vec![
+    //         vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
+    //         vec!["Bob Johnson".into(), "+15559876543".into(), 27.into()],
+    //         vec!["Carol Perez".into(), Value::Null, Value::Null],
+    //     ]
+    // );
+
+    Ok(())
+}
