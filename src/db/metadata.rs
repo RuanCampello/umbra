@@ -130,33 +130,14 @@ impl TableMetadata {
     pub fn comp(&self) -> Result<BTreeKeyCmp, DatabaseError> {
         let pk_type = &self.schema.columns[0].data_type;
         
-        if self.schema.has_nullable() {
-            // Use bitmap-aware comparator for tables with nullable columns
-            let bitmap_size = (self.schema.len() + 7) / 8;
-            match pk_type {
-                Type::Varchar(max) => Ok(BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp {
-                    bitmap_size,
-                    len_prefix: utf_8_length_bytes(*max),
-                })),
-                _ => {
-                    let pk_size = byte_len_of_type(pk_type);
-                    Ok(BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp {
-                        bitmap_size,
-                        pk_size,
-                    }))
-                }
-            }
-        } else {
-            // Use original comparator for tables without nullable columns
-            FixedSizeCmp::try_from(pk_type)
-                .map(BTreeKeyCmp::MemCmp)
-                .map_err(|_e| {
-                    DatabaseError::Corrupted(format!(
-                        "Table {} is using a non-int Btree key with type {:#?}",
-                        self.name, pk_type
-                    ))
-                })
-        }
+        FixedSizeCmp::try_from(pk_type)
+            .map(BTreeKeyCmp::MemCmp)
+            .map_err(|_e| {
+                DatabaseError::Corrupted(format!(
+                    "Table {} is using a non-int Btree key with type {:#?}",
+                    self.name, pk_type
+                ))
+            })
     }
 
     pub fn keys(&self) -> &Column {
@@ -180,27 +161,13 @@ impl Relation {
     pub fn comp(&self) -> BTreeKeyCmp {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
-            // Indexes always use regular comparators regardless of parent table's nullable columns
+            // All indexes use regular comparators regardless of parent table's nullable columns
             Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
+            // Tables also use regular comparators for primary key comparison
+            // The bitmap format is only for tuple storage, not for B-tree key comparison
             Self::Table(table) => {
                 let pk_type = &table.schema.columns[0].data_type;
-                if table.schema.has_nullable() {
-                    // Use bitmap-aware comparator for tables with nullable columns
-                    let bitmap_size = (table.schema.len() + 7) / 8;
-                    match pk_type {
-                        Type::Varchar(max) => BTreeKeyCmp::BitmapStrCmp(BitmapStringCmp {
-                            bitmap_size,
-                            len_prefix: utf_8_length_bytes(*max),
-                        }),
-                        _ => BTreeKeyCmp::BitmapMemCmp(BitmapFixedSizeCmp {
-                            bitmap_size,
-                            pk_size: byte_len_of_type(pk_type),
-                        }),
-                    }
-                } else {
-                    // Use original comparator for tables without nullable columns
-                    BTreeKeyCmp::from(pk_type)
-                }
+                BTreeKeyCmp::from(pk_type)
             }
         }
     }

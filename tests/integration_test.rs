@@ -1,5 +1,6 @@
 use umbra::db::{Database, DatabaseError, QuerySet};
 use umbra::sql::statement::Value;
+use std::path::Path;
 
 type Result<T> = std::result::Result<T, DatabaseError>;
 
@@ -19,11 +20,30 @@ impl State {
     fn exec(&mut self, sql: &str) -> Result<QuerySet> {
         self.db.exec(sql)
     }
+}
 
-    fn drop(self) -> std::io::Result<()> {
-        drop(self.db);
+impl Default for State {
+    #[track_caller]
+    fn default() -> Self {
+        let caller = std::panic::Location::caller();
+        let path = format!(
+            "{}-{}.db",
+            Path::new(caller.file())
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            caller.line()
+        );
+        let path = Path::new(path.as_str());
 
-        std::fs::remove_file(self.path)
+        Self::new(path)
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).expect("Failed to drop State")
     }
 }
 
@@ -98,8 +118,6 @@ fn serialisation_and_deserialisation() -> Result<()> {
 
     println!("{:#?}", query.tuples);
 
-    db.drop()?;
-
     Ok(())
 }
 
@@ -130,7 +148,6 @@ fn test_simple_null_handling() -> Result<()> {
     assert_eq!(query.tuples.len(), 1);
     assert!(matches!(query.tuples[0][1], Value::String(_)));
 
-    db.drop()?;
     Ok(())
 }
 
@@ -179,7 +196,6 @@ fn test_original_issue_resolved() -> Result<()> {
         }
     }
 
-    db.drop()?;
     Ok(())
 }
 
@@ -226,7 +242,6 @@ fn test_aggregate_functions_cleaned_up() -> Result<()> {
     // SUM and AVG won't work on string values, so let's just check they don't crash
     // The cleaned up code should handle this gracefully
 
-    db.drop()?;
     Ok(())
 }
 
@@ -271,7 +286,6 @@ fn test_serial_primary_key_with_nullable_columns() -> Result<()> {
     assert_eq!(result.tuples[0][0], Value::Number(1));
     assert_eq!(result.tuples[1][0], Value::Number(2));
     
-    db.drop()?;
     Ok(())
 }
 
@@ -316,7 +330,6 @@ fn test_manual_primary_key_with_nullable_columns() -> Result<()> {
     assert_eq!(result.tuples[0][0], Value::Number(1));
     assert_eq!(result.tuples[1][0], Value::Number(2));
     
-    db.drop()?;
     Ok(())
 }
 
@@ -361,46 +374,44 @@ fn debug_phone_unique_index() -> Result<()> {
         println!("  Row {}: {:?}", i + 1, tuple);
     }
     
-    db.drop()?;
     Ok(())
 }
 
 #[test]
 fn nullable_column() -> Result<()> {
-    let mut db = State::new("nullable_column_test.db");
-    
-    println!("Creating table with nullable primary key...");
+    let mut db = State::default();
     db.exec(
         r#"
-        CREATE TABLE test_table (
-            id SMALLINT UNSIGNED NULLABLE PRIMARY KEY,
-            name VARCHAR(255)
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255),
+            email VARCHAR(255) UNIQUE,
+            phone VARCHAR(15) NULLABLE UNIQUE,
+            age SMALLINT UNSIGNED NULLABLE
         );
         "#,
     )?;
-    
-    println!("Inserting first row with id=1...");
+
     db.exec(
         r#"
-        INSERT INTO test_table (id, name) VALUES (1, 'first');
+        INSERT INTO users (name, email, phone, age)
+        VALUES
+            ('Alice Smith',  'alice@example.com',   '+15551234567', 33),
+            ('Bob Johnson',  'bob@example.com',     '+15559876543', 27),
+            ('Carol Perez',  'carol@example.com',   NULL, NULL),
+            ('Daniel Silva', 'daniel@example.com',  '+15557654321', NULL);
         "#,
     )?;
-    
-    println!("First insert successful, now inserting second row with id=2...");
-    db.exec(
-        r#"
-        INSERT INTO test_table (id, name) VALUES (2, 'second');
-        "#,
-    )?;
-    
-    println!("Both inserts successful! Querying results...");
-    let query = db.exec("SELECT id, name FROM test_table;")?;
-    println!("Query results: {:?}", query.tuples);
-    
-    assert_eq!(query.tuples.len(), 2);
-    assert_eq!(query.tuples[0][0], Value::Number(1));
-    assert_eq!(query.tuples[1][0], Value::Number(2));
-    
-    db.drop()?;
+
+    let query = db.exec("SELECT name, phone, age FROM users;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
+            vec!["Bob Johnson".into(), "+15559876543".into(), 27.into()],
+            vec!["Carol Perez".into(), Value::Null, Value::Null],
+            vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
+        ]
+    );
     Ok(())
 }
