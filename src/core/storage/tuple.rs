@@ -158,7 +158,7 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                 }
                 _ => unreachable!()
             }
-            
+
             _ => byte_len_of_type(&col.data_type)
         })
         .sum::<usize>()
