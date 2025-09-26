@@ -3,7 +3,7 @@ use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::storage::btree::{
-    BTree, BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp,
+    BTree, BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp, StringCmp,
 };
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
@@ -179,7 +179,15 @@ impl Relation {
     pub fn comp(&self) -> BTreeKeyCmp {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
-            Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
+            Self::Index(idx) => {
+                // For indexes, we need to compare the full index schema [column_value, row_id]
+                // not just the column data type
+                let first_col = &idx.schema.columns[0].data_type;
+                match first_col {
+                    Type::Varchar(max) => BTreeKeyCmp::StrCmp(StringCmp(utf_8_length_bytes(*max))),
+                    _ => BTreeKeyCmp::from(first_col),
+                }
+            },
             Self::Table(table) => {
                 let pk = &table.schema.columns[0].data_type;
 

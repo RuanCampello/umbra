@@ -125,18 +125,17 @@ pub(crate) fn deserialize_row_id<'value>(buff: &[u8]) -> RowId {
     RowId::from_be_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
 }
 
-pub(crate) fn serialize_tuple<'value>(
+// Create a separate function for table-level tuple serialization
+pub(crate) fn serialize_table_tuple<'value>(
     schema: &Schema,
     values: impl IntoIterator<Item = &'value Value> + Copy,
 ) -> Vec<u8> {
-    use crate::sql::statement::Column;
-
     let mut buff = Vec::new();
 
     debug_assert_eq!(
         schema.len(),
         values.into_iter().count(),
-        "Lenght of schema and values length mismatch"
+        "Length of schema and values length mismatch"
     );
 
     // Include bitmap if schema has nullable columns
@@ -158,6 +157,42 @@ pub(crate) fn serialize_tuple<'value>(
                 serialize_into(&mut buff, &col.data_type, val);
             }
         });
+
+    buff
+}
+
+// Keep the original serialize_tuple for index operations
+pub(crate) fn serialize_tuple<'value>(
+    schema: &Schema,
+    values: impl IntoIterator<Item = &'value Value> + Copy,
+) -> Vec<u8> {
+    use crate::sql::statement::Column;
+
+    let mut buff = Vec::new();
+
+    debug_assert_eq!(
+        schema.len(),
+        values.into_iter().count(),
+        "Lenght of schema and values length mismatch"
+    );
+
+    // Use the original logic to maintain compatibility
+    let filter: fn(&(&Column, &Value)) -> bool = match schema.has_nullable() {
+        true => {
+            let bitmap = null_bitmap(schema.len(), values);
+            buff.extend_from_slice(&bitmap);
+
+            |(_, value)| !value.is_null()
+        }
+        false => |_| true, // no filter needed
+    };
+    
+    schema
+        .columns
+        .iter()
+        .zip(values)
+        .filter(filter)
+        .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
 
     buff
 }
