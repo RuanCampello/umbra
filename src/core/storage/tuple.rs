@@ -125,43 +125,6 @@ pub(crate) fn deserialize_row_id<'value>(buff: &[u8]) -> RowId {
     RowId::from_be_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
 }
 
-// Create a separate function for table-level tuple serialization
-pub(crate) fn serialize_table_tuple<'value>(
-    schema: &Schema,
-    values: impl IntoIterator<Item = &'value Value> + Copy,
-) -> Vec<u8> {
-    let mut buff = Vec::new();
-
-    debug_assert_eq!(
-        schema.len(),
-        values.into_iter().count(),
-        "Length of schema and values length mismatch"
-    );
-
-    // Include bitmap if schema has nullable columns
-    if schema.has_nullable() {
-        let bitmap = null_bitmap(schema.len(), values);
-        buff.extend_from_slice(&bitmap);
-    }
-
-    // Always serialize all columns, but handle nulls appropriately
-    schema
-        .columns
-        .iter()
-        .zip(values)
-        .for_each(|(col, val)| {
-            if val.is_null() {
-                // For NULL values, write appropriate "empty" representation
-                serialize_null_value(&mut buff, &col.data_type);
-            } else {
-                serialize_into(&mut buff, &col.data_type, val);
-            }
-        });
-
-    buff
-}
-
-// Keep the original serialize_tuple for index operations
 pub(crate) fn serialize_tuple<'value>(
     schema: &Schema,
     values: impl IntoIterator<Item = &'value Value> + Copy,
@@ -176,17 +139,31 @@ pub(crate) fn serialize_tuple<'value>(
         "Lenght of schema and values length mismatch"
     );
 
-    // Use the original logic to maintain compatibility
+    // Use improved logic for nullable schemas to fix data corruption
     let filter: fn(&(&Column, &Value)) -> bool = match schema.has_nullable() {
         true => {
             let bitmap = null_bitmap(schema.len(), values);
             buff.extend_from_slice(&bitmap);
 
-            |(_, value)| !value.is_null()
+            // For nullable schemas, serialize all columns with proper NULL handling
+            // This fixes the data corruption that occurred with the original filtering approach
+            schema
+                .columns
+                .iter()
+                .zip(values)
+                .for_each(|(col, val)| {
+                    if val.is_null() {
+                        serialize_null_value(&mut buff, &col.data_type);
+                    } else {
+                        serialize_into(&mut buff, &col.data_type, val);
+                    }
+                });
+            return buff;
         }
-        false => |_| true, // no filter needed
+        false => |_| true, // no filter needed for non-nullable schemas
     };
     
+    // For non-nullable schemas, use the original approach
     schema
         .columns
         .iter()

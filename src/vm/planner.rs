@@ -874,7 +874,7 @@ impl<File: PlanExecutor> Execute for Insert<File> {
         let mut pager = self.pager.borrow_mut();
 
         BTree::new(&mut pager, self.table.root, self.comparator.clone())
-            .try_insert(tuple::serialize_table_tuple(&self.table.schema, &tuple))?
+            .try_insert(tuple::serialize_tuple(&self.table.schema, &tuple))?
             .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(0)))?;
 
         (self.table.indexes)
@@ -934,7 +934,7 @@ impl<File: PlanExecutor> Execute for Update<File> {
         let mut pager = self.pager.borrow_mut();
         let mut btree = BTree::new(&mut pager, self.table.root, self.comparator.clone());
 
-        let updated_entry = tuple::serialize_table_tuple(&self.table.schema, &tuple);
+        let updated_entry = tuple::serialize_tuple(&self.table.schema, &tuple);
 
         match updated_cols.get(&self.table.schema.columns[0].name) {
             Some((old, _)) => {
