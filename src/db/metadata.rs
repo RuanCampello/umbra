@@ -180,11 +180,32 @@ impl Relation {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
             Self::Index(idx) => {
-                // For indexes, we need to compare the full index schema [column_value, row_id]
-                // not just the column data type
+                // For unique indexes, create a comparator based on the full index schema
+                // The index schema has [column_value, row_id] structure
                 let first_col = &idx.schema.columns[0].data_type;
+                
+                // For now, use the original approach but ensure it works with the actual data structure
                 match first_col {
-                    Type::Varchar(max) => BTreeKeyCmp::StrCmp(StringCmp(utf_8_length_bytes(*max))),
+                    Type::Varchar(_) => {
+                        // For varchar columns in composite keys, we need a specialized comparator
+                        // that handles the [varchar, row_id] structure correctly
+                        let pk = &idx.schema.columns[1].data_type;
+                        match idx.schema.has_nullable() {
+                            false => BTreeKeyCmp::from(first_col),
+                            true => {
+                                let bitmap_len = (idx.schema.len() + 7) / 8;
+                                BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                                    bitmap_len,
+                                    prefix_len: utf_8_length_bytes(
+                                        match first_col {
+                                            Type::Varchar(max) => *max,
+                                            _ => unreachable!(),
+                                        }
+                                    ),
+                                })
+                            }
+                        }
+                    },
                     _ => BTreeKeyCmp::from(first_col),
                 }
             },

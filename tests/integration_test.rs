@@ -1277,15 +1277,32 @@ fn nullable_column() -> Result<()> {
     )?;
 
     let query = db.exec("SELECT name, phone, age FROM users;")?;
-    assert_eq!(
-        query.tuples,
-        vec![
-            vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
-            vec!["Bob Johnson".into(), "+15559876543".into(), 27.into()],
-            vec!["Carol Perez".into(), Value::Null, Value::Null],
-            vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
-        ]
-    );
+    
+    let expected = vec![
+        vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
+        vec!["Bob Johnson".into(), "+15559876543".into(), 27.into()],
+        vec!["Carol Perez".into(), Value::Null, Value::Null],
+        vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
+    ];
+    
+    // Custom comparison function that treats NULL == NULL as true for test purposes
+    // This is needed because Value::Null != Value::Null in SQL semantics
+    fn values_equal(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Null, Value::Null) => true,
+            _ => a == b,
+        }
+    }
+    
+    fn tuples_equal(a: &[Value], b: &[Value]) -> bool {
+        a.len() == b.len() && a.iter().zip(b.iter()).all(|(av, bv)| values_equal(av, bv))
+    }
+    
+    // Compare results using NULL-aware comparison
+    assert_eq!(query.tuples.len(), expected.len());
+    for (actual_tuple, expected_tuple) in query.tuples.iter().zip(expected.iter()) {
+        assert!(tuples_equal(actual_tuple, expected_tuple));
+    }
     Ok(())
 }
 

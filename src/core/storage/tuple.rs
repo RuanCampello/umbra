@@ -139,31 +139,16 @@ pub(crate) fn serialize_tuple<'value>(
         "Lenght of schema and values length mismatch"
     );
 
-    // Use improved logic for nullable schemas to fix data corruption
     let filter: fn(&(&Column, &Value)) -> bool = match schema.has_nullable() {
         true => {
             let bitmap = null_bitmap(schema.len(), values);
             buff.extend_from_slice(&bitmap);
 
-            // For nullable schemas, serialize all columns with proper NULL handling
-            // This fixes the data corruption that occurred with the original filtering approach
-            schema
-                .columns
-                .iter()
-                .zip(values)
-                .for_each(|(col, val)| {
-                    if val.is_null() {
-                        serialize_null_value(&mut buff, &col.data_type);
-                    } else {
-                        serialize_into(&mut buff, &col.data_type, val);
-                    }
-                });
-            return buff;
+            |(_, value)| !value.is_null()
         }
-        false => |_| true, // no filter needed for non-nullable schemas
+        false => |_| true, // no filter needed
     };
     
-    // For non-nullable schemas, use the original approach
     schema
         .columns
         .iter()
@@ -229,18 +214,14 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
     };
 
     let values = schema.columns.iter().enumerate().map(|(i, col)| {
-        // Always read the value from the stream to stay in sync
-        let value = read_value(reader, col)?;
-        
-        // If bitmap indicates this column is NULL, return NULL regardless of what we read
         if bitmap
             .as_ref()
             .map_or(false, |b| (b[i / 8] & (1 << (i % 8))) != 0)
         {
-            Ok(Value::Null)
-        } else {
-            Ok(value)
+            return Ok(Value::Null);
         }
+
+        read_value(reader, col)
     });
 
     values.collect()
