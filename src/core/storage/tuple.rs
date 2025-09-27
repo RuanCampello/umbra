@@ -91,35 +91,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
     }
 }
 
-fn serialize_null_value(buff: &mut Vec<u8>, r#type: &Type) {
-    // For NULL values, we need to write the same number of bytes as a non-null value
-    // so that deserialization stays in sync, but the actual content doesn't matter
-    // since the bitmap will indicate it's NULL
-    match r#type {
-        Type::Varchar(max) => {
-            // Write zero length followed by no data
-            let len_prefix = utf_8_length_bytes(*max);
-            let zero_bytes = vec![0u8; len_prefix];
-            buff.extend_from_slice(&zero_bytes);
-            // No string data since length is 0
-        },
-        Type::Text => {
-            // Write minimal varlena header indicating zero length
-            buff.push(0); // 1-byte header for empty string
-        },
-        Type::Boolean => buff.push(0),
-        Type::SmallInt | Type::UnsignedSmallInt | Type::SmallSerial => buff.extend_from_slice(&[0u8; 2]),
-        Type::Integer | Type::UnsignedInteger | Type::Serial => buff.extend_from_slice(&[0u8; 4]),
-        Type::BigInteger | Type::UnsignedBigInteger | Type::BigSerial => buff.extend_from_slice(&[0u8; 8]),
-        Type::Real => buff.extend_from_slice(&[0u8; 4]),
-        Type::DoublePrecision => buff.extend_from_slice(&[0u8; 8]),
-        Type::Date => buff.extend_from_slice(&[0u8; 4]),
-        Type::Time => buff.extend_from_slice(&[0u8; 8]),
-        Type::DateTime => buff.extend_from_slice(&[0u8; 8]),
-        Type::Uuid => buff.extend_from_slice(&[0u8; 16]),
-        _ => panic!("Unsupported type for NULL serialization: {:?}", r#type),
-    }
-}
+
 
 pub(crate) fn deserialize_row_id<'value>(buff: &[u8]) -> RowId {
     RowId::from_be_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
@@ -171,12 +143,13 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
         .columns
         .iter()
         .enumerate()
-        .map(|(idx, col)| {
+        .filter_map(|(idx, col)| {
             if tuple[idx].is_null() {
-                // NULL values still take up space in the serialized format
-                null_value_size(&col.data_type)
+                // NULL values don't take up space in PostgreSQL-style storage
+                // They are only indicated by the bitmap
+                None
             } else {
-                match &tuple[idx] {
+                Some(match &tuple[idx] {
                     Value::String(string) => match col.data_type {
                         Type::Varchar(max) => utf_8_length_bytes(max) + string.as_bytes().len(),
                         Type::Text => {
@@ -187,19 +160,12 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                         _ => unreachable!()
                     }
                     _ => byte_len_of_type(&col.data_type)
-                }
+                })
             }
         })
         .sum::<usize>()
 }
 
-fn null_value_size(r#type: &Type) -> usize {
-    match r#type {
-        Type::Varchar(max) => utf_8_length_bytes(*max), // Just the length prefix, no data
-        Type::Text => 1, // 1-byte header for empty string
-        _ => byte_len_of_type(r#type), // Fixed size types take their normal size
-    }
-}
 
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
     let bitmap = match schema.has_nullable() {
