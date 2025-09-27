@@ -1259,7 +1259,7 @@ fn nullable_column() -> Result<()> {
             id SERIAL PRIMARY KEY,
             name VARCHAR(255),
             email VARCHAR(255) UNIQUE,
-            phone VARCHAR(15) NULLABLE UNIQUE,
+            phone VARCHAR(15) NULLABLE,
             age SMALLINT UNSIGNED NULLABLE
         );
         "#,

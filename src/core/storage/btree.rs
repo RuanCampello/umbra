@@ -160,6 +160,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
         self.balance(search.page, &mut parents)
     }
+
     pub fn try_insert(&mut self, entry: Vec<u8>) -> IOResult<Result<(), Search>> {
         let mut parents = Vec::new();
         let search = self.search(self.root, &entry, &mut parents)?;

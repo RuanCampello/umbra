@@ -179,7 +179,27 @@ impl Relation {
     pub fn comp(&self) -> BTreeKeyCmp {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
-            Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
+            Self::Index(idx) => {
+                let first = &idx.schema.columns[0].data_type;
+
+                match first {
+                    Type::Varchar(max) => {
+                        let pk = &idx.schema.columns[1].data_type;
+
+                        match idx.schema.has_nullable() {
+                            false => BTreeKeyCmp::from(first),
+                            true => {
+                                let bitmap_len = (idx.schema.len() + 7) / 8;
+                                BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                                    bitmap_len,
+                                    prefix_len: *max,
+                                })
+                            }
+                        }
+                    }
+                    _ => BTreeKeyCmp::from(first),
+                }
+            }
             Self::Table(table) => {
                 let pk = &table.schema.columns[0].data_type;
 

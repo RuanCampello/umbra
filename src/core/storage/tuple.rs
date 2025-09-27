@@ -140,28 +140,27 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
         .columns
         .iter()
         .enumerate()
-        .map(|(idx, col)| match &tuple[idx] {
-            Value::String(string) => match col.data_type{
-                Type::Varchar(max) => utf_8_length_bytes(max) + string.as_bytes().len(),
-                Type::Text => {
-                    if tuple[idx].is_null() {
-                    return 0;
-                }
+        .filter_map(|(idx, col)| {
+            match tuple[idx].is_null() {
+                true => None,
+                _ => {
+                    Some(match &tuple[idx] {
+                        Value::String(str) => match col.data_type {
+                            Type::Varchar(max) => utf_8_length_bytes(max) + str.as_bytes().len(),
+                            Type::Text => {
+                                let len = str.as_bytes().len();
+                                let header_len = varlena_header_len(len as _);
 
-                let Value::String(string) = &tuple[idx] else {
-                    panic!("Expected data type TEXT but found {}", tuple[idx]);
-                };
-
-                let len = string.as_bytes().len();
-                let header_len = varlena_header_len(len as _);
-                header_len + len
+                                header_len + len
+                            }
+                            _ => unreachable!(),
+                        }
+                        _ => byte_len_of_type(&col.data_type)
+                    })
                 }
-                _ => unreachable!()
             }
-
-            _ => byte_len_of_type(&col.data_type)
         })
-        .sum::<usize>()
+                .sum::<usize>()
 }
 
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
@@ -323,12 +322,13 @@ fn null_bitmap<'value, V>(schema_length: usize, values: V) -> Vec<u8>
 where
     V: IntoIterator<Item = &'value Value>,
 {
-    let mut bitmap = vec![0u8; schema_length];
+    let size = (schema_length + 7) / 8;
+    let mut bitmap = vec![0u8; size];
 
     values
         .into_iter()
-        .filter(|value| value.is_null())
         .enumerate()
+        .filter(|(_, value)| value.is_null())
         .for_each(|(idx, _)| bitmap[idx / 8] |= 1 << (idx % 8));
 
     bitmap
