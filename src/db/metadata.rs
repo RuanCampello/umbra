@@ -192,7 +192,7 @@ impl Relation {
                                 let bitmap_len = (idx.schema.len() + 7) / 8;
                                 BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
                                     bitmap_len,
-                                    prefix_len: *max,
+                                    prefix_len: utf_8_length_bytes(*max),
                                 })
                             }
                         }
