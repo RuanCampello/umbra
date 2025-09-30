@@ -200,6 +200,16 @@ pub(crate) fn resolve_expression<'exp>(
 
                 Ok(Value::Number(functions::position(&string, &pat) as i128))
             }
+            Function::Coalesce => {
+                for arg in args {
+                    let value = resolve_expression(val, schema, arg)?;
+                    if !value.is_null() {
+                        return Ok(value);
+                    }
+                }
+
+                Ok(Value::Null)
+            }
             Function::Abs => {
                 let value = resolve_expression(val, schema, &args[0])?;
                 math::abs(&value)

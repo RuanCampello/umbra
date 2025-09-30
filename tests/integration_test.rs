@@ -1328,7 +1328,6 @@ fn nullable_conditions() -> Result<()> {
 
     let query =
         db.exec("SELECT customer_name, priority FROM orders WHERE shipping_notes IS NOT NULL;")?;
-
     assert_values(
         &query.tuples,
         &vec![
@@ -1337,6 +1336,11 @@ fn nullable_conditions() -> Result<()> {
             vec!["Eve".into(), Value::Null],
         ],
     );
+
+    let query = db.exec(
+        "SELECT priority FROM orders WHERE priority IS NOT NULL AND shipping_notes IS NOT NULL;",
+    )?;
+    assert_values(&query.tuples, &vec![vec![1.into()], vec![2.into()]]);
 
     Ok(())
 }

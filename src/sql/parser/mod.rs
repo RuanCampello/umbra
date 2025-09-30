@@ -495,7 +495,12 @@ impl<'input> Parser<'input> {
                 })
             }
 
-            keyword if matches!(keyword, Keyword::Concat | Keyword::Power | Keyword::Trunc) => {
+            keyword
+                if matches!(
+                    keyword,
+                    Keyword::Concat | Keyword::Power | Keyword::Trunc | Keyword::Coalesce
+                ) =>
+            {
                 let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
 

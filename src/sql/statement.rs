@@ -322,6 +322,11 @@ pub enum Function {
     Max,
     /// Returns the data type of any value.
     TypeOf,
+    /// Returns the first non-null argument.
+    /// ```sql
+    /// COALESCE(value1, value2, ..., valueN) -> T;
+    /// ```
+    Coalesce,
     UuidV4,
 }
 
@@ -835,6 +840,8 @@ impl Function {
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => {
                 VmType::Number
             }
+
+            Self::Coalesce => panic!("This must be overridden by the analyzer"),
         }
     }
 
@@ -903,6 +910,7 @@ define_function_mapping! {
     Count => "COUNT",
     TypeOf => "TYPEOF",
     Max => "MAX",
+    Coalesce => "COALESCE",
     UuidV4 => "UUIDV4",
 }
 
@@ -924,6 +932,7 @@ impl From<Function> for Keyword {
             Function::TypeOf => Self::TypeOf,
             Function::Avg => Self::Avg,
             Function::Sum => Self::Sum,
+            Function::Coalesce => Self::Coalesce,
             Function::UuidV4 => unimplemented!(),
         }
     }
