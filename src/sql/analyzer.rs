@@ -451,7 +451,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
             match func {
                 // TODO: make a variant check function for variadic return types
-                Function::Min | Function::Max => match arg_types.first() {
+                Function::Min | Function::Max | Function::Coalesce => match arg_types.first() {
                     Some(first) => return Ok(*first),
                     None => func.return_type(),
                 },
