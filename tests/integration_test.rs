@@ -1381,5 +1381,17 @@ fn coalesce_function() -> Result<()> {
         ],
     );
 
+    let query =
+        db.exec("SELECT product, (price - COALESCE(discount, 0)) AS net_price FROM items;")?;
+    assert_values(
+        &query.tuples,
+        &vec![
+            vec!["A".into(), 990.into()],
+            vec!["B".into(), 1480.into()],
+            vec!["C".into(), 795.into()],
+            vec!["D".into(), 500.into()],
+        ],
+    );
+
     Ok(())
 }

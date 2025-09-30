@@ -958,6 +958,7 @@ impl TryFrom<&Keyword> for Function {
             Keyword::Min => Ok(Self::Min),
             Keyword::Max => Ok(Self::Max),
             Keyword::TypeOf => Ok(Self::TypeOf),
+            Keyword::Coalesce => Ok(Self::Coalesce),
             _ => Err(()),
         }
     }
