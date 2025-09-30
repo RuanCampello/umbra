@@ -1334,7 +1334,7 @@ fn nullable_conditions() -> Result<()> {
         &vec![
             vec!["Alice".into(), 1.into()],
             vec!["Carol".into(), 2.into()],
-            vec!["Eve".into(), 1.into()],
+            vec!["Eve".into(), Value::Null],
         ],
     );
 

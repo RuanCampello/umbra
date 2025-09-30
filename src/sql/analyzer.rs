@@ -459,10 +459,13 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             }
         }
 
-        Expression::Nested(expr)
-        | Expression::Alias { expr, .. }
-        | Expression::IsNull { expr, .. } => analyze_expression(ctx, data_type, expr)?,
-
+        Expression::Nested(expr) | Expression::Alias { expr, .. } => {
+            analyze_expression(ctx, data_type, expr)?
+        }
+        Expression::IsNull { expr, .. } => {
+            analyze_expression(ctx, data_type, expr)?;
+            VmType::Bool
+        }
         Expression::Wildcard => {
             return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
         }
