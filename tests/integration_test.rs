@@ -1344,3 +1344,42 @@ fn nullable_conditions() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn coalesce_function() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+        CREATE TABLE items (
+            id SERIAL PRIMARY KEY,
+            product VARCHAR (100),
+            price INT,
+            discount INT NULLABLE
+        );
+        "#,
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO items (product, price, discount)
+    VALUES
+        ('A', 1000, 10),
+        ('B', 1500, 20),
+        ('C', 800, 5),
+        ('D', 500, NULL);
+    "#,
+    )?;
+
+    let query = db.exec("SELECT product, (price - discount) AS net_price FROM items;")?;
+    assert_values(
+        &query.tuples,
+        &vec![
+            vec!["A".into(), 990.into()],
+            vec!["B".into(), 1480.into()],
+            vec!["C".into(), 795.into()],
+            vec!["D".into(), Value::Null],
+        ],
+    );
+
+    Ok(())
+}

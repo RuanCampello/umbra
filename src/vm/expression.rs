@@ -96,9 +96,11 @@ pub(crate) fn resolve_expression<'exp>(
             let right = resolve_expression(val, schema, right)?;
 
             let (left, right) = try_coerce(left, right);
+            if matches!(left, Value::Null) || matches!(right, Value::Null) {
+                return Ok(Value::Null);
+            }
 
             let mismatched_types = || {
-                println!("left {left} right {right}");
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
                     operator: *operator,
