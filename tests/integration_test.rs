@@ -1299,3 +1299,44 @@ fn nullable_column() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn nullable_conditions() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+        CREATE TABLE orders (
+            id SERIAL PRIMARY KEY,
+            customer_name VARCHAR(255),
+            shipping_notes TEXT NULLABLE,
+            priority INTEGER NULLABLE
+        );
+        "#,
+    )?;
+
+    db.exec(
+        r#"
+        INSERT INTO orders (customer_name, shipping_notes, priority)
+        VALUES
+            ('Alice', 'Fragile package', 1),
+            ('Bob', NULL, NULL),
+            ('Carol', 'Leave at door', 2),
+            ('Dave', NULL, 1),
+            ('Eve', 'Signature required', NULL);
+        "#,
+    )?;
+
+    let query =
+        db.exec("SELECT customer_name, priority FROM orders WHERE shipping_notes IS NOT NULL")?;
+
+    assert_values(
+        &query.tuples,
+        &vec![
+            vec!["Alice".into(), 1.into()],
+            vec!["Carol".into(), 2.into()],
+            vec!["Eve".into(), 1.into()],
+        ],
+    );
+
+    Ok(())
+}
