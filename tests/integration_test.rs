@@ -1451,3 +1451,74 @@ fn debug_simple_unique_without_nullable() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_unique_nullable_comprehensive() -> Result<()> {
+    let mut db = State::default();
+    
+    // Create table with nullable unique columns
+    db.exec(
+        r#"
+        CREATE TABLE test_unique (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(50),
+            email VARCHAR(100) NULLABLE UNIQUE,
+            phone VARCHAR(15) NULLABLE UNIQUE
+        );
+        "#,
+    )?;
+
+    // Test 1: Insert records with unique values
+    db.exec(
+        r#"
+        INSERT INTO test_unique (name, email, phone) 
+        VALUES ('Alice', 'alice@test.com', '+1234567890');
+        "#,
+    )?;
+
+    db.exec(
+        r#"
+        INSERT INTO test_unique (name, email, phone) 
+        VALUES ('Bob', 'bob@test.com', '+0987654321');
+        "#,
+    )?;
+
+    // Test 2: Insert records with NULL values (multiple NULLs should be allowed)
+    db.exec(
+        r#"
+        INSERT INTO test_unique (name, email, phone) 
+        VALUES ('Carol', NULL, NULL);
+        "#,
+    )?;
+
+    db.exec(
+        r#"
+        INSERT INTO test_unique (name, email, phone) 
+        VALUES ('David', NULL, '+5555555555');
+        "#,
+    )?;
+
+    db.exec(
+        r#"
+        INSERT INTO test_unique (name, email, phone) 
+        VALUES ('Eve', 'eve@test.com', NULL);
+        "#,
+    )?;
+
+    // Test 3: Verify unique constraint is enforced (this should fail)
+    let result = db.exec(
+        r#"
+        INSERT INTO test_unique (name, email, phone) 
+        VALUES ('Frank', 'alice@test.com', '+9999999999');
+        "#,
+    );
+    
+    // This should fail due to duplicate email
+    assert!(result.is_err());
+
+    // Test 4: Verify data integrity - should have 5 records
+    let query = db.exec("SELECT name, email, phone FROM test_unique ORDER BY name;")?;
+    assert_eq!(query.tuples.len(), 5);
+
+    Ok(())
+}
