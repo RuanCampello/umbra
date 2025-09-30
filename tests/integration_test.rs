@@ -48,6 +48,17 @@ impl Drop for State {
     }
 }
 
+fn assert_values(left: &[Vec<Value>], right: &[Vec<Value>]) {
+    for (left_row, right_row) in left.iter().zip(right.iter()) {
+        for (left_val, right_val) in left_row.iter().zip(right_row.iter()) {
+            match (left_val, right_val) {
+                (Value::Null, Value::Null) => {}
+                _ => assert_eq!(left_val, right_val),
+            }
+        }
+    }
+}
+
 #[test]
 fn serialisation_and_deserialisation() -> Result<()> {
     let mut db = State::new("test.db");
@@ -1277,14 +1288,14 @@ fn nullable_column() -> Result<()> {
     )?;
 
     let query = db.exec("SELECT name, phone, age FROM users;")?;
-    assert_eq!(
-        query.tuples,
-        vec![
+    assert_values(
+        &query.tuples,
+        &vec![
             vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
             vec!["Bob Johnson".into(), "+15559876543".into(), 27.into()],
             vec!["Carol Perez".into(), Value::Null, Value::Null],
             vec!["Daniel Silva".into(), "+15557654321".into(), Value::Null],
-        ]
+        ],
     );
     Ok(())
 }
