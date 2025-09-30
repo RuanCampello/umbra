@@ -124,6 +124,10 @@ pub enum Expression {
         expr: Box<Self>,
         alias: String,
     },
+    IsNull {
+        expr: Box<Self>,
+        negated: bool,
+    },
     Nested(Box<Self>),
 }
 
@@ -719,6 +723,12 @@ impl Display for Expression {
             }
             Self::Function { func, args } => write!(f, "{func}"),
             Self::Alias { expr, alias } => write!(f, "{expr} AS {alias}"),
+            Self::IsNull { expr, negated } => {
+                write!(f, "{expr} IS ");
+
+                let is = if *negated { "NOT NULL" } else { "NULL" };
+                f.write_str(is)
+            }
             Self::Nested(expr) => write!(f, "({expr})"),
         }
     }

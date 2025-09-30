@@ -197,6 +197,15 @@ impl<'input> Parser<'input> {
                     }),
                 }));
             }
+            Token::Keyword(Keyword::Is) => {
+                let negated = self.consume_optional(Token::Keyword(Keyword::Not));
+                self.expect_keyword(Keyword::Null)?;
+
+                return Ok(Expression::IsNull {
+                    expr: Box::new(left),
+                    negated,
+                });
+            }
             token => {
                 return Err(self.error(ErrorKind::Expected {
                     expected: Token::Eq,
@@ -383,7 +392,8 @@ impl<'input> Parser<'input> {
             | Token::LtEq
             | Token::Keyword(Keyword::Between)
             | Token::Keyword(Keyword::In)
-            | Token::Keyword(Keyword::Like) => 20,
+            | Token::Keyword(Keyword::Like)
+            | Token::Keyword(Keyword::Is) => 20,
             Token::Plus | Token::Minus => 30,
             Token::Mul | Token::Div => 40,
             _ => 0,
@@ -1858,6 +1868,43 @@ mod tests {
                     Column::unique("email", Type::Text),
                     Column::nullable("profile_url", Type::Text)
                 ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_nullable_condition() {
+        let sql = "SELECT * FROM customer WHERE email IS NOT NULL;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Wildcard],
+                from: "customer".into(),
+                r#where: Some(Expression::IsNull {
+                    expr: Box::new(Expression::Identifier("email".into())),
+                    negated: true
+                }),
+                order_by: vec![],
+                group_by: vec![],
+            })
+        );
+
+        let sql = "SELECT * FROM customer WHERE email IS NULL;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Wildcard],
+                from: "customer".into(),
+                r#where: Some(Expression::IsNull {
+                    expr: Box::new(Expression::Identifier("email".into())),
+                    negated: false
+                }),
+                order_by: vec![],
+                group_by: vec![],
             })
         )
     }

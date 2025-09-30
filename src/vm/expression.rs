@@ -242,6 +242,12 @@ pub(crate) fn resolve_expression<'exp>(
             }
             func => unimplemented!("function {func} handling is not yet implemented"),
         },
+        Expression::IsNull { expr, negated } => {
+            let expr = resolve_expression(val, schema, expr)?;
+            let is_null = matches!(expr, Value::Null);
+
+            Ok(Value::Boolean(if *negated { !is_null } else { is_null }))
+        }
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
             resolve_expression(val, schema, expr)
         }

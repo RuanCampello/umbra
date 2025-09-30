@@ -1327,7 +1327,7 @@ fn nullable_conditions() -> Result<()> {
     )?;
 
     let query =
-        db.exec("SELECT customer_name, priority FROM orders WHERE shipping_notes IS NOT NULL")?;
+        db.exec("SELECT customer_name, priority FROM orders WHERE shipping_notes IS NOT NULL;")?;
 
     assert_values(
         &query.tuples,
