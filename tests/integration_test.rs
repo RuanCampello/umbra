@@ -1536,5 +1536,14 @@ fn nullable_aggregation() -> Result<()> {
     let query = db.exec("SELECT MIN(salary), MAX(salary) FROM employees;")?;
     assert_eq!(query.tuples, vec![vec![55000.into(), 81000.into()]]);
 
+    let query = db.exec("SELECT name FROM employees WHERE department = NULL;")?;
+    assert!(query.tuples.is_empty());
+
+    let query = db.exec("SELECT name FROM employees WHERE department IS NULL;")?;
+    assert_eq!(
+        query.tuples,
+        vec![vec!["Eva Brown".into()], vec!["Ivy Chen".into()]]
+    );
+
     Ok(())
 }

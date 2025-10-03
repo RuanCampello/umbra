@@ -296,6 +296,7 @@ pub(crate) fn evaluate_where(
 ) -> Result<bool, SqlError> {
     match resolve_expression(tuple, schema, expr)? {
         Value::Boolean(boolean) => Ok(boolean),
+        Value::Null => Ok(false),
 
         other => Err(SqlError::Type(TypeError::ExpectedType {
             expected: VmType::Bool,

@@ -374,10 +374,14 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             left,
             right,
         } => {
+            let left_null = matches!(left.as_ref(), Expression::Value(Value::Null));
+            let right_null = matches!(left.as_ref(), Expression::Value(Value::Null));
+            let can_skip = left_null && right_null;
+
             let left_type = analyze_expression(ctx, data_type, left)?;
             let right_type = analyze_expression(ctx, data_type, right)?;
 
-            if left_type.ne(&right_type) {
+            if !can_skip && left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
@@ -515,7 +519,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         },
         Value::Null => match col_type {
             Some(ty) => Ok(ty.into()),
-            None => unreachable!(),
+            None => Ok(VmType::String), // just a default
         },
         _ => Ok(VmType::Date),
     };
