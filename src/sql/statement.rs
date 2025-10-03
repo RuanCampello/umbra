@@ -622,7 +622,9 @@ impl PartialEq for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
-            // NULL is not equal to anything
+            // For grouping and hashing, NULL values should be equal.
+            // SQL semantics (NULL = NULL returns NULL) is handled separetly.
+            (Value::Null, Value::Null) => true,
             (Value::Null, _) | (_, Value::Null) => false,
             _ => false,
         }
@@ -640,8 +642,11 @@ impl PartialOrd for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
-            // NULL is not comparable to anything
-            (Value::Null, _) | (_, Value::Null) => None,
+            // For sorting, NULL values are considered equal to each other
+            // and sort after all non-NULL values.
+            (Value::Null, Value::Null) => Some(Ordering::Equal),
+            (Value::Null, _) => Some(Ordering::Greater),
+            (_, Value::Null) => Some(Ordering::Less),
             _ => panic!("these values are not comparable"),
         }
     }

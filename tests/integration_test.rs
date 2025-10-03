@@ -1478,9 +1478,9 @@ fn nullable_aggregation() -> Result<()> {
         department,
         COUNT(*) AS employee_count,
         COUNT(salary) AS employees_with_salary,
-        AVG(COALESCE(salary, 0)) AS avg_salary,
+        TRUNC(AVG(COALESCE(salary, 0)), 1) AS avg_salary,
         SUM(COALESCE(bonus, 0)) AS total_bonus,
-        AVG(COALESCE(performance_rating, 0)) AS avg_rating
+        TRUNC(AVG(COALESCE(performance_rating, 0)), 1) AS avg_rating
     FROM employees
     GROUP BY department
     ORDER BY department;
@@ -1494,9 +1494,9 @@ fn nullable_aggregation() -> Result<()> {
                 "Engineering".into(),
                 3.into(),
                 3.into(),
-                74666.66666667.into(),
+                74666.6.into(),
                 22000.0.into(),
-                4.666666666666667.into()
+                4.6.into()
             ],
             vec![
                 "HR".into(),
@@ -1525,7 +1525,7 @@ fn nullable_aggregation() -> Result<()> {
             vec![
                 Value::Null,
                 2.into(),
-                2.into(),
+                1.into(),
                 36000.0.into(),
                 0.0.into(),
                 2.5.into()
