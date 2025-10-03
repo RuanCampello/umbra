@@ -1,4 +1,4 @@
-# UMBRA BINARY PROTOCOL v0.2
+# UMBRA BINARY PROTOCOL v0.3
 
 **The Shadow Whisper**
 
@@ -34,10 +34,15 @@ For each column:
       If `VARCHAR`:
         [ 4 bytes ] - Max length (u32, LE)
 
+  [ 1 byte ]  - Nullable flag (0 = NOT NULL, 1 = NULLABLE)
+
 [ 4 bytes ] - Row count (u32, LE)
 
 For each row:
   [ n bytes ] - Serialized row data (encoded per column type)
+
+  If schema has nullable columns, row data starts with: [ n bytes ]
+    - NULL bitmap (1 bit per column, rounded up to nearest byte) Bit is set to 1 if the column value is NULL
 
 ### (!) Empty / OK Response:
 
