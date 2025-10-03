@@ -383,23 +383,20 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             }
 
             let left_null = matches!(left.as_ref(), Expression::Value(Value::Null));
-            let right_null = matches!(left.as_ref(), Expression::Value(Value::Null));
-            let can_skip = left_null && right_null;
+            let right_null = matches!(right.as_ref(), Expression::Value(Value::Null));
 
             let (left_type, right_type) = match (left_null, right_null) {
                 // null on left: get the right type, then analyze the left with that info
                 (true, false) => {
-                    let right_type = analyze_expression(ctx, data_type, &right)?;
-                    let type_hint = get_hint(ctx, &right);
-                    let left_type = analyze_expression(ctx, type_hint, &left)?;
+                    let right_type = analyze_expression(ctx, data_type, right)?;
+                    let left_type = analyze_expression(ctx, get_hint(ctx, &right), left)?;
 
                     (left_type, right_type)
                 }
                 // null on right: get the left type, then analyze the right with that info
                 (false, true) => {
-                    let left_type = analyze_expression(ctx, data_type, &left)?;
-                    let type_hint = get_hint(ctx, &left);
-                    let right_type = analyze_expression(ctx, type_hint, &right)?;
+                    let left_type = analyze_expression(ctx, data_type, left)?;
+                    let right_type = analyze_expression(ctx, get_hint(ctx, &left), right)?;
 
                     (left_type, right_type)
                 }
@@ -411,7 +408,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             };
 
-            if !can_skip && left_type.ne(&right_type) {
+            if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
@@ -549,7 +546,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         },
         Value::Null => match col_type {
             Some(ty) => Ok(ty.into()),
-            None => Ok(VmType::String), // just a default
+            None => unreachable!("NULL should always be type aware"),
         },
         _ => Ok(VmType::Date),
     };
