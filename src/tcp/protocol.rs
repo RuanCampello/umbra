@@ -43,6 +43,8 @@ pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
                 if let Type::Varchar(length) = column.data_type {
                     packed.extend_from_slice(&(length as u32).to_le_bytes());
                 }
+
+                packed.push(if column.is_nullable() { 1 } else { 0 })
             }
 
             packed.extend_from_slice(&(u32::try_from(query_set.tuples.len())?).to_le_bytes());
@@ -99,7 +101,15 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                 };
                 cursor += 1;
 
-                query_set.schema.push(Column::new(&name, data_type));
+                let nullable = content[cursor] != 0;
+                cursor += 1;
+
+                let column = match nullable {
+                    true => Column::nullable(&name, data_type),
+                    _ => Column::new(&name, data_type),
+                };
+
+                query_set.schema.push(column);
             }
 
             let num_tuples = u32::from_le_bytes(content[cursor..cursor + 4].try_into()?);
