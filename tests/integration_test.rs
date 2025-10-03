@@ -1561,3 +1561,44 @@ fn test_where_null_equals() -> Result<()> {
     
     Ok(())
 }
+
+#[test]
+fn test_null_serialization_deserialization() -> Result<()> {
+    let mut db = State::default();
+    
+    db.exec(r#"
+        CREATE TABLE agents (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100),
+            code VARCHAR(10) NULLABLE,
+            status VARCHAR(50) NULLABLE
+        );
+    "#)?;
+
+    db.exec(r#"
+        INSERT INTO agents (name, code, status) VALUES
+            ('James Bond', '007', 'Active duty'),
+            ('Ethan Hunt', NULL, 'Undercover'),
+            ('Jason Bourne', NULL, NULL);
+    "#)?;
+
+    let query = db.exec("SELECT * FROM agents;")?;
+    assert_eq!(query.tuples.len(), 3);
+    
+    // Check James Bond row
+    assert_eq!(query.tuples[0][1], "James Bond".into());
+    assert_eq!(query.tuples[0][2], "007".into());
+    assert_eq!(query.tuples[0][3], "Active duty".into());
+    
+    // Check Ethan Hunt row
+    assert_eq!(query.tuples[1][1], "Ethan Hunt".into());
+    assert_eq!(query.tuples[1][2], Value::Null);
+    assert_eq!(query.tuples[1][3], "Undercover".into());
+    
+    // Check Jason Bourne row
+    assert_eq!(query.tuples[2][1], "Jason Bourne".into());
+    assert_eq!(query.tuples[2][2], Value::Null);
+    assert_eq!(query.tuples[2][3], Value::Null);
+    
+    Ok(())
+}
