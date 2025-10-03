@@ -62,18 +62,34 @@ struct Removal {
 /// Compares the `self.0` using a `memcmp`.
 /// If the integer keys at the beginning of a buffer array are stored as big endian,
 /// that's all needed to determine its [`Ordering`].
-#[derive(Debug, PartialEq, Default, Clone)]
+#[derive(Debug, PartialEq, Default, Clone, Copy)]
 pub(crate) struct FixedSizeCmp(pub usize);
 
 /// Compares UTF-8 strings.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StringCmp(pub usize);
 
+/// Fixed-size comparator for nullable tuples with the bitmap header.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct BitMapSizedCmp {
+    pub bitmap_len: usize,
+    pub key_size: usize,
+}
+
+/// UFT-8 string comparator for nullable tuples with the bitmap header.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct BitMapStringCmp {
+    pub bitmap_len: usize,
+    pub prefix_len: usize,
+}
+
 /// No allocations comparing to [`Box`].
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum BTreeKeyCmp {
     MemCmp(FixedSizeCmp),
     StrCmp(StringCmp),
+    MapMemCmp(BitMapSizedCmp),
+    MapStrCmp(BitMapStringCmp),
 }
 
 /// Represents the result of reading content from the [`BTree`].
@@ -144,6 +160,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
         self.balance(search.page, &mut parents)
     }
+
     pub fn try_insert(&mut self, entry: Vec<u8>) -> IOResult<Result<(), Search>> {
         let mut parents = Vec::new();
         let search = self.search(self.root, &entry, &mut parents)?;
@@ -728,6 +745,12 @@ impl TryFrom<&Type> for FixedSizeCmp {
     }
 }
 
+impl From<FixedSizeCmp> for BTreeKeyCmp {
+    fn from(value: FixedSizeCmp) -> Self {
+        Self::MemCmp(value)
+    }
+}
+
 /// Computes the length of a string reading its first `self.0` as a big endian.
 impl BytesCmp for StringCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
@@ -754,6 +777,37 @@ impl BytesCmp for StringCmp {
 impl BytesCmp for FixedSizeCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
         a[..self.0].cmp(&b[..self.0])
+    }
+}
+
+impl BytesCmp for BitMapSizedCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        let a_key = &a[self.bitmap_len..self.bitmap_len + self.key_size];
+        let b_key = &b[self.bitmap_len..self.bitmap_len + self.key_size];
+
+        a_key.cmp(b_key)
+    }
+}
+
+impl BytesCmp for BitMapStringCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        use std::str::from_utf8;
+
+        let a = &a[self.bitmap_len..];
+        let b = &b[self.bitmap_len..];
+
+        let mut buff = [0; size_of::<usize>()];
+
+        buff[..self.prefix_len].copy_from_slice(&a[..self.prefix_len]);
+        let length_a = usize::from_le_bytes(buff);
+        buff.fill(0);
+
+        buff[..self.prefix_len].copy_from_slice(&b[..self.prefix_len]);
+        let length_b = usize::from_le_bytes(buff);
+
+        from_utf8(&a[self.prefix_len..self.prefix_len + length_a])
+            .unwrap()
+            .cmp(from_utf8(&b[self.prefix_len..self.prefix_len + length_b]).unwrap())
     }
 }
 
@@ -786,6 +840,8 @@ impl BytesCmp for BTreeKeyCmp {
         match self {
             Self::MemCmp(mem) => mem.cmp(a, b),
             Self::StrCmp(str) => str.cmp(a, b),
+            Self::MapMemCmp(mem) => mem.cmp(a, b),
+            Self::MapStrCmp(str) => str.cmp(a, b),
         }
     }
 }

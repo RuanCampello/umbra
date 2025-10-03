@@ -67,20 +67,23 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 .filter(|col| !col.constraints.is_empty())
                 .flat_map(|col| {
                     let table = name.clone();
-                    col.constraints.into_iter().map(move |constraint| {
-                        let name = match constraint {
-                            Constraint::PrimaryKey => index!(primary on (table)),
-                            Constraint::Unique => index!(unique on (table) (col.name)),
-                            _ => unreachable!("This ain't a index"),
-                        };
-
-                        Create::Index {
-                            name,
-                            table: table.clone(),
-                            column: col.name.clone(),
-                            unique: true,
-                        }
-                    })
+                    col.constraints
+                        .into_iter()
+                        .filter_map(move |constraint| match constraint {
+                            Constraint::PrimaryKey => Some(Create::Index {
+                                name: index!(primary on (table)),
+                                table: table.clone(),
+                                column: col.name.clone(),
+                                unique: true,
+                            }),
+                            Constraint::Unique => Some(Create::Index {
+                                name: index!(unique on (table) (col.name)),
+                                table: table.clone(),
+                                column: col.name.clone(),
+                                unique: true,
+                            }),
+                            Constraint::Nullable | Constraint::Default(_) => None,
+                        })
                 });
 
             for index in indexes {
@@ -122,10 +125,19 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 name,
                 unique,
                 column: metadata.schema.columns[col].clone(),
-                schema: Schema::new(vec![
-                    metadata.schema.columns[col].clone(),
-                    metadata.schema.columns[0].clone(),
-                ]),
+                schema: {
+                    let mut index_col = metadata.schema.columns[col].clone();
+                    let mut pk_col = metadata.schema.columns[0].clone();
+
+                    index_col
+                        .constraints
+                        .retain(|c| !matches!(c, Constraint::Nullable));
+                    pk_col
+                        .constraints
+                        .retain(|c| !matches!(c, Constraint::Nullable));
+
+                    Schema::new(vec![index_col, pk_col])
+                },
             };
 
             let mut scan = Planner::SeqScan(SeqScan {

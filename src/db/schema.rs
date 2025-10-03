@@ -58,6 +58,10 @@ impl Schema {
             && !matches!(self.columns[0].data_type, Type::Varchar(_) | Type::Boolean)
     }
 
+    pub fn has_nullable(&self) -> bool {
+        self.columns.iter().any(|col| col.is_nullable())
+    }
+
     pub fn empty() -> Self {
         Self::new(Vec::new())
     }

@@ -197,6 +197,15 @@ impl<'input> Parser<'input> {
                     }),
                 }));
             }
+            Token::Keyword(Keyword::Is) => {
+                let negated = self.consume_optional(Token::Keyword(Keyword::Not));
+                self.expect_keyword(Keyword::Null)?;
+
+                return Ok(Expression::IsNull {
+                    expr: Box::new(left),
+                    negated,
+                });
+            }
             token => {
                 return Err(self.error(ErrorKind::Expected {
                     expected: Token::Eq,
@@ -219,6 +228,7 @@ impl<'input> Parser<'input> {
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
+            Token::Keyword(Keyword::Null) => Ok(Expression::Value(Value::Null)),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
             }
@@ -284,7 +294,7 @@ impl<'input> Parser<'input> {
 
         let mut constraints = Vec::new();
         while let Some(constraint) = self
-            .consume_one(&[Keyword::Primary, Keyword::Unique])
+            .consume_one(&[Keyword::Primary, Keyword::Unique, Keyword::Nullable])
             .as_optional()
         {
             match constraint {
@@ -293,6 +303,7 @@ impl<'input> Parser<'input> {
                     constraints.push(Constraint::PrimaryKey);
                 }
                 Keyword::Unique => constraints.push(Constraint::Unique),
+                Keyword::Nullable => constraints.push(Constraint::Nullable),
                 _ => unreachable!(),
             }
         }
@@ -381,7 +392,8 @@ impl<'input> Parser<'input> {
             | Token::LtEq
             | Token::Keyword(Keyword::Between)
             | Token::Keyword(Keyword::In)
-            | Token::Keyword(Keyword::Like) => 20,
+            | Token::Keyword(Keyword::Like)
+            | Token::Keyword(Keyword::Is) => 20,
             Token::Plus | Token::Minus => 30,
             Token::Mul | Token::Div => 40,
             _ => 0,
@@ -483,7 +495,12 @@ impl<'input> Parser<'input> {
                 })
             }
 
-            keyword if matches!(keyword, Keyword::Concat | Keyword::Power | Keyword::Trunc) => {
+            keyword
+                if matches!(
+                    keyword,
+                    Keyword::Concat | Keyword::Power | Keyword::Trunc | Keyword::Coalesce
+                ) =>
+            {
                 let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
 
@@ -1838,6 +1855,61 @@ mod tests {
                     Column::new("content", Type::Text),
                     Column::new("created_at", Type::DateTime)
                 ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_nullable_column() {
+        let sql = "CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT UNIQUE, profile_url TEXT NULLABLE);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Table {
+                name: "users".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Serial),
+                    Column::unique("email", Type::Text),
+                    Column::nullable("profile_url", Type::Text)
+                ]
+            })
+        )
+    }
+
+    #[test]
+    fn test_nullable_condition() {
+        let sql = "SELECT * FROM customer WHERE email IS NOT NULL;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Wildcard],
+                from: "customer".into(),
+                r#where: Some(Expression::IsNull {
+                    expr: Box::new(Expression::Identifier("email".into())),
+                    negated: true
+                }),
+                order_by: vec![],
+                group_by: vec![],
+            })
+        );
+
+        let sql = "SELECT * FROM customer WHERE email IS NULL;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Wildcard],
+                from: "customer".into(),
+                r#where: Some(Expression::IsNull {
+                    expr: Box::new(Expression::Identifier("email".into())),
+                    negated: false
+                }),
+                order_by: vec![],
+                group_by: vec![],
             })
         )
     }

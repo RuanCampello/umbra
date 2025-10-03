@@ -1,29 +1,27 @@
-use std::{
-    collections::VecDeque,
-    io::{Read, Seek, Write},
-    rc::Rc,
-};
-
 use crate::{
     core::storage::pagination::io::FileOperations,
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
     sql::{
         analyzer::{self, contains_aggregate},
         query::optimiser,
-        statement::{Column, Delete, Expression, OrderBy, OrderDirection, Select, Type, Update},
+        statement::{
+            Column, Delete, Expression, Insert, OrderBy, OrderDirection, Select, Type, Update,
+        },
         Statement,
     },
     vm::{
         expression::VmType,
-        planner::{AggregateBuilder, Insert as InsertPlan, Planner, Sort, SortKeys, Values},
+        planner::{
+            AggregateBuilder, Collect, CollectBuilder, Delete as DeletePlan, Insert as InsertPlan,
+            Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator, Update as UpdatePlan,
+            Values, DEFAULT_SORT_BUFFER_SIZE,
+        },
     },
 };
-use crate::{
-    sql::statement::Insert,
-    vm::planner::{
-        Collect, CollectBuilder, Delete as DeletePlan, Project, SortBuilder, TupleComparator,
-        Update as UpdatePlan, DEFAULT_SORT_BUFFER_SIZE,
-    },
+use std::{
+    collections::VecDeque,
+    io::{Read, Seek, Write},
+    rc::Rc,
 };
 
 pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
@@ -667,7 +665,7 @@ mod tests {
             Planner::KeyScan(KeyScan {
                 pager: db.pager(),
                 table: db.tables["employees"].to_owned(),
-                comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)).into(),
                 source: Box::new(Planner::ExactMatch(ExactMatch {
                     done: false,
                     emit_only_key: true,
@@ -740,7 +738,7 @@ mod tests {
         assert_eq!(
             db.gen_plan("SELECT * FROM employees WHERE email <= 'johndoe@email.com';")?,
             Planner::KeyScan(KeyScan {
-                comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)).into(),
                 pager: db.pager(),
                 table: db.tables["employees"].to_owned(),
                 source: Box::new(Planner::Sort(Sort::from(SortBuilder {
@@ -1192,7 +1190,7 @@ mod tests {
                     source: Box::new(Planner::KeyScan(KeyScan {
                         pager: db.pager(),
                         table: db.tables["users"].to_owned(),
-                        comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)),
+                        comparator: FixedSizeCmp(byte_len_of_type(&Type::Integer)).into(),
                         source: Box::new(Planner::Sort(sort))
                     })),
                     group_by: vec![],

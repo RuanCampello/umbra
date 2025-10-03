@@ -116,7 +116,7 @@ pub(in crate::sql) fn analyze<'s>(
                 return Err(AnalyzerError::MetadataAssignment.into());
             }
 
-            // FIXME: there's a lot of things here, maybe check the performance
+            // PERFORMANCE: there's a lot of things here, maybe check the performance
             let schema = metadata.key_only_schema();
             let columns_provided_by_user = !columns.is_empty();
 
@@ -124,7 +124,7 @@ pub(in crate::sql) fn analyze<'s>(
                 true => schema
                     .columns
                     .iter()
-                    .filter(|col| col.name.ne(ROW_COL_ID))
+                    .filter(|col| col.name.ne(ROW_COL_ID) && !col.is_nullable())
                     .map(|col| col.name.as_str())
                     .collect(),
                 false => columns.iter().map(String::as_str).collect(),
@@ -133,7 +133,7 @@ pub(in crate::sql) fn analyze<'s>(
             let column_set: HashSet<&str> = columns.iter().copied().collect();
 
             for row in rows {
-                if row.len().ne(&columns.len()) {
+                if columns_provided_by_user && row.len().ne(&columns.len()) {
                     return Err(AnalyzerError::MissingCols.into());
                 }
 
@@ -154,12 +154,11 @@ pub(in crate::sql) fn analyze<'s>(
                     if col.name == ROW_COL_ID {
                         continue;
                     }
-                    if col.data_type.can_be_autogen() {
-                        continue;
-                    }
 
-                    if !column_set.contains(col.name.as_str()) {
-                        return Err(AnalyzerError::MissingCols.into());
+                    if !col.is_nullable() && !col.data_type.can_be_autogen() {
+                        if !column_set.contains(col.name.as_str()) {
+                            return Err(AnalyzerError::MissingCols.into());
+                        }
                     }
                 }
 
@@ -276,15 +275,23 @@ fn analyze_assignment<'exp, 'id>(
         .schema
         .index_of(column)
         .ok_or(SqlError::InvalidColumn(column.into()))?;
-    let data_type = &table.schema.columns[idx].data_type;
-    let expect_type = VmType::from(data_type);
+    let column = &table.schema.columns[idx];
+    let data_type = column.data_type;
+    let expect_type = VmType::from(&data_type);
 
     let evaluate_type = match allow_id {
-        true => analyze_expression(&table.schema, Some(data_type), value)?,
-        false => analyze_expression(&Schema::empty(), Some(data_type), value)?,
+        true => analyze_expression(&table.schema, Some(&data_type), value)?,
+        false => analyze_expression(&Schema::empty(), Some(&data_type), value)?,
     };
 
-    if expect_type.ne(&evaluate_type) {
+    if let Expression::Value(Value::Null) = value {
+        if !column.is_nullable() {
+            return Err(SqlError::Type(TypeError::ExpectedType {
+                expected: expect_type,
+                found: Expression::Value(Value::Null),
+            }));
+        }
+    } else if expect_type.ne(&evaluate_type) {
         return Err(SqlError::Type(TypeError::ExpectedType {
             expected: expect_type,
             found: value.clone(),
@@ -293,8 +300,8 @@ fn analyze_assignment<'exp, 'id>(
 
     if let Type::Varchar(max) = data_type {
         if let Expression::Value(Value::String(str)) = value {
-            if &str.chars().count() > max {
-                return Err(AnalyzerError::Overflow(data_type.to_owned(), *max).into());
+            if str.chars().count() > max {
+                return Err(AnalyzerError::Overflow(data_type.to_owned(), max).into());
             }
         }
     }
@@ -367,8 +374,39 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             left,
             right,
         } => {
-            let left_type = analyze_expression(ctx, data_type, left)?;
-            let right_type = analyze_expression(ctx, data_type, right)?;
+            fn get_hint<'e, C: AnalyzeCtx>(ctx: &'e C, expr: &'e Expression) -> Option<&'e Type> {
+                match expr {
+                    #[rustfmt::skip]
+                    Expression::Identifier(ident) => ctx.resolve_identifier(ident).map(|(_, ty)| ty),
+                    _ => None,
+                }
+            }
+
+            let left_null = matches!(left.as_ref(), Expression::Value(Value::Null));
+            let right_null = matches!(right.as_ref(), Expression::Value(Value::Null));
+
+            let (left_type, right_type) = match (left_null, right_null) {
+                // null on left: get the right type, then analyze the left with that info
+                (true, false) => {
+                    let right_type = analyze_expression(ctx, data_type, right)?;
+                    let left_type = analyze_expression(ctx, get_hint(ctx, &right), left)?;
+
+                    (left_type, right_type)
+                }
+                // null on right: get the left type, then analyze the right with that info
+                (false, true) => {
+                    let left_type = analyze_expression(ctx, data_type, left)?;
+                    let right_type = analyze_expression(ctx, get_hint(ctx, &left), right)?;
+
+                    (left_type, right_type)
+                }
+                // both are null or non-null: analyze normally
+                _ => {
+                    let left_type = analyze_expression(ctx, data_type, left)?;
+                    let right_type = analyze_expression(ctx, data_type, right)?;
+                    (left_type, right_type)
+                }
+            };
 
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
@@ -444,7 +482,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
             match func {
                 // TODO: make a variant check function for variadic return types
-                Function::Min | Function::Max => match arg_types.first() {
+                Function::Min | Function::Max | Function::Coalesce => match arg_types.first() {
                     Some(first) => return Ok(*first),
                     None => func.return_type(),
                 },
@@ -455,7 +493,10 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
             analyze_expression(ctx, data_type, expr)?
         }
-
+        Expression::IsNull { expr, .. } => {
+            analyze_expression(ctx, data_type, expr)?;
+            VmType::Bool
+        }
         Expression::Wildcard => {
             return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
         }
@@ -502,6 +543,10 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
             // if we don’t know the target type, we can only
             // treat it as a plain string.
             None => Ok(VmType::String),
+        },
+        Value::Null => match col_type {
+            Some(ty) => Ok(ty.into()),
+            None => unreachable!("NULL should always be type aware"),
         },
         _ => Ok(VmType::Date),
     };
@@ -622,18 +667,6 @@ mod tests {
     }
 
     type AnalyzerResult = Result<(), DatabaseError>;
-
-    impl PartialEq for DatabaseError {
-        fn eq(&self, other: &Self) -> bool {
-            match (self, other) {
-                (Self::Io(a), Self::Io(b)) => a.kind().eq(&b.kind()),
-                (Self::Parser(a), Self::Parser(b)) => a.eq(b),
-                (Self::Sql(a), Self::Sql(b)) => a.eq(b),
-                _ => false,
-            }
-        }
-    }
-
     #[test]
     fn select_from_invalid_table() -> AnalyzerResult {
         // we cannot select from a table not created yet

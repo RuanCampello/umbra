@@ -4,6 +4,7 @@
 
 #![allow(unused)]
 
+use super::Keyword;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
@@ -14,8 +15,6 @@ use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
 use std::ops::Neg;
 use std::str::FromStr;
-
-use super::Keyword;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -124,6 +123,10 @@ pub enum Expression {
         expr: Box<Self>,
         alias: String,
     },
+    IsNull {
+        expr: Box<Self>,
+        negated: bool,
+    },
     Nested(Box<Self>),
 }
 
@@ -194,12 +197,14 @@ pub enum Value {
     Boolean(bool),
     Temporal(Temporal),
     Uuid(Uuid),
+    Null,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Constraint {
     PrimaryKey,
     Unique,
+    Nullable,
     Default(Expression),
 }
 
@@ -316,8 +321,15 @@ pub enum Function {
     Max,
     /// Returns the data type of any value.
     TypeOf,
+    /// Returns the first non-null argument.
+    /// ```sql
+    /// COALESCE(value1, value2, ..., valueN) -> T;
+    /// ```
+    Coalesce,
     UuidV4,
 }
+
+const NULL_HASH: u32 = 0x4E554C4C;
 
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
@@ -342,6 +354,18 @@ impl Column {
             data_type,
             constraints: vec![Constraint::Unique],
         }
+    }
+
+    pub fn nullable(name: &str, data_type: Type) -> Self {
+        Self {
+            name: name.to_string(),
+            data_type,
+            constraints: vec![Constraint::Nullable],
+        }
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.constraints.contains(&Constraint::Nullable)
     }
 }
 
@@ -558,6 +582,10 @@ impl Default for Expression {
 }
 
 impl Value {
+    pub(crate) fn is_null(&self) -> bool {
+        matches!(self, Value::Null)
+    }
+
     pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
         match (self, other) {
             (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),
@@ -594,6 +622,10 @@ impl PartialEq for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
+            // For grouping and hashing, NULL values should be equal.
+            // SQL semantics (NULL = NULL returns NULL) is handled separetly.
+            (Value::Null, Value::Null) => true,
+            (Value::Null, _) | (_, Value::Null) => false,
             _ => false,
         }
     }
@@ -610,7 +642,12 @@ impl PartialOrd for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
-            _ => panic!("those values are not comparable"),
+            // For sorting, NULL values are considered equal to each other
+            // and sort after all non-NULL values.
+            (Value::Null, Value::Null) => Some(Ordering::Equal),
+            (Value::Null, _) => Some(Ordering::Greater),
+            (_, Value::Null) => Some(Ordering::Less),
+            _ => panic!("these values are not comparable"),
         }
     }
 }
@@ -641,6 +678,7 @@ impl Hash for Value {
             Value::Boolean(b) => b.hash(state),
             Value::Temporal(t) => t.hash(state),
             Value::Uuid(u) => u.hash(state),
+            Value::Null => NULL_HASH.hash(state),
         }
     }
 }
@@ -651,6 +689,7 @@ impl Neg for Value {
         match self {
             Value::Number(num) => Ok(Value::Number(-num)),
             Value::Float(float) => Ok(Value::Float(-float)),
+            Value::Null => Ok(Value::Null),
             v => Err(TypeError::CannotApplyUnary {
                 operator: UnaryOperator::Minus,
                 value: v,
@@ -668,6 +707,7 @@ impl Display for Column {
             f.write_str(match constraint {
                 Constraint::PrimaryKey => "PRIMARY KEY",
                 Constraint::Unique => "UNIQUE",
+                Constraint::Nullable => "NULLABLE",
                 Constraint::Default(value) => "DEFAULT {value}",
             })?;
         }
@@ -694,6 +734,12 @@ impl Display for Expression {
             }
             Self::Function { func, args } => write!(f, "{func}"),
             Self::Alias { expr, alias } => write!(f, "{expr} AS {alias}"),
+            Self::IsNull { expr, negated } => {
+                write!(f, "{expr} IS ");
+
+                let is = if *negated { "NOT NULL" } else { "NULL" };
+                f.write_str(is)
+            }
             Self::Nested(expr) => write!(f, "({expr})"),
         }
     }
@@ -768,6 +814,7 @@ impl Display for Value {
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
+            Value::Null => write!(f, "NULL"),
         }
     }
 }
@@ -799,6 +846,8 @@ impl Function {
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => {
                 VmType::Number
             }
+
+            Self::Coalesce => panic!("This must be overridden by the analyzer"),
         }
     }
 
@@ -867,6 +916,7 @@ define_function_mapping! {
     Count => "COUNT",
     TypeOf => "TYPEOF",
     Max => "MAX",
+    Coalesce => "COALESCE",
     UuidV4 => "UUIDV4",
 }
 
@@ -888,6 +938,7 @@ impl From<Function> for Keyword {
             Function::TypeOf => Self::TypeOf,
             Function::Avg => Self::Avg,
             Function::Sum => Self::Sum,
+            Function::Coalesce => Self::Coalesce,
             Function::UuidV4 => unimplemented!(),
         }
     }
@@ -913,6 +964,7 @@ impl TryFrom<&Keyword> for Function {
             Keyword::Min => Ok(Self::Min),
             Keyword::Max => Ok(Self::Max),
             Keyword::TypeOf => Ok(Self::TypeOf),
+            Keyword::Coalesce => Ok(Self::Coalesce),
             _ => Err(()),
         }
     }

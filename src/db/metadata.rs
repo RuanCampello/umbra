@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::storage::btree::{BTree, BTreeKeyCmp, FixedSizeCmp};
+use crate::core::storage::btree::{
+    BTree, BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp,
+};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
+use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
 use crate::db::{DatabaseError, RowId, Schema};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::statement::{Column, Type, Value};
@@ -126,13 +129,33 @@ impl TableMetadata {
         Ok(current + 1)
     }
 
-    pub fn comp(&self) -> Result<FixedSizeCmp, DatabaseError> {
-        FixedSizeCmp::try_from(&self.schema.columns[0].data_type).map_err(|e| {
-            DatabaseError::Corrupted(format!(
-                "Table {} is using a non-int Btree key with type {:#?}",
-                self.name, self.schema.columns[0].data_type
-            ))
-        })
+    pub fn comp(&self) -> Result<BTreeKeyCmp, DatabaseError> {
+        let pk = self.schema.columns[0].data_type;
+        match self.schema.has_nullable() {
+            true => {
+                let bitmap_len = (&self.schema.len() + 7) / 8;
+                match pk {
+                    Type::Varchar(max) => Ok(BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                        bitmap_len,
+                        prefix_len: max,
+                    })),
+
+                    _ => Ok(BTreeKeyCmp::MapMemCmp(BitMapSizedCmp {
+                        bitmap_len,
+                        key_size: byte_len_of_type(&pk),
+                    })),
+                }
+            }
+
+            _ => FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
+                .map(BTreeKeyCmp::MemCmp)
+                .map_err(|e| {
+                    DatabaseError::Corrupted(format!(
+                        "Table {} is using a non-int Btree key with type {:#?}",
+                        self.name, self.schema.columns[0].data_type
+                    ))
+                }),
+        }
     }
 
     pub fn keys(&self) -> &Column {
@@ -156,8 +179,48 @@ impl Relation {
     pub fn comp(&self) -> BTreeKeyCmp {
         match self {
             Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
-            Self::Index(idx) => BTreeKeyCmp::from(&idx.column.data_type),
-            Self::Table(table) => BTreeKeyCmp::from(&table.schema.columns[0].data_type),
+            Self::Index(idx) => {
+                let first = &idx.schema.columns[0].data_type;
+
+                match first {
+                    Type::Varchar(max) => {
+                        let pk = &idx.schema.columns[1].data_type;
+
+                        match idx.schema.has_nullable() {
+                            false => BTreeKeyCmp::from(first),
+                            true => {
+                                let bitmap_len = (idx.schema.len() + 7) / 8;
+                                BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                                    bitmap_len,
+                                    prefix_len: utf_8_length_bytes(*max),
+                                })
+                            }
+                        }
+                    }
+                    _ => BTreeKeyCmp::from(first),
+                }
+            }
+            Self::Table(table) => {
+                let pk = &table.schema.columns[0].data_type;
+
+                match &table.schema.has_nullable() {
+                    false => BTreeKeyCmp::from(pk),
+                    _ => {
+                        let bitmap_len = (&table.schema.len() + 7) / 8;
+
+                        match pk {
+                            Type::Varchar(max) => BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                                bitmap_len,
+                                prefix_len: utf_8_length_bytes(*max),
+                            }),
+                            _ => BTreeKeyCmp::MapMemCmp(BitMapSizedCmp {
+                                bitmap_len,
+                                key_size: byte_len_of_type(pk),
+                            }),
+                        }
+                    }
+                }
+            }
         }
     }
 

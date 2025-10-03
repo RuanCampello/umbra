@@ -96,9 +96,11 @@ pub(crate) fn resolve_expression<'exp>(
             let right = resolve_expression(val, schema, right)?;
 
             let (left, right) = try_coerce(left, right);
+            if matches!(left, Value::Null) || matches!(right, Value::Null) {
+                return Ok(Value::Null);
+            }
 
             let mismatched_types = || {
-                println!("left {left} right {right}");
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
                     operator: *operator,
@@ -200,6 +202,16 @@ pub(crate) fn resolve_expression<'exp>(
 
                 Ok(Value::Number(functions::position(&string, &pat) as i128))
             }
+            Function::Coalesce => {
+                for arg in args {
+                    let value = resolve_expression(val, schema, arg)?;
+                    if !value.is_null() {
+                        return Ok(value);
+                    }
+                }
+
+                Ok(Value::Null)
+            }
             Function::Abs => {
                 let value = resolve_expression(val, schema, &args[0])?;
                 math::abs(&value)
@@ -242,6 +254,12 @@ pub(crate) fn resolve_expression<'exp>(
             }
             func => unimplemented!("function {func} handling is not yet implemented"),
         },
+        Expression::IsNull { expr, negated } => {
+            let expr = resolve_expression(val, schema, expr)?;
+            let is_null = matches!(expr, Value::Null);
+
+            Ok(Value::Boolean(if *negated { !is_null } else { is_null }))
+        }
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
             resolve_expression(val, schema, expr)
         }
@@ -278,6 +296,7 @@ pub(crate) fn evaluate_where(
 ) -> Result<bool, SqlError> {
     match resolve_expression(tuple, schema, expr)? {
         Value::Boolean(boolean) => Ok(boolean),
+        Value::Null => Ok(false),
 
         other => Err(SqlError::Type(TypeError::ExpectedType {
             expected: VmType::Bool,

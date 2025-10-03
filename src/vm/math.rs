@@ -150,7 +150,7 @@ pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, Sql
                 return Err(SqlError::Type(TypeError::ExpectedType {
                     expected: VmType::Number,
                     found: Expression::Value(decimals.clone()),
-                }))
+                }));
             }
         },
         _ => Err(TypeError::ExpectedType {
