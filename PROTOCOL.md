@@ -33,11 +33,16 @@ For each column:
   [ 1 byte  ] - Type code (see below)
       If `VARCHAR`:
         [ 4 bytes ] - Max length (u32, LE)
+  
+  [ 1 byte  ] - Nullable flag (0 = NOT NULL, 1 = NULLABLE)
 
 [ 4 bytes ] - Row count (u32, LE)
 
 For each row:
   [ n bytes ] - Serialized row data (encoded per column type)
+                If schema has nullable columns, row data starts with:
+                [ n bytes ] - NULL bitmap (1 bit per column, rounded up to nearest byte)
+                              Bit is set to 1 if the column value is NULL
 
 ### (!) Empty / OK Response:
 
@@ -85,6 +90,7 @@ Temporal Types:
 
 - All numbers are little-endian
 - Strings are UTF-8 encoded
+- **Version 0.2 Changes**: Added nullable flag for each column to properly handle NULL values in row data serialization/deserialization
 
 *"The protocol speaks in shadows — implement it faithfully."* 🦇
 
