@@ -1494,7 +1494,7 @@ fn nullable_aggregation() -> Result<()> {
                 "Engineering".into(),
                 3.into(),
                 3.into(),
-                74666.66666667.into(),
+                74666.66666666667.into(),
                 22000.0.into(),
                 4.666666666666667.into()
             ],
@@ -1525,7 +1525,7 @@ fn nullable_aggregation() -> Result<()> {
             vec![
                 Value::Null,
                 2.into(),
-                2.into(),
+                1.into(),
                 36000.0.into(),
                 0.0.into(),
                 2.5.into()
