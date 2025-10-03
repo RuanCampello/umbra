@@ -1207,17 +1207,15 @@ impl<File: PlanExecutor> Aggregate<File> {
                 values.iter().filter(|v| !v.is_null()).count() as i128,
             )),
             Function::Sum | Function::Avg => {
-                let sum = values.iter().filter(|v| !v.is_null()).fold(0.0, |acc, v| {
-                    acc + match v {
-                        Value::Float(f) => *f,
-                        Value::Number(n) => *n as f64,
-                        _ => 0.0,
-                    }
+                let (sum, count) = values.iter().fold((0.0, 0), |(acc, cnt), v| match v {
+                    Value::Float(f) => (acc + *f, cnt + 1),
+                    Value::Number(n) => (acc + *n as f64, cnt + 1),
+                    _ => (acc, cnt),
                 });
 
                 match func.eq(&Function::Sum) {
                     true => Ok(Value::Float(sum)),
-                    _ => Ok(Value::Float(sum / values.len() as f64)),
+                    _ => Ok(Value::Float(sum / count as f64)),
                 }
             }
             Function::Min => Ok(values

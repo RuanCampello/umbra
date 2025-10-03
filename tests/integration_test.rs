@@ -1383,14 +1383,93 @@ fn coalesce_function() -> Result<()> {
 
     let query =
         db.exec("SELECT product, (price - COALESCE(discount, 0)) AS net_price FROM items;")?;
-    assert_values(
-        &query.tuples,
-        &vec![
+    assert_eq!(
+        query.tuples,
+        vec![
             vec!["A".into(), 990.into()],
             vec!["B".into(), 1480.into()],
             vec!["C".into(), 795.into()],
             vec!["D".into(), 500.into()],
         ],
+    );
+
+    Ok(())
+}
+
+#[test]
+fn nullable_aggregation() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE employees (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NULLABLE,
+        department VARCHAR(50) NULLABLE,
+        salary DOUBLE PRECISION NULLABLE, 
+        bonus DOUBLE PRECISION NULLABLE,
+        join_date DATE NULLABLE,
+        performance_rating INTEGER NULLABLE
+    );
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO employees (name, department, salary, bonus, join_date, performance_rating) VALUES
+        ('Alice Johnson', 'Engineering', 75000.00, 10000.00, '2020-03-15', 5),
+        ('Bob Smith', 'Engineering', 68000.00, NULL, '2021-06-20', 4),
+        ('Carol Davis', 'Marketing', 62000.00, 5000.00, '2019-11-10', NULL),
+        ('David Wilson', 'Sales', 55000.00, 8000.00, '2022-01-05', 3),
+        ('Eva Brown', NULL, 72000.00, NULL, '2020-08-30', 5),
+        ('Frank Miller', 'Sales', NULL, 3000.00, '2021-09-12', 2),
+        ('Grace Lee', 'Engineering', 81000.00, 12000.00, '2018-05-22', 5),
+        (NULL, 'Marketing', 58000.00, 4000.00, '2022-03-18', 4),
+        ('Henry Taylor', 'HR', 65000.00, NULL, '2019-07-25', NULL),
+        ('Ivy Chen', NULL, NULL, NULL, '2023-02-14', NULL);
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT 
+            COUNT(*) AS total_rows,
+            COUNT(name) AS non_null_names,
+            COUNT(department) AS non_null_departments,
+            COUNT(salary) AS non_null_salaries,
+            COUNT(bonus) AS non_null_bonuses
+        FROM employees;
+    "#,
+    )?;
+    assert_eq!(
+        &query.tuples,
+        &vec![vec![10.into(), 9.into(), 8.into(), 8.into(), 6.into()]],
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT 
+            SUM(salary) AS total_salary,
+            AVG(salary) AS avg_salary,
+            SUM(COALESCE(salary, 0)) AS total_salary_with_nulls_as_zero,
+            AVG(COALESCE(salary, 0)) AS avg_salary_with_nulls_as_zero,
+            SUM(bonus) AS total_bonus,
+            AVG(bonus) AS avg_bonus_non_null,
+            AVG(COALESCE(bonus, 0)) AS avg_bonus_all_rows
+        FROM employees;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![vec![
+            536000.0.into(),
+            67000.0.into(),
+            536000.0.into(),
+            53600.0.into(),
+            42000.0.into(),
+            7000.0.into(),
+            4200.0.into()
+        ]]
     );
 
     Ok(())
