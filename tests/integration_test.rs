@@ -1535,3 +1535,29 @@ fn nullable_aggregation() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_where_null_equals() -> Result<()> {
+    let mut db = State::default();
+    
+    db.exec(r#"
+        CREATE TABLE employees (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100),
+            department VARCHAR(50) NULLABLE
+        );
+    "#)?;
+
+    db.exec(r#"
+        INSERT INTO employees (name, department) VALUES
+            ('Alice', 'Engineering'),
+            ('Bob', NULL),
+            ('Carol', 'Marketing');
+    "#)?;
+
+    // This should return empty because NULL = NULL returns NULL (falsy)
+    let query = db.exec("SELECT name FROM employees WHERE department = NULL;")?;
+    assert!(query.tuples.is_empty(), "Expected empty result but got: {:?}", query.tuples);
+    
+    Ok(())
+}

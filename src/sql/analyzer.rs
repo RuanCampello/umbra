@@ -375,7 +375,21 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             right,
         } => {
             let left_type = analyze_expression(ctx, data_type, left)?;
-            let right_type = analyze_expression(ctx, data_type, right)?;
+            
+            // For NULL literals on the right side, we need to infer the type from the left side
+            // This allows expressions like "column = NULL" to work properly in the analyzer
+            let right_data_type = if matches!(right.as_ref(), Expression::Value(Value::Null)) {
+                // Try to get the type from the left side if it's an identifier
+                if let Expression::Identifier(ident) = left.as_ref() {
+                    ctx.resolve_identifier(ident).map(|(_, ty)| ty)
+                } else {
+                    data_type
+                }
+            } else {
+                data_type
+            };
+            
+            let right_type = analyze_expression(ctx, right_data_type, right)?;
 
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
