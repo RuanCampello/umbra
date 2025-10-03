@@ -378,11 +378,36 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             let left_is_null = matches!(left.as_ref(), Expression::Value(Value::Null));
             let right_is_null = matches!(right.as_ref(), Expression::Value(Value::Null));
             
-            let left_type = analyze_expression(ctx, data_type, left)?;
-            let right_type = analyze_expression(ctx, data_type, right)?;
+            // Analyze operands with proper type context
+            let (left_type, right_type) = if left_is_null && !right_is_null {
+                // NULL on left: get right type first, then analyze left with that type info
+                let right_type = analyze_expression(ctx, data_type, right)?;
+                let type_hint = if let Expression::Identifier(ident) = right.as_ref() {
+                    ctx.resolve_identifier(ident).map(|(_, ty)| ty)
+                } else {
+                    None
+                };
+                let left_type = analyze_expression(ctx, type_hint, left)?;
+                (left_type, right_type)
+            } else if right_is_null && !left_is_null {
+                // NULL on right: get left type first, then analyze right with that type info
+                let left_type = analyze_expression(ctx, data_type, left)?;
+                let type_hint = if let Expression::Identifier(ident) = left.as_ref() {
+                    ctx.resolve_identifier(ident).map(|(_, ty)| ty)
+                } else {
+                    None
+                };
+                let right_type = analyze_expression(ctx, type_hint, right)?;
+                (left_type, right_type)
+            } else {
+                // Both NULL or both non-NULL: analyze normally
+                let left_type = analyze_expression(ctx, data_type, left)?;
+                let right_type = analyze_expression(ctx, data_type, right)?;
+                (left_type, right_type)
+            };
 
-            // Skip type checking if either operand is NULL, as NULL can be compared with any type
-            if !left_is_null && !right_is_null && left_type.ne(&right_type) {
+            // Type checking: both operands should have the same type
+            if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
@@ -520,10 +545,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         },
         Value::Null => match col_type {
             Some(ty) => Ok(ty.into()),
-            // When NULL appears without type context (e.g., in "column = NULL"),
-            // we use String as a default. The actual type checking is skipped for
-            // NULL comparisons in binary operations.
-            None => Ok(VmType::String),
+            None => unreachable!("NULL should always have type context from binary operation analysis"),
         },
         _ => Ok(VmType::Date),
     };
