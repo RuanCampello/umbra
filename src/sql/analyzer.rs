@@ -374,24 +374,15 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             left,
             right,
         } => {
+            // Check if either operand is a NULL literal
+            let left_is_null = matches!(left.as_ref(), Expression::Value(Value::Null));
+            let right_is_null = matches!(right.as_ref(), Expression::Value(Value::Null));
+            
             let left_type = analyze_expression(ctx, data_type, left)?;
-            
-            // For NULL literals on the right side, we need to infer the type from the left side
-            // This allows expressions like "column = NULL" to work properly in the analyzer
-            let right_data_type = if matches!(right.as_ref(), Expression::Value(Value::Null)) {
-                // Try to get the type from the left side if it's an identifier
-                if let Expression::Identifier(ident) = left.as_ref() {
-                    ctx.resolve_identifier(ident).map(|(_, ty)| ty)
-                } else {
-                    data_type
-                }
-            } else {
-                data_type
-            };
-            
-            let right_type = analyze_expression(ctx, right_data_type, right)?;
+            let right_type = analyze_expression(ctx, data_type, right)?;
 
-            if left_type.ne(&right_type) {
+            // Skip type checking if either operand is NULL, as NULL can be compared with any type
+            if !left_is_null && !right_is_null && left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
@@ -529,7 +520,10 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         },
         Value::Null => match col_type {
             Some(ty) => Ok(ty.into()),
-            None => unreachable!(),
+            // When NULL appears without type context (e.g., in "column = NULL"),
+            // we use String as a default. The actual type checking is skipped for
+            // NULL comparisons in binary operations.
+            None => Ok(VmType::String),
         },
         _ => Ok(VmType::Date),
     };
