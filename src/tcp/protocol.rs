@@ -43,6 +43,9 @@ pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
                 if let Type::Varchar(length) = column.data_type {
                     packed.extend_from_slice(&(length as u32).to_le_bytes());
                 }
+                
+                // Send nullable constraint information
+                packed.push(if column.is_nullable() { 1 } else { 0 });
             }
 
             packed.extend_from_slice(&(u32::try_from(query_set.tuples.len())?).to_le_bytes());
@@ -98,8 +101,17 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                     }
                 };
                 cursor += 1;
+                
+                // Read nullable constraint information
+                let is_nullable = content[cursor] != 0;
+                cursor += 1;
 
-                query_set.schema.push(Column::new(&name, data_type));
+                let column = if is_nullable {
+                    Column::nullable(&name, data_type)
+                } else {
+                    Column::new(&name, data_type)
+                };
+                query_set.schema.push(column);
             }
 
             let num_tuples = u32::from_le_bytes(content[cursor..cursor + 4].try_into()?);
@@ -298,6 +310,72 @@ mod tests {
         let packet = serialize(&response)?;
 
         assert_eq!(deserialize(&packet[4..])?, Response::Err(err));
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_with_nullable_columns() -> Result<(), EncodingError> {
+        let content = QuerySet {
+            schema: Schema::new(vec![
+                Column::new("id", Type::Integer),
+                Column::new("name", Type::Text),
+                Column::nullable("codename", Type::Text),
+                Column::new("clearance_level", Type::Integer),
+                Column::nullable("last_seen", Type::Date),
+                Column::nullable("status_report", Type::Text),
+            ]),
+            tuples: vec![
+                vec![
+                    Value::Number(1),
+                    Value::String("James Bond".to_string()),
+                    Value::String("007".to_string()),
+                    Value::Number(10),
+                    Value::String("2024-01-15".to_string()),
+                    Value::String("Active duty".to_string()),
+                ],
+                vec![
+                    Value::Number(2),
+                    Value::String("Ethan Hunt".to_string()),
+                    Value::Null,
+                    Value::Number(9),
+                    Value::Null,
+                    Value::String("Undercover".to_string()),
+                ],
+                vec![
+                    Value::Number(3),
+                    Value::String("Jason Bourne".to_string()),
+                    Value::Null,
+                    Value::Number(8),
+                    Value::String("2024-01-10".to_string()),
+                    Value::Null,
+                ],
+            ],
+        };
+
+        let response = Response::QuerySet(content);
+        let packet = serialize(&response)?;
+        let deserialized = deserialize(&packet[4..])?;
+
+        // Check that schema nullable flags are preserved
+        if let Response::QuerySet(query_set) = deserialized {
+            assert_eq!(query_set.schema.len(), 6);
+            assert!(!query_set.schema.columns[0].is_nullable()); // id
+            assert!(!query_set.schema.columns[1].is_nullable()); // name
+            assert!(query_set.schema.columns[2].is_nullable());  // codename
+            assert!(!query_set.schema.columns[3].is_nullable()); // clearance_level
+            assert!(query_set.schema.columns[4].is_nullable());  // last_seen
+            assert!(query_set.schema.columns[5].is_nullable());  // status_report
+            
+            // Check that NULL values are preserved
+            assert_eq!(query_set.tuples.len(), 3);
+            assert_eq!(query_set.tuples[1][2], Value::Null); // Ethan Hunt's codename
+            assert_eq!(query_set.tuples[1][4], Value::Null); // Ethan Hunt's last_seen
+            assert_eq!(query_set.tuples[2][2], Value::Null); // Jason Bourne's codename
+            assert_eq!(query_set.tuples[2][5], Value::Null); // Jason Bourne's status_report
+        } else {
+            panic!("Expected QuerySet response");
+        }
 
         Ok(())
     }
