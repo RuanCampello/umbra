@@ -374,12 +374,42 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             left,
             right,
         } => {
+            fn get_hint<'e, C: AnalyzeCtx>(ctx: &'e C, expr: &'e Expression) -> Option<&'e Type> {
+                match expr {
+                    #[rustfmt::skip]
+                    Expression::Identifier(ident) => ctx.resolve_identifier(ident).map(|(_, ty)| ty),
+                    _ => None,
+                }
+            }
+
             let left_null = matches!(left.as_ref(), Expression::Value(Value::Null));
             let right_null = matches!(left.as_ref(), Expression::Value(Value::Null));
             let can_skip = left_null && right_null;
 
-            let left_type = analyze_expression(ctx, data_type, left)?;
-            let right_type = analyze_expression(ctx, data_type, right)?;
+            let (left_type, right_type) = match (left_null, right_null) {
+                // null on left: get the right type, then analyze the left with that info
+                (true, false) => {
+                    let right_type = analyze_expression(ctx, data_type, &right)?;
+                    let type_hint = get_hint(ctx, &right);
+                    let left_type = analyze_expression(ctx, type_hint, &left)?;
+
+                    (left_type, right_type)
+                }
+                // null on right: get the left type, then analyze the right with that info
+                (false, true) => {
+                    let left_type = analyze_expression(ctx, data_type, &left)?;
+                    let type_hint = get_hint(ctx, &left);
+                    let right_type = analyze_expression(ctx, type_hint, &right)?;
+
+                    (left_type, right_type)
+                }
+                // both are null or non-null: analyze normally
+                _ => {
+                    let left_type = analyze_expression(ctx, data_type, left)?;
+                    let right_type = analyze_expression(ctx, data_type, right)?;
+                    (left_type, right_type)
+                }
+            };
 
             if !can_skip && left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
