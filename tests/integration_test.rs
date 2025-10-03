@@ -1472,5 +1472,66 @@ fn nullable_aggregation() -> Result<()> {
         ]]
     );
 
+    let query = db.exec(
+        r#"
+    SELECT 
+        department,
+        COUNT(*) AS employee_count,
+        COUNT(salary) AS employees_with_salary,
+        AVG(COALESCE(salary, 0)) AS avg_salary,
+        SUM(COALESCE(bonus, 0)) AS total_bonus,
+        AVG(COALESCE(performance_rating, 0)) AS avg_rating
+    FROM employees
+    GROUP BY department
+    ORDER BY department;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![
+                "Engineering".into(),
+                3.into(),
+                3.into(),
+                74666.66666667.into(),
+                22000.0.into(),
+                4.666666666666667.into()
+            ],
+            vec![
+                "HR".into(),
+                1.into(),
+                1.into(),
+                65000.0.into(),
+                0.0.into(),
+                0.0.into()
+            ],
+            vec![
+                "Marketing".into(),
+                2.into(),
+                2.into(),
+                60000.0.into(),
+                9000.0.into(),
+                2.0.into()
+            ],
+            vec![
+                "Sales".into(),
+                2.into(),
+                1.into(),
+                27500.0.into(),
+                11000.0.into(),
+                2.5.into()
+            ],
+            vec![
+                Value::Null,
+                2.into(),
+                2.into(),
+                36000.0.into(),
+                0.0.into(),
+                2.5.into()
+            ]
+        ]
+    );
+
     Ok(())
 }

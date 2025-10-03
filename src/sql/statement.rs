@@ -4,6 +4,7 @@
 
 #![allow(unused)]
 
+use super::Keyword;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
@@ -14,8 +15,6 @@ use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
 use std::ops::Neg;
 use std::str::FromStr;
-
-use super::Keyword;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -329,6 +328,8 @@ pub enum Function {
     Coalesce,
     UuidV4,
 }
+
+const NULL_HASH: u32 = 0x4E554C4C;
 
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
@@ -672,7 +673,7 @@ impl Hash for Value {
             Value::Boolean(b) => b.hash(state),
             Value::Temporal(t) => t.hash(state),
             Value::Uuid(u) => u.hash(state),
-            Value::Null => panic!("Null value cannot be hashed"),
+            Value::Null => NULL_HASH.hash(state),
         }
     }
 }
