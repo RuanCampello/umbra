@@ -9,6 +9,8 @@ use std::fmt::{Display, Formatter};
 use std::num::NonZeroI32;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod functions;
+
 /// A combined date and time representation without timezone information.
 ///
 /// This struct combines [`NaiveDate`] (4 bytes)
@@ -64,7 +66,7 @@ pub struct NaiveTime {
 struct u24([u8; 3]);
 
 #[allow(clippy::enum_variant_names, dead_code)]
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DateParseError {
     InvalidDateTime,
     InvalidDate,
@@ -107,6 +109,7 @@ pub trait Serialize {
 
 pub trait Current {
     /// Returns the current `UTC` time in this representation.
+    #[allow(dead_code)]
     fn now() -> Self;
 }
 
@@ -121,10 +124,7 @@ fn now() -> i64 {
 impl Current for NaiveDateTime {
     #[inline(always)]
     fn now() -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap();
+        let timestamp = now();
 
         Self::from_timestamp(timestamp)
     }
@@ -213,11 +213,7 @@ impl Display for NaiveDateTime {
 impl Current for NaiveDate {
     #[inline(always)]
     fn now() -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or_default();
-
+        let timestamp = now();
         let days = timestamp / SECS_IN_DAY;
         Self::from_days_since_epoch(days)
     }
@@ -427,10 +423,7 @@ impl Display for NaiveDate {
 impl Current for NaiveTime {
     #[inline(always)]
     fn now() -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or_default();
+        let timestamp = now();
 
         let secs_in_day = (timestamp % SECS_IN_DAY) as u32;
         Self::from_secs(secs_in_day)
