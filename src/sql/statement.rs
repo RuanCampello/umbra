@@ -5,6 +5,7 @@
 #![allow(unused)]
 
 use super::Keyword;
+use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
@@ -197,6 +198,7 @@ pub enum Value {
     Boolean(bool),
     Temporal(Temporal),
     Uuid(Uuid),
+    Interval(Interval),
     Null,
 }
 
@@ -283,6 +285,7 @@ pub enum Type {
     Date,
     Time,
     DateTime,
+    Interval,
 }
 
 /// Subset of `SQL` functions.
@@ -679,6 +682,7 @@ impl Hash for Value {
             Value::Boolean(b) => b.hash(state),
             Value::Temporal(t) => t.hash(state),
             Value::Uuid(u) => u.hash(state),
+            Value::Interval(i) => i.hash(state),
             Value::Null => NULL_HASH.hash(state),
         }
     }
@@ -802,6 +806,7 @@ impl Display for Type {
             Type::Date => f.write_str("DATE"),
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
             Type::Text => write!(f, "TEXT"),
+            Type::Interval => f.write_str("INTERVAL"),
         }
     }
 }
@@ -815,6 +820,7 @@ impl Display for Value {
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
+            Value::Interval(interval) => write!(f, "{interval}"),
             Value::Null => write!(f, "NULL"),
         }
     }
@@ -1031,6 +1037,12 @@ impl From<&str> for Value {
 impl From<Temporal> for Value {
     fn from(value: Temporal) -> Self {
         Self::Temporal(value)
+    }
+}
+
+impl From<Interval> for Value {
+    fn from(value: Interval) -> Self {
+        Self::Interval(value)
     }
 }
 

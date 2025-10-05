@@ -12,6 +12,7 @@ mod queries;
 mod tokenizer;
 mod tokens;
 
+use crate::core::date::interval::Interval;
 use crate::core::date::{
     ExtractKind, NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse,
 };
@@ -231,6 +232,7 @@ impl<'input> Parser<'input> {
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
             Token::Keyword(Keyword::Null) => Ok(Expression::Value(Value::Null)),
+            Token::Keyword(Keyword::Interval) => self.parse_interval(),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
             }
@@ -367,6 +369,59 @@ impl<'input> Parser<'input> {
             Keyword::Text => Ok(Type::Text),
             keyword => unreachable!("unexpected column token: {keyword}"),
         }
+    }
+
+    fn parse_interval(&mut self) -> ParserResult<Expression> {
+        const MICROSECS_IN_HOUR: i64 = 3_600_000_000;
+        const MICROSECS_IN_MIN: i64 = 60_000_000;
+        const MICROSECS_IN_SECS: i64 = 1_000_000;
+
+        let value = self.parse_ident()?;
+
+        let mut months = 0;
+        let mut days = 0;
+        let mut microseconds = 0;
+
+        let parts = value.split_whitespace().collect::<Vec<_>>();
+
+        if parts.len() % 2 != 0 {
+            return Err(self.error(ErrorKind::FormatError(format!(
+                "Invalid interval format: {value}"
+            ))));
+        }
+
+        for chunk in parts.chunks_exact(2) {
+            let num: i64 = match chunk[0].parse() {
+                Ok(num) => num,
+                Err(_) => {
+                    return Err(self.error(ErrorKind::FormatError(format!(
+                        "Invalid number in interval: {}",
+                        chunk[0]
+                    ))))
+                }
+            };
+
+            let unit = chunk[1].to_lowercase();
+            match unit.as_str() {
+                "year" | "years" => months += (num * 12) as i32,
+                "month" | "months" => months += num as i32,
+                "day" | "days" => days += num as i32,
+                "hour" | "hours" => microseconds += num * MICROSECS_IN_HOUR,
+                "minute" | "minutes" => microseconds += num * MICROSECS_IN_MIN,
+                "second" | "seconds" => microseconds += num * MICROSECS_IN_SECS,
+                "microsecond" | "microseconds" => microseconds += num,
+                _ => {
+                    return Err(self.error(ErrorKind::FormatError(format!(
+                        "Unknown interval unit: {}",
+                        unit
+                    ))))
+                }
+            }
+        }
+
+        Ok(Expression::Value(
+            Interval::new(months, days, microseconds).into(),
+        ))
     }
 
     fn parse_assign(&mut self) -> ParserResult<Assignment> {
@@ -694,7 +749,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 15] {
+    const fn supported_types() -> [Keyword; 16] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -711,6 +766,7 @@ impl<'input> Parser<'input> {
             Keyword::Time,
             Keyword::Date,
             Keyword::Timestamp,
+            Keyword::Interval,
         ]
     }
 
