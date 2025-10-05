@@ -750,4 +750,12 @@ mod tests {
         assert!(time < time2);
         assert!(timestamp < timestamp2);
     }
+
+    #[test]
+    fn test_now_between_threads() {
+        let time = NaiveTime::now();
+        let time2 = std::thread::spawn(|| NaiveTime::now()).join().unwrap();
+
+        assert_eq!(time, time2)
+    }
 }
