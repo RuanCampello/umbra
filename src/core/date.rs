@@ -9,8 +9,6 @@ use std::fmt::{Display, Formatter};
 use std::num::NonZeroI32;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use libc::time;
-
 /// A combined date and time representation without timezone information.
 ///
 /// This struct combines [`NaiveDate`] (4 bytes)
@@ -108,7 +106,7 @@ pub trait Serialize {
 }
 
 pub trait Current {
-    /// Returns the current time in this representation.
+    /// Returns the current `UTC` time in this representation.
     fn now() -> Self;
 }
 
@@ -121,7 +119,7 @@ fn now() -> i64 {
 }
 
 impl Current for NaiveDateTime {
-    #[inline]
+    #[inline(always)]
     fn now() -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -213,6 +211,7 @@ impl Display for NaiveDateTime {
 }
 
 impl Current for NaiveDate {
+    #[inline(always)]
     fn now() -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -735,5 +734,20 @@ mod tests {
         assert!(time4 > time0);
         assert_eq!(time1.partial_cmp(&time2), Some(std::cmp::Ordering::Less));
         assert_eq!(time1.partial_cmp(&time3), Some(std::cmp::Ordering::Equal));
+    }
+
+    #[test]
+    fn test_now_ordering() {
+        let time = NaiveTime::now();
+        let timestamp = NaiveDateTime::now();
+
+        let ten_millis = std::time::Duration::from_secs(1);
+        std::thread::sleep(ten_millis);
+
+        let time2 = NaiveTime::now();
+        let timestamp2 = NaiveDateTime::now();
+
+        assert!(time < time2);
+        assert!(timestamp < timestamp2);
     }
 }
