@@ -380,7 +380,7 @@ impl Display for TypeError {
                 write!(f, "Cannot apply unary operator {operator:#?} to {value:#?}")
             }
             TypeError::ExpectedType { expected, found } => {
-                write!(f, "Expected {expected:#?} but found {found:#?}")
+                write!(f, "Expected {expected:#?} but found {found:?}")
             }
             TypeError::ExpectedOneOfTypes { expected } => {
                 write!(f, "Expected one of ")?;
