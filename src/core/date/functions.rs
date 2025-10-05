@@ -116,6 +116,25 @@ impl Display for ExtractKind {
     }
 }
 
+impl TryFrom<&str> for ExtractKind {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_lowercase().as_str() {
+            "century" => Ok(Self::Century),
+            "day" => Ok(Self::Day),
+            "decade" => Ok(Self::Decade),
+            "hour" => Ok(Self::Hour),
+            "minute" => Ok(Self::Minute),
+            "second" => Ok(Self::Second),
+            "month" => Ok(Self::Month),
+            "quarter" => Ok(Self::Quarter),
+            "year" => Ok(Self::Year),
+            _ => Err(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::date::{functions::ExtractKind, NaiveDate, NaiveDateTime, NaiveTime, Parse};
@@ -166,4 +185,3 @@ mod tests {
         assert_eq!(ExtractKind::Second.from_timestamp(&datetime), Some(14.0));
     }
 }
-

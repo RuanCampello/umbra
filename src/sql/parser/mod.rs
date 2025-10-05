@@ -12,7 +12,9 @@ mod queries;
 mod tokenizer;
 mod tokens;
 
-use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
+use crate::core::date::{
+    ExtractKind, NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse,
+};
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, Statement,
     Type, UnaryOperator, Value,
@@ -494,6 +496,29 @@ impl<'input> Parser<'input> {
                     ],
                 })
             }
+            Keyword::Extract => {
+                let kind_str = self.parse_ident()?;
+                // TODO: this way we need to parse the kind here to check and when executing, but I
+                // don't know any better way without changing the enums to a special case or just
+                // making an execution error instead of a parsing, which isn't the ideal
+                let kind = ExtractKind::try_from(kind_str.as_str()).or(Err(self.error(
+                    ErrorKind::FormatError(format!(
+                        "Unit '{kind_str}' is not recognised for date type"
+                    )),
+                )))?;
+
+                self.expect_keyword(Keyword::From)?;
+                let from = self.parse_ident()?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Extract,
+                    args: vec![
+                        Expression::Value(Value::String(kind_str)),
+                        Expression::Identifier(from),
+                    ],
+                })
+            }
 
             keyword
                 if matches!(
@@ -790,7 +815,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
+    use crate::sql::statement::{self, Expression, OrderBy, OrderDirection};
 
     #[test]
     fn test_parse_select() {
@@ -1910,6 +1935,29 @@ mod tests {
                 }),
                 order_by: vec![],
                 group_by: vec![],
+            })
+        )
+    }
+
+    #[test]
+    fn test_extract_function() {
+        let sql = "SELECT EXTRACT(QUARTER FROM joined) FROM employees;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Extract,
+                    args: vec![
+                        Expression::Value("QUARTER".into()),
+                        Expression::Identifier("joined".into())
+                    ],
+                }],
+                from: "employees".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![]
             })
         )
     }

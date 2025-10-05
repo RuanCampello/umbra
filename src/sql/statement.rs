@@ -326,6 +326,7 @@ pub enum Function {
     /// COALESCE(value1, value2, ..., valueN) -> T;
     /// ```
     Coalesce,
+    Extract,
     UuidV4,
 }
 
@@ -846,6 +847,7 @@ impl Function {
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => {
                 VmType::Number
             }
+            Self::Extract => VmType::Float,
 
             Self::Coalesce => panic!("This must be overridden by the analyzer"),
         }
@@ -917,6 +919,7 @@ define_function_mapping! {
     TypeOf => "TYPEOF",
     Max => "MAX",
     Coalesce => "COALESCE",
+    Extract => "EXTRACT",
     UuidV4 => "UUIDV4",
 }
 
@@ -939,6 +942,7 @@ impl From<Function> for Keyword {
             Function::Avg => Self::Avg,
             Function::Sum => Self::Sum,
             Function::Coalesce => Self::Coalesce,
+            Function::Extract => Self::Extract,
             Function::UuidV4 => unimplemented!(),
         }
     }
@@ -965,6 +969,7 @@ impl TryFrom<&Keyword> for Function {
             Keyword::Max => Ok(Self::Max),
             Keyword::TypeOf => Ok(Self::TypeOf),
             Keyword::Coalesce => Ok(Self::Coalesce),
+            Keyword::Extract => Ok(Self::Extract),
             _ => Err(()),
         }
     }

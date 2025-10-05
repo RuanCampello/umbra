@@ -10,6 +10,7 @@ use std::num::NonZeroI32;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod functions;
+pub use functions::ExtractKind;
 
 /// A combined date and time representation without timezone information.
 ///
