@@ -70,7 +70,7 @@ impl ExtractKind {
             Self::Century => Some(((date.year() as f64 - 1.0) / 100.0).floor() + 1.0),
             Self::Decade => Some((date.year() as f64 / 10.0).floor()),
             Self::Year => Some(date.year() as _),
-            Self::Quarter => Some((date.month() as f64 - 1.0) / 3.0 + 1.0),
+            Self::Quarter => Some(((date.month() as f64 - 1.0) / 3.0 + 1.0).floor()),
             Self::Month => Some(date.month() as _),
             Self::Day => Some(date.day() as _),
             Self::Hour | Self::Minute | Self::Second => None,
@@ -113,6 +113,57 @@ impl Display for ExtractKind {
             Self::Year => "year",
         };
         write!(f, "{}", s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::date::{functions::ExtractKind, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+
+    #[test]
+    fn test_from_date() {
+        let date = NaiveDate::parse_str("2023-12-25").unwrap();
+
+        assert_eq!(ExtractKind::Year.from_date(&date), Some(2023.0));
+        assert_eq!(ExtractKind::Month.from_date(&date), Some(12.0));
+        assert_eq!(ExtractKind::Day.from_date(&date), Some(25.0));
+        assert_eq!(ExtractKind::Quarter.from_date(&date), Some(4.0));
+        assert_eq!(ExtractKind::Century.from_date(&date), Some(21.0));
+        assert_eq!(ExtractKind::Decade.from_date(&date), Some(202.0));
+
+        assert_eq!(ExtractKind::Hour.from_date(&date), None);
+        assert_eq!(ExtractKind::Minute.from_date(&date), None);
+        assert_eq!(ExtractKind::Second.from_date(&date), None);
+    }
+
+    #[test]
+    fn test_from_time() {
+        let time = NaiveTime::parse_str("13:30:15").unwrap();
+
+        assert_eq!(ExtractKind::Hour.from_time(&time), Some(13.0));
+        assert_eq!(ExtractKind::Minute.from_time(&time), Some(30.0));
+        assert_eq!(ExtractKind::Second.from_time(&time), Some(15.0));
+
+        assert_eq!(ExtractKind::Year.from_time(&time), None);
+        assert_eq!(ExtractKind::Month.from_time(&time), None);
+        assert_eq!(ExtractKind::Day.from_time(&time), None);
+        assert_eq!(ExtractKind::Quarter.from_time(&time), None);
+    }
+
+    #[test]
+    fn test_from_datetime() {
+        let date = NaiveDate::parse_str("2002-02-09").unwrap();
+        let time = NaiveTime::parse_str("00:37:14").unwrap();
+        let datetime = NaiveDateTime { date, time };
+
+        assert_eq!(ExtractKind::Year.from_timestamp(&datetime), Some(2002.0));
+        assert_eq!(ExtractKind::Month.from_timestamp(&datetime), Some(02.0));
+        assert_eq!(ExtractKind::Quarter.from_timestamp(&datetime), Some(1.0));
+        assert_eq!(ExtractKind::Day.from_timestamp(&datetime), Some(9.0));
+
+        assert_eq!(ExtractKind::Hour.from_timestamp(&datetime), Some(00.0));
+        assert_eq!(ExtractKind::Minute.from_timestamp(&datetime), Some(37.0));
+        assert_eq!(ExtractKind::Second.from_timestamp(&datetime), Some(14.0));
     }
 }
 
