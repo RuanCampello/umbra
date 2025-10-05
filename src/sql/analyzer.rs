@@ -1217,4 +1217,15 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn test_extract_function() -> AnalyzerResult {
+        let ctx = &["CREATE TABLE users (name VARCHAR(100), birth_date DATE);"];
+        Analyze {
+            sql: "SELECT EXTRACT(YEAR FROM birth_date) FROM users;",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }

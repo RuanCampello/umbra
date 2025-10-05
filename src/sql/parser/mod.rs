@@ -815,7 +815,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::{self, Expression, OrderBy, OrderDirection};
+    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
 
     #[test]
     fn test_parse_select() {
@@ -1959,6 +1959,19 @@ mod tests {
                 order_by: vec![],
                 group_by: vec![]
             })
+        );
+
+        let sql = "SELECT EXTRACT(SOMETHING FROM joined) FROM employees;";
+        let statement = Parser::new(sql).parse_statement();
+        assert_eq!(
+            statement.unwrap_err(),
+            ParserError {
+                kind: ErrorKind::FormatError(
+                    "Unit 'SOMETHING' is not recognised for date type".into()
+                ),
+                location: Location::new(1, 16),
+                input: sql.to_string(),
+            }
         )
     }
 }

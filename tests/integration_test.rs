@@ -1547,3 +1547,39 @@ fn nullable_aggregation() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn extract_function() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE events (
+        event_id SERIAL PRIMARY KEY,
+        event_name VARCHAR(100),
+        event_timestamp TIMESTAMP
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO events (event_name, event_timestamp) VALUES
+        ('Conference A', '2024-03-15 09:00:00'),
+        ('Workshop B', '2024-06-22 14:30:00'),
+        ('Seminar C', '2024-09-10 11:15:00'),
+        ('Conference D', '2024-12-05 10:00:00'),
+        ('Workshop E', '2025-02-18 13:45:00');
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT
+        event_name,
+        EXTRACT(YEAR FROM event_timestamp) AS year,
+        EXTRACT(MONTH FROM event_timestamp) AS month,
+    FROM events ORDER BY event_timestamp;
+    "#,
+    )?;
+
+    Ok(())
+}
