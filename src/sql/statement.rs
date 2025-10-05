@@ -848,7 +848,7 @@ impl Function {
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => {
                 VmType::Number
             }
-            Self::Extract => VmType::Float,
+            Self::Extract => VmType::Number,
 
             Self::Coalesce => panic!("This must be overridden by the analyzer"),
         }

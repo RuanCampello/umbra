@@ -1581,5 +1581,39 @@ fn extract_function() -> Result<()> {
     "#,
     )?;
 
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Conference A".into(), 2024.into(), 3.into()],
+            vec!["Workshop B".into(), 2024.into(), 6.into()],
+            vec!["Seminar C".into(), 2024.into(), 9.into()],
+            vec!["Conference D".into(), 2024.into(), 12.into()],
+            vec!["Workshop E".into(), 2025.into(), 2.into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT
+        EXTRACT(YEAR FROM event_timestamp) AS year,
+        EXTRACT(QUARTER FROM event_timestamp) AS quarter,
+        COUNT(*) AS event_count
+    FROM events
+    GROUP BY year, quarter
+    ORDER BY year, quarter;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![2024.into(), 1.into(), 1.into()],
+            vec![2024.into(), 2.into(), 1.into()],
+            vec![2024.into(), 3.into(), 1.into()],
+            vec![2024.into(), 4.into(), 1.into()],
+            vec![2025.into(), 1.into(), 1.into()],
+        ]
+    );
+
     Ok(())
 }

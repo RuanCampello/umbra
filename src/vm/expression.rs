@@ -187,12 +187,9 @@ pub(crate) fn resolve_expression<'exp>(
             Function::Extract => {
                 let kind = get_value::<String>(val, schema, &args[0])?;
                 let kind = ExtractKind::try_from(kind).unwrap();
-                let date = resolve_expression(val, schema, &args[1])?;
+                let date: Temporal = get_value(val, schema, &args[1])?;
 
-                Ok(Value::Float(match date {
-                    Value::Temporal(temporal) => temporal.extract(kind)?,
-                    _ => unreachable!(),
-                }))
+                Ok(Value::Number(date.extract(kind)? as i128))
             }
             Function::Ascii => {
                 let string: String = get_value(val, schema, &args[0])?;
