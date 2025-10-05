@@ -754,8 +754,13 @@ mod tests {
     #[test]
     fn test_now_between_threads() {
         let time = NaiveTime::now();
-        let time2 = std::thread::spawn(|| NaiveTime::now()).join().unwrap();
+        let timestamp = NaiveDateTime::now();
 
-        assert_eq!(time, time2)
+        let (time2, timestamp2) = std::thread::spawn(|| (NaiveTime::now(), NaiveDateTime::now()))
+            .join()
+            .unwrap();
+
+        assert_eq!(time, time2);
+        assert_eq!(timestamp, timestamp2);
     }
 }
