@@ -10,7 +10,7 @@ use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
 
-use crate::core::date::DateParseError;
+use crate::core::date::{DateParseError, ExtractError};
 use crate::core::storage::btree::{BTree, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
@@ -781,6 +781,12 @@ impl From<TypeError> for SqlError {
 impl From<DateParseError> for SqlError {
     fn from(value: DateParseError) -> Self {
         TypeError::InvalidDate(value).into()
+    }
+}
+
+impl From<ExtractError> for SqlError {
+    fn from(value: ExtractError) -> Self {
+        TypeError::ExtractError(value).into()
     }
 }
 

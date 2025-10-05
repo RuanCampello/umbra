@@ -829,6 +829,7 @@ impl Function {
             Self::Concat => Some((1, usize::MAX)),
             Self::Position => Some((2, 2)),
             Self::Power => Some((2, 2)),
+            Self::Extract => Some((2, 2)),
             Self::Trunc => Some((1, 2)),
             Self::Ascii => UNARY,
             func if func.is_math() => UNARY,

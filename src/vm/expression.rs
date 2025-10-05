@@ -1,5 +1,5 @@
 use super::{functions, math};
-use crate::core::date::DateParseError;
+use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
@@ -44,6 +44,7 @@ pub enum TypeError {
         expected: Vec<VmType>,
     },
     InvalidDate(DateParseError),
+    ExtractError(ExtractError),
     UuidError(UuidError),
 }
 
@@ -182,6 +183,16 @@ pub(crate) fn resolve_expression<'exp>(
                     .map(|num| num as isize);
 
                 Ok(Value::String(functions::substring(&string, start, count)))
+            }
+            Function::Extract => {
+                let kind = get_value::<String>(val, schema, &args[0])?;
+                let kind = ExtractKind::try_from(kind).unwrap();
+                let date = resolve_expression(val, schema, &args[1])?;
+
+                Ok(Value::Float(match date {
+                    Value::Temporal(temporal) => temporal.extract(kind)?,
+                    _ => unreachable!(),
+                }))
             }
             Function::Ascii => {
                 let string: String = get_value(val, schema, &args[0])?;
@@ -395,6 +406,7 @@ impl Display for TypeError {
 
                 Ok(())
             }
+            TypeError::ExtractError(err) => err.fmt(f),
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
         }

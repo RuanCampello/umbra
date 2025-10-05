@@ -496,6 +496,7 @@ impl<'input> Parser<'input> {
                     ],
                 })
             }
+
             Keyword::Extract => {
                 let kind_str = self.parse_ident()?;
                 // TODO: this way we need to parse the kind here to check and when executing, but I

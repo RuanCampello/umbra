@@ -1576,7 +1576,7 @@ fn extract_function() -> Result<()> {
     SELECT
         event_name,
         EXTRACT(YEAR FROM event_timestamp) AS year,
-        EXTRACT(MONTH FROM event_timestamp) AS month,
+        EXTRACT(MONTH FROM event_timestamp) AS month
     FROM events ORDER BY event_timestamp;
     "#,
     )?;

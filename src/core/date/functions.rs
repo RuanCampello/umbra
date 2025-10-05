@@ -29,6 +29,16 @@ pub trait Extract {
     fn extract(&self, kind: ExtractKind) -> Result<f64, ExtractError>;
 }
 
+impl Extract for Temporal {
+    fn extract(&self, kind: ExtractKind) -> Result<f64, ExtractError> {
+        match self {
+            Self::DateTime(timestamp) => timestamp.extract(kind),
+            Self::Date(date) => date.extract(kind),
+            Self::Time(time) => time.extract(kind),
+        }
+    }
+}
+
 impl Extract for NaiveDateTime {
     fn extract(&self, kind: ExtractKind) -> Result<f64, ExtractError> {
         kind.from_timestamp(self)
@@ -132,6 +142,14 @@ impl TryFrom<&str> for ExtractKind {
             "year" => Ok(Self::Year),
             _ => Err(()),
         }
+    }
+}
+
+impl TryFrom<String> for ExtractKind {
+    type Error = ();
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.as_str().try_into()
     }
 }
 
