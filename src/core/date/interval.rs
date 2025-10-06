@@ -51,7 +51,7 @@ impl Sub<Interval> for Temporal {
     type Output = Self;
 
     fn sub(self, rhs: Interval) -> Self::Output {
-        todo!()
+        self + (-rhs)
     }
 }
 

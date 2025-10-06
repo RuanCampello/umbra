@@ -715,6 +715,18 @@ impl Neg for Value {
     }
 }
 
+impl Neg for Interval {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            months: -self.months,
+            days: -self.days,
+            microseconds: -self.microseconds,
+        }
+    }
+}
+
 impl Display for Column {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.name, self.data_type)?;
