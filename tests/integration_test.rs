@@ -1,6 +1,6 @@
 use std::path::Path;
 use umbra::db::{Database, DatabaseError, QuerySet};
-use umbra::sql::statement::{Type, Value};
+use umbra::sql::statement::{Temporal, Type, Value};
 use umbra::temporal;
 
 type Result<T> = std::result::Result<T, DatabaseError>;
@@ -1634,16 +1634,111 @@ fn interval_operations() -> Result<()> {
     db.exec(
         r#"
     INSERT INTO events (event_date, event_datetime, event_time) VALUES
-        ('2024-01-15', '2024-01-15 10:30:00', '10:30:00'),
-        ('2024-02-28', '2024-02-28 14:45:00', '14:45:00'),
-        ('2024-06-15', '2024-06-15 08:00:00', '08:00:00');
+        ('2024-01-31', '2024-01-31 23:59:59', '23:59:59'),
+        ('2024-02-29', '2024-02-29 00:00:00', '00:00:00'),
+        ('2024-12-31', '2024-12-31 12:30:45', '12:30:45'),
+        ('2024-03-15', '2024-03-15 18:45:30', '18:45:30'),
+        ('2024-06-30', '2024-06-30 13:15:20', '13:15:20');
     "#,
     )?;
 
     let query = db.exec(
-        "SELECT event_date + INTERVAL '30 days' AS future_date FROM events WHERE event_id = 1;",
+        "SELECT event_id, event_date + INTERVAL '1 month' AS next_month FROM events ORDER BY event_id;",
     )?;
-    assert_eq!(query.tuples, vec![vec![temporal!("2024-02-14").unwrap()]]);
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2024-02-29").unwrap()], // jan 31 + 1 month = feb 29
+            vec![Value::Number(2), temporal!("2024-03-29").unwrap()], // feb 29 + 1 month = mar 29
+            vec![Value::Number(3), temporal!("2025-01-31").unwrap()], // dec 31 + 1 month = jan 31 next year
+            vec![Value::Number(4), temporal!("2024-04-15").unwrap()],
+            vec![Value::Number(5), temporal!("2024-07-30").unwrap()], // jun 30 + 1 month = jul 30
+        ]
+    );
+
+    // let query = db.exec(
+    //     "SELECT event_id, event_time + INTERVAL '25 hours 75 minutes 100 seconds' AS broken_time FROM events ORDER BY event_id;",
+    // )?;
+    // assert_eq!(
+    //     query.tuples,
+    //     vec![
+    //         vec![Value::Number(1), temporal!("01:41:39").unwrap()], // 23:59:59 + 26h15m40s = next day 01:41:39
+    //         vec![Value::Number(2), temporal!("02:16:40").unwrap()], // 00:00:00 + 26h15m40s = 02:16:40
+    //         vec![Value::Number(3), temporal!("14:47:25").unwrap()], // 12:30:45 + 26h15m40s = next day 14:47:25
+    //         vec![Value::Number(4), temporal!("21:02:10").unwrap()], // 18:45:30 + 26h15m40s = next day 21:02:10
+    //         vec![Value::Number(5), temporal!("15:32:00").unwrap()], // 13:15:20 + 26h15m40s = next day 15:32:00
+    //     ]
+    // );
+
+    // let query = db.exec(
+    //     "SELECT event_id, event_date - INTERVAL '35 days' AS past_date FROM events ORDER BY event_id;",
+    // )?;
+    // assert_eq!(
+    //     query.tuples,
+    //     vec![
+    //         vec![Value::Number(1), temporal!("2023-12-27").unwrap()], // jan 31 - 35 days = dec 27 previous year
+    //         vec![Value::Number(2), temporal!("2024-01-25").unwrap()], // feb 29 - 35 days = jan 25
+    //         vec![Value::Number(3), temporal!("2024-11-26").unwrap()], // dec 31 - 35 days = nov 26
+    //         vec![Value::Number(4), temporal!("2024-02-09").unwrap()], // mar 15 - 35 days = feb 9
+    //         vec![Value::Number(5), temporal!("2024-05-26").unwrap()], // jun 30 - 35 days = may 26
+    //     ]
+    // );
+
+    // let query = db.exec(
+    //     "SELECT event_id, event_datetime + INTERVAL '2 months 15 days 27 hours 90 minutes' AS complex_future FROM events ORDER BY event_id;",
+    // )?;
+    // assert_eq!(
+    //     query.tuples,
+    //     vec![
+    //         vec![Value::Number(1), temporal!("2024-04-17 02:29:59").unwrap()], // jan 31 + 2m15d28h30m
+    //         vec![Value::Number(2), temporal!("2024-05-16 03:30:00").unwrap()], // feb 29 + 2m15d28h30m
+    //         vec![Value::Number(3), temporal!("2025-03-18 16:00:45").unwrap()], // dec 31 + 2m15d28h30m
+    //         vec![Value::Number(4), temporal!("2024-06-01 22:15:30").unwrap()], // mar 15 + 2m15d28h30m
+    //         vec![Value::Number(5), temporal!("2024-09-16 15:45:20").unwrap()], // jun 30 + 2m15d28h30m
+    //     ]
+    // );
+
+    // let query = db.exec(
+    //     "SELECT event_id, event_datetime + INTERVAL '-1 month 15 days -2 hours 30 minutes' AS mixed_interval FROM events ORDER BY event_id;",
+    // )?;
+    // assert_eq!(
+    //     query.tuples,
+    //     vec![
+    //         vec![Value::Number(1), temporal!("2023-12-16 22:29:59").unwrap()], // Jan 31 -1m+15d-2h30m
+    //         vec![Value::Number(2), temporal!("2024-01-15 22:30:00").unwrap()], // Feb 29 -1m+15d-2h30m
+    //         vec![Value::Number(3), temporal!("2024-11-15 10:00:45").unwrap()], // Dec 31 -1m+15d-2h30m
+    //         vec![Value::Number(4), temporal!("2024-02-29 16:15:30").unwrap()], // Mar 15 -1m+15d-2h30m
+    //         vec![Value::Number(5), temporal!("2024-05-15 10:45:20").unwrap()], // Jun 30 -1m+15d-2h30m
+    //     ]
+    // );
+
+    // let query = db.exec(
+    //     "SELECT event_id, event_time + INTERVAL '0.5 seconds' AS micro_time FROM events ORDER BY event_id;",
+    // )?;
+    // assert_eq!(
+    //     query.tuples,
+    //     vec![
+    //         vec![Value::Number(1), temporal!("23:59:59.5").unwrap()], // 23:59:59 + 0.5s
+    //         vec![Value::Number(2), temporal!("00:00:00.5").unwrap()], // 00:00:00 + 0.5s
+    //         vec![Value::Number(3), temporal!("12:30:45.5").unwrap()], // 12:30:45 + 0.5s
+    //         vec![Value::Number(4), temporal!("18:45:30.5").unwrap()], // 18:45:30 + 0.5s
+    //         vec![Value::Number(5), temporal!("13:15:20.5").unwrap()], // 13:15:20 + 0.5s
+    //     ]
+    // );
+
+    // let query = db.exec(
+    //     "SELECT event_id, event_date + INTERVAL '13 months' AS next_year FROM events ORDER BY event_id;",
+    // )?;
+    // assert_eq!(
+    //     query.tuples,
+    //     vec![
+    //         vec![Value::Number(1), temporal!("2025-02-28").unwrap()], // jan 31 + 13 months
+    //         vec![Value::Number(2), temporal!("2025-03-29").unwrap()], // feb 29 + 13 months
+    //         vec![Value::Number(3), temporal!("2026-01-31").unwrap()], // dec 31 + 13 months
+    //         vec![Value::Number(4), temporal!("2025-04-15").unwrap()], // mar 15 + 13 months
+    //         vec![Value::Number(5), temporal!("2025-07-30").unwrap()], // jun 30 + 13 months
+    //     ]
+    // );
 
     Ok(())
 }

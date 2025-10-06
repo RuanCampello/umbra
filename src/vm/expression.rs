@@ -7,7 +7,7 @@ use crate::sql::statement::{
 };
 use std::fmt::{Display, Formatter};
 use std::mem;
-use std::ops::{Add, Neg};
+use std::ops::Neg;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy)]
