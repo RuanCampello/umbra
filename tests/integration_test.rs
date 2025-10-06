@@ -1617,3 +1617,86 @@ fn extract_function() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn interval_operations() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE events (
+        event_id SERIAL PRIMARY KEY,
+        event_date DATE,
+        event_datetime TIMESTAMP,
+        event_time TIME
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO events (event_date, event_datetime, event_time) VALUES
+        ('2024-01-15', '2024-01-15 10:30:00', '10:30:00'),
+        ('2024-02-28', '2024-02-28 14:45:00', '14:45:00'),
+        ('2024-06-15', '2024-06-15 08:00:00', '08:00:00');
+    "#,
+    )?;
+
+    // Test date + interval with days
+    let query = db.exec(
+        "SELECT event_date + INTERVAL '30 days' AS future_date FROM events WHERE event_id = 1;"
+    )?;
+    assert_eq!(query.tuples.len(), 1);
+    if let Value::Temporal(temporal) = &query.tuples[0][0] {
+        assert_eq!(temporal.to_string(), "2024-02-14");
+    } else {
+        panic!("Expected temporal value");
+    }
+
+    // Test date + interval with months
+    let query = db.exec(
+        "SELECT event_date + INTERVAL '1 month' AS next_month FROM events WHERE event_id = 2;"
+    )?;
+    assert_eq!(query.tuples.len(), 1);
+    if let Value::Temporal(temporal) = &query.tuples[0][0] {
+        // Feb 28 + 1 month should be Mar 28
+        assert_eq!(temporal.to_string(), "2024-03-28");
+    } else {
+        panic!("Expected temporal value");
+    }
+
+    // Test datetime + interval with hours
+    let query = db.exec(
+        "SELECT event_datetime + INTERVAL '3 hours' AS later FROM events WHERE event_id = 3;"
+    )?;
+    assert_eq!(query.tuples.len(), 1);
+    if let Value::Temporal(temporal) = &query.tuples[0][0] {
+        assert_eq!(temporal.to_string(), "2024-06-15 11:00:00");
+    } else {
+        panic!("Expected temporal value");
+    }
+
+    // Test date - interval
+    let query = db.exec(
+        "SELECT event_date - INTERVAL '15 days' AS past_date FROM events WHERE event_id = 1;"
+    )?;
+    assert_eq!(query.tuples.len(), 1);
+    if let Value::Temporal(temporal) = &query.tuples[0][0] {
+        // 2024-01-15 - 15 days = 2023-12-31
+        assert_eq!(temporal.to_string(), "2023-12-31");
+    } else {
+        panic!("Expected temporal value");
+    }
+
+    // Test time + interval (should wrap around)
+    let query = db.exec(
+        "SELECT event_time + INTERVAL '2 hours 30 minutes' AS later_time FROM events WHERE event_id = 1;"
+    )?;
+    assert_eq!(query.tuples.len(), 1);
+    if let Value::Temporal(temporal) = &query.tuples[0][0] {
+        // 10:30:00 + 2:30 = 13:00:00
+        assert_eq!(temporal.to_string(), "13:00:00");
+    } else {
+        panic!("Expected temporal value");
+    }
+
+    Ok(())
+}

@@ -151,6 +151,11 @@ impl NaiveDateTime {
 
         Self { date, time }
     }
+    
+    /// Create a NaiveDateTime from separate date and time components
+    pub fn from_date_time(date: NaiveDate, time: NaiveTime) -> Self {
+        Self { date, time }
+    }
 }
 
 impl Parse for NaiveDateTime {
@@ -285,7 +290,7 @@ impl NaiveDate {
     }
 
     #[inline(always)]
-    fn days_in_month(year: i32, month: u16) -> u16 {
+    pub fn days_in_month(year: i32, month: u16) -> u16 {
         match month {
             1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
             4 | 6 | 9 | 11 => 30,
@@ -296,12 +301,12 @@ impl NaiveDate {
     }
 
     #[inline(always)]
-    fn year(&self) -> i32 {
+    pub fn year(&self) -> i32 {
         self.yof.get() >> 13
     }
 
     #[inline(always)]
-    fn month(&self) -> u16 {
+    pub fn month(&self) -> u16 {
         let ordinal = self.ordinal();
 
         (1..=12)
@@ -311,7 +316,7 @@ impl NaiveDate {
     }
 
     #[inline(always)]
-    fn day(&self) -> u16 {
+    pub fn day(&self) -> u16 {
         let ordinal = self.ordinal();
         let m = self.month();
 
@@ -319,8 +324,35 @@ impl NaiveDate {
     }
 
     #[inline(always)]
-    fn ordinal(&self) -> u16 {
+    pub fn ordinal(&self) -> u16 {
         (self.yof.get() & 0x1fff) as u16
+    }
+    
+    /// Create a date from year, month, and day
+    pub fn from_ymd(year: i32, month: u8, day: u8) -> DateError<Self> {
+        if !(1..=12).contains(&month) {
+            return Err(DateParseError::InvalidMonth);
+        }
+        
+        let max_day = Self::days_in_month(year, month as u16);
+        if day == 0 || day as u16 > max_day {
+            return Err(DateParseError::InvalidDay);
+        }
+        
+        let ordinal = CUMULATIVE_DAYS[month as usize] 
+            + day as u16 
+            + if month > 2 && Self::is_leap_year(year) { 1 } else { 0 };
+        
+        Ok(Self::new(year, ordinal))
+    }
+    
+    /// Create a date from year and ordinal day of year
+    pub fn from_yo(year: i32, ordinal: u16) -> DateError<Self> {
+        let max_ordinal = if Self::is_leap_year(year) { 366 } else { 365 };
+        if ordinal == 0 || ordinal > max_ordinal {
+            return Err(DateParseError::InvalidDay);
+        }
+        Ok(Self::new(year, ordinal))
     }
 
     fn cumul_days(&self) -> [u16; 13] {
@@ -334,7 +366,7 @@ impl NaiveDate {
     }
 
     #[inline(always)]
-    const fn is_leap_year(year: i32) -> bool {
+    pub const fn is_leap_year(year: i32) -> bool {
         ((year & 3) == 0) && ((year % 25 != 0) || ((year & 15) == 0))
     }
 }
@@ -472,15 +504,15 @@ impl NaiveTime {
         Self::new_unchecked(hour, min, secs)
     }
 
-    fn hour(&self) -> u8 {
+    pub fn hour(&self) -> u8 {
         ((self.hms.get() >> 12) & 0x1f) as u8
     }
 
-    fn minute(&self) -> u8 {
+    pub fn minute(&self) -> u8 {
         ((self.hms.get() >> 6) & 0x3f) as u8
     }
 
-    fn second(&self) -> u8 {
+    pub fn second(&self) -> u8 {
         (self.hms.get() & 0x3f) as u8
     }
 }

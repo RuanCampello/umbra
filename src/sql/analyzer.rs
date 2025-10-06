@@ -408,6 +408,14 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             };
 
+            // Special handling for Temporal + Interval and Temporal - Interval
+            if matches!(operator, BinaryOperator::Plus | BinaryOperator::Minus) {
+                if (left_type == VmType::Date && right_type == VmType::Interval) ||
+                   (left_type == VmType::Interval && right_type == VmType::Date && *operator == BinaryOperator::Plus) {
+                    return Ok(VmType::Date);
+                }
+            }
+
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
@@ -548,7 +556,9 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
             Some(ty) => Ok(ty.into()),
             None => unreachable!("NULL should always be type aware"),
         },
-        _ => Ok(VmType::Date),
+        Value::Temporal(_) => Ok(VmType::Date),
+        Value::Interval(_) => Ok(VmType::Interval),
+        Value::Uuid(_) => Ok(VmType::Number),
     };
 
     result
