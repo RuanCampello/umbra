@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
-use std::ops::Neg;
+use std::ops::{Add, Neg};
 use std::str::FromStr;
 
 /// SQL statements.
@@ -333,6 +333,12 @@ pub enum Function {
     UuidV4,
 }
 
+#[derive(Debug)]
+pub(crate) enum ArithmeticPair {
+    Numeric(f64, f64),
+    Temporal(Temporal, Interval),
+}
+
 const NULL_HASH: u32 = 0x4E554C4C;
 
 impl Column {
@@ -590,12 +596,17 @@ impl Value {
         matches!(self, Value::Null)
     }
 
-    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
+    /// Tries to convert a pair of `Value`s into a representation suitable for arithmetic.
+    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<ArithmeticPair> {
         match (self, other) {
-            (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),
-            (Value::Float(a), Value::Float(b)) => Some((*a, *b)),
-            (Value::Number(a), Value::Float(b)) => Some((*a as f64, *b)),
-            (Value::Float(a), Value::Number(b)) => Some((*a, *b as f64)),
+            (Value::Number(a), Value::Number(b)) => {
+                Some(ArithmeticPair::Numeric(*a as f64, *b as f64))
+            }
+            (Value::Float(a), Value::Float(b)) => Some(ArithmeticPair::Numeric(*a, *b)),
+            (Value::Number(a), Value::Float(b)) => Some(ArithmeticPair::Numeric(*a as f64, *b)),
+            (Value::Float(a), Value::Number(b)) => Some(ArithmeticPair::Numeric(*a, *b as f64)),
+            (Value::Temporal(t), Value::Interval(i)) => Some(ArithmeticPair::Temporal(*t, *i)),
+            (Value::Interval(i), Value::Temporal(t)) => Some(ArithmeticPair::Temporal(*t, *i)),
             _ => None,
         }
     }

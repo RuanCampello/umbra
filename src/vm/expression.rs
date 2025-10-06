@@ -3,11 +3,11 @@ use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
-    BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+    ArithmeticPair, BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
 };
 use std::fmt::{Display, Formatter};
 use std::mem;
-use std::ops::Neg;
+use std::ops::{Add, Neg};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy)]
@@ -101,7 +101,6 @@ pub(crate) fn resolve_expression<'exp>(
                 return Ok(Value::Null);
             }
 
-            println!("left {left:?} right {right:?}");
             let mismatched_types = || {
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
@@ -141,32 +140,42 @@ pub(crate) fn resolve_expression<'exp>(
                 }
 
                 arithmetic => {
-                    let (left_value, right_value) = left
+                    let pair = left
                         .as_arithmetic_pair(&right)
                         .ok_or_else(mismatched_types)?;
 
-                    if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
-                        // TODO: maybe we should do better here
-                        return Err(VmError::DivisionByZero(
-                            left_value as i128,
-                            right_value as i128,
-                        )
-                        .into());
-                    }
+                    match pair {
+                        ArithmeticPair::Numeric(left_value, right_value) => {
+                            if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
+                                // TODO: maybe we should do better here
+                                return Err(VmError::DivisionByZero(
+                                    left_value as i128,
+                                    right_value as i128,
+                                )
+                                .into());
+                            }
 
-                    let result = match arithmetic {
-                        BinaryOperator::Plus => left_value + right_value,
-                        BinaryOperator::Minus => left_value - right_value,
-                        BinaryOperator::Mul => left_value * right_value,
-                        BinaryOperator::Div => left_value / right_value,
-                        _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
-                    };
+                            let result = match arithmetic {
+                                BinaryOperator::Plus => left_value + right_value,
+                                BinaryOperator::Minus => left_value - right_value,
+                                BinaryOperator::Mul => left_value * right_value,
+                                BinaryOperator::Div => left_value / right_value,
+                                _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
+                            };
 
-                    match (left, right) {
-                        (Value::Number(_), Value::Number(_)) if result.fract().eq(&0.0) => {
-                            Value::Number(result as i128)
+                            if let (Value::Number(_), Value::Number(_)) = (&left, &right) {
+                                if result.fract() == 0.0 {
+                                    return Ok(Value::Number(result as i128));
+                                }
+                            }
+                            Value::Float(result)
                         }
-                        _ => Value::Float(result),
+
+                        ArithmeticPair::Temporal(temporal, interval) => match arithmetic {
+                            BinaryOperator::Plus => Value::Temporal(temporal + interval),
+                            BinaryOperator::Minus => Value::Temporal(temporal - interval),
+                            _ => unreachable!("not implemented this operation"),
+                        },
                     }
                 }
             })

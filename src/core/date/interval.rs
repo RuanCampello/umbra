@@ -1,8 +1,14 @@
 //! Interval data type implemetation.
 
-use std::{fmt::Display, ops::Add};
+use std::{
+    fmt::Display,
+    ops::{Add, Sub},
+};
 
-use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, CUMULATIVE_DAYS};
+use crate::{
+    core::date::{NaiveDate, NaiveDateTime, NaiveTime, CUMULATIVE_DAYS},
+    sql::statement::Temporal,
+};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct Interval {
@@ -26,6 +32,26 @@ impl Interval {
             months: 0,
             microseconds: 0,
         }
+    }
+}
+
+impl Add<Interval> for Temporal {
+    type Output = Self;
+
+    fn add(self, rhs: Interval) -> Self::Output {
+        match self {
+            Self::Date(date) => Self::Date(date + rhs),
+            Self::Time(time) => Self::Time(time + rhs),
+            Self::DateTime(datetime) => Self::DateTime(datetime + rhs),
+        }
+    }
+}
+
+impl Sub<Interval> for Temporal {
+    type Output = Self;
+
+    fn sub(self, rhs: Interval) -> Self::Output {
+        todo!()
     }
 }
 
