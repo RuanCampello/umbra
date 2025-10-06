@@ -1,5 +1,6 @@
 use super::{functions, math};
-use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
+use crate::core::date::interval::Interval;
+use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind, NaiveDate, NaiveDateTime, NaiveTime};
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
@@ -108,6 +109,22 @@ pub(crate) fn resolve_expression<'exp>(
                     right: Expression::Value(right.clone()),
                 })
             };
+
+            // Handle Temporal +/- Interval arithmetic
+            if matches!(operator, BinaryOperator::Plus | BinaryOperator::Minus) {
+                if let (Value::Temporal(temporal), Value::Interval(interval)) = (&left, &right) {
+                    return apply_interval_to_temporal(*temporal, *interval, *operator == BinaryOperator::Plus);
+                }
+                if let (Value::Interval(interval), Value::Temporal(temporal)) = (&left, &right) {
+                    // Interval + Temporal is the same as Temporal + Interval
+                    if *operator == BinaryOperator::Plus {
+                        return apply_interval_to_temporal(*temporal, *interval, true);
+                    } else {
+                        // Interval - Temporal doesn't make sense
+                        return Err(mismatched_types());
+                    }
+                }
+            }
 
             if mem::discriminant(&left) != mem::discriminant(&right) {
                 return Err(mismatched_types());
@@ -417,4 +434,150 @@ impl Display for VmError {
             Self::NegativeNumSqrt => write!(f, "Cannot take square root of a negative number"),
         }
     }
+}
+
+/// Apply an interval to a temporal value (date, datetime, or time)
+fn apply_interval_to_temporal(temporal: Temporal, interval: Interval, is_add: bool) -> Result<Value, SqlError> {
+    let sign = if is_add { 1 } else { -1 };
+    
+    match temporal {
+        Temporal::Date(date) => {
+            // Add/subtract months and days
+            let new_date = add_months_to_date(date, sign * interval.months)?;
+            let new_date = add_days_to_date(new_date, sign * interval.days)?;
+            Ok(Value::Temporal(Temporal::Date(new_date)))
+        }
+        Temporal::DateTime(datetime) => {
+            // Add/subtract months, days, and microseconds
+            let mut date = datetime.into();
+            date = add_months_to_date(date, sign * interval.months)?;
+            date = add_days_to_date(date, sign * interval.days)?;
+            
+            // Create datetime with updated date but original time
+            let time: NaiveTime = datetime.into();
+            let mut new_datetime = NaiveDateTime::from_date_time(date, time);
+            
+            // Add microseconds
+            new_datetime = add_microseconds_to_datetime(new_datetime, sign as i64 * interval.microseconds)?;
+            Ok(Value::Temporal(Temporal::DateTime(new_datetime)))
+        }
+        Temporal::Time(time) => {
+            // For time, only microseconds make sense
+            let new_time = add_microseconds_to_time(time, sign as i64 * interval.microseconds)?;
+            Ok(Value::Temporal(Temporal::Time(new_time)))
+        }
+    }
+}
+
+/// Add months to a date
+fn add_months_to_date(date: NaiveDate, months: i32) -> Result<NaiveDate, SqlError> {
+    if months == 0 {
+        return Ok(date);
+    }
+    
+    let year = date.year();
+    let month = date.month() as i32;
+    let day = date.day() as u8;
+    
+    // Calculate new year and month
+    let total_months = (year * 12 + month - 1) + months;
+    let new_year = total_months / 12;
+    let new_month = (total_months % 12) + 1;
+    
+    // Handle day overflow (e.g., Jan 31 + 1 month = Feb 28/29)
+    let max_day = NaiveDate::days_in_month(new_year, new_month as u16) as u8;
+    let new_day = day.min(max_day);
+    
+    NaiveDate::from_ymd(new_year, new_month as u8, new_day)
+        .map_err(|e| SqlError::Type(TypeError::InvalidDate(e)))
+}
+
+/// Add days to a date
+fn add_days_to_date(date: NaiveDate, days: i32) -> Result<NaiveDate, SqlError> {
+    if days == 0 {
+        return Ok(date);
+    }
+    
+    let ordinal = date.ordinal() as i32 + days;
+    let mut year = date.year();
+    let mut remaining = ordinal;
+    
+    // Handle year overflow/underflow
+    while remaining < 1 {
+        year -= 1;
+        let days_in_prev_year = if NaiveDate::is_leap_year(year) { 366 } else { 365 };
+        remaining += days_in_prev_year;
+    }
+    
+    loop {
+        let days_in_current_year = if NaiveDate::is_leap_year(year) { 366 } else { 365 };
+        if remaining <= days_in_current_year {
+            break;
+        }
+        remaining -= days_in_current_year;
+        year += 1;
+    }
+    
+    NaiveDate::from_yo(year, remaining as u16)
+        .map_err(|e| SqlError::Type(TypeError::InvalidDate(e)))
+}
+
+/// Add microseconds to a datetime
+fn add_microseconds_to_datetime(datetime: NaiveDateTime, microseconds: i64) -> Result<NaiveDateTime, SqlError> {
+    if microseconds == 0 {
+        return Ok(datetime);
+    }
+    
+    let seconds = microseconds / 1_000_000;
+    let days = seconds / 86400;
+    let remaining_seconds = seconds % 86400;
+    
+    let mut date: NaiveDate = datetime.into();
+    if days != 0 {
+        date = add_days_to_date(date, days as i32)?;
+    }
+    
+    let time: NaiveTime = datetime.into();
+    let time_seconds = time.hour() as i64 * 3600 + time.minute() as i64 * 60 + time.second() as i64;
+    let new_time_seconds = time_seconds + remaining_seconds;
+    
+    let (final_days_offset, final_time_seconds) = if new_time_seconds < 0 {
+        let days_to_subtract = (new_time_seconds.abs() / 86400) + 1;
+        (-(days_to_subtract as i32), new_time_seconds + days_to_subtract * 86400)
+    } else if new_time_seconds >= 86400 {
+        let days_to_add = new_time_seconds / 86400;
+        ((days_to_add as i32), new_time_seconds % 86400)
+    } else {
+        (0, new_time_seconds)
+    };
+    
+    if final_days_offset != 0 {
+        date = add_days_to_date(date, final_days_offset)?;
+    }
+    
+    let final_time = NaiveTime::new(
+        (final_time_seconds / 3600) as u8,
+        ((final_time_seconds % 3600) / 60) as u8,
+        (final_time_seconds % 60) as u8,
+    ).map_err(|e| SqlError::Type(TypeError::InvalidDate(e)))?;
+    
+    Ok(NaiveDateTime::from_date_time(date, final_time))
+}
+
+/// Add microseconds to a time (wraps around 24 hours)
+fn add_microseconds_to_time(time: NaiveTime, microseconds: i64) -> Result<NaiveTime, SqlError> {
+    if microseconds == 0 {
+        return Ok(time);
+    }
+    
+    let seconds = microseconds / 1_000_000;
+    let time_seconds = time.hour() as i64 * 3600 + time.minute() as i64 * 60 + time.second() as i64;
+    let new_seconds = (time_seconds + seconds) % 86400;
+    let new_seconds = if new_seconds < 0 { new_seconds + 86400 } else { new_seconds };
+    
+    NaiveTime::new(
+        (new_seconds / 3600) as u8,
+        ((new_seconds % 3600) / 60) as u8,
+        (new_seconds % 60) as u8,
+    ).map_err(|e| SqlError::Type(TypeError::InvalidDate(e)))
 }
