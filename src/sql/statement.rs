@@ -102,7 +102,7 @@ pub(crate) enum Drop {
     Database(String),
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub enum Expression {
     Identifier(String),
     Value(Value),
@@ -210,13 +210,13 @@ pub enum Constraint {
     Default(Expression),
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
 pub enum UnaryOperator {
     Plus,
     Minus,
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
 pub enum BinaryOperator {
     Eq,
     Neq,
@@ -289,7 +289,7 @@ pub enum Type {
 }
 
 /// Subset of `SQL` functions.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 pub enum Function {
     /// Extracts the `string` to the `length` at the `start`th character (if specified) and stop
     /// after the `count` character. Must provide at least of of `start` and `count`.
@@ -625,6 +625,7 @@ impl PartialEq for Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
+            (Value::Interval(a), Value::Interval(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
             // For grouping and hashing, NULL values should be equal.
             // SQL semantics (NULL = NULL returns NULL) is handled separetly.

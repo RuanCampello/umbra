@@ -3,7 +3,7 @@
 use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-pub(crate) struct Interval {
+pub struct Interval {
     pub months: i32,
     pub days: i32,
     pub microseconds: i64,
