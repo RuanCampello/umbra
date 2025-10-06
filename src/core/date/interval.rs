@@ -17,6 +17,14 @@ impl Interval {
             microseconds,
         }
     }
+
+    pub fn from_days(days: i32) -> Self {
+        Self {
+            days,
+            months: 0,
+            microseconds: 0,
+        }
+    }
 }
 
 impl Display for Interval {

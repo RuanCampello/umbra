@@ -2031,4 +2031,30 @@ mod tests {
             }
         )
     }
+
+    #[test]
+    fn test_interval() {
+        let sql = "SELECT order_date, order_date + INTERVAL '30 days' AS due_date FROM orders;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![
+                    Expression::Identifier("order_date".into()),
+                    Expression::BinaryOperation {
+                        operator: BinaryOperator::Plus,
+                        left: Box::new(Expression::Identifier("order_date".into())),
+                        right: Box::new(Expression::Value(Value::Interval(Interval::from_days(
+                            30
+                        ))))
+                    }
+                ],
+                from: "orders".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
+            })
+        )
+    }
 }
