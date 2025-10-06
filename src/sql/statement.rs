@@ -626,6 +626,7 @@ impl PartialEq for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
+            (Value::Interval(a), Value::Interval(b)) => a == b,
             // For grouping and hashing, NULL values should be equal.
             // SQL semantics (NULL = NULL returns NULL) is handled separetly.
             (Value::Null, Value::Null) => true,
@@ -646,6 +647,7 @@ impl PartialOrd for Value {
             (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
             (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
             (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
+            (Value::Interval(a), Value::Interval(b)) => Some(a.cmp(b)),
             // For sorting, NULL values are considered equal to each other
             // and sort after all non-NULL values.
             (Value::Null, Value::Null) => Some(Ordering::Equal),

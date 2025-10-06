@@ -376,7 +376,17 @@ impl<'input> Parser<'input> {
         const MICROSECS_IN_MIN: i64 = 60_000_000;
         const MICROSECS_IN_SECS: i64 = 1_000_000;
 
-        let value = self.parse_ident()?;
+        // Parse either a string (e.g., '30 days') or an identifier
+        let value = match self.next_token()? {
+            Token::String(s) => s,
+            Token::Identifier(ident) => ident,
+            token => {
+                return Err(self.error(ErrorKind::Expected {
+                    expected: Token::String(String::new()),
+                    found: token,
+                }))
+            }
+        };
 
         let mut months = 0;
         let mut days = 0;
@@ -2042,12 +2052,15 @@ mod tests {
             Statement::Select(Select {
                 columns: vec![
                     Expression::Identifier("order_date".into()),
-                    Expression::BinaryOperation {
-                        operator: BinaryOperator::Plus,
-                        left: Box::new(Expression::Identifier("order_date".into())),
-                        right: Box::new(Expression::Value(Value::Interval(Interval::from_days(
-                            30
-                        ))))
+                    Expression::Alias {
+                        expr: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Plus,
+                            left: Box::new(Expression::Identifier("order_date".into())),
+                            right: Box::new(Expression::Value(Value::Interval(Interval::from_days(
+                                30
+                            ))))
+                        }),
+                        alias: "due_date".into()
                     }
                 ],
                 from: "orders".into(),
