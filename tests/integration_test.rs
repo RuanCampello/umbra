@@ -1617,3 +1617,33 @@ fn extract_function() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn interval_operations() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE events (
+        event_id SERIAL PRIMARY KEY,
+        event_date DATE,
+        event_datetime TIMESTAMP,
+        event_time TIME
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO events (event_date, event_datetime, event_time) VALUES
+        ('2024-01-15', '2024-01-15 10:30:00', '10:30:00'),
+        ('2024-02-28', '2024-02-28 14:45:00', '14:45:00'),
+        ('2024-06-15', '2024-06-15 08:00:00', '08:00:00');
+    "#,
+    )?;
+
+    let query = db.exec(
+        "SELECT event_date + INTERVAL '30 days' AS future_date FROM events WHERE event_id = 1;",
+    )?;
+    assert_eq!(query.tuples, vec![vec![temporal!("2024-02-14").unwrap()]]);
+
+    Ok(())
+}
