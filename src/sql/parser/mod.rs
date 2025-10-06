@@ -428,8 +428,6 @@ impl<'input> Parser<'input> {
             }
         }
 
-        println!("here");
-
         Ok(Expression::Value(
             Interval::new(months, days, microseconds).into(),
         ))

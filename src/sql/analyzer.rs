@@ -408,6 +408,8 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             };
 
+            println!("{right} {right_type:?} {operator} {left} {left_type:?}");
+
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
@@ -431,7 +433,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                    if matches!(left_type, VmType::Number | VmType::Float) =>
+                    if matches!(left_type, VmType::Number | VmType::Float | VmType::Date) =>
                 {
                     left_type
                 }

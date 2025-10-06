@@ -101,6 +101,7 @@ pub(crate) fn resolve_expression<'exp>(
                 return Ok(Value::Null);
             }
 
+            println!("left {left:?} right {right:?}");
             let mismatched_types = || {
                 SqlError::Type(TypeError::CannotApplyBinary {
                     left: Expression::Value(left.clone()),
@@ -349,7 +350,7 @@ impl From<&Type> for VmType {
         match value {
             Type::Boolean => VmType::Bool,
             Type::Varchar(_) | Type::Text => VmType::String,
-            Type::Date | Type::DateTime | Type::Time => VmType::Date,
+            Type::Date | Type::DateTime | Type::Time | Type::Interval => VmType::Date,
             float if float.is_float() => VmType::Float,
             number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
                 VmType::Number
