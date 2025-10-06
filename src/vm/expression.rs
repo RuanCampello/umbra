@@ -109,7 +109,19 @@ pub(crate) fn resolve_expression<'exp>(
                 })
             };
 
-            if mem::discriminant(&left) != mem::discriminant(&right) {
+            let is_compatible = match operator {
+                BinaryOperator::Plus
+                | BinaryOperator::Minus
+                | BinaryOperator::Mul
+                | BinaryOperator::Div => left.as_arithmetic_pair(&right).is_some(),
+
+                // for comparisons and other operations, our custom `PartialEq` impl
+                // handles coercion and different types correctly. we don't need a strict
+                // discriminant check; we let the operation itself determine compatibility.
+                _ => true,
+            };
+
+            if !is_compatible {
                 return Err(mismatched_types());
             }
 
@@ -174,12 +186,13 @@ pub(crate) fn resolve_expression<'exp>(
                         ArithmeticPair::Temporal(temporal, interval) => match arithmetic {
                             BinaryOperator::Plus => Value::Temporal(temporal + interval),
                             BinaryOperator::Minus => Value::Temporal(temporal - interval),
-                            _ => unreachable!("not implemented this operation"),
+                            _ => unreachable!("not implemented this operation: {arithmetic}"),
                         },
                     }
                 }
             })
         }
+
         Expression::Function { func, args } => match func {
             Function::Substring => {
                 let string: String = get_value(val, schema, &args[0])?;
