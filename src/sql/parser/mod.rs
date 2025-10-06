@@ -2070,4 +2070,85 @@ mod tests {
             })
         )
     }
+
+    #[test]
+    fn test_interval_complex() {
+        let sql = "SELECT event_date - INTERVAL '1 year 3 hours 20 minutes' FROM orders;";
+        let statement = Parser::new(sql).parse_statement();
+
+        // Parse should succeed and create an interval with 12 months, 0 days, and (3*3600 + 20*60)*1000000 microseconds
+        let expected_microseconds = (3 * 3600 + 20 * 60) as i64 * 1_000_000;
+        
+        assert!(statement.is_ok());
+        let statement = statement.unwrap();
+        
+        if let Statement::Select(select) = statement {
+            assert_eq!(select.columns.len(), 1);
+            if let Expression::BinaryOperation { operator, left: _, right } = &select.columns[0] {
+                assert_eq!(*operator, BinaryOperator::Minus);
+                if let Expression::Value(Value::Interval(interval)) = right.as_ref() {
+                    assert_eq!(interval.months, 12);
+                    assert_eq!(interval.days, 0);
+                    assert_eq!(interval.microseconds, expected_microseconds);
+                } else {
+                    panic!("Expected interval value");
+                }
+            } else {
+                panic!("Expected binary operation");
+            }
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_interval_parsing_hours() {
+        let sql = "SELECT INTERVAL '5 hours' FROM orders;";
+        let statement = Parser::new(sql).parse_statement();
+        
+        assert!(statement.is_ok());
+        if let Ok(Statement::Select(select)) = statement {
+            if let Expression::Value(Value::Interval(interval)) = &select.columns[0] {
+                assert_eq!(interval.months, 0);
+                assert_eq!(interval.days, 0);
+                assert_eq!(interval.microseconds, 5 * 3600 * 1_000_000);
+            } else {
+                panic!("Expected interval value");
+            }
+        }
+    }
+
+    #[test]
+    fn test_interval_parsing_minutes() {
+        let sql = "SELECT INTERVAL '45 minutes' FROM orders;";
+        let statement = Parser::new(sql).parse_statement();
+        
+        assert!(statement.is_ok());
+        if let Ok(Statement::Select(select)) = statement {
+            if let Expression::Value(Value::Interval(interval)) = &select.columns[0] {
+                assert_eq!(interval.months, 0);
+                assert_eq!(interval.days, 0);
+                assert_eq!(interval.microseconds, 45 * 60 * 1_000_000);
+            } else {
+                panic!("Expected interval value");
+            }
+        }
+    }
+
+    #[test]
+    fn test_interval_parsing_months_days() {
+        let sql = "SELECT INTERVAL '3 months 10 days' FROM orders;";
+        let statement = Parser::new(sql).parse_statement();
+        
+        assert!(statement.is_ok());
+        if let Ok(Statement::Select(select)) = statement {
+            if let Expression::Value(Value::Interval(interval)) = &select.columns[0] {
+                assert_eq!(interval.months, 3);
+                assert_eq!(interval.days, 10);
+                assert_eq!(interval.microseconds, 0);
+            } else {
+                panic!("Expected interval value");
+            }
+        }
+    }
 }
