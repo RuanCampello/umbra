@@ -18,6 +18,7 @@ pub enum VmType {
     Number,
     Float,
     Date,
+    Interval,
 }
 
 #[derive(Debug, PartialEq)]
@@ -367,6 +368,7 @@ impl From<&Type> for VmType {
             Type::Boolean => VmType::Bool,
             Type::Varchar(_) | Type::Text => VmType::String,
             Type::Date | Type::DateTime | Type::Time => VmType::Date,
+            Type::Interval => VmType::Interval,
             float if float.is_float() => VmType::Float,
             number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
                 VmType::Number
