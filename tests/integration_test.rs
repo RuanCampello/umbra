@@ -1645,6 +1645,7 @@ fn interval_operations() -> Result<()> {
     let query = db.exec(
         "SELECT event_id, event_date + INTERVAL '1 month' AS next_month FROM events ORDER BY event_id;",
     )?;
+
     assert_eq!(
         query.tuples,
         vec![

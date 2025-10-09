@@ -87,6 +87,7 @@ type DateError<T> = Result<T, DateParseError>;
 /// Cumulative day offsets for each month (non-leap year), starting at a 1-based index.
 /// E.g. March 1st is the 59th day → CUMULATIVE_DAYS = 59.
 const CUMULATIVE_DAYS: [u16; 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const CUMULATIVE_DAYS_LEAP: [u16; 13] = [0, 0, 31, 60, 91, 121, 152, 182, 213, 244, 275, 306, 335];
 
 /// Days since Unix epoch for year boundaries (1970-2037)
 const DAYS_SINCE_EPOCH: [i32; 68] = [
@@ -324,9 +325,6 @@ impl NaiveDate {
     }
 
     fn cumul_days(&self) -> [u16; 13] {
-        const CUMULATIVE_DAYS_LEAP: [u16; 13] =
-            [0, 0, 31, 60, 91, 121, 152, 182, 213, 244, 275, 306, 336];
-
         match NaiveDate::is_leap_year(self.year()) {
             true => CUMULATIVE_DAYS_LEAP,
             false => CUMULATIVE_DAYS,

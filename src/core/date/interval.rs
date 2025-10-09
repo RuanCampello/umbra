@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    core::date::{NaiveDate, NaiveDateTime, NaiveTime, CUMULATIVE_DAYS},
+    core::date::{NaiveDate, NaiveDateTime, NaiveTime, CUMULATIVE_DAYS, CUMULATIVE_DAYS_LEAP},
     sql::statement::Temporal,
 };
 
@@ -72,7 +72,6 @@ impl Add<Interval> for NaiveDate {
     fn add(self, rhs: Interval) -> Self::Output {
         let mut year = self.year() + rhs.months / 12;
         let mut month = self.month() as i32 + rhs.months % 12;
-        let mut day = self.day() as i32 + rhs.days;
 
         if month > 12 {
             year += 1;
@@ -82,29 +81,39 @@ impl Add<Interval> for NaiveDate {
             month += 12;
         }
 
-        loop {
-            let day_in_month = Self::days_in_month(year, month as u16) as i32;
+        let max_days_in_target_month = Self::days_in_month(year, month as u16);
+        let mut day = self.day().min(max_days_in_target_month) as i32;
 
-            match day > day_in_month {
-                true => {
-                    day -= day_in_month;
-                    month += 1;
+        day += rhs.days;
 
-                    if month > 12 {
-                        year += 1;
-                        month -= 12;
-                    }
-                }
-                _ => break,
+        let mut current_year = year;
+        let mut current_month = month as u16;
+
+        let days_in_month = Self::days_in_month(current_year, current_month) as i32;
+        while day > days_in_month {
+            day -= days_in_month;
+            current_month += 1;
+            if current_month > 12 {
+                current_year += 1;
+                current_month = 1;
             }
         }
 
-        let mut ordinal = CUMULATIVE_DAYS[month as usize] as i32 + day;
-        if month > 2 && Self::is_leap_year(year) {
-            ordinal += 1;
+        while day <= 0 {
+            current_month -= 1;
+            if current_month == 0 {
+                current_year -= 1;
+                current_month = 12;
+            }
+            day += days_in_month;
         }
 
-        Self::new(year, ordinal as u16)
+        let cumulative_days = match Self::is_leap_year(current_year) {
+            true => CUMULATIVE_DAYS_LEAP,
+            _ => CUMULATIVE_DAYS,
+        };
+        let ordinal = cumulative_days[current_month as usize] as i32 + day;
+        Self::new(current_year, ordinal as u16)
     }
 }
 
