@@ -1,6 +1,6 @@
 use std::path::Path;
 use umbra::db::{Database, DatabaseError, QuerySet};
-use umbra::sql::statement::{Temporal, Type, Value};
+use umbra::sql::statement::{Type, Value};
 use umbra::temporal;
 
 type Result<T> = std::result::Result<T, DatabaseError>;
@@ -1657,33 +1657,33 @@ fn interval_operations() -> Result<()> {
         ]
     );
 
-    // let query = db.exec(
-    //     "SELECT event_id, event_time + INTERVAL '25 hours 75 minutes 100 seconds' AS broken_time FROM events ORDER BY event_id;",
-    // )?;
-    // assert_eq!(
-    //     query.tuples,
-    //     vec![
-    //         vec![Value::Number(1), temporal!("01:41:39").unwrap()], // 23:59:59 + 26h15m40s = next day 01:41:39
-    //         vec![Value::Number(2), temporal!("02:16:40").unwrap()], // 00:00:00 + 26h15m40s = 02:16:40
-    //         vec![Value::Number(3), temporal!("14:47:25").unwrap()], // 12:30:45 + 26h15m40s = next day 14:47:25
-    //         vec![Value::Number(4), temporal!("21:02:10").unwrap()], // 18:45:30 + 26h15m40s = next day 21:02:10
-    //         vec![Value::Number(5), temporal!("15:32:00").unwrap()], // 13:15:20 + 26h15m40s = next day 15:32:00
-    //     ]
-    // );
+    let query = db.exec(
+        "SELECT event_id, event_time + INTERVAL '25 hours 75 minutes 100 seconds' AS broken_time FROM events ORDER BY event_id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("02:16:39").unwrap()],
+            vec![Value::Number(2), temporal!("02:16:40").unwrap()], // 00:00:00 + 26h15m40s = 02:16:40
+            vec![Value::Number(3), temporal!("14:47:25").unwrap()], // 12:30:45 + 26h15m40s = next day 14:47:25
+            vec![Value::Number(4), temporal!("21:02:10").unwrap()], // 18:45:30 + 26h15m40s = next day 21:02:10
+            vec![Value::Number(5), temporal!("15:32:00").unwrap()], // 13:15:20 + 26h15m40s = next day 15:32:00
+        ]
+    );
 
-    // let query = db.exec(
-    //     "SELECT event_id, event_date - INTERVAL '35 days' AS past_date FROM events ORDER BY event_id;",
-    // )?;
-    // assert_eq!(
-    //     query.tuples,
-    //     vec![
-    //         vec![Value::Number(1), temporal!("2023-12-27").unwrap()], // jan 31 - 35 days = dec 27 previous year
-    //         vec![Value::Number(2), temporal!("2024-01-25").unwrap()], // feb 29 - 35 days = jan 25
-    //         vec![Value::Number(3), temporal!("2024-11-26").unwrap()], // dec 31 - 35 days = nov 26
-    //         vec![Value::Number(4), temporal!("2024-02-09").unwrap()], // mar 15 - 35 days = feb 9
-    //         vec![Value::Number(5), temporal!("2024-05-26").unwrap()], // jun 30 - 35 days = may 26
-    //     ]
-    // );
+    let query = db.exec(
+        "SELECT event_id, event_date - INTERVAL '35 days' AS past_date FROM events ORDER BY event_id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2023-12-27").unwrap()], // jan 31 - 35 days = dec 27 previous year
+            vec![Value::Number(2), temporal!("2024-01-25").unwrap()], // feb 29 - 35 days = jan 25
+            vec![Value::Number(3), temporal!("2024-11-26").unwrap()], // dec 31 - 35 days = nov 26
+            vec![Value::Number(4), temporal!("2024-02-09").unwrap()], // mar 15 - 35 days = feb 9
+            vec![Value::Number(5), temporal!("2024-05-26").unwrap()], // jun 30 - 35 days = may 26
+        ]
+    );
 
     // let query = db.exec(
     //     "SELECT event_id, event_datetime + INTERVAL '2 months 15 days 27 hours 90 minutes' AS complex_future FROM events ORDER BY event_id;",

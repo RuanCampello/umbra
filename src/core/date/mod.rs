@@ -307,7 +307,7 @@ impl NaiveDate {
 
         (1..=12)
             .rev()
-            .find(|&m| self.cumul_days()[m] < ordinal)
+            .find(|&m| Self::cumul_days(self.year())[m] < ordinal)
             .unwrap_or(1) as u16
     }
 
@@ -316,7 +316,7 @@ impl NaiveDate {
         let ordinal = self.ordinal();
         let m = self.month();
 
-        ordinal - self.cumul_days()[m as usize]
+        ordinal - Self::cumul_days(self.year())[m as usize]
     }
 
     #[inline(always)]
@@ -324,8 +324,8 @@ impl NaiveDate {
         (self.yof.get() & 0x1fff) as u16
     }
 
-    fn cumul_days(&self) -> [u16; 13] {
-        match NaiveDate::is_leap_year(self.year()) {
+    fn cumul_days(year: i32) -> [u16; 13] {
+        match NaiveDate::is_leap_year(year) {
             true => CUMULATIVE_DAYS_LEAP,
             false => CUMULATIVE_DAYS,
         }
@@ -361,10 +361,7 @@ impl Parse for NaiveDate {
             return Err(DateParseError::InvalidMonthDay);
         }
 
-        let mut ordinal = CUMULATIVE_DAYS[month as usize] + day;
-        if month > 2 && Self::is_leap_year(year) {
-            ordinal += 1
-        }
+        let ordinal = Self::cumul_days(year)[month as usize] + day;
 
         Ok(NaiveDate::new(year, ordinal))
     }
