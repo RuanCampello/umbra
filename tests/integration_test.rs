@@ -1685,19 +1685,19 @@ fn interval_operations() -> Result<()> {
         ]
     );
 
-    // let query = db.exec(
-    //     "SELECT event_id, event_datetime + INTERVAL '2 months 15 days 27 hours 90 minutes' AS complex_future FROM events ORDER BY event_id;",
-    // )?;
-    // assert_eq!(
-    //     query.tuples,
-    //     vec![
-    //         vec![Value::Number(1), temporal!("2024-04-17 02:29:59").unwrap()], // jan 31 + 2m15d28h30m
-    //         vec![Value::Number(2), temporal!("2024-05-16 03:30:00").unwrap()], // feb 29 + 2m15d28h30m
-    //         vec![Value::Number(3), temporal!("2025-03-18 16:00:45").unwrap()], // dec 31 + 2m15d28h30m
-    //         vec![Value::Number(4), temporal!("2024-06-01 22:15:30").unwrap()], // mar 15 + 2m15d28h30m
-    //         vec![Value::Number(5), temporal!("2024-09-16 15:45:20").unwrap()], // jun 30 + 2m15d28h30m
-    //     ]
-    // );
+    let query = db.exec(
+        "SELECT event_id, event_datetime + INTERVAL '2 months 15 days 27 hours 90 minutes' AS complex_future FROM events ORDER BY event_id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2024-04-17 02:29:59").unwrap()], // jan 31 + 2m15d28h30m
+            vec![Value::Number(2), temporal!("2024-05-16 03:30:00").unwrap()], // feb 29 + 2m15d28h30m
+            vec![Value::Number(3), temporal!("2025-03-18 16:00:45").unwrap()], // dec 31 + 2m15d28h30m
+            vec![Value::Number(4), temporal!("2024-06-01 22:15:30").unwrap()], // mar 15 + 2m15d28h30m
+            vec![Value::Number(5), temporal!("2024-09-16 15:45:20").unwrap()], // jun 30 + 2m15d28h30m
+        ]
+    );
 
     // let query = db.exec(
     //     "SELECT event_id, event_datetime + INTERVAL '-1 month 15 days -2 hours 30 minutes' AS mixed_interval FROM events ORDER BY event_id;",
