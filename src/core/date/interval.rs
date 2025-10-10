@@ -77,10 +77,7 @@ impl Add<Interval> for NaiveDateTime {
             _ => (total_secs - (SECS_PER_DAY - 1)) / SECS_PER_DAY,
         };
 
-        let secs = match total_secs >= 0 {
-            true => total_secs % SECS_PER_DAY,
-            _ => ((total_secs % SECS_PER_DAY) / SECS_PER_DAY) % SECS_PER_DAY,
-        };
+        let secs = ((total_secs % SECS_PER_DAY) + SECS_PER_DAY) % SECS_PER_DAY;
 
         let hour = (secs / SECS_PER_HOUR) as u8;
         let minute = ((secs % SECS_PER_HOUR) / SECS_PER_MINUTE) as u8;
