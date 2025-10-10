@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    core::date::{NaiveDate, NaiveDateTime, NaiveTime},
+    core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse},
     sql::statement::Temporal,
 };
 
@@ -59,10 +59,46 @@ impl Add<Interval> for NaiveDateTime {
     type Output = Self;
 
     fn add(self, rhs: Interval) -> Self::Output {
+        // Add interval to date (months and days only, NaiveDate doesn't use microseconds)
         let date = self.date + rhs;
-        let time = self.time + rhs;
-
-        Self { date, time }
+        
+        // Add interval to time (microseconds only, wraps around 24 hours)
+        // This returns the time within a 24-hour period
+        let current_seconds = self.time.hour() as i64 * 3600
+            + self.time.minute() as i64 * 60
+            + self.time.second() as i64;
+        let interval_seconds = rhs.microseconds / 1_000_000;
+        let total_seconds = current_seconds + interval_seconds;
+        
+        // Calculate day overflow
+        let day_overflow = if total_seconds >= 0 {
+            total_seconds / 86400
+        } else {
+            (total_seconds - 86399) / 86400
+        };
+        
+        let time_seconds = if total_seconds >= 0 {
+            total_seconds % 86400
+        } else {
+            ((total_seconds % 86400) + 86400) % 86400
+        };
+        
+        let hour = (time_seconds / 3600) as u8;
+        let minute = ((time_seconds % 3600) / 60) as u8;
+        let second = (time_seconds % 60) as u8;
+        let time = NaiveTime::new_unchecked(hour, minute, second);
+        
+        // Add day overflow to date
+        let final_date = if day_overflow != 0 {
+            date + Interval::from_days(day_overflow as i32)
+        } else {
+            date
+        };
+        
+        Self {
+            date: final_date,
+            time,
+        }
     }
 }
 
