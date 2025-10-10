@@ -59,8 +59,38 @@ impl Add<Interval> for NaiveDateTime {
     type Output = Self;
 
     fn add(self, rhs: Interval) -> Self::Output {
+        const SECS_PER_MINUTE: i64 = 60;
+        const SECS_PER_HOUR: i64 = 3600;
+        const SECS_PER_DAY: i64 = 86_400;
+        const MICROS_PER_SEC: i64 = 1_000_000;
+
         let date = self.date + rhs;
-        let time = self.time + rhs;
+
+        let seconds = self.time.hour() as i64 * SECS_PER_HOUR
+            + self.time.minute() as i64 * SECS_PER_MINUTE
+            + self.time.second() as i64;
+        let interval = rhs.microseconds / MICROS_PER_SEC;
+        let total_secs = seconds + interval;
+
+        let overflow = match total_secs >= 0 {
+            true => total_secs / SECS_PER_DAY,
+            _ => (total_secs - (SECS_PER_DAY - 1)) / SECS_PER_DAY,
+        };
+
+        let secs = match total_secs >= 0 {
+            true => total_secs % SECS_PER_DAY,
+            _ => ((total_secs % SECS_PER_DAY) / SECS_PER_DAY) % SECS_PER_DAY,
+        };
+
+        let hour = (secs / SECS_PER_HOUR) as u8;
+        let minute = ((secs % SECS_PER_HOUR) / SECS_PER_MINUTE) as u8;
+        let second = (secs % SECS_PER_MINUTE) as u8;
+        let time = NaiveTime::new_unchecked(hour, minute, second);
+
+        let date = match overflow != 0 {
+            true => date + Interval::from_days(overflow as i32),
+            _ => date,
+        };
 
         Self { date, time }
     }
