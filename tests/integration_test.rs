@@ -1685,17 +1685,40 @@ fn interval_operations() -> Result<()> {
         ]
     );
 
+    // Test complex interval with months, days, and time components
+    // Interval: 2 months + 15 days + 27 hours + 90 minutes = 2 months + 15 days + 28h30m
+    // The 28h30m breaks down to: 1 day + 4h30m
+    // So effectively: 2 months + 16 days + 4h30m (but the 16th day comes from time overflow after adding to current time)
     let query = db.exec(
         "SELECT event_id, event_datetime + INTERVAL '2 months 15 days 27 hours 90 minutes' AS complex_future FROM events ORDER BY event_id;",
     )?;
     assert_eq!(
         query.tuples,
         vec![
-            vec![Value::Number(1), temporal!("2024-04-17 02:29:59").unwrap()], // jan 31 + 2m15d28h30m
-            vec![Value::Number(2), temporal!("2024-05-16 03:30:00").unwrap()], // feb 29 + 2m15d28h30m
-            vec![Value::Number(3), temporal!("2025-03-18 16:00:45").unwrap()], // dec 31 + 2m15d28h30m
-            vec![Value::Number(4), temporal!("2024-06-01 22:15:30").unwrap()], // mar 15 + 2m15d28h30m
-            vec![Value::Number(5), temporal!("2024-09-16 15:45:20").unwrap()], // jun 30 + 2m15d28h30m
+            // Jan 31 23:59:59 + 2 months = Mar 31 23:59:59
+            // + 15 days = Apr 15 23:59:59
+            // + 28h30m = Apr 15 23:59:59 + 1d4h30m = Apr 17 04:29:59
+            vec![Value::Number(1), temporal!("2024-04-17 04:29:59").unwrap()],
+            
+            // Feb 29 00:00:00 + 2 months = Apr 29 00:00:00
+            // + 15 days = May 14 00:00:00  
+            // + 28h30m = May 14 00:00:00 + 1d4h30m = May 15 04:30:00
+            vec![Value::Number(2), temporal!("2024-05-15 04:30:00").unwrap()],
+            
+            // Dec 31 12:30:45 + 2 months = Feb 28 12:30:45 (2025, capped from Feb 31)
+            // + 15 days = Mar 15 12:30:45
+            // + 28h30m = Mar 15 12:30:45 + 1d4h30m = Mar 16 17:00:45
+            vec![Value::Number(3), temporal!("2025-03-16 17:00:45").unwrap()],
+            
+            // Mar 15 18:45:30 + 2 months = May 15 18:45:30
+            // + 15 days = May 30 18:45:30
+            // + 28h30m = May 30 18:45:30 + 1d4h30m = May 31 23:15:30
+            vec![Value::Number(4), temporal!("2024-05-31 23:15:30").unwrap()],
+            
+            // Jun 30 13:15:20 + 2 months = Aug 30 13:15:20
+            // + 15 days = Sep 14 13:15:20
+            // + 28h30m = Sep 14 13:15:20 + 1d4h30m = Sep 15 17:45:20
+            vec![Value::Number(5), temporal!("2024-09-15 17:45:20").unwrap()],
         ]
     );
 
