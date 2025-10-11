@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    core::date::{NaiveDate, NaiveDateTime, NaiveTime},
+    core::date::{Extract, NaiveDate, NaiveDateTime, NaiveTime},
     sql::statement::Temporal,
 };
 
@@ -15,6 +15,13 @@ pub struct Interval {
     pub months: i32,
     pub days: i32,
     pub microseconds: i64,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum IntervalParseError<'i> {
+    InvalidFormat(&'i str),
+    InvalidNumber(i64),
+    InvalidUnit(&'i str),
 }
 
 impl Interval {
@@ -32,6 +39,12 @@ impl Interval {
             months: 0,
             microseconds: 0,
         }
+    }
+}
+
+impl Extract for Interval {
+    fn extract(&self, kind: super::ExtractKind) -> Result<f64, super::ExtractError> {
+        unimplemented!()
     }
 }
 
@@ -153,6 +166,52 @@ impl Add<Interval> for NaiveTime {
     }
 }
 
+impl<'i> TryFrom<&'i str> for Interval {
+    type Error = IntervalParseError<'i>;
+
+    fn try_from(value: &'i str) -> Result<Self, Self::Error> {
+        const MICROSECS_IN_HOUR: i64 = 3_600_000_000;
+        const MICROSECS_IN_MIN: i64 = 60_000_000;
+        const MICROSECS_IN_SECS: i64 = 1_000_000;
+
+        let mut months = 0;
+        let mut days = 0;
+        let mut microseconds = 0;
+
+        let parts = value.split_whitespace().collect::<Vec<_>>();
+
+        if parts.len() % 2 != 0 {
+            return Err(IntervalParseError::InvalidFormat(value));
+        }
+
+        for chunk in parts.chunks_exact(2) {
+            let num: i64 = match chunk[0].parse() {
+                Ok(num) => num,
+                Err(_) => {
+                    let invalid_num = chunk[0].parse::<i64>().unwrap_or(0);
+                    return Err(IntervalParseError::InvalidNumber(invalid_num));
+                }
+            };
+
+            let unit_str = chunk[1];
+            let unit = chunk[1].to_lowercase();
+            match unit.as_str() {
+                "year" | "years" => months += (num * 12) as i32,
+                "month" | "months" => months += num as i32,
+                "week" | "weeks" => days += (num * 7) as i32,
+                "day" | "days" => days += num as i32,
+                "hour" | "hours" => microseconds += num * MICROSECS_IN_HOUR,
+                "minute" | "minutes" => microseconds += num * MICROSECS_IN_MIN,
+                "second" | "seconds" => microseconds += num * MICROSECS_IN_SECS,
+                "microsecond" | "microseconds" => microseconds += num,
+                _ => return Err(IntervalParseError::InvalidUnit(unit_str)),
+            }
+        }
+
+        Ok(Interval::new(months, days, microseconds))
+    }
+}
+
 impl Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.months != 0 {
@@ -166,5 +225,15 @@ impl Display for Interval {
         }
 
         Ok(())
+    }
+}
+
+impl<'i> Display for IntervalParseError<'i> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidFormat(format) => write!(f, "Invalid interval format: {format}"),
+            Self::InvalidNumber(num) => write!(f, "Invalid number in interval: {num}"),
+            Self::InvalidUnit(unit) => write!(f, "Invalid interval unit: {unit}"),
+        }
     }
 }

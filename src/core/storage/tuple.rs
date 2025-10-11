@@ -370,6 +370,9 @@ impl ValueSerialize for String {
             Type::Date => NaiveDate::parse_str(self).unwrap().serialize(buff),
             Type::Time => NaiveTime::parse_str(self).unwrap().serialize(buff),
             Type::DateTime => NaiveDateTime::parse_str(self).unwrap().serialize(buff),
+            Type::Interval => Interval::try_from(self.as_str())
+                .unwrap()
+                .serialize(buff, &Type::Interval),
             Type::Uuid => buff.extend_from_slice(Uuid::from_str(self).unwrap().as_ref()),
             _ => unreachable!("Unsupported type {to} for String value"),
         }
@@ -453,7 +456,7 @@ impl ValueSerialize for Interval {
                 buff.extend_from_slice(&self.days.to_le_bytes());
                 buff.extend_from_slice(&self.microseconds.to_le_bytes());
             }
-            _ => unreachable!("Unsupported type {to} for UUID"),
+            _ => unreachable!("Unsupported type {to} for Interval"),
         }
     }
 }

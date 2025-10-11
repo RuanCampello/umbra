@@ -1,7 +1,7 @@
 use std::path::Path;
 use umbra::db::{Database, DatabaseError, QuerySet};
 use umbra::sql::statement::{Type, Value};
-use umbra::temporal;
+use umbra::{interval, temporal};
 
 type Result<T> = std::result::Result<T, DatabaseError>;
 
@@ -1740,6 +1740,47 @@ fn interval_operations() -> Result<()> {
             vec![Value::Number(5), temporal!("2025-07-30").unwrap()], // jun 30 + 13 months
         ]
     );
+
+    Ok(())
+}
+
+#[test]
+fn extraction_on_intervals() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE event_intervals (
+        id SERIAL PRIMARY KEY,
+        event_name VARCHAR(100),
+        duration INTERVAL,
+        time_until_next_event INTERVAL,
+        total_processing_time INTERVAL
+    );
+    "#,
+    )?;
+
+    db.exec(r#"
+    INSERT INTO event_intervals (event_name, duration, time_until_next_event, total_processing_time) VALUES
+        ('Data Backup', '2 hours 30 minutes', '1 day', '15 days'),
+        ('System Update', '45 minutes', '7 days', '3 months'),
+        ('Report Generation', '5 minutes', '1 hour', '2 weeks'),
+        ('Database Maintenance', '6 hours', '1 month', '1 year'),
+        ('Quick Sync', '30 seconds', '10 minutes', '1 day');
+        "#)?;
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        duration,
+        EXTRACT(DAY FROM duration) as duration_days,
+        EXTRACT(HOUR FROM duration) as duration_hours,
+        EXTRACT(MINUTE FROM duration) as duration_minutes,
+        EXTRACT(SECOND FROM duration) as duration_seconds
+    FROM event_intervals;
+    "#,
+    )?;
+
+    assert_eq!(query.tuples, vec![vec![interval!("adadad")]]);
 
     Ok(())
 }

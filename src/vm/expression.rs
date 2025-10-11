@@ -17,6 +17,7 @@ pub enum VmType {
     Number,
     Float,
     Date,
+    Interval,
 }
 
 #[derive(Debug, PartialEq)]
@@ -210,9 +211,20 @@ pub(crate) fn resolve_expression<'exp>(
             Function::Extract => {
                 let kind = get_value::<String>(val, schema, &args[0])?;
                 let kind = ExtractKind::try_from(kind).unwrap();
-                let date: Temporal = get_value(val, schema, &args[1])?;
 
-                Ok(Value::Number(date.extract(kind)? as i128))
+                let extractable_value = resolve_expression(val, schema, &args[1])?;
+
+                let result = match extractable_value {
+                    Value::Temporal(temporal) => temporal.extract(kind)?,
+                    Value::Interval(interval) => interval.extract(kind)?,
+                    _ => {
+                        return Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
+                            expected: vec![VmType::Date, VmType::Interval],
+                        }))
+                    }
+                };
+
+                Ok(Value::Number(result as i128))
             }
             Function::Ascii => {
                 let string: String = get_value(val, schema, &args[0])?;
@@ -372,7 +384,8 @@ impl From<&Type> for VmType {
         match value {
             Type::Boolean => VmType::Bool,
             Type::Varchar(_) | Type::Text => VmType::String,
-            Type::Date | Type::DateTime | Type::Time | Type::Interval => VmType::Date,
+            Type::Date | Type::DateTime | Type::Time => VmType::Date,
+            Type::Interval => VmType::Interval,
             float if float.is_float() => VmType::Float,
             number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
                 VmType::Number

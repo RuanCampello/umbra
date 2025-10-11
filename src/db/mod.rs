@@ -124,6 +124,16 @@ macro_rules! temporal {
     };
 }
 
+#[macro_export]
+macro_rules! interval {
+    ($interval_str:expr) => {
+        $interval_str
+            .try_into()
+            .map(Value::Interval)
+            .expect("Couldn't create interval")
+    };
+}
+
 impl Database<File> {
     pub fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let file = os::Fs::options()
