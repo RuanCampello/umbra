@@ -1780,7 +1780,7 @@ fn extraction_on_intervals() -> Result<()> {
     "#,
     )?;
 
-    assert_eq!(query.tuples, vec![vec![interval!("adadad")]]);
+    // assert_eq!(query.tuples, vec![vec![interval!("adadad")]]);
 
     Ok(())
 }

@@ -5,7 +5,7 @@
 use std::fmt::Display;
 
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime};
-use crate::sql::statement::Temporal;
+use crate::sql::statement::{Temporal, Type};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ExtractKind {
@@ -22,7 +22,7 @@ pub enum ExtractKind {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ExtractError {
-    UnsupportedUnitForType { unit: ExtractKind, r#type: Temporal },
+    UnsupportedUnitForType { unit: ExtractKind, r#type: Type },
 }
 
 pub trait Extract {
@@ -44,7 +44,7 @@ impl Extract for NaiveDateTime {
         kind.from_timestamp(self)
             .ok_or(ExtractError::UnsupportedUnitForType {
                 unit: kind,
-                r#type: Temporal::DateTime(*self),
+                r#type: Temporal::DateTime(*self).into(),
             })
     }
 }
@@ -54,7 +54,7 @@ impl Extract for NaiveDate {
         kind.from_date(self)
             .ok_or(ExtractError::UnsupportedUnitForType {
                 unit: kind,
-                r#type: Temporal::Date(*self),
+                r#type: Temporal::Date(*self).into(),
             })
     }
 }
@@ -64,7 +64,7 @@ impl Extract for NaiveTime {
         kind.from_time(self)
             .ok_or(ExtractError::UnsupportedUnitForType {
                 unit: kind,
-                r#type: Temporal::Time(*self),
+                r#type: Temporal::Time(*self).into(),
             })
     }
 }

@@ -5,6 +5,7 @@
 //! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
 
 use super::statement::{Delete, Insert, Select, Update};
+use crate::core::date::interval::Interval;
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
@@ -408,8 +409,6 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             };
 
-            println!("{right} {right_type:?} {operator} {left} {left_type:?}");
-
             if left_type.ne(&right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
@@ -590,6 +589,10 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
         Type::Uuid => {
             Uuid::from_str(s)?;
             Ok(VmType::Number)
+        }
+        Type::Interval => {
+            Interval::from_str(s).map_err(|e| TypeError::InvalidInterval(e))?;
+            Ok(VmType::Interval)
         }
         _ => Ok(VmType::String),
     }

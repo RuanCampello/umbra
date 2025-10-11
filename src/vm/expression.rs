@@ -1,4 +1,5 @@
 use super::{functions, math};
+use crate::core::date::interval::IntervalParseError;
 use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
@@ -45,6 +46,7 @@ pub enum TypeError {
         expected: Vec<VmType>,
     },
     InvalidDate(DateParseError),
+    InvalidInterval(IntervalParseError),
     ExtractError(ExtractError),
     UuidError(UuidError),
 }
@@ -213,7 +215,6 @@ pub(crate) fn resolve_expression<'exp>(
                 let kind = ExtractKind::try_from(kind).unwrap();
 
                 let extractable_value = resolve_expression(val, schema, &args[1])?;
-
                 let result = match extractable_value {
                     Value::Temporal(temporal) => temporal.extract(kind)?,
                     Value::Interval(interval) => interval.extract(kind)?,
@@ -442,6 +443,7 @@ impl Display for TypeError {
             TypeError::ExtractError(err) => err.fmt(f),
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
+            TypeError::InvalidInterval(err) => err.fmt(f),
         }
     }
 }

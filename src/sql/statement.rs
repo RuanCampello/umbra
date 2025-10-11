@@ -1088,6 +1088,16 @@ impl From<NaiveTime> for Temporal {
     }
 }
 
+impl From<Temporal> for Type {
+    fn from(value: Temporal) -> Self {
+        match value {
+            Temporal::Date(_) => Self::Date,
+            Temporal::Time(_) => Self::Time,
+            Temporal::DateTime(_) => Self::DateTime,
+        }
+    }
+}
+
 impl TryFrom<&str> for Temporal {
     type Error = DateParseError;
 

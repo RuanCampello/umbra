@@ -3,11 +3,12 @@
 use std::{
     fmt::Display,
     ops::{Add, Sub},
+    str::FromStr,
 };
 
 use crate::{
-    core::date::{Extract, NaiveDate, NaiveDateTime, NaiveTime},
-    sql::statement::Temporal,
+    core::date::{ExtractError, NaiveDate, NaiveDateTime, NaiveTime},
+    sql::statement::{Temporal, Type},
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -17,11 +18,11 @@ pub struct Interval {
     pub microseconds: i64,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum IntervalParseError<'i> {
-    InvalidFormat(&'i str),
+#[derive(Debug, PartialEq)]
+pub enum IntervalParseError {
+    InvalidFormat(String),
     InvalidNumber(i64),
-    InvalidUnit(&'i str),
+    InvalidUnit(String),
 }
 
 impl Interval {
@@ -42,9 +43,26 @@ impl Interval {
     }
 }
 
-impl Extract for Interval {
+impl super::Extract for Interval {
     fn extract(&self, kind: super::ExtractKind) -> Result<f64, super::ExtractError> {
-        unimplemented!()
+        use super::ExtractKind as Kind;
+
+        const MICROSECS_IN_HOUR: i64 = 3_600_000_000;
+        const MICROSECS_IN_MIN: i64 = 60_000_000;
+        const MICROSECS_IN_SECS: i64 = 1_000_000;
+
+        match kind {
+            Kind::Year => Ok((self.months / 12) as _),
+            Kind::Month => Ok((self.months) as _),
+            Kind::Day => Ok((self.days) as _),
+            Kind::Hour => Ok((self.microseconds / MICROSECS_IN_HOUR) as _),
+            Kind::Minute => Ok(((self.microseconds % MICROSECS_IN_HOUR) / MICROSECS_IN_MIN) as _),
+            Kind::Second => Ok(((self.microseconds % MICROSECS_IN_MIN) / MICROSECS_IN_SECS) as _),
+            _ => Err(ExtractError::UnsupportedUnitForType {
+                unit: kind,
+                r#type: Type::Interval,
+            }),
+        }
     }
 }
 
@@ -166,10 +184,10 @@ impl Add<Interval> for NaiveTime {
     }
 }
 
-impl<'i> TryFrom<&'i str> for Interval {
-    type Error = IntervalParseError<'i>;
+impl FromStr for Interval {
+    type Err = IntervalParseError;
 
-    fn try_from(value: &'i str) -> Result<Self, Self::Error> {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         const MICROSECS_IN_HOUR: i64 = 3_600_000_000;
         const MICROSECS_IN_MIN: i64 = 60_000_000;
         const MICROSECS_IN_SECS: i64 = 1_000_000;
@@ -181,7 +199,7 @@ impl<'i> TryFrom<&'i str> for Interval {
         let parts = value.split_whitespace().collect::<Vec<_>>();
 
         if parts.len() % 2 != 0 {
-            return Err(IntervalParseError::InvalidFormat(value));
+            return Err(IntervalParseError::InvalidFormat(value.to_string()));
         }
 
         for chunk in parts.chunks_exact(2) {
@@ -193,7 +211,6 @@ impl<'i> TryFrom<&'i str> for Interval {
                 }
             };
 
-            let unit_str = chunk[1];
             let unit = chunk[1].to_lowercase();
             match unit.as_str() {
                 "year" | "years" => months += (num * 12) as i32,
@@ -204,7 +221,7 @@ impl<'i> TryFrom<&'i str> for Interval {
                 "minute" | "minutes" => microseconds += num * MICROSECS_IN_MIN,
                 "second" | "seconds" => microseconds += num * MICROSECS_IN_SECS,
                 "microsecond" | "microseconds" => microseconds += num,
-                _ => return Err(IntervalParseError::InvalidUnit(unit_str)),
+                _ => return Err(IntervalParseError::InvalidUnit(unit)),
             }
         }
 
@@ -228,7 +245,7 @@ impl Display for Interval {
     }
 }
 
-impl<'i> Display for IntervalParseError<'i> {
+impl Display for IntervalParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidFormat(format) => write!(f, "Invalid interval format: {format}"),

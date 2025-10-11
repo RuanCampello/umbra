@@ -370,7 +370,7 @@ impl ValueSerialize for String {
             Type::Date => NaiveDate::parse_str(self).unwrap().serialize(buff),
             Type::Time => NaiveTime::parse_str(self).unwrap().serialize(buff),
             Type::DateTime => NaiveDateTime::parse_str(self).unwrap().serialize(buff),
-            Type::Interval => Interval::try_from(self.as_str())
+            Type::Interval => Interval::from_str(self)
                 .unwrap()
                 .serialize(buff, &Type::Interval),
             Type::Uuid => buff.extend_from_slice(Uuid::from_str(self).unwrap().as_ref()),

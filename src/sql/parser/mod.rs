@@ -23,6 +23,7 @@ use crate::sql::statement::{
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::iter::Peekable;
+use std::str::FromStr;
 use tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
 use tokens::Token;
 
@@ -385,7 +386,7 @@ impl<'input> Parser<'input> {
             }
         };
 
-        let interval = Interval::try_from(value.as_str())
+        let interval = Interval::from_str(value.as_str())
             .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
 
         Ok(Expression::Value(Value::Interval(interval)))
