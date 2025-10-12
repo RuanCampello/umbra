@@ -1792,5 +1792,70 @@ fn extraction_on_intervals() -> Result<()> {
         ],
     );
 
+    let query = db.exec(
+        r#"
+    SELECT 
+        event_name,
+        time_until_next_event,
+        EXTRACT(DAY FROM time_until_next_event) as days_until_next,
+        EXTRACT(HOUR FROM time_until_next_event) as hours_until_next,
+        total_processing_time,
+        EXTRACT(MONTH FROM total_processing_time) as processing_months,
+        EXTRACT(DAY FROM total_processing_time) as processing_days
+    FROM event_intervals;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![
+                "Data Backup".into(),
+                interval!("1 day"),
+                1.into(),
+                0.into(),
+                interval!("15 days"),
+                0.into(),
+                15.into(),
+            ],
+            vec![
+                "System Update".into(),
+                interval!("7 days"),
+                7.into(),
+                0.into(),
+                interval!("3 months"),
+                3.into(),
+                0.into(),
+            ],
+            vec![
+                "Report Generation".into(),
+                interval!("1 hour"),
+                0.into(),
+                1.into(),
+                interval!("2 weeks"),
+                0.into(),
+                14.into(),
+            ],
+            vec![
+                "Database Maintenance".into(),
+                interval!("1 month"),
+                0.into(),
+                0.into(),
+                interval!("1 year"),
+                12.into(),
+                0.into(),
+            ],
+            vec![
+                "Quick Sync".into(),
+                interval!("10 minutes"),
+                0.into(),
+                0.into(),
+                interval!("1 day"),
+                0.into(),
+                1.into(),
+            ],
+        ],
+    );
+
     Ok(())
 }
