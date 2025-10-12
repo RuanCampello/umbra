@@ -128,7 +128,7 @@ macro_rules! temporal {
 macro_rules! interval {
     ($interval_str:expr) => {
         $interval_str
-            .try_into()
+            .parse()
             .map(Value::Interval)
             .expect("Couldn't create interval")
     };

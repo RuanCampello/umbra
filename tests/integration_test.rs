@@ -1,7 +1,7 @@
 use std::path::Path;
 use umbra::db::{Database, DatabaseError, QuerySet};
 use umbra::sql::statement::{Type, Value};
-use umbra::temporal;
+use umbra::{interval, temporal};
 
 type Result<T> = std::result::Result<T, DatabaseError>;
 
@@ -1779,8 +1779,18 @@ fn extraction_on_intervals() -> Result<()> {
     FROM event_intervals;
     "#,
     )?;
-    println!("{query}");
-    // assert_eq!(query.tuples, vec![vec![interval!("adadad")]]);
+
+    #[rustfmt::skip]
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![interval!("2 hours 30 minutes"), 0.into(), 2.into(), 30.into(), 0.into()],
+            vec![interval!("45 minutes"), 0.into(), 0.into(), 45.into(), 0.into()],
+            vec![interval!("5 minutes"), 0.into(), 0.into(), 5.into(), 0.into()],
+            vec![interval!("6 hours"), 0.into(), 6.into(), 0.into(), 0.into()],
+            vec![interval!("30 seconds"), 0.into(), 0.into(), 0.into(), 30.into()],
+        ],
+    );
 
     Ok(())
 }
