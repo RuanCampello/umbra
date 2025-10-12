@@ -4,7 +4,7 @@
 
 use std::fmt::Display;
 
-use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime};
+use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::sql::statement::{Temporal, Type};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -18,6 +18,7 @@ pub enum ExtractKind {
     Month,
     Quarter,
     Year,
+    Epoch,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -71,8 +72,12 @@ impl Extract for NaiveTime {
 
 impl ExtractKind {
     fn from_timestamp(&self, timestamp: &NaiveDateTime) -> Option<f64> {
-        self.from_date(&timestamp.date)
-            .or(self.from_time(&timestamp.time))
+        match self {
+            Self::Epoch => Some(timestamp.timestamp() as f64),
+            _ => self
+                .from_date(&timestamp.date)
+                .or(self.from_time(&timestamp.time)),
+        }
     }
 
     fn from_date(&self, date: &NaiveDate) -> Option<f64> {
@@ -83,6 +88,7 @@ impl ExtractKind {
             Self::Quarter => Some(((date.month() as f64 - 1.0) / 3.0 + 1.0).floor()),
             Self::Month => Some(date.month() as _),
             Self::Day => Some(date.day() as _),
+            Self::Epoch => Some(date.timestamp() as _),
             Self::Hour | Self::Minute | Self::Second => None,
         }
     }
@@ -92,6 +98,7 @@ impl ExtractKind {
             Self::Hour => Some(time.hour() as f64),
             Self::Minute => Some(time.minute() as f64),
             Self::Second => Some(time.second() as f64),
+            Self::Epoch => Some(time.timestamp() as f64),
             Self::Year | Self::Month | Self::Day | Self::Quarter | Self::Century | Self::Decade => {
                 None
             }
@@ -121,6 +128,7 @@ impl Display for ExtractKind {
             Self::Month => "month",
             Self::Quarter => "quarter",
             Self::Year => "year",
+            Self::Epoch => "epoch",
         };
         write!(f, "{}", s)
     }
@@ -140,6 +148,7 @@ impl TryFrom<&str> for ExtractKind {
             "month" => Ok(Self::Month),
             "quarter" => Ok(Self::Quarter),
             "year" => Ok(Self::Year),
+            "epoch" => Ok(Self::Epoch),
             _ => Err(()),
         }
     }

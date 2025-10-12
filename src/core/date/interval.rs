@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    core::date::{ExtractError, NaiveDate, NaiveDateTime, NaiveTime},
+    core::date::{ExtractError, NaiveDate, NaiveDateTime, NaiveTime, SECS_IN_DAY},
     sql::statement::{Temporal, Type},
 };
 
@@ -61,6 +61,16 @@ impl Interval {
     pub const fn microseconds(&self) -> i64 {
         self.microseconds % MICROSECS_IN_SECS
     }
+
+    pub const fn total_seconds(&self) -> i64 {
+        const SECONDS_IN_MONTH: i64 = 30 * SECS_IN_DAY;
+
+        let secs_in_day = self.days as i64 * SECS_IN_DAY;
+        let secs_in_month = self.months as i64 * SECONDS_IN_MONTH;
+        let secs_in_micro = self.microseconds / MICROSECS_IN_SECS;
+
+        secs_in_day + secs_in_month + secs_in_micro
+    }
 }
 
 impl super::Extract for Interval {
@@ -74,6 +84,7 @@ impl super::Extract for Interval {
             Kind::Hour => Ok(self.hours() as _),
             Kind::Minute => Ok(self.minutes() as _),
             Kind::Second => Ok(self.seconds() as _),
+            Kind::Epoch => Ok(self.total_seconds() as _),
             _ => Err(ExtractError::UnsupportedUnitForType {
                 unit: kind,
                 r#type: Type::Interval,
@@ -108,7 +119,6 @@ impl Add<Interval> for NaiveDateTime {
     fn add(self, rhs: Interval) -> Self::Output {
         const SECS_PER_MINUTE: i64 = 60;
         const SECS_PER_HOUR: i64 = 3600;
-        const SECS_PER_DAY: i64 = 86_400;
 
         let date = self.date + rhs;
 
@@ -119,11 +129,11 @@ impl Add<Interval> for NaiveDateTime {
         let total_secs = seconds + interval;
 
         let overflow = match total_secs >= 0 {
-            true => total_secs / SECS_PER_DAY,
-            _ => (total_secs - (SECS_PER_DAY - 1)) / SECS_PER_DAY,
+            true => total_secs / SECS_IN_DAY,
+            _ => (total_secs - (SECS_IN_DAY - 1)) / SECS_IN_DAY,
         };
 
-        let secs = ((total_secs % SECS_PER_DAY) + SECS_PER_DAY) % SECS_PER_DAY;
+        let secs = ((total_secs % SECS_IN_DAY) + SECS_IN_DAY) % SECS_IN_DAY;
 
         let hour = (secs / SECS_PER_HOUR) as u8;
         let minute = ((secs % SECS_PER_HOUR) / SECS_PER_MINUTE) as u8;
