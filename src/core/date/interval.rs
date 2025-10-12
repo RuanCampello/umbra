@@ -25,6 +25,10 @@ pub enum IntervalParseError {
     InvalidUnit(String),
 }
 
+const MICROSECS_IN_HOUR: i64 = 3_600_000_000;
+const MICROSECS_IN_MIN: i64 = 60_000_000;
+const MICROSECS_IN_SECS: i64 = 1_000_000;
+
 impl Interval {
     pub fn new(months: i32, days: i32, microseconds: i64) -> Self {
         Self {
@@ -41,23 +45,35 @@ impl Interval {
             microseconds: 0,
         }
     }
+
+    pub const fn hours(&self) -> i64 {
+        self.microseconds / MICROSECS_IN_HOUR
+    }
+
+    pub const fn minutes(&self) -> i64 {
+        (self.microseconds % MICROSECS_IN_HOUR) / MICROSECS_IN_MIN
+    }
+
+    pub const fn seconds(&self) -> i64 {
+        (self.microseconds % MICROSECS_IN_MIN) / MICROSECS_IN_SECS
+    }
+
+    pub const fn microseconds(&self) -> i64 {
+        self.microseconds % MICROSECS_IN_SECS
+    }
 }
 
 impl super::Extract for Interval {
     fn extract(&self, kind: super::ExtractKind) -> Result<f64, super::ExtractError> {
         use super::ExtractKind as Kind;
 
-        const MICROSECS_IN_HOUR: i64 = 3_600_000_000;
-        const MICROSECS_IN_MIN: i64 = 60_000_000;
-        const MICROSECS_IN_SECS: i64 = 1_000_000;
-
         match kind {
             Kind::Year => Ok((self.months / 12) as _),
             Kind::Month => Ok((self.months) as _),
             Kind::Day => Ok((self.days) as _),
-            Kind::Hour => Ok((self.microseconds / MICROSECS_IN_HOUR) as _),
-            Kind::Minute => Ok(((self.microseconds % MICROSECS_IN_HOUR) / MICROSECS_IN_MIN) as _),
-            Kind::Second => Ok(((self.microseconds % MICROSECS_IN_MIN) / MICROSECS_IN_SECS) as _),
+            Kind::Hour => Ok(self.hours() as _),
+            Kind::Minute => Ok(self.minutes() as _),
+            Kind::Second => Ok(self.seconds() as _),
             _ => Err(ExtractError::UnsupportedUnitForType {
                 unit: kind,
                 r#type: Type::Interval,
@@ -93,14 +109,13 @@ impl Add<Interval> for NaiveDateTime {
         const SECS_PER_MINUTE: i64 = 60;
         const SECS_PER_HOUR: i64 = 3600;
         const SECS_PER_DAY: i64 = 86_400;
-        const MICROS_PER_SEC: i64 = 1_000_000;
 
         let date = self.date + rhs;
 
         let seconds = self.time.hour() as i64 * SECS_PER_HOUR
             + self.time.minute() as i64 * SECS_PER_MINUTE
             + self.time.second() as i64;
-        let interval = rhs.microseconds / MICROS_PER_SEC;
+        let interval = rhs.microseconds / MICROSECS_IN_SECS;
         let total_secs = seconds + interval;
 
         let overflow = match total_secs >= 0 {
@@ -188,10 +203,6 @@ impl FromStr for Interval {
     type Err = IntervalParseError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        const MICROSECS_IN_HOUR: i64 = 3_600_000_000;
-        const MICROSECS_IN_MIN: i64 = 60_000_000;
-        const MICROSECS_IN_SECS: i64 = 1_000_000;
-
         let mut months = 0;
         let mut days = 0;
         let mut microseconds = 0;
@@ -231,14 +242,36 @@ impl FromStr for Interval {
 
 impl Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.months != 0 {
-            write!(f, "{} months ", self.months)?;
+        let is_negative = self.months < 0 || self.days < 0 || self.microseconds < 0;
+        if is_negative {
+            write!(f, "-")?;
         }
-        if self.days != 0 {
-            write!(f, "{} days ", self.days)?;
+
+        let months = self.months.abs();
+        let days = self.days.abs();
+        let micros = self.microseconds.abs();
+
+        if months == 0 && days == 0 && micros == 0 {
+            write!(f, "00:00:00")?;
         }
-        if self.microseconds != 0 {
-            write!(f, "{} microseconds", self.microseconds)?;
+
+        if months > 0 {
+            write!(f, "{} mon{}", months, if months == 1 { "" } else { "s" })?;
+        }
+        if days > 0 {
+            write!(f, "{} day{}", days, if days == 1 { "" } else { "s" })?;
+        }
+
+        write!(
+            f,
+            "{:02}:{:02}:{:02}",
+            self.hours(),
+            self.minutes(),
+            self.seconds()
+        )?;
+
+        if self.microseconds() > 0 {
+            write!(f, ".{:06}", self.microseconds())?;
         }
 
         Ok(())
