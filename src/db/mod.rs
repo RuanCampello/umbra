@@ -738,6 +738,75 @@ impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     }
 }
 
+impl Display for QuerySet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let widths: Vec<usize> = self
+            .schema
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| {
+                let header_len = col.name.len();
+                let max_data_len = self
+                    .tuples
+                    .iter()
+                    .map(|row| row[i].to_string().len())
+                    .max()
+                    .unwrap_or(0);
+                header_len.max(max_data_len)
+            })
+            .collect();
+
+        let border: String = widths
+            .iter()
+            .map(|&w| "-".repeat(w + 2))
+            .collect::<Vec<_>>()
+            .join("+");
+        let full_border = format!("+{}+", border);
+
+        let header = self
+            .schema
+            .columns
+            .iter()
+            .zip(&widths)
+            .map(|(col, &width)| format!(" {:<width$} ", col.name, width = width))
+            .collect::<Vec<_>>()
+            .join("|");
+
+        writeln!(f, "{}", full_border)?;
+        writeln!(f, "|{}|", header)?;
+        writeln!(f, "{}", full_border)?;
+
+        if self.tuples.is_empty() {
+            writeln!(
+                f,
+                "| (0 rows)                                                               |"
+            )?;
+        } else {
+            for row in &self.tuples {
+                let row_str = row
+                    .iter()
+                    .zip(&widths)
+                    .enumerate()
+                    .map(|(i, (value, &width))| {
+                        let value_str = value.to_string();
+                        if self.schema.columns[i].data_type.is_number() {
+                            format!(" {:>width$} ", value_str, width = width)
+                        } else {
+                            format!(" {:<width$} ", value_str, width = width)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|");
+                writeln!(f, "|{}|", row_str)?;
+            }
+        }
+
+        writeln!(f, "{}", full_border)?;
+        Ok(())
+    }
+}
+
 impl Display for DatabaseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
