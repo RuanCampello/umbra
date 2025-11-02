@@ -409,7 +409,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             };
 
-            if left_type.ne(&right_type) {
+            if !are_types_compatible(operator, &left_type, &right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
@@ -612,6 +612,31 @@ fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
     }
 
     Ok(())
+}
+
+// TODO: this is very uhhhhhhhhhmmmmmmm
+// I wanna remove this somehow later
+fn are_types_compatible(
+    operator: &BinaryOperator,
+    left_type: &VmType,
+    right_type: &VmType,
+) -> bool {
+    if left_type == right_type {
+        return true;
+    }
+
+    matches!(
+        (operator, left_type, right_type),
+        (
+            BinaryOperator::Plus | BinaryOperator::Minus,
+            VmType::Date,
+            VmType::Interval
+        ) | (
+            BinaryOperator::Plus | BinaryOperator::Minus,
+            VmType::Interval,
+            VmType::Date
+        )
+    )
 }
 
 impl Display for AnalyzerError {

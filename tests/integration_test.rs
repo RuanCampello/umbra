@@ -1752,6 +1752,7 @@ fn extraction_on_intervals() -> Result<()> {
     CREATE TABLE event_intervals (
         id SERIAL PRIMARY KEY,
         event_name VARCHAR(100),
+        created_at TIMESTAMP,
         duration INTERVAL,
         time_until_next_event INTERVAL,
         total_processing_time INTERVAL
@@ -1760,13 +1761,13 @@ fn extraction_on_intervals() -> Result<()> {
     )?;
 
     db.exec(r#"
-    INSERT INTO event_intervals (event_name, duration, time_until_next_event, total_processing_time) VALUES
-        ('Data Backup', '2 hours 30 minutes', '1 day', '15 days'),
-        ('System Update', '45 minutes', '7 days', '3 months'),
-        ('Report Generation', '5 minutes', '1 hour', '2 weeks'),
-        ('Database Maintenance', '6 hours', '1 month', '1 year'),
-        ('Quick Sync', '30 seconds', '10 minutes', '1 day');
-        "#)?;
+        INSERT INTO event_intervals (event_name, created_at, duration, time_until_next_event, total_processing_time) VALUES
+            ('Data Backup', '2024-01-15 08:00:00', '2 hours 30 minutes', '1 day', '15 days'),
+            ('System Update', '2024-02-20 14:30:00', '45 minutes', '7 days', '3 months'),
+            ('Report Generation', '2024-03-10 09:15:00', '5 minutes', '1 hour', '2 weeks'),
+            ('Database Maintenance', '2024-04-05 22:00:00', '6 hours', '1 month', '1 year'),
+            ('Quick Sync', '2024-05-12 16:45:30', '30 seconds', '10 minutes', '1 day');
+    "#)?;
 
     let query = db.exec(
         r#"
@@ -1796,7 +1797,6 @@ fn extraction_on_intervals() -> Result<()> {
     let query = db.exec(
         r#"
     SELECT 
-        event_name,
         time_until_next_event,
         EXTRACT(DAY FROM time_until_next_event) as days_until_next,
         EXTRACT(HOUR FROM time_until_next_event) as hours_until_next,
@@ -1807,54 +1807,38 @@ fn extraction_on_intervals() -> Result<()> {
     "#,
     )?;
 
+    #[rustfmt::skip]
     assert_eq!(
         query.tuples,
         vec![
-            vec![
-                "Data Backup".into(),
-                interval!("1 day"),
-                1.into(),
-                0.into(),
-                interval!("15 days"),
-                0.into(),
-                15.into(),
-            ],
-            vec![
-                "System Update".into(),
-                interval!("7 days"),
-                7.into(),
-                0.into(),
-                interval!("3 months"),
-                3.into(),
-                0.into(),
-            ],
-            vec![
-                "Report Generation".into(),
-                interval!("1 hour"),
-                0.into(),
-                1.into(),
-                interval!("2 weeks"),
-                0.into(),
-                14.into(),
-            ],
-            vec![
-                "Database Maintenance".into(),
-                interval!("1 month"),
-                0.into(),
-                0.into(),
-                interval!("1 year"),
-                12.into(),
-                0.into(),
-            ],
-            vec![
-                "Quick Sync".into(),
-                interval!("10 minutes"),
-                0.into(),
-                0.into(),
-                interval!("1 day"),
-                0.into(),
-                1.into(),
-            ],
+            vec![interval!("1 day"), 1.into(), 0.into(), interval!("15 days"), 0.into(), 15.into()],
+            vec![interval!("7 days"), 7.into(), 0.into(), interval!("3 months"), 3.into(), 0.into()],
+            vec![interval!("1 hour"), 0.into(), 1.into(), interval!("2 weeks"), 0.into(), 14.into()],
+            vec![interval!("1 month"), 0.into(), 0.into(), interval!("1 year"), 12.into(), 0.into()],
+            vec![interval!("10 minutes"), 0.into(), 0.into(), interval!("1 day"), 0.into(), 1.into()],
+        ],
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        duration,
+        (created_at + duration) as estimated_end_time,
+        EXTRACT(HOUR FROM (created_at + duration)) as end_hour,
+        EXTRACT(DAY FROM (created_at + duration)) as end_day
+    FROM event_intervals;
+    "#,
+    )?;
+
+    #[rustfmt::skip]
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![interval!("2 hours 30 minutes"), temporal!("2024-01-15 10:30:00")?, 10.into(), 15.into()],
+            vec![interval!("45 minutes"), temporal!("2024-02-20 15:15:00")?, 15.into(), 20.into()],
+            vec![interval!("5 minutes"), temporal!("2024-03-10 09:20:00")?, 9.into(), 10.into()],
+            vec![interval!("6 hours"), temporal!("2024-04-06 04:00:00")?, 4.into(), 6.into()],
+            vec![interval!("30 seconds"), temporal!("2024-05-12 16:46:00")?, 16.into(), 12.into()],
         ],
     );
 

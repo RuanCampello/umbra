@@ -532,15 +532,12 @@ impl<'input> Parser<'input> {
                 )))?;
 
                 self.expect_keyword(Keyword::From)?;
-                let from = self.parse_ident()?;
+                let from = self.parse_expr(None)?;
                 self.expect_token(Token::RightParen)?;
 
                 Ok(Expression::Function {
                     func: Function::Extract,
-                    args: vec![
-                        Expression::Value(Value::String(kind_str)),
-                        Expression::Identifier(from),
-                    ],
+                    args: vec![Expression::Value(Value::String(kind_str)), from],
                 })
             }
 
