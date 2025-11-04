@@ -169,6 +169,7 @@ impl From<&Type> for u8 {
             Type::Date => TEMPORAL_CATEGORY | 0x0,
             Type::Time => TEMPORAL_CATEGORY | 0x1,
             Type::DateTime => TEMPORAL_CATEGORY | 0x2,
+            Type::Interval => TEMPORAL_CATEGORY | 0x3,
         }
     }
 }

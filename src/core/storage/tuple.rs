@@ -5,8 +5,10 @@ use std::{
 };
 
 use crate::{
-    core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse, Serialize},
-    core::uuid::Uuid,
+    core::{
+        date::{interval::Interval, NaiveDate, NaiveDateTime, NaiveTime, Parse, Serialize},
+        uuid::Uuid,
+    },
     db::{RowId, Schema},
     sql::statement::{Column, Temporal, Type, Value},
 };
@@ -18,7 +20,7 @@ trait ValueSerialize {
 /// Returns the byte length of a given SQL [`Type`].
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
-        Type::Uuid => 16,
+        Type::Uuid | Type::Interval => 16,
         Type::BigInteger
         | Type::BigSerial
         | Type::UnsignedBigInteger
@@ -87,6 +89,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
+        Value::Interval(i) => i.serialize(buff, r#type),
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
@@ -293,6 +296,17 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             Ok(Value::Float(f64::from_be_bytes(bytes)))
         }
 
+        Type::Interval => {
+            let mut bytes = [0; byte_len_of_type(&Type::Interval)];
+            reader.read_exact(&mut bytes)?;
+
+            let months = i32::from_le_bytes(bytes[0..4].try_into().unwrap());
+            let days = i32::from_le_bytes(bytes[4..8].try_into().unwrap());
+            let microseconds = i64::from_le_bytes(bytes[8..16].try_into().unwrap());
+
+            Ok(Value::Interval(Interval::new(months, days, microseconds)))
+        }
+
         Type::Date => {
             let mut bytes = [0; byte_len_of_type(&Type::Date)];
             reader.read_exact(&mut bytes)?;
@@ -356,6 +370,9 @@ impl ValueSerialize for String {
             Type::Date => NaiveDate::parse_str(self).unwrap().serialize(buff),
             Type::Time => NaiveTime::parse_str(self).unwrap().serialize(buff),
             Type::DateTime => NaiveDateTime::parse_str(self).unwrap().serialize(buff),
+            Type::Interval => Interval::from_str(self)
+                .unwrap()
+                .serialize(buff, &Type::Interval),
             Type::Uuid => buff.extend_from_slice(Uuid::from_str(self).unwrap().as_ref()),
             _ => unreachable!("Unsupported type {to} for String value"),
         }
@@ -427,6 +444,19 @@ impl ValueSerialize for bool {
         match to {
             Type::Boolean => buff.push(u8::from(*self)),
             _ => unreachable!("This ain't a boolean"),
+        }
+    }
+}
+
+impl ValueSerialize for Interval {
+    fn serialize(&self, buff: &mut Vec<u8>, to: &Type) {
+        match to {
+            Type::Interval => {
+                buff.extend_from_slice(&self.months.to_le_bytes());
+                buff.extend_from_slice(&self.days.to_le_bytes());
+                buff.extend_from_slice(&self.microseconds.to_le_bytes());
+            }
+            _ => unreachable!("Unsupported type {to} for Interval"),
         }
     }
 }

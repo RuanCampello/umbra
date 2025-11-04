@@ -5,6 +5,7 @@
 //! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
 
 use super::statement::{Delete, Insert, Select, Update};
+use crate::core::date::interval::Interval;
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
@@ -408,7 +409,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             };
 
-            if left_type.ne(&right_type) {
+            if !are_types_compatible(operator, &left_type, &right_type) {
                 return Err(SqlError::Type(TypeError::CannotApplyBinary {
                     left: *left.clone(),
                     right: *right.clone(),
@@ -431,7 +432,7 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                    if matches!(left_type, VmType::Number | VmType::Float) =>
+                    if matches!(left_type, VmType::Number | VmType::Float | VmType::Date) =>
                 {
                     left_type
                 }
@@ -589,6 +590,10 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
             Uuid::from_str(s)?;
             Ok(VmType::Number)
         }
+        Type::Interval => {
+            Interval::from_str(s).map_err(|e| TypeError::InvalidInterval(e))?;
+            Ok(VmType::Interval)
+        }
         _ => Ok(VmType::String),
     }
 }
@@ -607,6 +612,31 @@ fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
     }
 
     Ok(())
+}
+
+// TODO: this is very uhhhhhhhhhmmmmmmm
+// I wanna remove this somehow later
+fn are_types_compatible(
+    operator: &BinaryOperator,
+    left_type: &VmType,
+    right_type: &VmType,
+) -> bool {
+    if left_type == right_type {
+        return true;
+    }
+
+    matches!(
+        (operator, left_type, right_type),
+        (
+            BinaryOperator::Plus | BinaryOperator::Minus,
+            VmType::Date,
+            VmType::Interval
+        ) | (
+            BinaryOperator::Plus | BinaryOperator::Minus,
+            VmType::Interval,
+            VmType::Date
+        )
+    )
 }
 
 impl Display for AnalyzerError {
@@ -1212,6 +1242,17 @@ mod tests {
 
         Analyze {
             sql: "SELECT * FROM documents WHERE full_text LIKE '%lorem%';",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_extract_function() -> AnalyzerResult {
+        let ctx = &["CREATE TABLE users (name VARCHAR(100), birth_date DATE);"];
+        Analyze {
+            sql: "SELECT EXTRACT(YEAR FROM birth_date) FROM users;",
             ctx,
             expected: Ok(()),
         }

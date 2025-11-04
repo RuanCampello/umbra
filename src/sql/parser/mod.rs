@@ -12,7 +12,10 @@ mod queries;
 mod tokenizer;
 mod tokens;
 
-use crate::core::date::{NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse};
+use crate::core::date::interval::Interval;
+use crate::core::date::{
+    ExtractKind, NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse,
+};
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, Statement,
     Type, UnaryOperator, Value,
@@ -20,6 +23,7 @@ use crate::sql::statement::{
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::iter::Peekable;
+use std::str::FromStr;
 use tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
 use tokens::Token;
 
@@ -229,6 +233,7 @@ impl<'input> Parser<'input> {
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
             Token::Keyword(Keyword::Null) => Ok(Expression::Value(Value::Null)),
+            Token::Keyword(Keyword::Interval) => self.parse_interval(),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
             }
@@ -362,9 +367,29 @@ impl<'input> Parser<'input> {
             Keyword::Timestamp => Ok(Type::DateTime),
             Keyword::Date => Ok(Type::Date),
             Keyword::Time => Ok(Type::Time),
+            Keyword::Interval => Ok(Type::Interval),
             Keyword::Text => Ok(Type::Text),
             keyword => unreachable!("unexpected column token: {keyword}"),
         }
+    }
+
+    fn parse_interval(&mut self) -> ParserResult<Expression> {
+        // either a string (e.g., '30 days') or an identifier
+        let value = match self.next_token()? {
+            Token::String(s) => s,
+            Token::Identifier(ident) => ident,
+            token => {
+                return Err(self.error(ErrorKind::Expected {
+                    expected: Token::String(String::new()),
+                    found: token,
+                }))
+            }
+        };
+
+        let interval = Interval::from_str(value.as_str())
+            .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
+
+        Ok(Expression::Value(Value::Interval(interval)))
     }
 
     fn parse_assign(&mut self) -> ParserResult<Assignment> {
@@ -492,6 +517,27 @@ impl<'input> Parser<'input> {
                         from.unwrap_or(Expression::Value(Value::Number(0))),
                         r#for.unwrap_or(Expression::Value(Value::Number(-1))),
                     ],
+                })
+            }
+
+            Keyword::Extract => {
+                let kind_str = self.parse_ident()?;
+                // TODO: this way we need to parse the kind here to check and when executing, but I
+                // don't know any better way without changing the enums to a special case or just
+                // making an execution error instead of a parsing, which isn't the ideal
+                let kind = ExtractKind::try_from(kind_str.as_str()).or(Err(self.error(
+                    ErrorKind::FormatError(format!(
+                        "Unit '{kind_str}' is not recognised for date type"
+                    )),
+                )))?;
+
+                self.expect_keyword(Keyword::From)?;
+                let from = self.parse_expr(None)?;
+                self.expect_token(Token::RightParen)?;
+
+                Ok(Expression::Function {
+                    func: Function::Extract,
+                    args: vec![Expression::Value(Value::String(kind_str)), from],
                 })
             }
 
@@ -668,7 +714,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 15] {
+    const fn supported_types() -> [Keyword; 16] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -685,6 +731,7 @@ impl<'input> Parser<'input> {
             Keyword::Time,
             Keyword::Date,
             Keyword::Timestamp,
+            Keyword::Interval,
         ]
     }
 
@@ -1908,6 +1955,71 @@ mod tests {
                     expr: Box::new(Expression::Identifier("email".into())),
                     negated: false
                 }),
+                order_by: vec![],
+                group_by: vec![],
+            })
+        )
+    }
+
+    #[test]
+    fn test_extract_function() {
+        let sql = "SELECT EXTRACT(QUARTER FROM joined) FROM employees;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![Expression::Function {
+                    func: Function::Extract,
+                    args: vec![
+                        Expression::Value("QUARTER".into()),
+                        Expression::Identifier("joined".into())
+                    ],
+                }],
+                from: "employees".into(),
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![]
+            })
+        );
+
+        let sql = "SELECT EXTRACT(SOMETHING FROM joined) FROM employees;";
+        let statement = Parser::new(sql).parse_statement();
+        assert_eq!(
+            statement.unwrap_err(),
+            ParserError {
+                kind: ErrorKind::FormatError(
+                    "Unit 'SOMETHING' is not recognised for date type".into()
+                ),
+                location: Location::new(1, 16),
+                input: sql.to_string(),
+            }
+        )
+    }
+
+    #[test]
+    fn test_interval() {
+        let sql = "SELECT order_date, order_date + INTERVAL '30 days' AS due_date FROM orders;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(Select {
+                columns: vec![
+                    Expression::Identifier("order_date".into()),
+                    Expression::Alias {
+                        alias: "due_date".into(),
+                        expr: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Plus,
+                            left: Box::new(Expression::Identifier("order_date".into())),
+                            right: Box::new(Expression::Value(Value::Interval(
+                                Interval::from_days(30)
+                            )))
+                        })
+                    }
+                ],
+                from: "orders".into(),
+                r#where: None,
                 order_by: vec![],
                 group_by: vec![],
             })

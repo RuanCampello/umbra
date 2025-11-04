@@ -5,6 +5,7 @@
 #![allow(unused)]
 
 use super::Keyword;
+use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
@@ -13,7 +14,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
-use std::ops::Neg;
+use std::ops::{Add, Neg};
 use std::str::FromStr;
 
 /// SQL statements.
@@ -101,7 +102,7 @@ pub(crate) enum Drop {
     Database(String),
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub enum Expression {
     Identifier(String),
     Value(Value),
@@ -197,6 +198,7 @@ pub enum Value {
     Boolean(bool),
     Temporal(Temporal),
     Uuid(Uuid),
+    Interval(Interval),
     Null,
 }
 
@@ -208,13 +210,13 @@ pub enum Constraint {
     Default(Expression),
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
 pub enum UnaryOperator {
     Plus,
     Minus,
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
 pub enum BinaryOperator {
     Eq,
     Neq,
@@ -283,10 +285,11 @@ pub enum Type {
     Date,
     Time,
     DateTime,
+    Interval,
 }
 
 /// Subset of `SQL` functions.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 pub enum Function {
     /// Extracts the `string` to the `length` at the `start`th character (if specified) and stop
     /// after the `count` character. Must provide at least of of `start` and `count`.
@@ -326,7 +329,14 @@ pub enum Function {
     /// COALESCE(value1, value2, ..., valueN) -> T;
     /// ```
     Coalesce,
+    Extract,
     UuidV4,
+}
+
+#[derive(Debug)]
+pub(crate) enum ArithmeticPair {
+    Numeric(f64, f64),
+    Temporal(Temporal, Interval),
 }
 
 const NULL_HASH: u32 = 0x4E554C4C;
@@ -586,12 +596,17 @@ impl Value {
         matches!(self, Value::Null)
     }
 
-    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<(f64, f64)> {
+    /// Tries to convert a pair of `Value`s into a representation suitable for arithmetic.
+    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<ArithmeticPair> {
         match (self, other) {
-            (Value::Number(a), Value::Number(b)) => Some((*a as f64, *b as f64)),
-            (Value::Float(a), Value::Float(b)) => Some((*a, *b)),
-            (Value::Number(a), Value::Float(b)) => Some((*a as f64, *b)),
-            (Value::Float(a), Value::Number(b)) => Some((*a, *b as f64)),
+            (Value::Number(a), Value::Number(b)) => {
+                Some(ArithmeticPair::Numeric(*a as f64, *b as f64))
+            }
+            (Value::Float(a), Value::Float(b)) => Some(ArithmeticPair::Numeric(*a, *b)),
+            (Value::Number(a), Value::Float(b)) => Some(ArithmeticPair::Numeric(*a as f64, *b)),
+            (Value::Float(a), Value::Number(b)) => Some(ArithmeticPair::Numeric(*a, *b as f64)),
+            (Value::Temporal(t), Value::Interval(i)) => Some(ArithmeticPair::Temporal(*t, *i)),
+            (Value::Interval(i), Value::Temporal(t)) => Some(ArithmeticPair::Temporal(*t, *i)),
             _ => None,
         }
     }
@@ -621,6 +636,7 @@ impl PartialEq for Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Temporal(a), Value::Temporal(b)) => a == b,
+            (Value::Interval(a), Value::Interval(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
             // For grouping and hashing, NULL values should be equal.
             // SQL semantics (NULL = NULL returns NULL) is handled separetly.
@@ -678,6 +694,7 @@ impl Hash for Value {
             Value::Boolean(b) => b.hash(state),
             Value::Temporal(t) => t.hash(state),
             Value::Uuid(u) => u.hash(state),
+            Value::Interval(i) => i.hash(state),
             Value::Null => NULL_HASH.hash(state),
         }
     }
@@ -694,6 +711,18 @@ impl Neg for Value {
                 operator: UnaryOperator::Minus,
                 value: v,
             }),
+        }
+    }
+}
+
+impl Neg for Interval {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            months: -self.months,
+            days: -self.days,
+            microseconds: -self.microseconds,
         }
     }
 }
@@ -801,6 +830,7 @@ impl Display for Type {
             Type::Date => f.write_str("DATE"),
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
             Type::Text => write!(f, "TEXT"),
+            Type::Interval => f.write_str("INTERVAL"),
         }
     }
 }
@@ -814,6 +844,7 @@ impl Display for Value {
             Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
+            Value::Interval(interval) => write!(f, "{interval}"),
             Value::Null => write!(f, "NULL"),
         }
     }
@@ -828,6 +859,7 @@ impl Function {
             Self::Concat => Some((1, usize::MAX)),
             Self::Position => Some((2, 2)),
             Self::Power => Some((2, 2)),
+            Self::Extract => Some((2, 2)),
             Self::Trunc => Some((1, 2)),
             Self::Ascii => UNARY,
             func if func.is_math() => UNARY,
@@ -846,6 +878,7 @@ impl Function {
             Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => {
                 VmType::Number
             }
+            Self::Extract => VmType::Number,
 
             Self::Coalesce => panic!("This must be overridden by the analyzer"),
         }
@@ -917,6 +950,7 @@ define_function_mapping! {
     TypeOf => "TYPEOF",
     Max => "MAX",
     Coalesce => "COALESCE",
+    Extract => "EXTRACT",
     UuidV4 => "UUIDV4",
 }
 
@@ -939,6 +973,7 @@ impl From<Function> for Keyword {
             Function::Avg => Self::Avg,
             Function::Sum => Self::Sum,
             Function::Coalesce => Self::Coalesce,
+            Function::Extract => Self::Extract,
             Function::UuidV4 => unimplemented!(),
         }
     }
@@ -965,6 +1000,7 @@ impl TryFrom<&Keyword> for Function {
             Keyword::Max => Ok(Self::Max),
             Keyword::TypeOf => Ok(Self::TypeOf),
             Keyword::Coalesce => Ok(Self::Coalesce),
+            Keyword::Extract => Ok(Self::Extract),
             _ => Err(()),
         }
     }
@@ -1028,6 +1064,12 @@ impl From<Temporal> for Value {
     }
 }
 
+impl From<Interval> for Value {
+    fn from(value: Interval) -> Self {
+        Self::Interval(value)
+    }
+}
+
 impl From<NaiveDate> for Temporal {
     fn from(value: NaiveDate) -> Self {
         Self::Date(value)
@@ -1043,6 +1085,16 @@ impl From<NaiveDateTime> for Temporal {
 impl From<NaiveTime> for Temporal {
     fn from(value: NaiveTime) -> Self {
         Self::Time(value)
+    }
+}
+
+impl From<Temporal> for Type {
+    fn from(value: Temporal) -> Self {
+        match value {
+            Temporal::Date(_) => Self::Date,
+            Temporal::Time(_) => Self::Time,
+            Temporal::DateTime(_) => Self::DateTime,
+        }
     }
 }
 

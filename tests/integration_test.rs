@@ -1,7 +1,7 @@
 use std::path::Path;
 use umbra::db::{Database, DatabaseError, QuerySet};
 use umbra::sql::statement::{Type, Value};
-use umbra::temporal;
+use umbra::{interval, temporal};
 
 type Result<T> = std::result::Result<T, DatabaseError>;
 
@@ -1543,6 +1543,303 @@ fn nullable_aggregation() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![vec!["Eva Brown".into()], vec!["Ivy Chen".into()]]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn extract_function() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE events (
+        event_id SERIAL PRIMARY KEY,
+        event_name VARCHAR(100),
+        event_timestamp TIMESTAMP
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO events (event_name, event_timestamp) VALUES
+        ('Conference A', '2024-03-15 09:00:00'),
+        ('Workshop B', '2024-06-22 14:30:00'),
+        ('Seminar C', '2024-09-10 11:15:00'),
+        ('Conference D', '2024-12-05 10:00:00'),
+        ('Workshop E', '2025-02-18 13:45:00');
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT
+        event_name,
+        EXTRACT(YEAR FROM event_timestamp) AS year,
+        EXTRACT(MONTH FROM event_timestamp) AS month
+    FROM events ORDER BY event_timestamp;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Conference A".into(), 2024.into(), 3.into()],
+            vec!["Workshop B".into(), 2024.into(), 6.into()],
+            vec!["Seminar C".into(), 2024.into(), 9.into()],
+            vec!["Conference D".into(), 2024.into(), 12.into()],
+            vec!["Workshop E".into(), 2025.into(), 2.into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT
+        EXTRACT(YEAR FROM event_timestamp) AS year,
+        EXTRACT(QUARTER FROM event_timestamp) AS quarter,
+        COUNT(*) AS event_count
+    FROM events
+    GROUP BY year, quarter
+    ORDER BY year, quarter;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![2024.into(), 1.into(), 1.into()],
+            vec![2024.into(), 2.into(), 1.into()],
+            vec![2024.into(), 3.into(), 1.into()],
+            vec![2024.into(), 4.into(), 1.into()],
+            vec![2025.into(), 1.into(), 1.into()],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn interval_operations() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE events (
+        event_id SERIAL PRIMARY KEY,
+        event_date DATE,
+        event_datetime TIMESTAMP,
+        event_time TIME
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO events (event_date, event_datetime, event_time) VALUES
+        ('2024-01-31', '2024-01-31 23:59:59', '23:59:59'),
+        ('2024-02-29', '2024-02-29 00:00:00', '00:00:00'),
+        ('2024-12-31', '2024-12-31 12:30:45', '12:30:45'),
+        ('2024-03-15', '2024-03-15 18:45:30', '18:45:30'),
+        ('2024-06-30', '2024-06-30 13:15:20', '13:15:20');
+    "#,
+    )?;
+
+    let query = db.exec(
+        "SELECT event_id, event_date + INTERVAL '1 month' AS next_month FROM events ORDER BY event_id;",
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2024-02-29").unwrap()], // jan 31 + 1 month = feb 29
+            vec![Value::Number(2), temporal!("2024-03-29").unwrap()], // feb 29 + 1 month = mar 29
+            vec![Value::Number(3), temporal!("2025-01-31").unwrap()], // dec 31 + 1 month = jan 31 next year
+            vec![Value::Number(4), temporal!("2024-04-15").unwrap()],
+            vec![Value::Number(5), temporal!("2024-07-30").unwrap()], // jun 30 + 1 month = jul 30
+        ]
+    );
+
+    let query = db.exec(
+        "SELECT event_id, event_time + INTERVAL '25 hours 75 minutes 100 seconds' AS broken_time FROM events ORDER BY event_id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("02:16:39").unwrap()],
+            vec![Value::Number(2), temporal!("02:16:40").unwrap()], // 00:00:00 + 26h15m40s = 02:16:40
+            vec![Value::Number(3), temporal!("14:47:25").unwrap()], // 12:30:45 + 26h15m40s = next day 14:47:25
+            vec![Value::Number(4), temporal!("21:02:10").unwrap()], // 18:45:30 + 26h15m40s = next day 21:02:10
+            vec![Value::Number(5), temporal!("15:32:00").unwrap()], // 13:15:20 + 26h15m40s = next day 15:32:00
+        ]
+    );
+
+    let query = db.exec(
+        "SELECT event_id, event_date - INTERVAL '35 days' AS past_date FROM events ORDER BY event_id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2023-12-27").unwrap()], // jan 31 - 35 days = dec 27 previous year
+            vec![Value::Number(2), temporal!("2024-01-25").unwrap()], // feb 29 - 35 days = jan 25
+            vec![Value::Number(3), temporal!("2024-11-26").unwrap()], // dec 31 - 35 days = nov 26
+            vec![Value::Number(4), temporal!("2024-02-09").unwrap()], // mar 15 - 35 days = feb 9
+            vec![Value::Number(5), temporal!("2024-05-26").unwrap()], // jun 30 - 35 days = may 26
+        ]
+    );
+
+    let query = db.exec(
+        "SELECT event_id, event_datetime + INTERVAL '2 months 15 days 27 hours 90 minutes' AS complex_future FROM events ORDER BY event_id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2024-04-17 04:29:59").unwrap()],
+            vec![Value::Number(2), temporal!("2024-05-15 04:30:00").unwrap()],
+            vec![Value::Number(3), temporal!("2025-03-16 17:00:45").unwrap()],
+            vec![Value::Number(4), temporal!("2024-05-31 23:15:30").unwrap()],
+            vec![Value::Number(5), temporal!("2024-09-15 17:45:20").unwrap()],
+        ]
+    );
+
+    let query = db.exec(
+        "SELECT event_id, event_datetime + INTERVAL '-1 month 15 days -2 hours 30 minutes' AS mixed_interval FROM events ORDER BY event_id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2024-01-15 22:29:59").unwrap()],
+            vec![Value::Number(2), temporal!("2024-02-12 22:30:00").unwrap()],
+            vec![Value::Number(3), temporal!("2024-12-15 11:00:45").unwrap()],
+            vec![Value::Number(4), temporal!("2024-03-01 17:15:30").unwrap()],
+            vec![Value::Number(5), temporal!("2024-06-14 11:45:20").unwrap()],
+        ]
+    );
+
+    // let query = db.exec(
+    //     "SELECT event_id, event_time + INTERVAL '0.5 seconds' AS micro_time FROM events ORDER BY event_id;",
+    // )?;
+    // assert_eq!(
+    //     query.tuples,
+    //     vec![
+    //         vec![Value::Number(1), temporal!("23:59:59.5").unwrap()], // 23:59:59 + 0.5s
+    //         vec![Value::Number(2), temporal!("00:00:00.5").unwrap()], // 00:00:00 + 0.5s
+    //         vec![Value::Number(3), temporal!("12:30:45.5").unwrap()], // 12:30:45 + 0.5s
+    //         vec![Value::Number(4), temporal!("18:45:30.5").unwrap()], // 18:45:30 + 0.5s
+    //         vec![Value::Number(5), temporal!("13:15:20.5").unwrap()], // 13:15:20 + 0.5s
+    //     ]
+    // );
+
+    let query = db.exec(
+        "SELECT event_id, event_date + INTERVAL '13 months' AS next_year FROM events ORDER BY event_id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2025-02-28").unwrap()], // jan 31 + 13 months
+            vec![Value::Number(2), temporal!("2025-03-29").unwrap()], // feb 29 + 13 months
+            vec![Value::Number(3), temporal!("2026-01-31").unwrap()], // dec 31 + 13 months
+            vec![Value::Number(4), temporal!("2025-04-15").unwrap()], // mar 15 + 13 months
+            vec![Value::Number(5), temporal!("2025-07-30").unwrap()], // jun 30 + 13 months
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn extraction_on_intervals() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE event_intervals (
+        id SERIAL PRIMARY KEY,
+        event_name VARCHAR(100),
+        created_at TIMESTAMP,
+        duration INTERVAL,
+        time_until_next_event INTERVAL,
+        total_processing_time INTERVAL
+    );
+    "#,
+    )?;
+
+    db.exec(r#"
+        INSERT INTO event_intervals (event_name, created_at, duration, time_until_next_event, total_processing_time) VALUES
+            ('Data Backup', '2024-01-15 08:00:00', '2 hours 30 minutes', '1 day', '15 days'),
+            ('System Update', '2024-02-20 14:30:00', '45 minutes', '7 days', '3 months'),
+            ('Report Generation', '2024-03-10 09:15:00', '5 minutes', '1 hour', '2 weeks'),
+            ('Database Maintenance', '2024-04-05 22:00:00', '6 hours', '1 month', '1 year'),
+            ('Quick Sync', '2024-05-12 16:45:30', '30 seconds', '10 minutes', '1 day');
+    "#)?;
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        duration,
+        EXTRACT(DAY FROM duration) as days,
+        EXTRACT(HOUR FROM duration) as hours,
+        EXTRACT(MINUTE FROM duration) as minutes,
+        EXTRACT(SECOND FROM duration) as seconds,
+        EXTRACT(EPOCH FROM duration) as duration_total_seconds
+    FROM event_intervals;
+    "#,
+    )?;
+
+    #[rustfmt::skip]
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![interval!("2 hours 30 minutes"), 0.into(), 2.into(), 30.into(), 0.into(), 9000.into()],
+            vec![interval!("45 minutes"), 0.into(), 0.into(), 45.into(), 0.into(), 2700.into()],
+            vec![interval!("5 minutes"), 0.into(), 0.into(), 5.into(), 0.into(), 300.into()],
+            vec![interval!("6 hours"), 0.into(), 6.into(), 0.into(), 0.into(), 21600.into()],
+            vec![interval!("30 seconds"), 0.into(), 0.into(), 0.into(), 30.into(), 30.into()],
+        ],
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        time_until_next_event,
+        EXTRACT(DAY FROM time_until_next_event) as days_until_next,
+        EXTRACT(HOUR FROM time_until_next_event) as hours_until_next,
+        total_processing_time,
+        EXTRACT(MONTH FROM total_processing_time) as processing_months,
+        EXTRACT(DAY FROM total_processing_time) as processing_days
+    FROM event_intervals;
+    "#,
+    )?;
+
+    #[rustfmt::skip]
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![interval!("1 day"), 1.into(), 0.into(), interval!("15 days"), 0.into(), 15.into()],
+            vec![interval!("7 days"), 7.into(), 0.into(), interval!("3 months"), 3.into(), 0.into()],
+            vec![interval!("1 hour"), 0.into(), 1.into(), interval!("2 weeks"), 0.into(), 14.into()],
+            vec![interval!("1 month"), 0.into(), 0.into(), interval!("1 year"), 12.into(), 0.into()],
+            vec![interval!("10 minutes"), 0.into(), 0.into(), interval!("1 day"), 0.into(), 1.into()],
+        ],
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        duration,
+        (created_at + duration) as estimated_end_time,
+        EXTRACT(HOUR FROM (created_at + duration)) as end_hour,
+        EXTRACT(DAY FROM (created_at + duration)) as end_day
+    FROM event_intervals;
+    "#,
+    )?;
+
+    #[rustfmt::skip]
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![interval!("2 hours 30 minutes"), temporal!("2024-01-15 10:30:00")?, 10.into(), 15.into()],
+            vec![interval!("45 minutes"), temporal!("2024-02-20 15:15:00")?, 15.into(), 20.into()],
+            vec![interval!("5 minutes"), temporal!("2024-03-10 09:20:00")?, 9.into(), 10.into()],
+            vec![interval!("6 hours"), temporal!("2024-04-06 04:00:00")?, 4.into(), 6.into()],
+            vec![interval!("30 seconds"), temporal!("2024-05-12 16:46:00")?, 16.into(), 12.into()],
+        ],
     );
 
     Ok(())

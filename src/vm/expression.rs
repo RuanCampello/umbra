@@ -1,9 +1,10 @@
 use super::{functions, math};
-use crate::core::date::DateParseError;
+use crate::core::date::interval::IntervalParseError;
+use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
-    BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+    ArithmeticPair, BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
 };
 use std::fmt::{Display, Formatter};
 use std::mem;
@@ -17,6 +18,7 @@ pub enum VmType {
     Number,
     Float,
     Date,
+    Interval,
 }
 
 #[derive(Debug, PartialEq)]
@@ -44,6 +46,8 @@ pub enum TypeError {
         expected: Vec<VmType>,
     },
     InvalidDate(DateParseError),
+    InvalidInterval(IntervalParseError),
+    ExtractError(ExtractError),
     UuidError(UuidError),
 }
 
@@ -108,7 +112,19 @@ pub(crate) fn resolve_expression<'exp>(
                 })
             };
 
-            if mem::discriminant(&left) != mem::discriminant(&right) {
+            let is_compatible = match operator {
+                BinaryOperator::Plus
+                | BinaryOperator::Minus
+                | BinaryOperator::Mul
+                | BinaryOperator::Div => left.as_arithmetic_pair(&right).is_some(),
+
+                // for comparisons and other operations, our custom `PartialEq` impl
+                // handles coercion and different types correctly. we don't need a strict
+                // discriminant check; we let the operation itself determine compatibility.
+                _ => true,
+            };
+
+            if !is_compatible {
                 return Err(mismatched_types());
             }
 
@@ -139,36 +155,47 @@ pub(crate) fn resolve_expression<'exp>(
                 }
 
                 arithmetic => {
-                    let (left_value, right_value) = left
+                    let pair = left
                         .as_arithmetic_pair(&right)
                         .ok_or_else(mismatched_types)?;
 
-                    if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
-                        // TODO: maybe we should do better here
-                        return Err(VmError::DivisionByZero(
-                            left_value as i128,
-                            right_value as i128,
-                        )
-                        .into());
-                    }
+                    match pair {
+                        ArithmeticPair::Numeric(left_value, right_value) => {
+                            if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
+                                // TODO: maybe we should do better here
+                                return Err(VmError::DivisionByZero(
+                                    left_value as i128,
+                                    right_value as i128,
+                                )
+                                .into());
+                            }
 
-                    let result = match arithmetic {
-                        BinaryOperator::Plus => left_value + right_value,
-                        BinaryOperator::Minus => left_value - right_value,
-                        BinaryOperator::Mul => left_value * right_value,
-                        BinaryOperator::Div => left_value / right_value,
-                        _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
-                    };
+                            let result = match arithmetic {
+                                BinaryOperator::Plus => left_value + right_value,
+                                BinaryOperator::Minus => left_value - right_value,
+                                BinaryOperator::Mul => left_value * right_value,
+                                BinaryOperator::Div => left_value / right_value,
+                                _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
+                            };
 
-                    match (left, right) {
-                        (Value::Number(_), Value::Number(_)) if result.fract().eq(&0.0) => {
-                            Value::Number(result as i128)
+                            if let (Value::Number(_), Value::Number(_)) = (&left, &right) {
+                                if result.fract() == 0.0 {
+                                    return Ok(Value::Number(result as i128));
+                                }
+                            }
+                            Value::Float(result)
                         }
-                        _ => Value::Float(result),
+
+                        ArithmeticPair::Temporal(temporal, interval) => match arithmetic {
+                            BinaryOperator::Plus => Value::Temporal(temporal + interval),
+                            BinaryOperator::Minus => Value::Temporal(temporal - interval),
+                            _ => unreachable!("not implemented this operation: {arithmetic}"),
+                        },
                     }
                 }
             })
         }
+
         Expression::Function { func, args } => match func {
             Function::Substring => {
                 let string: String = get_value(val, schema, &args[0])?;
@@ -182,6 +209,23 @@ pub(crate) fn resolve_expression<'exp>(
                     .map(|num| num as isize);
 
                 Ok(Value::String(functions::substring(&string, start, count)))
+            }
+            Function::Extract => {
+                let kind = get_value::<String>(val, schema, &args[0])?;
+                let kind = ExtractKind::try_from(kind).unwrap();
+
+                let extractable_value = resolve_expression(val, schema, &args[1])?;
+                let result = match extractable_value {
+                    Value::Temporal(temporal) => temporal.extract(kind)?,
+                    Value::Interval(interval) => interval.extract(kind)?,
+                    _ => {
+                        return Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
+                            expected: vec![VmType::Date, VmType::Interval],
+                        }))
+                    }
+                };
+
+                Ok(Value::Number(result as i128))
             }
             Function::Ascii => {
                 let string: String = get_value(val, schema, &args[0])?;
@@ -342,6 +386,7 @@ impl From<&Type> for VmType {
             Type::Boolean => VmType::Bool,
             Type::Varchar(_) | Type::Text => VmType::String,
             Type::Date | Type::DateTime | Type::Time => VmType::Date,
+            Type::Interval => VmType::Interval,
             float if float.is_float() => VmType::Float,
             number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
                 VmType::Number
@@ -380,7 +425,7 @@ impl Display for TypeError {
                 write!(f, "Cannot apply unary operator {operator:#?} to {value:#?}")
             }
             TypeError::ExpectedType { expected, found } => {
-                write!(f, "Expected {expected:#?} but found {found:#?}")
+                write!(f, "Expected {expected:#?} but found {found:?}")
             }
             TypeError::ExpectedOneOfTypes { expected } => {
                 write!(f, "Expected one of ")?;
@@ -395,8 +440,10 @@ impl Display for TypeError {
 
                 Ok(())
             }
+            TypeError::ExtractError(err) => err.fmt(f),
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
+            TypeError::InvalidInterval(err) => err.fmt(f),
         }
     }
 }
