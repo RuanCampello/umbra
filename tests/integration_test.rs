@@ -1713,20 +1713,6 @@ fn interval_operations() -> Result<()> {
         ]
     );
 
-    // let query = db.exec(
-    //     "SELECT event_id, event_time + INTERVAL '0.5 seconds' AS micro_time FROM events ORDER BY event_id;",
-    // )?;
-    // assert_eq!(
-    //     query.tuples,
-    //     vec![
-    //         vec![Value::Number(1), temporal!("23:59:59.5").unwrap()], // 23:59:59 + 0.5s
-    //         vec![Value::Number(2), temporal!("00:00:00.5").unwrap()], // 00:00:00 + 0.5s
-    //         vec![Value::Number(3), temporal!("12:30:45.5").unwrap()], // 12:30:45 + 0.5s
-    //         vec![Value::Number(4), temporal!("18:45:30.5").unwrap()], // 18:45:30 + 0.5s
-    //         vec![Value::Number(5), temporal!("13:15:20.5").unwrap()], // 13:15:20 + 0.5s
-    //     ]
-    // );
-
     let query = db.exec(
         "SELECT event_id, event_date + INTERVAL '13 months' AS next_year FROM events ORDER BY event_id;",
     )?;
