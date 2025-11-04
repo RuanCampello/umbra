@@ -1209,7 +1209,7 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 impl<File: PlanExecutor> Execute for HashJoin<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         if !self.hash_built {
-            let (left_key, right_key, r#type) = self.extract_join_keys()?;
+            let (_, right_key, r#type) = self.extract_join_keys()?;
 
             // iterate over the source
             while let Some(right) = self.right.try_next()? {
@@ -1220,9 +1220,57 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
                 self.table.entry(key).or_default().push(right);
             }
 
-            todo!()
+            self.hash_built = true;
         }
-        todo!()
+
+        loop {
+            // a: check if we're in the middle of processing matches for a left tuple
+            if let (Some(matches), Some(left_tuple)) = (&self.current_matches, &self.current_left) {
+                if self.index < matches.len() {
+                    let right = &matches[self.index];
+                    let mut tuple = left_tuple.clone();
+                    tuple.extend(right.clone());
+
+                    self.index += 1;
+
+                    return Ok(Some(tuple));
+                } else {
+                    // we have exhausted all matches for this left tuple
+                    self.current_left = None;
+                    self.current_matches = None;
+                    self.index = 0;
+                }
+            }
+
+            // b: handle left join for a left tuple that just finished and has no matches
+            if let Some(left) = self.current_left.take() {
+                if self.join_type.eq(&JoinType::Left) && self.index.eq(&0) {
+                    let mut tuple = left;
+                    tuple.extend(vec![Value::Null; self.right_schema.len()]);
+
+                    return Ok(Some(tuple));
+                }
+            }
+
+            // c: fetch new left tuple from probe side
+            let Some(left) = self.left.try_next()? else {
+                return Ok(None);
+            };
+
+            // d: probe hash table with the new tuple
+            let (left_key, _, r#type) = self.extract_join_keys()?;
+            let key = vm::expression::resolve_expression(&left, &self.left_schema, &left_key)?;
+
+            let key = tuple::serialize(&r#type.into(), &key);
+            self.current_left = Some(left);
+
+            match self.table.get(&key) {
+                Some(matches) => self.current_matches = Some(matches.clone()),
+                _ => self.current_matches = None,
+            }
+
+            self.index = 0;
+        }
     }
 }
 
