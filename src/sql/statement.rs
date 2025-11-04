@@ -144,6 +144,14 @@ pub(crate) enum OrderDirection {
     Desc,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum JoinType {
+    Left,
+    Right,
+    Inner,
+    Full,
+}
+
 /// Date/Time related types.
 ///
 /// This enum wraps actual values of date/time types, such as a specific calendar date or a time of day.

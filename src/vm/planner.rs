@@ -10,7 +10,9 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{join, Assignment, Expression, Function, OrderDirection, Value};
+use crate::sql::statement::{
+    join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
+};
 use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
@@ -183,6 +185,24 @@ pub(crate) struct Aggregate<File: FileOperations> {
     output_buffer: TupleBuffer,
     filled: bool,
     page_size: usize,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct HashJoin<File: FileOperations> {
+    pub left: Box<Planner<File>>,
+    pub right: Box<Planner<File>>,
+    pub condition: Expression,
+    pub join_type: JoinType,
+
+    hash_built: bool,
+
+    current_left: Option<Tuple>,
+    current_matches: Option<Vec<Tuple>>,
+
+    left_schema: Schema,
+    right_schema: Schema,
+
+    index: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1182,6 +1202,69 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 
         self.filled = true;
         Ok(self.output_buffer.pop_front())
+    }
+}
+
+impl<File: PlanExecutor> Execute for HashJoin<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if !self.hash_built {
+            while let Some(right) = self.right.try_next()? {
+                let (left_key, right_key, r#type) = self.extract_join_keys()?;
+                todo!()
+            }
+        }
+        todo!()
+    }
+}
+
+impl<File: FileOperations> HashJoin<File> {
+    fn extract_join_keys(
+        &self,
+    ) -> Result<(Expression, Expression, crate::vm::expression::VmType), DatabaseError> {
+        use crate::sql::analyzer::analyze_expression;
+        use crate::sql::statement::BinaryOperator;
+
+        // TODO: those errors will need to be transformed into panics because they mean something
+        // went wrong during the building phase
+
+        let Expression::BinaryOperation {
+            operator,
+            ref left,
+            ref right,
+        } = self.condition
+        else {
+            panic!("HashJoin requires a binary operation condition");
+        };
+
+        if operator != BinaryOperator::Eq {
+            panic!("HashJoin requires a equal operator");
+        }
+
+        let left = &**left;
+        let right = &**right;
+
+        let left_expr = analyze_expression(&self.left_schema, None, left).is_ok();
+        let right_expr = analyze_expression(&self.right_schema, None, right).is_ok();
+
+        // 1: the left and right expressions are in their respective schemas
+        if left_expr && right_expr {
+            let r#type = analyze_expression(&self.right_schema, None, left)?;
+            return Ok((left.clone(), right.clone(), r#type));
+        }
+
+        // 2: if `left` expression belongs to right schema and `right` to left_schema (swapped)
+        let left_expr_for_right = analyze_expression(&self.right_schema, None, left).is_ok();
+        let right_expr_for_left = analyze_expression(&self.left_schema, None, right).is_ok();
+
+        if left_expr_for_right && right_expr_for_left {
+            let r#type = analyze_expression(&self.right_schema, None, left)?;
+            return Ok((right.clone(), left.clone(), r#type));
+        }
+
+        Err(DatabaseError::Other(format!(
+            "Ambiguos or invalid JOIN condition for HashJoin: {}",
+            self.condition
+        )))
     }
 }
 

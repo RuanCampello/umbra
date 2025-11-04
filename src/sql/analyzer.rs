@@ -43,7 +43,7 @@ pub enum AlreadyExists {
 
 type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
-pub(in crate::sql) trait AnalyzeCtx {
+pub(crate) trait AnalyzeCtx {
     fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)>;
 }
 
@@ -349,7 +349,7 @@ impl<'s> AnalyzeCtx for AliasCtx<'s> {
     }
 }
 
-pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
+pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
     ctx: &Ctx,
     data_type: Option<&Type>,
     expr: &'exp Expression,
