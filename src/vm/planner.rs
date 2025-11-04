@@ -194,6 +194,7 @@ pub(crate) struct HashJoin<File: FileOperations> {
     pub condition: Expression,
     pub join_type: JoinType,
 
+    table: HashMap<Vec<u8>, Vec<Tuple>>,
     hash_built: bool,
 
     current_left: Option<Tuple>,
@@ -1208,10 +1209,18 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 impl<File: PlanExecutor> Execute for HashJoin<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         if !self.hash_built {
+            let (left_key, right_key, r#type) = self.extract_join_keys()?;
+
+            // iterate over the source
             while let Some(right) = self.right.try_next()? {
-                let (left_key, right_key, r#type) = self.extract_join_keys()?;
-                todo!()
+                let key =
+                    vm::expression::resolve_expression(&right, &self.right_schema, &right_key)?;
+
+                let key = tuple::serialize(&r#type.into(), &key);
+                self.table.entry(key).or_default().push(right);
             }
+
+            todo!()
         }
         todo!()
     }

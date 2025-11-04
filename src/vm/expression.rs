@@ -396,6 +396,19 @@ impl From<&Type> for VmType {
     }
 }
 
+impl From<VmType> for Type {
+    fn from(value: VmType) -> Self {
+        match value {
+            VmType::Bool => Self::Boolean,
+            VmType::String => Self::Text,
+            VmType::Number => Self::BigInteger,
+            VmType::Float => Self::DoublePrecision,
+            VmType::Date => Self::DateTime,
+            VmType::Interval => Self::Interval,
+        }
+    }
+}
+
 impl PartialEq for VmType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
