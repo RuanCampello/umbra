@@ -172,11 +172,12 @@ pub(in crate::sql) fn analyze<'s>(
         Statement::Select(Select {
             columns,
             from,
-            joins,
+            joins: _,
             order_by,
             group_by,
             r#where,
         }) => {
+            // TODO: analyze correcly the join clauses
             let metadata = ctx.metadata(from)?;
 
             let aliases: HashMap<String, &Expression> = columns

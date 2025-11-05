@@ -2023,6 +2023,7 @@ mod tests {
                 ],
                 from: "orders".into(),
                 r#where: None,
+                joins: vec![],
                 order_by: vec![],
                 group_by: vec![],
             })

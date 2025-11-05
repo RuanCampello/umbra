@@ -77,6 +77,16 @@ pub(crate) struct Select {
     // TODO: limit
 }
 
+#[derive(Debug, Default, PartialEq)]
+pub struct SelectBuilder {
+    columns: Vec<Expression>,
+    from: String,
+    joins: Vec<JoinClause>,
+    r#where: Option<Expression>,
+    order_by: Vec<OrderBy>,
+    group_by: Vec<Expression>,
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct Update {
     pub table: String,
@@ -133,20 +143,20 @@ pub enum Expression {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub(crate) struct OrderBy {
+pub struct OrderBy {
     pub expr: Expression,
     pub direction: OrderDirection,
 }
 
 #[derive(Debug, Default, PartialEq, PartialOrd, Clone, Copy)]
-pub(crate) enum OrderDirection {
+pub enum OrderDirection {
     #[default]
     Asc,
     Desc,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct JoinClause {
+pub struct JoinClause {
     table: String,
     on: Expression,
     join_type: JoinType,
@@ -969,6 +979,56 @@ define_function_mapping! {
     Coalesce => "COALESCE",
     Extract => "EXTRACT",
     UuidV4 => "UUIDV4",
+}
+
+impl SelectBuilder {
+    pub fn from(mut self, from: impl Into<String>) -> Self {
+        self.from = from.into();
+        self
+    }
+
+    pub fn select(mut self, expression: Expression) -> Self {
+        self.columns.push(expression);
+        self
+    }
+
+    pub fn columns(mut self, expressions: impl IntoIterator<Item = Expression>) -> Self {
+        self.columns.extend(expressions);
+        self
+    }
+
+    pub fn r#where(mut self, condition: Expression) -> Self {
+        self.r#where = Some(condition);
+        self
+    }
+
+    pub fn join(mut self, join: JoinClause) -> Self {
+        self.joins.push(join);
+        self
+    }
+
+    pub fn group_by(mut self, expression: Expression) -> Self {
+        self.group_by.push(expression);
+        self
+    }
+
+    pub fn order_by(mut self, order_expr: OrderBy) -> Self {
+        self.order_by.push(order_expr);
+        self
+    }
+}
+
+impl From<SelectBuilder> for Select {
+    fn from(value: SelectBuilder) -> Self {
+        Self {
+            columns: value.columns,
+            joins: value.joins,
+            from: value.from,
+            r#where: value.r#where,
+            order_by: value.order_by,
+            group_by: value.group_by,
+        }
+    }
 }
 
 impl From<Function> for Keyword {
