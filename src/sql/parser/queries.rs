@@ -40,6 +40,7 @@ impl<'sql> Sql<'sql> for Select {
         Ok(Select {
             columns,
             from,
+            joins: vec![],
             r#where,
             order_by,
             group_by,

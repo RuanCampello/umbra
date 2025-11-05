@@ -69,7 +69,8 @@ pub(crate) enum Create {
 #[derive(Debug, PartialEq)]
 pub(crate) struct Select {
     pub columns: Vec<Expression>,
-    pub from: FromClause,
+    pub from: String,
+    pub joins: Vec<JoinClause>,
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
@@ -145,14 +146,10 @@ pub(crate) enum OrderDirection {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum FromClause {
-    Table(String),
-    Join {
-        left: Box<Self>,
-        right: Box<Self>,
-        on: Expression,
-        join_type: JoinType,
-    },
+pub(crate) struct JoinClause {
+    table: String,
+    on: Expression,
+    join_type: JoinType,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -502,6 +499,7 @@ impl Display for Statement {
                 columns,
                 from,
                 r#where,
+                joins,
                 order_by,
                 group_by,
             }) => {
@@ -1049,22 +1047,6 @@ impl From<Expression> for OrderBy {
         Self {
             expr,
             direction: Default::default(),
-        }
-    }
-}
-
-impl Display for FromClause {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Table(table) => f.write_str(table),
-            Self::Join {
-                left,
-                right,
-                on,
-                join_type,
-            } => {
-                write!(f, "{} {} JOIN {} ON {}", left, join_type, right, on)
-            }
         }
     }
 }

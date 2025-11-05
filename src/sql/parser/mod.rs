@@ -879,6 +879,7 @@ mod tests {
                         "Agatha Christie".to_string()
                     ))),
                 }),
+                joins: vec![],
                 order_by: vec![],
                 group_by: vec![],
             }))
@@ -896,6 +897,7 @@ mod tests {
                 columns: vec![Expression::Wildcard],
                 from: "users".to_string(),
                 r#where: None,
+                joins: vec![],
                 order_by: vec![],
                 group_by: vec![],
             }))
@@ -1477,6 +1479,7 @@ mod tests {
             Statement::Select(Select {
                 order_by: vec![],
                 group_by: vec![],
+                joins: vec![],
                 from: "customer".into(),
                 columns: vec![
                     Expression::Identifier("name".into()),
