@@ -1,5 +1,5 @@
 use crate::sql::statement::{
-    Create, Delete, Drop, Insert, OrderBy, OrderDirection, Select, SelectBuilder, Update,
+    Create, Delete, Drop, Insert, OrderBy, OrderDirection, Select, Update,
 };
 
 use super::{

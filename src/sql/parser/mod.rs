@@ -1645,14 +1645,15 @@ mod tests {
             statement.unwrap(),
             Statement::Select(
                 Select::builder()
-                    .from("numbers")
-                    .select(Expression::Function {
-                        func: Function::Power,
-                        args: vec![
-                            Expression::Identifier("base".into()),
-                            Expression::Identifier("exponent".into())
-                        ],
-                    })
+                    .from("sales")
+                    .columns(vec![
+                        Expression::Identifier("id".into()),
+                        Expression::Function {
+                            func: Function::Sum,
+                            args: vec![Expression::Identifier("price".into())],
+                        }
+                    ])
+                    .group_by(Expression::Identifier("id".into()))
                     .into()
             )
         );
