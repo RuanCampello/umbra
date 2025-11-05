@@ -50,6 +50,8 @@ pub(crate) enum Planner<File: FileOperations> {
     SortKeys(SortKeys<File>),
     /// Used for aggregate functions like `COUNT` or `AVG`.
     Aggregate(Aggregate<File>),
+    /// Used for `JOIN`s with an equal `ON` condition.
+    HashJoin(HashJoin<File>),
     Project(Project<File>),
     Collect(Collect<File>),
     /// Handles literal values from INSERT statements.
@@ -304,6 +306,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::SortKeys(keys) => keys.try_next(),
             Self::Project(projection) => projection.try_next(),
             Self::Aggregate(aggr) => aggr.try_next(),
+            Self::HashJoin(hash) => hash.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
@@ -345,6 +348,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Collect(collection) => format!("{collection}"),
             Self::Values(values) => format!("{values}"),
             Self::Aggregate(aggr) => format!("{aggr}"),
+            Self::HashJoin(hash) => format!("{hash}"),
         };
 
         format!("{prefix}{display}")
@@ -1259,14 +1263,19 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 
             // d: probe hash table with the new tuple
             let (left_key, _, r#type) = self.extract_join_keys()?;
-            let key = vm::expression::resolve_expression(&left, &self.left_schema, &left_key)?;
+            let key_value =
+                vm::expression::resolve_expression(&left, &self.left_schema, &left_key)?;
 
-            let key = tuple::serialize(&r#type.into(), &key);
+            let key = tuple::serialize(&r#type.into(), &key_value);
             self.current_left = Some(left);
 
-            match self.table.get(&key) {
-                Some(matches) => self.current_matches = Some(matches.clone()),
-                _ => self.current_matches = None,
+            if key_value.is_null() {
+                self.current_matches = None;
+            } else {
+                match self.table.get(&key) {
+                    Some(matches) => self.current_matches = Some(matches.clone()),
+                    _ => self.current_matches = None,
+                }
             }
 
             self.index = 0;
@@ -1922,6 +1931,16 @@ impl<File: FileOperations> Display for Collect<File> {
 impl<File: FileOperations> Display for Aggregate<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Aggregate on {}", join(&self.group_by, ", "))
+    }
+}
+
+impl<File: FileOperations> Display for HashJoin<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "HashJoin on {} to {} with {:?}",
+            self.left, self.right, self.join_type
+        )
     }
 }
 
