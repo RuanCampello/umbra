@@ -846,16 +846,15 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select(Select {
-                columns: vec![
-                    Expression::Identifier("id".to_string()),
-                    Expression::Identifier("price".to_string())
-                ],
-                from: "bills".to_string(),
-                r#where: None,
-                order_by: vec![],
-                group_by: vec![],
-            }))
+            Ok(Statement::Select(
+                Select::builder()
+                    .from("bills")
+                    .columns(vec![
+                        Expression::Identifier("id".to_string()),
+                        Expression::Identifier("price".to_string())
+                    ])
+                    .into()
+            ))
         );
     }
 
@@ -1107,13 +1106,12 @@ mod tests {
                         },
                     ],
                 }),
-                Statement::Select(Select {
-                    columns: vec![Expression::Wildcard],
-                    from: "employees".to_string(),
-                    r#where: None,
-                    order_by: vec![],
-                    group_by: vec![],
-                })
+                Statement::Select(
+                    Select::builder()
+                        .from("employees")
+                        .select(Expression::Wildcard)
+                        .into()
+                )
             ]
         );
 
@@ -1129,17 +1127,17 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select(Select {
-                columns: vec![Expression::Wildcard],
-                from: "schedule".to_string(),
-                r#where: Some(Expression::BinaryOperation {
-                    operator: BinaryOperator::Lt,
-                    left: Box::new(Expression::Identifier("start_time".to_string())),
-                    right: Box::new(Expression::Value(Value::String("12:00:00".into()))),
-                }),
-                order_by: vec![],
-                group_by: vec![],
-            }))
+            Ok(Statement::Select(
+                Select::builder()
+                    .from("schedule")
+                    .select(Expression::Wildcard)
+                    .r#where(Expression::BinaryOperation {
+                        operator: BinaryOperator::Lt,
+                        left: Box::new(Expression::Identifier("start_time".to_string())),
+                        right: Box::new(Expression::Value(Value::String("12:00:00".into()))),
+                    })
+                    .into()
+            ))
         );
     }
 
@@ -1424,36 +1422,36 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                from: "film".to_string(),
-                order_by: vec![],
-                group_by: vec![],
-                columns: vec![
-                    Expression::Identifier("film_id".into()),
-                    Expression::Identifier("title".into())
-                ],
-                r#where: Some(Expression::BinaryOperation {
-                    operator: BinaryOperator::Or,
-                    left: Box::new(Expression::BinaryOperation {
+            Statement::Select(
+                Select::builder()
+                    .from("film")
+                    .columns(vec![
+                        Expression::Identifier("film_id".into()),
+                        Expression::Identifier("title".into())
+                    ])
+                    .r#where(Expression::BinaryOperation {
                         operator: BinaryOperator::Or,
                         left: Box::new(Expression::BinaryOperation {
-                            operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("film_id".to_string())),
-                            right: Box::new(Expression::Value(Value::Number(1))),
+                            operator: BinaryOperator::Or,
+                            left: Box::new(Expression::BinaryOperation {
+                                operator: BinaryOperator::Eq,
+                                left: Box::new(Expression::Identifier("film_id".to_string())),
+                                right: Box::new(Expression::Value(Value::Number(1))),
+                            }),
+                            right: Box::new(Expression::BinaryOperation {
+                                operator: BinaryOperator::Eq,
+                                left: Box::new(Expression::Identifier("film_id".to_string())),
+                                right: Box::new(Expression::Value(Value::Number(2))),
+                            }),
                         }),
                         right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
                             left: Box::new(Expression::Identifier("film_id".to_string())),
-                            right: Box::new(Expression::Value(Value::Number(2))),
+                            right: Box::new(Expression::Value(Value::Number(3))),
                         }),
-                    }),
-                    right: Box::new(Expression::BinaryOperation {
-                        operator: BinaryOperator::Eq,
-                        left: Box::new(Expression::Identifier("film_id".to_string())),
-                        right: Box::new(Expression::Value(Value::Number(3))),
-                    }),
-                }),
-            })
+                    })
+                    .into()
+            )
         );
     }
 
@@ -1476,21 +1474,20 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                order_by: vec![],
-                group_by: vec![],
-                joins: vec![],
-                from: "customer".into(),
-                columns: vec![
-                    Expression::Identifier("name".into()),
-                    Expression::Identifier("last_name".into())
-                ],
-                r#where: Some(Expression::BinaryOperation {
-                    operator: BinaryOperator::Like,
-                    left: Box::new(Expression::Identifier("name".into())),
-                    right: Box::new(Expression::Value(Value::String("Jen%".into())))
-                })
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("customer")
+                    .columns(vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Identifier("last_name".into())
+                    ])
+                    .r#where(Expression::BinaryOperation {
+                        operator: BinaryOperator::Like,
+                        left: Box::new(Expression::Identifier("name".into())),
+                        right: Box::new(Expression::Value(Value::String("Jen%".into())))
+                    })
+                    .into()
+            )
         )
     }
 
@@ -1518,20 +1515,19 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Substring,
-                    args: vec![
-                        Expression::Identifier("name".into()),
-                        Expression::Value(Value::Number(1)),
-                        Expression::Value(Value::Number(8)),
-                    ]
-                }],
-                from: "users".into(),
-                order_by: vec![],
-                group_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .select(Expression::Function {
+                        func: Function::Substring,
+                        args: vec![
+                            Expression::Identifier("name".into()),
+                            Expression::Value(Value::Number(1)),
+                            Expression::Value(Value::Number(8)),
+                        ]
+                    })
+                    .into()
+            )
         )
     }
 
@@ -1542,19 +1538,19 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Identifier("name".into())],
-                from: "users".into(),
-                r#where: None,
-                order_by: vec![OrderBy {
-                    expr: Expression::Function {
-                        func: Function::Ascii,
-                        args: vec![Expression::Identifier("name".into())]
-                    },
-                    direction: Default::default(),
-                }],
-                group_by: vec![],
-            })
+            Statement::Select(
+                Select::builder()
+                    .select(Expression::Identifier("name".into()))
+                    .order_by(OrderBy {
+                        expr: Expression::Function {
+                            func: Function::Ascii,
+                            args: vec![Expression::Identifier("name".into())]
+                        },
+                        direction: Default::default(),
+                    })
+                    .from("users")
+                    .into()
+            )
         )
     }
 
@@ -1565,19 +1561,18 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Concat,
-                    args: vec![
-                        Expression::Identifier("name".into()),
-                        Expression::Identifier("middle_name".into()),
-                    ]
-                }],
-                from: "users".into(),
-                order_by: vec![],
-                group_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .select(Expression::Function {
+                        func: Function::Concat,
+                        args: vec![
+                            Expression::Identifier("name".into()),
+                            Expression::Identifier("middle_name".into()),
+                        ]
+                    })
+                    .into()
+            )
         )
     }
 
@@ -1588,19 +1583,18 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Position,
-                    args: vec![
-                        Expression::Value(Value::String("fateful".into())),
-                        Expression::Identifier("description".into()),
-                    ]
-                }],
-                from: "films".into(),
-                order_by: vec![],
-                group_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("films")
+                    .select(Expression::Function {
+                        func: Function::Position,
+                        args: vec![
+                            Expression::Value(Value::String("fateful".into())),
+                            Expression::Identifier("description".into()),
+                        ]
+                    })
+                    .into()
+            )
         )
     }
 
@@ -1611,16 +1605,15 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Count,
-                    args: vec![Expression::Wildcard]
-                }],
-                from: "payments".into(),
-                order_by: vec![],
-                group_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("payments")
+                    .select(Expression::Function {
+                        func: Function::Count,
+                        args: vec![Expression::Wildcard]
+                    })
+                    .into()
+            )
         )
     }
 
@@ -1631,16 +1624,15 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Avg,
-                    args: vec![Expression::Identifier("price".into())]
-                }],
-                from: "products".into(),
-                order_by: vec![],
-                group_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .columns(vec![Expression::Function {
+                        func: Function::Avg,
+                        args: vec![Expression::Identifier("price".into())]
+                    }])
+                    .from("products")
+                    .into(),
+            )
         )
     }
 
@@ -1651,20 +1643,19 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![
-                    Expression::Identifier("id".into()),
-                    Expression::Function {
-                        func: Function::Sum,
-                        args: vec![Expression::Identifier("price".into())]
-                    }
-                ],
-                from: "sales".into(),
-                group_by: vec![Expression::Identifier("id".into())],
-                order_by: vec![],
-                r#where: None,
-            })
-        )
+            Statement::Select(
+                Select::builder()
+                    .from("numbers")
+                    .select(Expression::Function {
+                        func: Function::Power,
+                        args: vec![
+                            Expression::Identifier("base".into()),
+                            Expression::Identifier("exponent".into())
+                        ],
+                    })
+                    .into()
+            )
+        );
     }
 
     #[test]
@@ -1674,19 +1665,18 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![
-                    Expression::Identifier("name".into()),
-                    Expression::Function {
-                        func: Function::TypeOf,
-                        args: vec![Expression::Identifier("id".into())]
-                    }
-                ],
-                from: "users".into(),
-                group_by: vec![],
-                order_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .columns(vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Function {
+                            func: Function::TypeOf,
+                            args: vec![Expression::Identifier("id".into())]
+                        }
+                    ])
+                    .into()
+            )
         )
     }
 
@@ -1697,16 +1687,15 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Abs,
-                    args: vec![Expression::Identifier("amount".into())],
-                }],
-                from: "payments".into(),
-                group_by: vec![],
-                order_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("payments")
+                    .select(Expression::Function {
+                        func: Function::Abs,
+                        args: vec![Expression::Identifier("amount".into())],
+                    })
+                    .into()
+            )
         );
     }
 
@@ -1717,19 +1706,18 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Power,
-                    args: vec![
-                        Expression::Identifier("base".into()),
-                        Expression::Identifier("exponent".into())
-                    ],
-                }],
-                from: "numbers".into(),
-                group_by: vec![],
-                order_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("numbers")
+                    .select(Expression::Function {
+                        func: Function::Power,
+                        args: vec![
+                            Expression::Identifier("base".into()),
+                            Expression::Identifier("exponent".into())
+                        ],
+                    })
+                    .into()
+            )
         );
     }
 
@@ -1737,19 +1725,17 @@ mod tests {
     fn test_trunc_func() {
         let sql = "SELECT TRUNC(amount) FROM payments;";
         let statement = Parser::new(sql).parse_statement();
-
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Trunc,
-                    args: vec![Expression::Identifier("amount".into())],
-                }],
-                from: "payments".into(),
-                group_by: vec![],
-                order_by: vec![],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("payments")
+                    .select(Expression::Function {
+                        func: Function::Trunc,
+                        args: vec![Expression::Identifier("amount".into())],
+                    })
+                    .into()
+            )
         );
 
         let sql = "SELECT TRUNC(amount, 4) FROM payments WHERE customer_id > 10;";
@@ -1757,23 +1743,23 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Trunc,
-                    args: vec![
-                        Expression::Identifier("amount".into()),
-                        Expression::Value(4i128.into())
-                    ],
-                }],
-                from: "payments".into(),
-                order_by: vec![],
-                group_by: vec![],
-                r#where: Some(Expression::BinaryOperation {
-                    operator: BinaryOperator::Gt,
-                    left: Box::new(Expression::Identifier("customer_id".into())),
-                    right: Box::new(Expression::Value(10i128.into()))
-                }),
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("payments")
+                    .select(Expression::Function {
+                        func: Function::Trunc,
+                        args: vec![
+                            Expression::Identifier("amount".into()),
+                            Expression::Value(4i128.into())
+                        ],
+                    })
+                    .r#where(Expression::BinaryOperation {
+                        operator: BinaryOperator::Gt,
+                        left: Box::new(Expression::Identifier("customer_id".into())),
+                        right: Box::new(Expression::Value(10i128.into()))
+                    })
+                    .into()
+            )
         )
     }
 
@@ -1784,23 +1770,23 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Concat,
-                    args: vec![
-                        Expression::Identifier("first_name".into()),
-                        Expression::Value(Value::String(" ".into())),
-                        Expression::Identifier("last_name".into()),
-                    ]
-                }],
-                from: "users".into(),
-                group_by: vec![],
-                order_by: vec![OrderBy {
-                    direction: OrderDirection::Desc,
-                    expr: Expression::Identifier("last_name".into())
-                }],
-                r#where: None,
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .select(Expression::Function {
+                        func: Function::Concat,
+                        args: vec![
+                            Expression::Identifier("first_name".into()),
+                            Expression::Value(Value::String(" ".into())),
+                            Expression::Identifier("last_name".into()),
+                        ]
+                    })
+                    .order_by(OrderBy {
+                        direction: OrderDirection::Desc,
+                        expr: Expression::Identifier("last_name".into())
+                    })
+                    .into()
+            )
         )
     }
 
@@ -1811,26 +1797,25 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![
-                    Expression::Alias {
-                        expr: Box::new(Expression::BinaryOperation {
-                            operator: BinaryOperator::Plus,
-                            left: Box::new(Expression::Identifier("salary".into())),
-                            right: Box::new(Expression::Identifier("bonus".into()))
-                        }),
-                        alias: "total".into()
-                    },
-                    Expression::Alias {
-                        expr: Box::new(Expression::Identifier("name".into())),
-                        alias: "employee_name".into()
-                    }
-                ],
-                from: "employees".into(),
-                r#where: None,
-                order_by: vec![],
-                group_by: vec![],
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("employees")
+                    .columns(vec![
+                        Expression::Alias {
+                            expr: Box::new(Expression::BinaryOperation {
+                                operator: BinaryOperator::Plus,
+                                left: Box::new(Expression::Identifier("salary".into())),
+                                right: Box::new(Expression::Identifier("bonus".into()))
+                            }),
+                            alias: "total".into()
+                        },
+                        Expression::Alias {
+                            expr: Box::new(Expression::Identifier("name".into())),
+                            alias: "employee_name".into()
+                        }
+                    ])
+                    .into()
+            )
         )
     }
 
@@ -1841,30 +1826,31 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Alias {
-                    expr: Box::new(Expression::BinaryOperation {
-                        operator: BinaryOperator::Plus,
-                        left: Box::new(Expression::Nested(Box::new(Expression::BinaryOperation {
-                            operator: BinaryOperator::Mul,
-                            left: Box::new(Expression::Identifier("salary".into())),
-                            right: Box::new(Expression::Value(Value::Number(2)))
-                        }))),
-                        right: Box::new(Expression::Nested(Box::new(
-                            Expression::BinaryOperation {
-                                operator: BinaryOperator::Div,
-                                left: Box::new(Expression::Identifier("bonus".into())),
-                                right: Box::new(Expression::Value(Value::Number(2)))
-                            }
-                        )))
-                    }),
-                    alias: "value".into()
-                }],
-                from: "employees".into(),
-                r#where: None,
-                order_by: vec![],
-                group_by: vec![],
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("employees")
+                    .select(Expression::Alias {
+                        expr: Box::new(Expression::BinaryOperation {
+                            operator: BinaryOperator::Plus,
+                            left: Box::new(Expression::Nested(Box::new(
+                                Expression::BinaryOperation {
+                                    operator: BinaryOperator::Mul,
+                                    left: Box::new(Expression::Identifier("salary".into())),
+                                    right: Box::new(Expression::Value(Value::Number(2)))
+                                }
+                            ))),
+                            right: Box::new(Expression::Nested(Box::new(
+                                Expression::BinaryOperation {
+                                    operator: BinaryOperator::Div,
+                                    left: Box::new(Expression::Identifier("bonus".into())),
+                                    right: Box::new(Expression::Value(Value::Number(2)))
+                                }
+                            )))
+                        }),
+                        alias: "value".into()
+                    })
+                    .into()
+            )
         );
     }
 
@@ -1875,22 +1861,20 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Alias {
-                    alias: "user_count".into(),
-                    expr: Box::new(Expression::Function {
-                        func: Function::Count,
-                        args: vec![Expression::Wildcard]
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .select(Expression::Alias {
+                        alias: "user_count".into(),
+                        expr: Box::new(Expression::Function {
+                            func: Function::Count,
+                            args: vec![Expression::Wildcard]
+                        })
                     })
-                }],
-                from: "users".into(),
-                r#where: None,
-                order_by: vec![],
-                group_by: vec![],
-            })
+                    .into()
+            )
         )
     }
-
     #[test]
     fn test_text_column() {
         let sql = "CREATE TABLE notes (id SERIAL PRIMARY KEY, content TEXT, created_at TIMESTAMP);";
@@ -1934,16 +1918,16 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Wildcard],
-                from: "customer".into(),
-                r#where: Some(Expression::IsNull {
-                    expr: Box::new(Expression::Identifier("email".into())),
-                    negated: true
-                }),
-                order_by: vec![],
-                group_by: vec![],
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("customer")
+                    .select(Expression::Wildcard)
+                    .r#where(Expression::IsNull {
+                        expr: Box::new(Expression::Identifier("email".into())),
+                        negated: true
+                    })
+                    .into()
+            )
         );
 
         let sql = "SELECT * FROM customer WHERE email IS NULL;";
@@ -1951,16 +1935,16 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Wildcard],
-                from: "customer".into(),
-                r#where: Some(Expression::IsNull {
-                    expr: Box::new(Expression::Identifier("email".into())),
-                    negated: false
-                }),
-                order_by: vec![],
-                group_by: vec![],
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("customer")
+                    .select(Expression::Wildcard)
+                    .r#where(Expression::IsNull {
+                        expr: Box::new(Expression::Identifier("email".into())),
+                        negated: false
+                    })
+                    .into()
+            ),
         )
     }
 
@@ -1971,19 +1955,18 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![Expression::Function {
-                    func: Function::Extract,
-                    args: vec![
-                        Expression::Value("QUARTER".into()),
-                        Expression::Identifier("joined".into())
-                    ],
-                }],
-                from: "employees".into(),
-                r#where: None,
-                order_by: vec![],
-                group_by: vec![]
-            })
+            Statement::Select(
+                Select::builder()
+                    .columns(vec![Expression::Function {
+                        func: Function::Extract,
+                        args: vec![
+                            Expression::Value("QUARTER".into()),
+                            Expression::Identifier("joined".into())
+                        ],
+                    }])
+                    .from("employees")
+                    .into()
+            ),
         );
 
         let sql = "SELECT EXTRACT(SOMETHING FROM joined) FROM employees;";
@@ -2007,26 +1990,24 @@ mod tests {
 
         assert_eq!(
             statement.unwrap(),
-            Statement::Select(Select {
-                columns: vec![
-                    Expression::Identifier("order_date".into()),
-                    Expression::Alias {
-                        alias: "due_date".into(),
-                        expr: Box::new(Expression::BinaryOperation {
-                            operator: BinaryOperator::Plus,
-                            left: Box::new(Expression::Identifier("order_date".into())),
-                            right: Box::new(Expression::Value(Value::Interval(
-                                Interval::from_days(30)
-                            )))
-                        })
-                    }
-                ],
-                from: "orders".into(),
-                r#where: None,
-                joins: vec![],
-                order_by: vec![],
-                group_by: vec![],
-            })
+            Statement::Select(
+                Select::builder()
+                    .from("orders")
+                    .columns(vec![
+                        Expression::Identifier("order_date".into()),
+                        Expression::Alias {
+                            alias: "due_date".into(),
+                            expr: Box::new(Expression::BinaryOperation {
+                                operator: BinaryOperator::Plus,
+                                left: Box::new(Expression::Identifier("order_date".into())),
+                                right: Box::new(Expression::Value(Value::Interval(
+                                    Interval::from_days(30)
+                                )))
+                            })
+                        }
+                    ])
+                    .into()
+            )
         )
     }
 }

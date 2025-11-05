@@ -1031,6 +1031,12 @@ impl From<SelectBuilder> for Select {
     }
 }
 
+impl Select {
+    pub fn builder() -> SelectBuilder {
+        SelectBuilder::default()
+    }
+}
+
 impl From<Function> for Keyword {
     fn from(value: Function) -> Self {
         match value {
