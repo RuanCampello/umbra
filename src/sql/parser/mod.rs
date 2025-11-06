@@ -2098,4 +2098,37 @@ mod tests {
             )
         )
     }
+
+    #[test]
+    fn test_join_with_where() {
+        let sql = "SELECT name, title FROM users JOIN posts ON user_id = post_user_id WHERE active = true;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .columns(vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Identifier("title".into()),
+                    ])
+                    .join(JoinClause {
+                        table: "posts".into(),
+                        join_type: JoinType::Inner,
+                        on: Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("user_id".into())),
+                            right: Box::new(Expression::Identifier("post_user_id".into())),
+                        }
+                    })
+                    .r#where(Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(Expression::Identifier("active".into())),
+                        right: Box::new(Expression::Value(Value::Boolean(true))),
+                    })
+                    .into()
+            )
+        )
+    }
 }
