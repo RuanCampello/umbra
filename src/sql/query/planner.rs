@@ -1286,9 +1286,7 @@ mod tests {
         let orders_table = db.tables["orders"].clone();
 
         let mut schema = db.tables["users"].schema.clone();
-        for col in orders_table.schema.columns.clone() {
-            schema.push(col);
-        }
+        schema.extend(orders_table.schema.columns.clone());
 
         assert_eq!(
             db.gen_plan("SELECT name, order_id FROM users JOIN orders ON id = user_id;")?,

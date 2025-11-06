@@ -183,9 +183,7 @@ pub(in crate::sql) fn analyze<'s>(
 
             for join in joins {
                 let join_metadata = ctx.metadata(&join.table)?;
-                for col in join_metadata.schema.columns.clone() {
-                    schema.push(col);
-                }
+                schema.extend(join_metadata.schema.columns.clone());
             }
 
             let aliases: HashMap<String, &Expression> = columns

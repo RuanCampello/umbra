@@ -39,6 +39,12 @@ impl Schema {
         self.columns.push(col);
     }
 
+    pub fn extend(&mut self, columns: impl IntoIterator<Item = Column>) {
+        for col in columns {
+            self.push(col)
+        }
+    }
+
     pub fn index_of(&self, col: &str) -> Option<usize> {
         self.index.get(col).copied()
     }
