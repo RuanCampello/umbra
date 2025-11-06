@@ -17,8 +17,8 @@ use crate::core::date::{
     ExtractKind, NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse,
 };
 use crate::sql::statement::{
-    Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, Statement,
-    Type, UnaryOperator, Value,
+    Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, JoinClause,
+    JoinType, Statement, Type, UnaryOperator, Value,
 };
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -398,6 +398,27 @@ impl<'input> Parser<'input> {
         let value = self.parse_expr(None)?;
 
         Ok(Assignment { identifier, value })
+    }
+
+    fn parse_join(&mut self) -> ParserResult<Option<JoinClause>> {
+        let join_type: Option<JoinType> = self
+            .consume_one(&[Keyword::Inner, Keyword::Full, Keyword::Left, Keyword::Right])
+            .into();
+
+        let Some(join_type) = join_type else {
+            return Ok(None);
+        };
+
+        let table = self.parse_ident()?;
+
+        self.expect_keyword(Keyword::On)?;
+        let on = self.parse_expr(None)?;
+
+        Ok(Some(JoinClause {
+            join_type,
+            table,
+            on,
+        }))
     }
 
     /// Operator's precedence from the [PostgreSQL documentation](https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-PRECEDENCE)

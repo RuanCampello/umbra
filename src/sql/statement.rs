@@ -157,9 +157,9 @@ pub enum OrderDirection {
 
 #[derive(Debug, PartialEq)]
 pub struct JoinClause {
-    table: String,
-    on: Expression,
-    join_type: JoinType,
+    pub table: String,
+    pub on: Expression,
+    pub join_type: JoinType,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -1058,6 +1058,18 @@ impl From<Function> for Keyword {
             Function::Coalesce => Self::Coalesce,
             Function::Extract => Self::Extract,
             Function::UuidV4 => unimplemented!(),
+        }
+    }
+}
+
+impl From<Keyword> for Option<JoinType> {
+    fn from(value: Keyword) -> Self {
+        match value {
+            Keyword::Left => Some(JoinType::Left),
+            Keyword::Right => Some(JoinType::Right),
+            Keyword::Inner => Some(JoinType::Inner),
+            Keyword::Full => Some(JoinType::Full),
+            _ => None,
         }
     }
 }

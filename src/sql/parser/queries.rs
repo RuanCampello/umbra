@@ -24,7 +24,17 @@ impl<'sql> Sql<'sql> for Select {
         )?;
 
         parser.expect_keyword(Keyword::From)?;
-        let (from, r#where) = parser.parse_from_and_where()?;
+        let from = parser.parse_ident()?;
+
+        let mut joins = Vec::new();
+        while let Some(clause) = parser.parse_join()? {
+            joins.push(clause)
+        }
+
+        let r#where = match parser.consume_optional(Token::Keyword(Keyword::Where)) {
+            true => Some(parser.parse_expr(None)?),
+            false => None,
+        };
 
         let group_by = parser.parse_by_separated_keyword(Keyword::Group, |p| p.parse_expr(None))?;
         let order_by = parser.parse_by_separated_keyword(Keyword::Order, |p| {
