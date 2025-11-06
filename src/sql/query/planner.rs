@@ -481,7 +481,7 @@ fn resolve_order_index<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::sql::statement::Function;
+    use crate::sql::statement::{Function, JoinType};
     use std::{cell::RefCell, collections::HashMap, ops::Bound, path::PathBuf};
 
     use super::*;
@@ -1268,6 +1268,55 @@ mod tests {
                 .into()
             )
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_join() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));",
+            "CREATE TABLE orders (order_id SERIAL PRIMARY KEY, user_id INT, item VARCHAR(50));",
+        ])?;
+
+        let users_table = db.tables["users"].clone();
+        let orders_table = db.tables["orders"].clone();
+
+        let mut schema = db.tables["users"].schema.clone();
+        schema.columns.extend(orders_table.schema.columns.clone());
+
+        println!(
+            "{:#?}",
+            db.gen_plan("SELECT * FROM users JOIN orders ON id = user_id;")?
+        );
+
+        assert_eq!(
+            db.gen_plan("SELECT name, order_id FROM users JOIN orders ON id = user_id;")?,
+            Planner::Project(Project {
+                input: schema.clone(),
+                output: schema,
+                projection: vec![
+                    Expression::Identifier("name".into()),
+                    Expression::Identifier("order_id".into()),
+                ],
+                source: Box::new(Planner::HashJoin(HashJoin::new(
+                    Planner::SeqScan(SeqScan {
+                        table: users_table.clone(),
+                        pager: db.pager(),
+                        cursor: Cursor::new(users_table.root, 0),
+                    }),
+                    Planner::SeqScan(SeqScan {
+                        table: orders_table.clone(),
+                        pager: db.pager(),
+                        cursor: Cursor::new(orders_table.root, 0),
+                    }),
+                    orders_table.schema,
+                    users_table.schema,
+                    JoinType::Inner,
+                    parse_expr("id = user_id"),
+                ))),
+            })
+        );
+
         Ok(())
     }
 }
