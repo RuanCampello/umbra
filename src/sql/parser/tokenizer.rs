@@ -451,16 +451,3 @@ mod tests {
         )
     }
 }
-
-#[cfg(test)]
-mod test_qualified {
-    use super::*;
-    
-    #[test]
-    fn test_qualified_ident() {
-        let input = "users.id";
-        let tokenizer = Tokenizer::new(input);
-        let tokens: Vec<_> = tokenizer.into_iter().map(|t| t.unwrap().token).collect();
-        eprintln!("Tokens: {:?}", tokens);
-    }
-}
