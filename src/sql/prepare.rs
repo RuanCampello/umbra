@@ -34,11 +34,11 @@ use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 /// ```
 pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
-        Statement::Select(Select { columns, from, .. })
+        Statement::Select(Select { columns, from, joins, .. })
             if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) =>
         {
             let metadata = ctx.metadata(from)?;
-            let identifiers: Vec<Expression> = metadata
+            let mut identifiers: Vec<Expression> = metadata
                 .schema
                 .columns
                 .iter()
@@ -46,6 +46,20 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 .cloned()
                 .map(|col| Expression::Identifier(col.name))
                 .collect();
+
+            // Include columns from joined tables
+            for join_clause in joins.iter() {
+                let join_metadata = ctx.metadata(&join_clause.table)?;
+                identifiers.extend(
+                    join_metadata
+                        .schema
+                        .columns
+                        .iter()
+                        .filter(|&col| col.name.ne(&ROW_COL_ID))
+                        .cloned()
+                        .map(|col| Expression::Identifier(col.name))
+                );
+            }
 
             let mut wildcards = Vec::new();
 

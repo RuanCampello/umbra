@@ -172,13 +172,22 @@ pub(in crate::sql) fn analyze<'s>(
         Statement::Select(Select {
             columns,
             from,
-            joins: _,
+            joins,
             order_by,
             group_by,
             r#where,
         }) => {
-            // TODO: analyze correcly the join clauses
-            let metadata = ctx.metadata(from)?;
+            // Build combined schema for joins
+            let from_metadata = ctx.metadata(from)?;
+            let mut combined_schema = from_metadata.schema.clone();
+            
+            for join_clause in joins {
+                let join_metadata = ctx.metadata(&join_clause.table)?;
+                // Properly extend schema by adding each column individually to update the index
+                for col in join_metadata.schema.columns.clone() {
+                    combined_schema.push(col);
+                }
+            }
 
             let aliases: HashMap<String, &Expression> = columns
                 .iter()
@@ -212,18 +221,18 @@ pub(in crate::sql) fn analyze<'s>(
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
                 }
 
-                analyze_expression(&metadata.schema, None, expr)?;
+                analyze_expression(&combined_schema, None, expr)?;
             }
 
-            analyze_where(&metadata.schema, r#where)?;
+            analyze_where(&combined_schema, r#where)?;
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
-                analyze_expression_with_aliases(&metadata.schema, &aliases, None, &order.expr)?;
+                analyze_expression_with_aliases(&combined_schema, &aliases, None, &order.expr)?;
             }
 
             for expr in group_by {
-                analyze_expression_with_aliases(&metadata.schema, &aliases, None, expr)?;
+                analyze_expression_with_aliases(&combined_schema, &aliases, None, expr)?;
             }
         }
 
