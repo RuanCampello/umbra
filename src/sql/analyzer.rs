@@ -172,13 +172,21 @@ pub(in crate::sql) fn analyze<'s>(
         Statement::Select(Select {
             columns,
             from,
-            joins: _,
+            joins,
             order_by,
             group_by,
             r#where,
         }) => {
             // TODO: analyze correcly the join clauses
             let metadata = ctx.metadata(from)?;
+            let mut schema = metadata.schema.clone();
+
+            for join in joins {
+                let join_metadata = ctx.metadata(&join.table)?;
+                for col in join_metadata.schema.columns.clone() {
+                    schema.push(col);
+                }
+            }
 
             let aliases: HashMap<String, &Expression> = columns
                 .iter()
@@ -212,18 +220,18 @@ pub(in crate::sql) fn analyze<'s>(
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
                 }
 
-                analyze_expression(&metadata.schema, None, expr)?;
+                analyze_expression(&schema, None, expr)?;
             }
 
-            analyze_where(&metadata.schema, r#where)?;
+            analyze_where(&schema, r#where)?;
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
-                analyze_expression_with_aliases(&metadata.schema, &aliases, None, &order.expr)?;
+                analyze_expression_with_aliases(&schema, &aliases, None, &order.expr)?;
             }
 
             for expr in group_by {
-                analyze_expression_with_aliases(&metadata.schema, &aliases, None, expr)?;
+                analyze_expression_with_aliases(&schema, &aliases, None, expr)?;
             }
         }
 

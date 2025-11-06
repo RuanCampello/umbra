@@ -63,7 +63,11 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
             for (join, right_table) in join_metadata {
                 let right = optimiser::generate_seq_plan(&join.table, None, db)?;
-                schema.columns.extend(right_table.schema.columns.clone());
+                right_table
+                    .schema
+                    .columns
+                    .iter()
+                    .for_each(|col| schema.push(col.clone()));
 
                 let left_schema = match source.schema() {
                     Some(schema) => schema,
@@ -73,8 +77,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 source = Planner::HashJoin(HashJoin::new(
                     source,
                     right,
-                    left_schema,
                     right_table.schema,
+                    left_schema,
                     join.join_type,
                     join.on.clone(),
                 ))
@@ -1282,7 +1286,9 @@ mod tests {
         let orders_table = db.tables["orders"].clone();
 
         let mut schema = db.tables["users"].schema.clone();
-        schema.columns.extend(orders_table.schema.columns.clone());
+        for col in orders_table.schema.columns.clone() {
+            schema.push(col);
+        }
 
         println!(
             "{:#?}",
@@ -1293,7 +1299,10 @@ mod tests {
             db.gen_plan("SELECT name, order_id FROM users JOIN orders ON id = user_id;")?,
             Planner::Project(Project {
                 input: schema.clone(),
-                output: schema,
+                output: Schema::new(vec![
+                    Column::new("name", Type::Varchar(100)),
+                    Column::primary_key("order_id", Type::Serial)
+                ]),
                 projection: vec![
                     Expression::Identifier("name".into()),
                     Expression::Identifier("order_id".into()),
