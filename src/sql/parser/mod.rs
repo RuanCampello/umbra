@@ -408,6 +408,7 @@ impl<'input> Parser<'input> {
         let Some(join_type) = join_type else {
             return Ok(None);
         };
+        self.expect_keyword(Keyword::Join)?;
 
         let table = self.parse_ident()?;
 
@@ -2028,6 +2029,34 @@ mod tests {
                             })
                         }
                     ])
+                    .into()
+            )
+        )
+    }
+
+    #[test]
+    fn test_join() {
+        let sql = "SELECT name, title FROM users JOIN posts ON user_id = post_user_id;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .columns(vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Identifier("title".into())
+                    ])
+                    .join(JoinClause {
+                        table: "posts".into(),
+                        join_type: JoinType::Inner,
+                        on: Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("user_id".into())),
+                            right: Box::new(Expression::Identifier("post_user_id".into())),
+                        }
+                    })
                     .into()
             )
         )
