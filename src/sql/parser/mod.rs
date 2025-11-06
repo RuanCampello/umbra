@@ -2060,4 +2060,42 @@ mod tests {
             )
         )
     }
+
+    #[test]
+    fn test_multiple_joins() {
+        let sql = "SELECT name, title, content FROM users JOIN posts ON user_id = post_user_id LEFT JOIN comments ON post_id = comment_post_id;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .columns(vec![
+                        Expression::Identifier("name".into()),
+                        Expression::Identifier("title".into()),
+                        Expression::Identifier("content".into()),
+                    ])
+                    .join(JoinClause {
+                        table: "posts".into(),
+                        join_type: JoinType::Inner,
+                        on: Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("user_id".into())),
+                            right: Box::new(Expression::Identifier("post_user_id".into()))
+                        }
+                    })
+                    .join(JoinClause {
+                        table: "comments".into(),
+                        join_type: JoinType::Left,
+                        on: Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::Identifier("post_id".into())),
+                            right: Box::new(Expression::Identifier("comment_post_id".into()))
+                        }
+                    })
+                    .into()
+            )
+        )
+    }
 }
