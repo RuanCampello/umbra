@@ -163,7 +163,7 @@ pub struct JoinClause {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum JoinType {
+pub enum JoinType {
     Left,
     Right,
     Inner,
@@ -1062,14 +1062,14 @@ impl From<Function> for Keyword {
     }
 }
 
-impl From<Keyword> for Option<JoinType> {
+impl From<Keyword> for JoinType {
     fn from(value: Keyword) -> Self {
         match value {
-            Keyword::Left => Some(JoinType::Left),
-            Keyword::Right => Some(JoinType::Right),
-            Keyword::Inner => Some(JoinType::Inner),
-            Keyword::Full => Some(JoinType::Full),
-            _ => None,
+            Keyword::Left => Self::Left,
+            Keyword::Right => Self::Right,
+            Keyword::Inner => Self::Inner,
+            Keyword::Full => Self::Full,
+            _ => Self::Inner,
         }
     }
 }

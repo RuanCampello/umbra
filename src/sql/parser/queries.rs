@@ -50,7 +50,7 @@ impl<'sql> Sql<'sql> for Select {
         Ok(Select {
             columns,
             from,
-            joins: vec![],
+            joins,
             r#where,
             order_by,
             group_by,

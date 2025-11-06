@@ -401,14 +401,13 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_join(&mut self) -> ParserResult<Option<JoinClause>> {
-        let join_type: Option<JoinType> = self
+        let join_type: JoinType = self
             .consume_one(&[Keyword::Inner, Keyword::Full, Keyword::Left, Keyword::Right])
             .into();
 
-        let Some(join_type) = join_type else {
+        if !self.consume_optional(Token::Keyword(Keyword::Join)) {
             return Ok(None);
         };
-        self.expect_keyword(Keyword::Join)?;
 
         let table = self.parse_ident()?;
 
