@@ -10,11 +10,12 @@ use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 /// Takes a given [statement](crate::sql::statement::Statement) and prepares it to the plan
 /// generation.
 ///
-/// Here we basic do three things:
+/// Here we basic do four things:
 ///
 /// 1.Remove wildcards for [select](crate::sql::statement::Select) statements.
 /// 2.Reorder the values in [insert](crate::sql::statement::Insert) statements to match the [schema](crate::db::Schema) ordering.
 /// 3.Increment `SERIAL` (and its variants) columns.
+/// 4.Combine [schemas](crate::db::Schema) of possible table joins.
 ///
 /// ```sql
 /// -- table

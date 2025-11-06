@@ -1290,11 +1290,6 @@ mod tests {
             schema.push(col);
         }
 
-        println!(
-            "{:#?}",
-            db.gen_plan("SELECT * FROM users JOIN orders ON id = user_id;")?
-        );
-
         assert_eq!(
             db.gen_plan("SELECT name, order_id FROM users JOIN orders ON id = user_id;")?,
             Planner::Project(Project {
