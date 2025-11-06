@@ -1284,6 +1284,30 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 }
 
 impl<File: FileOperations> HashJoin<File> {
+    pub fn new(
+        left: Planner<File>,
+        right: Planner<File>,
+        left_schema: Schema,
+        right_schema: Schema,
+        join_type: JoinType,
+        condition: Expression,
+    ) -> Self {
+        Self {
+            join_type,
+            condition,
+            left_schema,
+            right_schema,
+            left: Box::new(left),
+            right: Box::new(right),
+
+            hash_built: false,
+            table: HashMap::new(),
+            current_left: None,
+            current_matches: None,
+            index: 0,
+        }
+    }
+
     fn extract_join_keys(
         &self,
     ) -> Result<(Expression, Expression, crate::vm::expression::VmType), DatabaseError> {
