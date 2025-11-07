@@ -30,6 +30,7 @@ pub(in crate::sql) enum Token {
     Semicolon,
     LeftParen,
     RightParen,
+    Dot,
     /// That's not an actual SQL Token, but helps mark the end of token's stream.
     Eof,
 }
@@ -162,6 +163,7 @@ impl Display for Token {
                     Self::Minus => "-",
                     Self::Comma => ",",
                     Self::Semicolon => ";",
+                    Self::Dot => ".",
                     Self::LeftParen => "(",
                     Self::RightParen => ")",
                     _ => unreachable!(),

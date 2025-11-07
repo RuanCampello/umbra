@@ -228,7 +228,6 @@ impl<'input> Parser<'input> {
 
     fn parse_pref(&mut self) -> ParserResult<Expression> {
         match self.next_token()? {
-            Token::Identifier(identifier) => Ok(Expression::Identifier(identifier)),
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
@@ -260,6 +259,16 @@ impl<'input> Parser<'input> {
                         .parse()
                         .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
                 ))),
+            },
+            Token::Identifier(identifier) => match self.consume_optional(Token::Dot) {
+                false => Ok(Expression::Identifier(identifier)),
+                _ => {
+                    let column = self.parse_ident()?;
+                    Ok(Expression::QualifiedIdentifier {
+                        table: identifier,
+                        column,
+                    })
+                }
             },
             token @ (Token::Minus | Token::Plus) => {
                 let op = match token {

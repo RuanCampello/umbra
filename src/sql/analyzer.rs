@@ -364,11 +364,11 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 ) -> Result<VmType, SqlError> {
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, data_type)?,
-        Expression::Identifier(ident) => {
+        Expression::Identifier(column) | Expression::QualifiedIdentifier { column, .. } => {
             let data_type = ctx
-                .resolve_identifier(ident)
+                .resolve_identifier(column)
                 .map(|tuple| tuple.1)
-                .ok_or(SqlError::InvalidColumn(ident.into()))?;
+                .ok_or(SqlError::InvalidColumn(column.into()))?;
 
             // this is an expection because when dealing with outside input, UUID's treated as a
             // String, but inside the engine, we treat it as a Number.
