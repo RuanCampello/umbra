@@ -385,8 +385,10 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
         } => {
             fn get_hint<'e, C: AnalyzeCtx>(ctx: &'e C, expr: &'e Expression) -> Option<&'e Type> {
                 match expr {
-                    #[rustfmt::skip]
-                    Expression::Identifier(ident) => ctx.resolve_identifier(ident).map(|(_, ty)| ty),
+                    Expression::Identifier(column)
+                    | Expression::QualifiedIdentifier { column, .. } => {
+                        ctx.resolve_identifier(column).map(|(_, ty)| ty)
+                    }
                     _ => None,
                 }
             }
