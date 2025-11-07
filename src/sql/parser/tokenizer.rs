@@ -135,6 +135,7 @@ impl<'input> Tokenizer<'input> {
             '(' => self.consume(Token::LeftParen),
             ')' => self.consume(Token::RightParen),
             ';' => self.consume(Token::Semicolon),
+            '.' => self.consume(Token::Dot),
             '"' | '\'' => self.tokenize_string(),
             '0'..='9' => self.tokenize_number(),
             _ if Token::is_keyword(c) => self.tokenize_keyword(),

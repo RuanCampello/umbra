@@ -380,6 +380,19 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 r#type => r#type.into(),
             }
         }
+        Expression::QualifiedIdentifier { table: _, column } => {
+            // For qualified identifiers, we just need to verify the column exists
+            // The table qualifier is mainly for disambiguation during parsing
+            let data_type = ctx
+                .resolve_identifier(column)
+                .map(|tuple| tuple.1)
+                .ok_or(SqlError::InvalidColumn(column.into()))?;
+
+            match data_type {
+                Type::Uuid => VmType::String,
+                r#type => r#type.into(),
+            }
+        }
 
         Expression::BinaryOperation {
             operator,
@@ -390,6 +403,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 match expr {
                     #[rustfmt::skip]
                     Expression::Identifier(ident) => ctx.resolve_identifier(ident).map(|(_, ty)| ty),
+                    Expression::QualifiedIdentifier { column, .. } => ctx.resolve_identifier(column).map(|(_, ty)| ty),
                     _ => None,
                 }
             }

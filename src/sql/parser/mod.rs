@@ -228,7 +228,18 @@ impl<'input> Parser<'input> {
 
     fn parse_pref(&mut self) -> ParserResult<Expression> {
         match self.next_token()? {
-            Token::Identifier(identifier) => Ok(Expression::Identifier(identifier)),
+            Token::Identifier(identifier) => {
+                // Check if this is a qualified identifier (table.column)
+                if self.consume_optional(Token::Dot) {
+                    let column = self.parse_ident()?;
+                    Ok(Expression::QualifiedIdentifier {
+                        table: identifier,
+                        column,
+                    })
+                } else {
+                    Ok(Expression::Identifier(identifier))
+                }
+            }
             Token::String(string) => Ok(Expression::Value(Value::String(string))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
@@ -2126,6 +2137,46 @@ mod tests {
                         operator: BinaryOperator::Eq,
                         left: Box::new(Expression::Identifier("active".into())),
                         right: Box::new(Expression::Value(Value::Boolean(true))),
+                    })
+                    .into()
+            )
+        )
+    }
+
+    #[test]
+    fn test_qualified_identifiers() {
+        let sql = "SELECT users.name, posts.title FROM users JOIN posts ON users.id = posts.user_id;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .from("users")
+                    .columns(vec![
+                        Expression::QualifiedIdentifier {
+                            table: "users".into(),
+                            column: "name".into(),
+                        },
+                        Expression::QualifiedIdentifier {
+                            table: "posts".into(),
+                            column: "title".into(),
+                        },
+                    ])
+                    .join(JoinClause {
+                        table: "posts".into(),
+                        join_type: JoinType::Inner,
+                        on: Expression::BinaryOperation {
+                            operator: BinaryOperator::Eq,
+                            left: Box::new(Expression::QualifiedIdentifier {
+                                table: "users".into(),
+                                column: "id".into(),
+                            }),
+                            right: Box::new(Expression::QualifiedIdentifier {
+                                table: "posts".into(),
+                                column: "user_id".into(),
+                            }),
+                        }
                     })
                     .into()
             )

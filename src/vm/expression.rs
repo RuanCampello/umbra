@@ -84,6 +84,10 @@ pub(crate) fn resolve_expression<'exp>(
             Some(idx) => Ok(val[idx].clone()),
             None => Err(SqlError::InvalidColumn(ident.clone())),
         },
+        Expression::QualifiedIdentifier { column, .. } => match schema.index_of(column) {
+            Some(idx) => Ok(val[idx].clone()),
+            None => Err(SqlError::InvalidColumn(column.clone())),
+        },
         Expression::UnaryOperation { operator, expr } => {
             let value = resolve_expression(val, schema, expr)?;
             Ok(match operator {

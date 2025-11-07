@@ -116,6 +116,7 @@ pub(crate) enum Drop {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub enum Expression {
     Identifier(String),
+    QualifiedIdentifier { table: String, column: String },
     Value(Value),
     Wildcard,
     UnaryOperation {
@@ -776,6 +777,7 @@ impl Display for Expression {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Identifier(ident) => f.write_str(ident),
+            Self::QualifiedIdentifier { table, column } => write!(f, "{}.{}", table, column),
             Self::Value(value) => write!(f, "{value}"),
             Self::Wildcard => f.write_char('*'),
             Self::BinaryOperation {

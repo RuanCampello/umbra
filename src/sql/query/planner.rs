@@ -105,6 +105,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         Expression::Identifier(ident) => {
                             Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
                         }
+                        Expression::QualifiedIdentifier { column, .. } => {
+                            Ok(schema.columns[schema.index_of(column).unwrap()].clone())
+                        }
                         Expression::Alias { expr, alias } => {
                             Ok(Column::new(alias, resolve_type(&schema, expr)?))
                         }
@@ -142,6 +145,13 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                                 aggr_schema.push(schema.columns[idx].clone());
                             } else {
                                 return Err(SqlError::InvalidColumn(ident.clone()).into());
+                            }
+                        }
+                        Expression::QualifiedIdentifier { column, .. } => {
+                            if let Some(idx) = schema.index_of(column) {
+                                aggr_schema.push(schema.columns[idx].clone());
+                            } else {
+                                return Err(SqlError::InvalidColumn(column.clone()).into());
                             }
                         }
                         other => {
@@ -269,6 +279,11 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                             indexes.push(idx);
                             directions.push(order.direction);
                         }
+                        Expression::QualifiedIdentifier { ref column, .. } => {
+                            let idx = resolve_order_index(&schema, &columns, column)?;
+                            indexes.push(idx);
+                            directions.push(order.direction);
+                        }
                         _ => {
                             let ty = resolve_type(&schema, &order.expr)?;
                             indexes.push(sorted_schema.len());
@@ -386,6 +401,11 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             let index = schema.index_of(col).unwrap();
             schema.columns[index].data_type.clone()
         }
+        Expression::QualifiedIdentifier { column, .. } => {
+            // For qualified identifiers, resolve using the column name
+            let index = schema.index_of(column).unwrap();
+            schema.columns[index].data_type.clone()
+        }
         _ => match analyzer::analyze_expression(schema, None, expr)? {
             VmType::Float => Type::DoublePrecision,
             VmType::Bool => Type::Boolean,
@@ -418,6 +438,12 @@ fn extract_order_indexes_and_directions(
                     schema
                         .index_of(ident)
                         .ok_or(SqlError::InvalidGroupBy(ident.into()))
+                        .map(|idx| (idx, order.direction))
+                }
+                Expression::QualifiedIdentifier { column, .. } => {
+                    schema
+                        .index_of(column)
+                        .ok_or(SqlError::InvalidGroupBy(column.into()))
                         .map(|idx| (idx, order.direction))
                 }
                 _ => schema
