@@ -1353,4 +1353,62 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_join_with_qualified_identifiers() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));",
+            "CREATE TABLE orders (order_id SERIAL PRIMARY KEY, user_id INT, item VARCHAR(50));",
+        ])?;
+
+        let users_table = db.tables["users"].clone();
+        let orders_table = db.tables["orders"].clone();
+
+        let mut joined_schema = db.tables["users"].schema.clone();
+        for col in orders_table.schema.columns.clone() {
+            joined_schema.push(col);
+        }
+
+        // Test that qualified identifiers work in JOIN conditions and SELECT columns
+        let plan = db.gen_plan("SELECT users.name, orders.order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
+        
+        assert_eq!(
+            plan,
+            Planner::Project(Project {
+                input: joined_schema,
+                output: Schema::new(vec![
+                    Column::new("name", Type::Varchar(100)),
+                    Column::primary_key("order_id", Type::Serial),
+                ]),
+                projection: vec![
+                    Expression::QualifiedIdentifier {
+                        table: "users".into(),
+                        column: "name".into(),
+                    },
+                    Expression::QualifiedIdentifier {
+                        table: "orders".into(),
+                        column: "order_id".into(),
+                    },
+                ],
+                source: Box::new(Planner::HashJoin(HashJoin::new(
+                    Planner::SeqScan(SeqScan {
+                        table: users_table.clone(),
+                        pager: db.pager(),
+                        cursor: Cursor::new(users_table.root, 0),
+                    }),
+                    Planner::SeqScan(SeqScan {
+                        table: orders_table.clone(),
+                        pager: db.pager(),
+                        cursor: Cursor::new(orders_table.root, 0),
+                    }),
+                    orders_table.schema,
+                    users_table.schema,
+                    JoinType::Inner,
+                    parse_expr("users.id = orders.user_id"),
+                ))),
+            })
+        );
+
+        Ok(())
+    }
 }
