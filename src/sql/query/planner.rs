@@ -103,11 +103,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 columns
                     .iter()
                     .map(|expr| match expr {
-                        Expression::Identifier(ident) => {
-                            Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
-                        }
-                        Expression::Alias { expr, alias } => {
-                            Ok(Column::new(alias, resolve_type(&schema, expr)?))
+                        Expression::Alias { expr, alias } => match expr.as_ref() {
+                            Expression::QualifiedIdentifier { column, .. } => {
+                                let mut column =
+                                    schema.columns[schema.index_of(column).unwrap()].clone();
+                                column.name = alias.clone();
+
+                                Ok(column)
+                            }
+                            _ => Ok(Column::new(alias, resolve_type(&schema, expr)?)),
+                        },
+                        Expression::QualifiedIdentifier { column, .. }
+                        | Expression::Identifier(column) => {
+                            Ok(schema.columns[schema.index_of(column).unwrap()].clone())
                         }
                         _ => Ok(Column::new(&expr.to_string(), resolve_type(&schema, expr)?)),
                     })
@@ -1337,7 +1345,7 @@ mod tests {
             joined_schema.push(col);
         }
 
-        let plan = db.gen_plan("SELECT users.name as name, orders.id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
+        let plan = db.gen_plan("SELECT users.name as name, orders.order_id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
 
         assert_eq!(
             plan,
@@ -1358,7 +1366,7 @@ mod tests {
                     Expression::Alias {
                         expr: Box::new(Expression::QualifiedIdentifier {
                             table: "orders".into(),
-                            column: "id".into(),
+                            column: "order_id".into(),
                         }),
                         alias: "order_id".into(),
                     },
