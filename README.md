@@ -179,10 +179,10 @@ CREATE TABLE users (
 - [x] `BETWEEN` (for when life exists within bounds)
 - [ ] `LIMIT`/`OFFSET` (self-restraint coming soon™)
 - [x] Column aliases (SELECT tomb AS grave - identity is fluid)
-- [ ] Table aliases (`FROM crypts AS c` - naming things is hard)
-- [ ] `JOIN` (relationships require couples therapy)
+- [x] Table aliases (`FROM crypts AS c` - naming things is hard)
+- [x] `JOIN` (relationships require couples therapy)
 - [x] `GROUP BY` (aggregation is a social construct)
-- [ ] `HAVING` 
+- [ ] `HAVING`
 
 #### 💸 **Transactions**
 - [x] `BEGIN` 
