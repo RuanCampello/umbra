@@ -94,7 +94,8 @@ pub(in crate::sql) fn analyze<'s>(
             table,
             unique,
             name,
-            ..
+            column,
+            column_table,
         }) => {
             if !unique {
                 return Err(SqlError::Other("Non-unique index is not yet supported".into()).into());
@@ -104,6 +105,22 @@ pub(in crate::sql) fn analyze<'s>(
 
             if metadata.indexes.iter().any(|idx| idx.name.eq(name)) {
                 return Err(AnalyzerError::AlreadyExists(AlreadyExists::Index(name.into())).into());
+            }
+
+            // Validate that if column_table is specified, it matches the table being indexed
+            if let Some(col_table) = column_table {
+                if col_table != table {
+                    return Err(SqlError::InvalidQualifiedColumn {
+                        table: col_table.clone(),
+                        column: column.clone(),
+                    }
+                    .into());
+                }
+            }
+
+            // Validate that the column exists in the table
+            if metadata.schema.index_of(column).is_none() {
+                return Err(SqlError::InvalidColumn(column.clone()).into());
             }
         }
 
@@ -1265,6 +1282,46 @@ mod tests {
             sql: "SELECT EXTRACT(YEAR FROM birth_date) FROM users;",
             ctx,
             expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_qualified_column_index_valid() -> AnalyzerResult {
+        let ctx = &["CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT);"];
+        Analyze {
+            sql: "CREATE UNIQUE INDEX idx_orders_id ON orders(orders.id);",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_qualified_column_index_wrong_table() -> AnalyzerResult {
+        let ctx = &[
+            "CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT);",
+            "CREATE TABLE customers (id INT PRIMARY KEY, name VARCHAR(100));",
+        ];
+        Analyze {
+            sql: "CREATE UNIQUE INDEX idx_wrong ON orders(customers.id);",
+            ctx,
+            expected: Err(SqlError::InvalidQualifiedColumn {
+                table: "customers".to_string(),
+                column: "id".to_string(),
+            }
+            .into()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_index_on_nonexistent_column() -> AnalyzerResult {
+        let ctx = &["CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT);"];
+        Analyze {
+            sql: "CREATE UNIQUE INDEX idx_bad ON orders(nonexistent);",
+            ctx,
+            expected: Err(SqlError::InvalidColumn("nonexistent".to_string()).into()),
         }
         .assert()
     }
