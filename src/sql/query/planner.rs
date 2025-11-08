@@ -19,7 +19,7 @@ use crate::{
     },
 };
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     io::{Read, Seek, Write},
     rc::Rc,
 };
@@ -489,6 +489,25 @@ fn resolve_order_index<'a>(
     schema
         .index_of(ident)
         .ok_or(SqlError::InvalidColumn(ident.into()))
+}
+
+fn resolve_qualified_column(
+    table: &str,
+    column: &str,
+    tables: &HashMap<String, Schema>,
+) -> Result<Column, SqlError> {
+    let schema = tables
+        .get(table)
+        .ok_or(SqlError::InvalidTable(table.to_string()))?;
+
+    let idx = schema
+        .index_of(column)
+        .ok_or(SqlError::InvalidQualifiedColumn {
+            table: table.into(),
+            column: column.into(),
+        })?;
+
+    Ok(schema.columns[idx].clone())
 }
 
 #[cfg(test)]
