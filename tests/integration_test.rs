@@ -1864,3 +1864,29 @@ fn test_qualified_column_in_index() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_index_validation_across_multiple_tables() -> Result<()> {
+    let mut state = State::default();
+
+    // Create two tables where 'id' exists in users but NOT in orders
+    state.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));")?;
+    state.exec("CREATE TABLE orders (order_id INT PRIMARY KEY, user_id INT, total REAL);")?;
+
+    // Should fail: orders doesn't have 'id' column even though users does
+    // This ensures we validate against the specific table, not combined schemas
+    let result = state.exec("CREATE UNIQUE INDEX idx_orders_id ON orders(id);");
+    assert!(result.is_err(), "Should fail when indexing non-existent column");
+
+    // Should fail: qualified column with wrong table
+    let result = state.exec("CREATE UNIQUE INDEX idx_users_id_on_orders ON orders(users.id);");
+    assert!(result.is_err(), "Should fail when table qualifier doesn't match");
+
+    // Should succeed: column exists in the table being indexed
+    state.exec("CREATE UNIQUE INDEX idx_order_id ON orders(order_id);")?;
+    
+    // Should succeed: indexing users.id on users table
+    state.exec("CREATE UNIQUE INDEX idx_user_id ON users(id);")?;
+
+    Ok(())
+}

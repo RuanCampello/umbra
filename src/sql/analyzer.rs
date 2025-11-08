@@ -1325,4 +1325,42 @@ mod tests {
         }
         .assert()
     }
+
+    #[test]
+    fn test_index_validation_with_multiple_tables() -> AnalyzerResult {
+        // This test ensures that when multiple tables exist, indexing validates
+        // against the specific table being indexed, not a combined schema
+        let ctx = &[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));",
+            "CREATE TABLE orders (order_id INT PRIMARY KEY, user_id INT, total REAL);",
+        ];
+        
+        // Should fail: orders doesn't have 'id' column even though users does
+        Analyze {
+            sql: "CREATE UNIQUE INDEX idx_orders_id ON orders(id);",
+            ctx,
+            expected: Err(SqlError::InvalidColumn("id".to_string()).into()),
+        }
+        .assert()?;
+
+        // Should fail: qualified column with wrong table
+        Analyze {
+            sql: "CREATE UNIQUE INDEX idx_users_id_on_orders ON orders(users.id);",
+            ctx,
+            expected: Err(SqlError::InvalidQualifiedColumn {
+                table: "users".to_string(),
+                column: "id".to_string(),
+            }
+            .into()),
+        }
+        .assert()?;
+
+        // Should succeed: column exists in the table being indexed
+        Analyze {
+            sql: "CREATE UNIQUE INDEX idx_order_id ON orders(order_id);",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()
+    }
 }
