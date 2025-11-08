@@ -17,7 +17,7 @@ use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use std::ops::{Bound, Index, RangeBounds};
@@ -189,7 +189,7 @@ pub(crate) struct Aggregate<File: FileOperations> {
     page_size: usize,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct HashJoin<File: FileOperations> {
     pub left: Box<Planner<File>>,
     pub right: Box<Planner<File>>,
@@ -206,6 +206,24 @@ pub(crate) struct HashJoin<File: FileOperations> {
     right_schema: Schema,
 
     index: usize,
+    
+    // For RIGHT and FULL joins: track which right rows have been matched
+    matched_right_keys: HashSet<Vec<u8>>,
+    // For emitting unmatched right rows
+    unmatched_right_iter: Option<std::collections::hash_map::IntoIter<Vec<u8>, Vec<Tuple>>>,
+    unmatched_right_index: usize,
+}
+
+impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
+    fn eq(&self, other: &Self) -> bool {
+        // Only compare the structural parts, not runtime state
+        *self.left == *other.left
+            && *self.right == *other.right
+            && self.condition == other.condition
+            && self.join_type == other.join_type
+            && self.left_schema == other.left_schema
+            && self.right_schema == other.right_schema
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -1212,10 +1230,11 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 
 impl<File: PlanExecutor> Execute for HashJoin<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        // Phase 1: Build hash table from right side
         if !self.hash_built {
             let (_, right_key, r#type) = self.extract_join_keys()?;
 
-            // iterate over the source
+            // iterate over the right side and build hash table
             while let Some(right) = self.right.try_next()? {
                 let key =
                     vm::expression::resolve_expression(&right, &self.right_schema, &right_key)?;
@@ -1227,6 +1246,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             self.hash_built = true;
         }
 
+        // Phase 2: Process matches between left and right
         loop {
             // a: check if we're in the middle of processing matches for a left tuple
             if let (Some(matches), Some(left_tuple)) = (&self.current_matches, &self.current_left) {
@@ -1246,9 +1266,10 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
                 }
             }
 
-            // b: handle left join for a left tuple that just finished and has no matches
+            // b: handle LEFT/FULL join for a left tuple that just finished and has no matches
             if let Some(left) = self.current_left.take() {
-                if self.join_type.eq(&JoinType::Left) && self.index.eq(&0) {
+                if (self.join_type == JoinType::Left || self.join_type == JoinType::Full) 
+                    && self.index == 0 {
                     let mut tuple = left;
                     tuple.extend(vec![Value::Null; self.right_schema.len()]);
 
@@ -1258,6 +1279,10 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 
             // c: fetch new left tuple from probe side
             let Some(left) = self.left.try_next()? else {
+                // Phase 3: For RIGHT/FULL joins, emit unmatched right rows
+                if self.join_type == JoinType::Right || self.join_type == JoinType::Full {
+                    return self.emit_unmatched_right();
+                }
                 return Ok(None);
             };
 
@@ -1273,7 +1298,13 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
                 self.current_matches = None;
             } else {
                 match self.table.get(&key) {
-                    Some(matches) => self.current_matches = Some(matches.clone()),
+                    Some(matches) => {
+                        // Mark this key as matched for RIGHT/FULL joins
+                        if self.join_type == JoinType::Right || self.join_type == JoinType::Full {
+                            self.matched_right_keys.insert(key);
+                        }
+                        self.current_matches = Some(matches.clone());
+                    }
                     _ => self.current_matches = None,
                 }
             }
@@ -1305,7 +1336,55 @@ impl<File: FileOperations> HashJoin<File> {
             current_left: None,
             current_matches: None,
             index: 0,
+            matched_right_keys: HashSet::new(),
+            unmatched_right_iter: None,
+            unmatched_right_index: 0,
         }
+    }
+
+    fn emit_unmatched_right(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        // Initialize the iterator if not done yet
+        if self.unmatched_right_iter.is_none() {
+            // Move the hash table into an iterator
+            let table = std::mem::take(&mut self.table);
+            self.unmatched_right_iter = Some(table.into_iter());
+            self.unmatched_right_index = 0;
+        }
+
+        // Iterate through remaining right rows that weren't matched
+        while let Some(iter) = self.unmatched_right_iter.as_mut() {
+            if let Some((key, tuples)) = iter.next() {
+                // Skip if this key was matched
+                if self.matched_right_keys.contains(&key) {
+                    continue;
+                }
+                
+                // Emit the unmatched right tuple with NULL for left columns
+                if self.unmatched_right_index < tuples.len() {
+                    let right_tuple = &tuples[self.unmatched_right_index];
+                    let mut tuple = vec![Value::Null; self.left_schema.len()];
+                    tuple.extend(right_tuple.clone());
+                    
+                    self.unmatched_right_index += 1;
+                    
+                    // Reset index if we've exhausted all tuples for this key
+                    if self.unmatched_right_index >= tuples.len() {
+                        self.unmatched_right_index = 0;
+                        // Continue to next key
+                        continue;
+                    }
+                    
+                    return Ok(Some(tuple));
+                } else {
+                    self.unmatched_right_index = 0;
+                }
+            } else {
+                // No more keys to process
+                return Ok(None);
+            }
+        }
+
+        Ok(None)
     }
 
     fn extract_join_keys(
