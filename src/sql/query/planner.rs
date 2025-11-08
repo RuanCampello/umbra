@@ -55,9 +55,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let table = db.metadata(&from)?.clone();
             let mut schema = table.schema.clone();
 
+            // Build a map of table names to their schemas for qualified column resolution
+            let mut tables = HashMap::new();
+            tables.insert(from.clone(), table.schema.clone());
+
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
                 let right_table = db.metadata(&join_clause.table)?.clone();
+                tables.insert(join_clause.table.clone(), right_table.schema.clone());
                 join_metadata.push((join_clause, right_table));
             }
 
@@ -104,17 +109,18 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     .iter()
                     .map(|expr| match expr {
                         Expression::Alias { expr, alias } => match expr.as_ref() {
-                            Expression::QualifiedIdentifier { column, .. } => {
-                                let mut column =
-                                    schema.columns[schema.index_of(column).unwrap()].clone();
+                            Expression::QualifiedIdentifier { table, column } => {
+                                let mut column = resolve_qualified_column(table, column, &tables)?;
                                 column.name = alias.clone();
 
                                 Ok(column)
                             }
                             _ => Ok(Column::new(alias, resolve_type(&schema, expr)?)),
                         },
-                        Expression::QualifiedIdentifier { column, .. }
-                        | Expression::Identifier(column) => {
+                        Expression::QualifiedIdentifier { table, column } => {
+                            resolve_qualified_column(table, column, &tables)
+                        }
+                        Expression::Identifier(column) => {
                             Ok(schema.columns[schema.index_of(column).unwrap()].clone())
                         }
                         _ => Ok(Column::new(&expr.to_string(), resolve_type(&schema, expr)?)),
@@ -1408,6 +1414,35 @@ mod tests {
                 ))),
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_qualified_column_validation_with_joins() -> PlannerResult {
+        // Test that qualified columns are validated against the specific table,
+        // not just the combined schema from joins
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));",
+            "CREATE TABLE orders (order_id SERIAL PRIMARY KEY, user_id INT, item VARCHAR(50));",
+        ])?;
+
+        // This should fail: orders doesn't have 'id' column even though users does
+        let result = db.gen_plan(
+            "SELECT users.name as name, orders.id as order_id FROM users JOIN orders ON users.id = orders.user_id;"
+        );
+        
+        assert!(matches!(
+            result,
+            Err(DatabaseError::Sql(SqlError::InvalidQualifiedColumn { table, column }))
+            if table == "orders" && column == "id"
+        ));
+
+        // This should succeed: both columns exist in their respective tables
+        let result = db.gen_plan(
+            "SELECT users.name as name, orders.order_id as order_id FROM users JOIN orders ON users.id = orders.user_id;"
+        );
+        assert!(result.is_ok());
 
         Ok(())
     }
