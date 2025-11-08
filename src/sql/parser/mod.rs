@@ -1080,6 +1080,24 @@ mod tests {
                 name: "content_idx".to_string(),
                 table: "pages".to_string(),
                 column: "content".to_string(),
+                column_table: None,
+                unique: true,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_unique_index_with_qualified_column() {
+        let sql = "CREATE UNIQUE INDEX idx_orders_id ON orders(orders.id);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Index {
+                name: "idx_orders_id".to_string(),
+                table: "orders".to_string(),
+                column: "id".to_string(),
+                column_table: Some("orders".to_string()),
                 unique: true,
             }))
         );

@@ -84,12 +84,23 @@ impl<'sql> Sql<'sql> for Create {
                 parser.expect_keyword(Keyword::On)?;
                 let table = parser.parse_ident()?;
                 parser.expect_token(Token::LeftParen)?;
-                let column = parser.parse_ident()?;
+                
+                // Parse column name, which may be qualified (e.g., "orders.id")
+                let first_ident = parser.parse_ident()?;
+                let (column_table, column) = match parser.consume_optional(Token::Dot) {
+                    true => {
+                        let column = parser.parse_ident()?;
+                        (Some(first_ident), column)
+                    }
+                    false => (None, first_ident),
+                };
+                
                 parser.expect_token(Token::RightParen)?;
 
                 Create::Index {
                     name,
                     column,
+                    column_table,
                     table,
                     unique,
                 }

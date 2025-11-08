@@ -1844,3 +1844,23 @@ fn extraction_on_intervals() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_qualified_column_in_index() -> Result<()> {
+    let mut state = State::default();
+
+    state.exec("CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT, total REAL);")?;
+    state.exec("CREATE TABLE customers (id INT PRIMARY KEY, name VARCHAR(100));")?;
+
+    // This should work - qualified column matches the table being indexed
+    state.exec("CREATE UNIQUE INDEX idx_orders_id ON orders(orders.id);")?;
+
+    // This should fail - qualified column refers to wrong table
+    let result = state.exec("CREATE UNIQUE INDEX idx_wrong ON orders(customers.id);");
+    assert!(result.is_err());
+    
+    // Regular unqualified index should still work
+    state.exec("CREATE UNIQUE INDEX idx_customer_id ON orders(customer_id);")?;
+
+    Ok(())
+}

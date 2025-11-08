@@ -74,12 +74,14 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                                 name: index!(primary on (table)),
                                 table: table.clone(),
                                 column: col.name.clone(),
+                                column_table: None,
                                 unique: true,
                             }),
                             Constraint::Unique => Some(Create::Index {
                                 name: index!(unique on (table) (col.name)),
                                 table: table.clone(),
                                 column: col.name.clone(),
+                                column_table: None,
                                 unique: true,
                             }),
                             Constraint::Nullable | Constraint::Default(_) => None,
@@ -94,12 +96,23 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             name,
             table,
             column,
+            column_table,
             unique,
         }) => {
             if !unique {
                 return Err(DatabaseError::Sql(SqlError::Other(
                     "Non-unique indexes are not supported yet".into(),
                 )));
+            }
+
+            // Validate that if column_table is specified, it matches the table being indexed
+            if let Some(ref col_table) = column_table {
+                if col_table != &table {
+                    return Err(DatabaseError::Sql(SqlError::InvalidQualifiedColumn {
+                        table: col_table.clone(),
+                        column: column.clone(),
+                    }));
+                }
             }
 
             let root = allocate_root(db)?;

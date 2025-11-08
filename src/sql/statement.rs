@@ -62,6 +62,8 @@ pub(crate) enum Create {
         name: String,
         table: String,
         column: String,
+        /// Optional table qualifier for the column (e.g., "orders" in "orders.id")
+        column_table: Option<String>,
         unique: bool,
     },
 }
@@ -502,10 +504,15 @@ impl Display for Statement {
                     name,
                     table,
                     column,
+                    column_table,
                     unique,
                 } => {
                     let unique = if *unique { "UNIQUE" } else { "" };
-                    write!(f, "CREATE {unique} INDEX {name} ON {table}({column})")?;
+                    let column_str = match column_table {
+                        Some(col_table) => format!("{}.{}", col_table, column),
+                        None => column.clone(),
+                    };
+                    write!(f, "CREATE {unique} INDEX {name} ON {table}({column_str})")?;
                 }
             },
 
