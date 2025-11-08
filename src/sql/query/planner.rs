@@ -55,9 +55,15 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let table = db.metadata(&from)?.clone();
             let mut schema = table.schema.clone();
 
+            // map of table names to qualified column resolution
+            let mut tables = HashMap::new();
+            tables.insert(from, table.schema.clone());
+
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
                 let right_table = db.metadata(&join_clause.table)?.clone();
+                tables.insert(join_clause.table.clone(), right_table.schema.clone());
+
                 join_metadata.push((join_clause, right_table));
             }
 
@@ -104,17 +110,18 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     .iter()
                     .map(|expr| match expr {
                         Expression::Alias { expr, alias } => match expr.as_ref() {
-                            Expression::QualifiedIdentifier { column, .. } => {
-                                let mut column =
-                                    schema.columns[schema.index_of(column).unwrap()].clone();
+                            Expression::QualifiedIdentifier { column, table } => {
+                                let mut column = resolve_qualified_column(table, column, &tables)?;
                                 column.name = alias.clone();
 
                                 Ok(column)
                             }
                             _ => Ok(Column::new(alias, resolve_type(&schema, expr)?)),
                         },
-                        Expression::QualifiedIdentifier { column, .. }
-                        | Expression::Identifier(column) => {
+                        Expression::QualifiedIdentifier { column, table } => {
+                            resolve_qualified_column(&table, column, &tables)
+                        }
+                        Expression::Identifier(column) => {
                             Ok(schema.columns[schema.index_of(column).unwrap()].clone())
                         }
                         _ => Ok(Column::new(&expr.to_string(), resolve_type(&schema, expr)?)),
@@ -1363,6 +1370,9 @@ mod tests {
         for col in orders_table.schema.columns.clone() {
             joined_schema.push(col);
         }
+
+        let plan = db.gen_plan("SELECT users.name as name, orders.id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
+        println!("{plan:#?}");
 
         let plan = db.gen_plan("SELECT users.name as name, orders.order_id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
 
