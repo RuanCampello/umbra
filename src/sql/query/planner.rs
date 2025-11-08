@@ -1371,9 +1371,6 @@ mod tests {
             joined_schema.push(col);
         }
 
-        let plan = db.gen_plan("SELECT users.name as name, orders.id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
-        println!("{plan:#?}");
-
         let plan = db.gen_plan("SELECT users.name as name, orders.order_id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
 
         assert_eq!(
@@ -1417,6 +1414,21 @@ mod tests {
                     parse_expr("users.id = orders.user_id"),
                 ))),
             })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_qualified_column_non_existent() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));",
+            "CREATE TABLE orders (order_id SERIAL PRIMARY KEY, user_id INT, item VARCHAR(50));",
+        ])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT users.name as name, orders.id as order_id FROM users JOIN orders ON users.id = orders.user_id;").unwrap_err(),
+            SqlError::InvalidQualifiedColumn { table: "orders".into(), column: "id".into() }.into()
         );
 
         Ok(())
