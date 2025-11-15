@@ -1253,7 +1253,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 
             // b: handle LEFT/FULL join for a left tuple that just finished and has no matches
             if let Some(left) = self.current_left.take() {
-                if self.right_matters() && self.index.eq(&0) {
+                if matches!(self.join_type, JoinType::Left | JoinType::Full) && self.index.eq(&0) {
                     let mut tuple = left;
                     tuple.extend(vec![Value::Null; self.right_schema.len()]);
 
@@ -1876,7 +1876,7 @@ impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
             && self.right == other.right
             && self.condition == other.condition
             && self.join_type == other.join_type
-            && self.left_schema == other.right_schema
+            && self.left_schema == other.left_schema
             && self.right_schema == other.right_schema
     }
 }
