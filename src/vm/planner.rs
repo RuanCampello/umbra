@@ -1876,7 +1876,7 @@ impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
             && self.right == other.right
             && self.condition == other.condition
             && self.join_type == other.join_type
-            && self.left_schema == other.right_schema
+            && self.left_schema == other.left_schema
             && self.right_schema == other.right_schema
     }
 }
