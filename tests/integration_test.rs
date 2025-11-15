@@ -1901,3 +1901,44 @@ fn simple_join() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_right_join_debug() -> Result<()> {
+    let mut db = State::default();
+    
+    db.exec("CREATE TABLE basket_a(a SERIAL PRIMARY KEY, fruit_a VARCHAR (100));")?;
+    db.exec("CREATE TABLE basket_b(b SERIAL PRIMARY KEY, fruit_b VARCHAR (100));")?;
+
+    db.exec(
+        r#"
+    INSERT INTO basket_a (a, fruit_a)
+    VALUES
+        (1, 'Apple'),
+        (2, 'Orange'),
+        (3, 'Banana'),
+        (4, 'Cucumber');
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO basket_b (b, fruit_b)
+    VALUES
+        (1, 'Orange'),
+        (2, 'Apple'),
+        (3, 'Watermelon'),
+        (4, 'Pear');
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT a, fruit_a, b, fruit_b
+    FROM basket_a
+    RIGHT JOIN basket_b ON fruit_a = fruit_b;"#,
+    )?;
+    
+    println!("{:#?}", query);
+    
+    Ok(())
+}
