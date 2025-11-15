@@ -1899,5 +1899,27 @@ fn simple_join() -> Result<()> {
     RIGHT JOIN basket_b ON fruit_a = fruit_b;"#,
     )?;
 
+    // Note: The order of unmatched rows may vary due to hash table iteration order
+    assert_eq!(query.tuples.len(), 4);
+    
+    // Check matched rows
+    assert!(query.tuples.contains(&vec![Value::String("Apple".into()), Value::String("Apple".into())]));
+    assert!(query.tuples.contains(&vec![Value::String("Orange".into()), Value::String("Orange".into())]));
+    
+    // Check unmatched rows (with NULL for left table columns)
+    let unmatched_rows: Vec<&Vec<Value>> = query.tuples.iter()
+        .filter(|row| matches!(row[0], Value::Null))
+        .collect();
+    assert_eq!(unmatched_rows.len(), 2);
+    
+    let unmatched_fruits: Vec<String> = unmatched_rows.iter()
+        .map(|row| match &row[1] {
+            Value::String(s) => s.clone(),
+            _ => panic!("Expected string"),
+        })
+        .collect();
+    assert!(unmatched_fruits.contains(&"Watermelon".to_string()));
+    assert!(unmatched_fruits.contains(&"Pear".to_string()));
+
     Ok(())
 }
