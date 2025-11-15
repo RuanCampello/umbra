@@ -1892,6 +1892,24 @@ fn simple_join() -> Result<()> {
 
     let query = db.exec(
         r#"
+    SELECT fruit_a, fruit_a
+    FROM basket_a
+    LEFT JOIN basket_b ON fruit_a = fruit_b
+    ORDER BY fruit_a;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Apple".into(), "Apple".into()],
+            vec!["Banana".into(), Value::Null],
+            vec!["Cucumber".into(), Value::Null],
+            vec!["Orange".into(), "Orange".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
     SELECT fruit_a, fruit_b
     FROM basket_a
     RIGHT JOIN basket_b ON fruit_a = fruit_b
