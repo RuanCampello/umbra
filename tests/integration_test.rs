@@ -1884,11 +1884,8 @@ fn simple_join() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![Value::String("Apple".into()), Value::String("Apple".into())],
-            vec![
-                Value::String("Orange".into()),
-                Value::String("Orange".into())
-            ]
+            vec!["Apple".into(), "Apple".into()],
+            vec!["Orange".into(), "Orange".into()]
         ]
     );
 
@@ -1898,6 +1895,15 @@ fn simple_join() -> Result<()> {
     FROM basket_a
     RIGHT JOIN basket_b ON fruit_a = fruit_b;"#,
     )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Apple".into(), "Apple".into()],
+            vec!["Orange".into(), "Orange".into()],
+            vec!["Banana".into(), Value::Null, Value::Null],
+        ]
+    );
 
     Ok(())
 }

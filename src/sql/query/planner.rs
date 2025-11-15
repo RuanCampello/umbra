@@ -83,8 +83,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 source = Planner::HashJoin(HashJoin::new(
                     source,
                     right,
-                    right_table.schema,
                     left_schema,
+                    right_table.schema,
                     join.join_type,
                     join.on.clone(),
                 ))
@@ -1345,8 +1345,8 @@ mod tests {
                         pager: db.pager(),
                         cursor: Cursor::new(orders_table.root, 0),
                     }),
-                    orders_table.schema,
                     users_table.schema,
+                    orders_table.schema,
                     JoinType::Inner,
                     parse_expr("id = user_id"),
                 ))),
@@ -1367,9 +1367,7 @@ mod tests {
         let orders_table = db.tables["orders"].clone();
 
         let mut joined_schema = db.tables["users"].schema.clone();
-        for col in orders_table.schema.columns.clone() {
-            joined_schema.push(col);
-        }
+        joined_schema.extend(orders_table.schema.columns.clone());
 
         let plan = db.gen_plan("SELECT users.name as name, orders.order_id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
 
@@ -1408,8 +1406,8 @@ mod tests {
                         pager: db.pager(),
                         cursor: Cursor::new(orders_table.root, 0),
                     }),
-                    orders_table.schema,
                     users_table.schema,
+                    orders_table.schema,
                     JoinType::Inner,
                     parse_expr("users.id = orders.user_id"),
                 ))),
