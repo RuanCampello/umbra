@@ -1892,9 +1892,10 @@ fn simple_join() -> Result<()> {
 
     let query = db.exec(
         r#"
-    SELECT fruit_a, fruit_a
+    SELECT fruit_a, fruit_b
     FROM basket_a
-    LEFT JOIN basket_b ON fruit_a = fruit_b
+    LEFT JOIN basket_b
+    ON fruit_a = fruit_b
     ORDER BY fruit_a;"#,
     )?;
 
