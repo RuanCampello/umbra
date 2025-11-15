@@ -17,7 +17,8 @@ use crate::vm;
 use crate::vm::expression::evaluate_where;
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
-use std::collections::{HashMap, VecDeque};
+use std::collections::hash_map::IntoIter;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use std::ops::{Bound, Index, RangeBounds};
@@ -189,7 +190,7 @@ pub(crate) struct Aggregate<File: FileOperations> {
     page_size: usize,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct HashJoin<File: FileOperations> {
     pub left: Box<Planner<File>>,
     pub right: Box<Planner<File>>,
@@ -201,6 +202,10 @@ pub(crate) struct HashJoin<File: FileOperations> {
 
     current_left: Option<Tuple>,
     current_matches: Option<Vec<Tuple>>,
+
+    matched_right_keys: HashSet<Vec<u8>>,
+    unmatched_right: Option<IntoIter<Vec<u8>, Vec<Tuple>>>,
+    unmatched_right_index: usize,
 
     left_schema: Schema,
     right_schema: Schema,
@@ -1215,7 +1220,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
         if !self.hash_built {
             let (_, right_key, r#type) = self.extract_join_keys()?;
 
-            // iterate over the source
+            // iterate over the right side and build the hash table
             while let Some(right) = self.right.try_next()? {
                 let key =
                     vm::expression::resolve_expression(&right, &self.right_schema, &right_key)?;
@@ -1246,9 +1251,11 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
                 }
             }
 
-            // b: handle left join for a left tuple that just finished and has no matches
+            // b: handle LEFT/FULL join for a left tuple that just finished and has no matches
             if let Some(left) = self.current_left.take() {
-                if self.join_type.eq(&JoinType::Left) && self.index.eq(&0) {
+                if (self.join_type.eq(&JoinType::Left) || self.join_type.eq(&JoinType::Full))
+                    && self.index.eq(&0)
+                {
                     let mut tuple = left;
                     tuple.extend(vec![Value::Null; self.right_schema.len()]);
 
@@ -1304,6 +1311,9 @@ impl<File: FileOperations> HashJoin<File> {
             table: HashMap::new(),
             current_left: None,
             current_matches: None,
+            matched_right_keys: HashSet::new(),
+            unmatched_right: None,
+            unmatched_right_index: 0,
             index: 0,
         }
     }
@@ -1355,6 +1365,50 @@ impl<File: FileOperations> HashJoin<File> {
             "Ambiguos or invalid JOIN condition for HashJoin: {}",
             self.condition
         )))
+    }
+
+    fn emit_unmatched_right(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if self.unmatched_right.is_none() {
+            let table = std::mem::take(&mut self.table);
+            self.unmatched_right = Some(table.into_iter());
+            self.reset_index();
+        }
+
+        while let Some(iter) = self.unmatched_right.as_mut() {
+            if let Some((key, tuples)) = iter.next() {
+                if self.matched_right_keys.contains(&key) {
+                    continue;
+                }
+
+                match self.unmatched_right_index < tuples.len() {
+                    true => {
+                        let right = &tuples[self.unmatched_right_index];
+                        let mut tuple = vec![Value::Null; self.left_schema.len()];
+                        tuple.extend(right.clone());
+
+                        self.unmatched_right_index += 1;
+
+                        // we need to reset the index if we've exhausted all tuples for this key
+                        if self.unmatched_right_index >= tuples.len() {
+                            self.reset_index();
+                            continue;
+                        }
+
+                        return Ok(Some(tuple));
+                    }
+                    _ => self.reset_index(),
+                }
+            } else {
+                // no more keys
+                return Ok(None);
+            }
+        }
+
+        Ok(None)
+    }
+
+    const fn reset_index(&mut self) {
+        self.unmatched_right_index = 0;
     }
 }
 
@@ -1802,6 +1856,17 @@ impl TupleComparator {
 impl<File: FileOperations + PartialEq> PartialEq for Collect<File> {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source && self.schema == other.schema
+    }
+}
+
+impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
+    fn eq(&self, other: &Self) -> bool {
+        self.left == other.left
+            && self.right == other.right
+            && self.condition == other.condition
+            && self.join_type == other.join_type
+            && self.left_schema == other.right_schema
+            && self.right_schema == other.right_schema
     }
 }
 

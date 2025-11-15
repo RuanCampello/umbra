@@ -1892,5 +1892,12 @@ fn simple_join() -> Result<()> {
         ]
     );
 
+    let query = db.exec(
+        r#"
+    SELECT fruit_a, fruit_b
+    FROM basket_a
+    RIGHT JOIN basket_b ON fruit_a = fruit_b;"#,
+    )?;
+
     Ok(())
 }
