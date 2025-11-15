@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use umbra::db::{Database, DatabaseError, QuerySet};
 use umbra::sql::statement::{Type, Value};
@@ -1893,7 +1894,9 @@ fn simple_join() -> Result<()> {
         r#"
     SELECT fruit_a, fruit_b
     FROM basket_a
-    RIGHT JOIN basket_b ON fruit_a = fruit_b;"#,
+    RIGHT JOIN basket_b ON fruit_a = fruit_b
+    ORDER BY fruit_b;
+    ;"#,
     )?;
 
     assert_eq!(
@@ -1901,7 +1904,8 @@ fn simple_join() -> Result<()> {
         vec![
             vec!["Apple".into(), "Apple".into()],
             vec!["Orange".into(), "Orange".into()],
-            vec!["Banana".into(), Value::Null, Value::Null],
+            vec![Value::Null, "Pear".into()],
+            vec![Value::Null, "Watermelon".into()],
         ]
     );
 

@@ -1355,7 +1355,7 @@ impl<File: FileOperations> HashJoin<File> {
 
         // 1: the left and right expressions are in their respective schemas
         if left_expr && right_expr {
-            let r#type = analyze_expression(&self.right_schema, None, left)?;
+            let r#type = analyze_expression(&self.left_schema, None, left)?;
             return Ok((left.clone(), right.clone(), r#type));
         }
 
@@ -1364,7 +1364,7 @@ impl<File: FileOperations> HashJoin<File> {
         let right_expr_for_left = analyze_expression(&self.left_schema, None, right).is_ok();
 
         if left_expr_for_right && right_expr_for_left {
-            let r#type = analyze_expression(&self.right_schema, None, left)?;
+            let r#type = analyze_expression(&self.left_schema, None, right)?;
             return Ok((right.clone(), left.clone(), r#type));
         }
 
@@ -1398,7 +1398,6 @@ impl<File: FileOperations> HashJoin<File> {
                         // we need to reset the index if we've exhausted all tuples for this key
                         if self.unmatched_right_index >= tuples.len() {
                             self.reset_index();
-                            continue;
                         }
 
                         return Ok(Some(tuple));
