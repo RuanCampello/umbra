@@ -1899,46 +1899,27 @@ fn simple_join() -> Result<()> {
     RIGHT JOIN basket_b ON fruit_a = fruit_b;"#,
     )?;
 
-    Ok(())
-}
-
-#[test]
-fn test_right_join_debug() -> Result<()> {
-    let mut db = State::default();
+    // Note: The order of unmatched rows may vary due to hash table iteration order
+    assert_eq!(query.tuples.len(), 4);
     
-    db.exec("CREATE TABLE basket_a(a SERIAL PRIMARY KEY, fruit_a VARCHAR (100));")?;
-    db.exec("CREATE TABLE basket_b(b SERIAL PRIMARY KEY, fruit_b VARCHAR (100));")?;
-
-    db.exec(
-        r#"
-    INSERT INTO basket_a (a, fruit_a)
-    VALUES
-        (1, 'Apple'),
-        (2, 'Orange'),
-        (3, 'Banana'),
-        (4, 'Cucumber');
-    "#,
-    )?;
-
-    db.exec(
-        r#"
-    INSERT INTO basket_b (b, fruit_b)
-    VALUES
-        (1, 'Orange'),
-        (2, 'Apple'),
-        (3, 'Watermelon'),
-        (4, 'Pear');
-    "#,
-    )?;
-
-    let query = db.exec(
-        r#"
-    SELECT a, fruit_a, b, fruit_b
-    FROM basket_a
-    RIGHT JOIN basket_b ON fruit_a = fruit_b;"#,
-    )?;
+    // Check matched rows
+    assert!(query.tuples.contains(&vec![Value::String("Apple".into()), Value::String("Apple".into())]));
+    assert!(query.tuples.contains(&vec![Value::String("Orange".into()), Value::String("Orange".into())]));
     
-    println!("{:#?}", query);
+    // Check unmatched rows (with NULL for left table columns)
+    let unmatched_rows: Vec<&Vec<Value>> = query.tuples.iter()
+        .filter(|row| matches!(row[0], Value::Null))
+        .collect();
+    assert_eq!(unmatched_rows.len(), 2);
     
+    let unmatched_fruits: Vec<String> = unmatched_rows.iter()
+        .map(|row| match &row[1] {
+            Value::String(s) => s.clone(),
+            _ => panic!("Expected string"),
+        })
+        .collect();
+    assert!(unmatched_fruits.contains(&"Watermelon".to_string()));
+    assert!(unmatched_fruits.contains(&"Pear".to_string()));
+
     Ok(())
 }
