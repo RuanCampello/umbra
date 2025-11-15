@@ -1253,9 +1253,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 
             // b: handle LEFT/FULL join for a left tuple that just finished and has no matches
             if let Some(left) = self.current_left.take() {
-                if (self.join_type.eq(&JoinType::Left) || self.join_type.eq(&JoinType::Full))
-                    && self.index.eq(&0)
-                {
+                if self.right_matters() && self.index.eq(&0) {
                     let mut tuple = left;
                     tuple.extend(vec![Value::Null; self.right_schema.len()]);
 
@@ -1265,6 +1263,10 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 
             // c: fetch new left tuple from probe side
             let Some(left) = self.left.try_next()? else {
+                if self.right_matters() {
+                    return self.emit_unmatched_right();
+                }
+
                 return Ok(None);
             };
 
@@ -1276,13 +1278,18 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             let key = tuple::serialize(&r#type.into(), &key_value);
             self.current_left = Some(left);
 
-            if key_value.is_null() {
-                self.current_matches = None;
-            } else {
-                match self.table.get(&key) {
-                    Some(matches) => self.current_matches = Some(matches.clone()),
+            match key_value.is_null() {
+                true => self.current_matches = None,
+                _ => match self.table.get(&key) {
+                    Some(matches) => {
+                        if self.right_matters() {
+                            self.matched_right_keys.insert(key);
+                        }
+
+                        self.current_matches = Some(matches.clone())
+                    }
                     _ => self.current_matches = None,
-                }
+                },
             }
 
             self.index = 0;
@@ -1405,6 +1412,10 @@ impl<File: FileOperations> HashJoin<File> {
         }
 
         Ok(None)
+    }
+
+    const fn right_matters(&self) -> bool {
+        matches!(self.join_type, JoinType::Right | JoinType::Full)
     }
 
     const fn reset_index(&mut self) {
