@@ -19,7 +19,7 @@ use crate::{
     },
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     io::{Read, Seek, Write},
     rc::Rc,
 };
@@ -59,6 +59,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let mut tables = HashMap::new();
             tables.insert(from.key(), table.schema.clone());
 
+            let mut left_tables = HashSet::new();
+            left_tables.insert(from.key().to_string());
+
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
                 let right_table = db.metadata(&join_clause.table.name)?.clone();
@@ -80,14 +83,22 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     _ => table.schema.clone(),
                 };
 
-                source = Planner::HashJoin(HashJoin::new(
-                    source,
-                    right,
-                    left_schema,
-                    right_table.schema,
-                    join.join_type,
-                    join.on.clone(),
-                ))
+                let mut right_tables = HashSet::new();
+                right_tables.insert(join.table.key().to_string());
+
+                source = Planner::HashJoin(
+                    HashJoin::new(
+                        source,
+                        right,
+                        left_schema,
+                        right_table.schema,
+                        join.join_type,
+                        join.on.clone(),
+                    )
+                    .with_table_names(left_tables.clone(), right_tables),
+                );
+
+                left_tables.insert(join.table.key().to_string());
             }
 
             // this is a special case for `type_of` function

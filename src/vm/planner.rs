@@ -210,6 +210,9 @@ pub(crate) struct HashJoin<File: FileOperations> {
     left_schema: Schema,
     right_schema: Schema,
 
+    left_tables: HashSet<String>,
+    right_tables: HashSet<String>,
+
     index: usize,
 }
 
@@ -1321,6 +1324,10 @@ impl<File: FileOperations> HashJoin<File> {
             matched_right_keys: HashSet::new(),
             unmatched_right: None,
             unmatched_right_index: 0,
+
+            left_tables: HashSet::new(),
+            right_tables: HashSet::new(),
+
             index: 0,
         }
     }
@@ -1350,20 +1357,20 @@ impl<File: FileOperations> HashJoin<File> {
         let left = &**left;
         let right = &**right;
 
-        let left_expr = analyze_expression(&self.left_schema, None, left).is_ok();
-        let right_expr = analyze_expression(&self.right_schema, None, right).is_ok();
+        let left_is_left = self.expr_belongs_to_side(left, true);
+        let right_is_right = self.expr_belongs_to_side(right, false);
 
         // 1: the left and right expressions are in their respective schemas
-        if left_expr && right_expr {
+        if left_is_left && right_is_right {
             let r#type = analyze_expression(&self.left_schema, None, left)?;
             return Ok((left.clone(), right.clone(), r#type));
         }
 
         // 2: if `left` expression belongs to right schema and `right` to left_schema (swapped)
-        let left_expr_for_right = analyze_expression(&self.right_schema, None, left).is_ok();
-        let right_expr_for_left = analyze_expression(&self.left_schema, None, right).is_ok();
+        let left_is_right = self.expr_belongs_to_side(left, false);
+        let right_is_left = self.expr_belongs_to_side(right, true);
 
-        if left_expr_for_right && right_expr_for_left {
+        if left_is_right && right_is_left {
             let r#type = analyze_expression(&self.left_schema, None, right)?;
             return Ok((right.clone(), left.clone(), r#type));
         }
@@ -1372,6 +1379,39 @@ impl<File: FileOperations> HashJoin<File> {
             "Ambiguos or invalid JOIN condition for HashJoin: {}",
             self.condition
         )))
+    }
+
+    pub fn with_table_names(
+        mut self,
+        left_tables: HashSet<String>,
+        right_tables: HashSet<String>,
+    ) -> Self {
+        self.left_tables = left_tables;
+        self.right_tables = right_tables;
+
+        self
+    }
+
+    fn expr_belongs_to_side(&self, expr: &Expression, is_left: bool) -> bool {
+        use crate::sql::analyzer::analyze_expression;
+        use crate::sql::statement::Expression;
+
+        if let Expression::QualifiedIdentifier { table, column } = expr {
+            #[rustfmt::skip]
+            let tables = if is_left { &self.left_tables } else { &self.right_tables };
+            #[rustfmt::skip]
+            let schema = if is_left { &self.left_schema } else { &self.right_schema };
+
+            if !tables.is_empty() && !tables.contains(table) {
+                return false;
+            }
+
+            schema.last_index_of(column).is_some()
+        } else {
+            #[rustfmt::skip]
+            let schema = if is_left { &self.left_schema } else { &self.right_schema };
+            analyze_expression(schema, None, expr).is_ok()
+        }
     }
 
     fn emit_unmatched_right(&mut self) -> Result<Option<Tuple>, DatabaseError> {
@@ -1877,6 +1917,8 @@ impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
             && self.join_type == other.join_type
             && self.left_schema == other.left_schema
             && self.right_schema == other.right_schema
+            && self.left_tables == other.left_tables
+            && self.right_tables == other.right_tables
     }
 }
 

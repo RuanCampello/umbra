@@ -49,6 +49,11 @@ impl Schema {
         self.index.get(col).copied()
     }
 
+    /// Finds the last occurence of column name in the schema.
+    pub fn last_index_of(&self, col: &str) -> Option<usize> {
+        self.columns.iter().rposition(|c| c.name == col)
+    }
+
     pub fn columns_ids(&self) -> Vec<String> {
         self.columns.iter().map(|c| c.name.to_string()).collect()
     }

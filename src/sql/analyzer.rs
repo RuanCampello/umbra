@@ -23,6 +23,12 @@ struct AliasCtx<'s> {
     aliases: &'s HashMap<String, &'s Expression>,
 }
 
+struct TableAwareCtx<'s> {
+    tables: &'s HashMap<String, Schema>,
+    /// Combined schema for unqualified column lookups.
+    combined_schema: &'s Schema,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
     MissingCols,
@@ -45,6 +51,10 @@ type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
 pub(crate) trait AnalyzeCtx {
     fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)>;
+
+    /// Resolves a qualified identifier `table.column`.
+    /// Default implementation ignores the table.
+    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)>;
 }
 
 pub(in crate::sql) fn analyze<'s>(
@@ -343,6 +353,11 @@ impl AnalyzeCtx for Schema {
         self.index_of(ident)
             .map(|idx| (idx, &self.columns[idx].data_type))
     }
+
+    fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
+        self.last_index_of(column)
+            .map(|idx| (idx, &self.columns[idx].data_type))
+    }
 }
 
 impl<'s> AnalyzeCtx for AliasCtx<'s> {
@@ -355,6 +370,12 @@ impl<'s> AnalyzeCtx for AliasCtx<'s> {
             .index_of(ident)
             .map(|idx| (idx, &self.schema.columns[idx].data_type))
     }
+
+    fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
+        self.schema
+            .last_index_of(column)
+            .map(|idx| (idx, &self.schema.columns[idx].data_type))
+    }
 }
 
 pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
@@ -364,7 +385,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 ) -> Result<VmType, SqlError> {
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, data_type)?,
-        Expression::Identifier(column) | Expression::QualifiedIdentifier { column, .. } => {
+        Expression::Identifier(column) => {
             let data_type = ctx
                 .resolve_identifier(column)
                 .map(|tuple| tuple.1)
@@ -372,6 +393,20 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
             // this is an expection because when dealing with outside input, UUID's treated as a
             // String, but inside the engine, we treat it as a Number.
+            match data_type {
+                Type::Uuid => VmType::String,
+                r#type => r#type.into(),
+            }
+        }
+        Expression::QualifiedIdentifier { table, column } => {
+            let data_type = ctx
+                .resolve_qualified_identifier(table, column)
+                .map(|tuple| tuple.1)
+                .ok_or(SqlError::InvalidQualifiedColumn {
+                    table: table.clone(),
+                    column: column.clone(),
+                })?;
+
             match data_type {
                 Type::Uuid => VmType::String,
                 r#type => r#type.into(),
