@@ -1360,6 +1360,9 @@ mod tests {
                     orders_table.schema,
                     JoinType::Inner,
                     parse_expr("id = user_id"),
+                ).with_table_names(
+                    vec!["users".to_string()].into_iter().collect(),
+                    vec!["orders".to_string()].into_iter().collect(),
                 ))),
             })
         );
@@ -1421,6 +1424,9 @@ mod tests {
                     orders_table.schema,
                     JoinType::Inner,
                     parse_expr("users.id = orders.user_id"),
+                ).with_table_names(
+                    vec!["users".to_string()].into_iter().collect(),
+                    vec!["orders".to_string()].into_iter().collect(),
                 ))),
             })
         );
