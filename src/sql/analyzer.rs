@@ -29,13 +29,16 @@ pub(crate) struct TableAwareCtx<'s> {
     tables: &'s HashMap<String, Schema>,
     /// Combined schema for unqualified column lookups
     combined_schema: &'s Schema,
+    /// Ordered list of table keys matching the order they were added to combined schema
+    table_order: Vec<String>,
 }
 
 impl<'s> TableAwareCtx<'s> {
-    pub fn new(tables: &'s HashMap<String, Schema>, combined_schema: &'s Schema) -> Self {
+    pub fn new(tables: &'s HashMap<String, Schema>, combined_schema: &'s Schema, table_order: Vec<String>) -> Self {
         Self {
             tables,
             combined_schema,
+            table_order,
         }
     }
     
@@ -46,14 +49,16 @@ impl<'s> TableAwareCtx<'s> {
         let col_idx_in_table = table_schema.index_of(column)?;
         
         // Now find where this column appears in the combined schema
-        // We need to calculate the offset based on which tables come before this one
+        // Calculate the offset based on tables that come before this one in table_order
         let mut offset = 0;
-        for (table_key, schema) in self.tables.iter() {
+        for table_key in &self.table_order {
             if table_key == table {
                 // Found our table, return the index with offset
                 return Some((offset + col_idx_in_table, &table_schema.columns[col_idx_in_table].data_type));
             }
-            offset += schema.len();
+            if let Some(schema) = self.tables.get(table_key) {
+                offset += schema.len();
+            }
         }
         
         None
@@ -82,6 +87,12 @@ type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
 pub(crate) trait AnalyzeCtx {
     fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)>;
+    
+    /// Resolves a qualified identifier (table.column). Default implementation ignores the table.
+    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
+        let _ = table; // Ignore table by default
+        self.resolve_identifier(column)
+    }
 }
 
 pub(in crate::sql) fn analyze<'s>(
@@ -389,6 +400,10 @@ impl<'s> AnalyzeCtx for TableAwareCtx<'s> {
             .index_of(ident)
             .map(|idx| (idx, &self.combined_schema.columns[idx].data_type))
     }
+    
+    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
+        self.resolve_qualified(table, column)
+    }
 }
 
 impl<'s> AnalyzeCtx for AliasCtx<'s> {
@@ -410,7 +425,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 ) -> Result<VmType, SqlError> {
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, data_type)?,
-        Expression::Identifier(column) | Expression::QualifiedIdentifier { column, .. } => {
+        Expression::Identifier(column) => {
             let data_type = ctx
                 .resolve_identifier(column)
                 .map(|tuple| tuple.1)
@@ -418,6 +433,20 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
             // this is an expection because when dealing with outside input, UUID's treated as a
             // String, but inside the engine, we treat it as a Number.
+            match data_type {
+                Type::Uuid => VmType::String,
+                r#type => r#type.into(),
+            }
+        }
+        Expression::QualifiedIdentifier { table, column } => {
+            let data_type = ctx
+                .resolve_qualified_identifier(table, column)
+                .map(|tuple| tuple.1)
+                .ok_or(SqlError::InvalidQualifiedColumn {
+                    table: table.clone(),
+                    column: column.clone(),
+                })?;
+
             match data_type {
                 Type::Uuid => VmType::String,
                 r#type => r#type.into(),
