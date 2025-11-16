@@ -18,7 +18,7 @@ use crate::core::date::{
 };
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, JoinClause,
-    JoinType, Statement, Type, UnaryOperator, Value,
+    JoinType, Statement, TableRef, Type, UnaryOperator, Value,
 };
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -418,12 +418,13 @@ impl<'input> Parser<'input> {
             return Ok(None);
         };
 
-        let table = self.parse_ident()?;
-        let alias = if self.consume_optional(Token::Keyword(Keyword::As)) {
+        let table_name = self.parse_ident()?;
+        let table_alias = if self.consume_optional(Token::Keyword(Keyword::As)) {
             Some(self.parse_ident()?)
         } else {
             None
         };
+        let table = TableRef::new(table_name, table_alias);
 
         self.expect_keyword(Keyword::On)?;
         let on = self.parse_expr(None)?;
@@ -431,7 +432,6 @@ impl<'input> Parser<'input> {
         Ok(Some(JoinClause {
             join_type,
             table,
-            alias,
             on,
         }))
     }
@@ -906,8 +906,7 @@ mod tests {
                     Expression::Identifier("title".to_string()),
                     Expression::Identifier("author".to_string())
                 ],
-                from: "books".to_string(),
-                from_alias: None,
+                from: TableRef::new("books".to_string(), None),
                 r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Eq,
                     left: Box::new(Expression::Identifier("author".to_string())),
@@ -931,8 +930,7 @@ mod tests {
             statement,
             Ok(Statement::Select(Select {
                 columns: vec![Expression::Wildcard],
-                from: "users".to_string(),
-                from_alias: None,
+                from: TableRef::new("users".to_string(), None),
                 r#where: None,
                 joins: vec![],
                 order_by: vec![],
@@ -2065,7 +2063,7 @@ mod tests {
                         Expression::Identifier("title".into())
                     ])
                     .join(JoinClause {
-                        table: "posts".into(),
+                        table: TableRef::new("posts".into(), None),
                         join_type: JoinType::Inner,
                         on: Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
@@ -2094,8 +2092,8 @@ mod tests {
                         Expression::Identifier("content".into()),
                     ])
                     .join(JoinClause {
-                        table: "posts".into(),
-                        alias: None,
+                        table: TableRef::new("posts".into(), None),
+                        
                         join_type: JoinType::Inner,
                         on: Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
@@ -2104,8 +2102,8 @@ mod tests {
                         }
                     })
                     .join(JoinClause {
-                        table: "comments".into(),
-                        alias: None,
+                        table: TableRef::new("comments".into(), None),
+                        
                         join_type: JoinType::Left,
                         on: Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
@@ -2133,8 +2131,7 @@ mod tests {
                         Expression::Identifier("title".into()),
                     ])
                     .join(JoinClause {
-                        table: "posts".into(),
-                        alias: None,
+                        table: TableRef::new("posts".into(), None),
                         join_type: JoinType::Inner,
                         on: Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,

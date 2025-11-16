@@ -44,34 +44,31 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         Statement::Select(Select {
             columns,
             from,
-            from_alias,
             r#where,
             order_by,
             group_by,
             joins,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
+            let mut source = optimiser::generate_seq_plan(&from.name, r#where.clone(), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
-            let table = db.metadata(&from)?.clone();
+            let table = db.metadata(&from.name)?.clone();
             let mut schema = table.schema.clone();
 
             // map of table names/aliases to qualified column resolution
             let mut tables = HashMap::new();
-            let from_key = from_alias.as_ref().unwrap_or(&from);
-            tables.insert(from_key.clone(), table.schema.clone());
+            tables.insert(from.key().to_string(), table.schema.clone());
 
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
-                let right_table = db.metadata(&join_clause.table)?.clone();
-                let join_key = join_clause.alias.as_ref().unwrap_or(&join_clause.table);
-                tables.insert(join_key.clone(), right_table.schema.clone());
+                let right_table = db.metadata(&join_clause.table.name)?.clone();
+                tables.insert(join_clause.table.key().to_string(), right_table.schema.clone());
 
                 join_metadata.push((join_clause, right_table));
             }
 
             for (join, right_table) in join_metadata {
-                let right = optimiser::generate_seq_plan(&join.table, None, db)?;
+                let right = optimiser::generate_seq_plan(&join.table.name, None, db)?;
                 right_table
                     .schema
                     .columns

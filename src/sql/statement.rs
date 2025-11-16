@@ -66,11 +66,28 @@ pub(crate) enum Create {
     },
 }
 
+/// Represents a table reference with an optional alias
+#[derive(Debug, PartialEq, Clone)]
+pub struct TableRef {
+    pub name: String,
+    pub alias: Option<String>,
+}
+
+impl TableRef {
+    pub fn new(name: String, alias: Option<String>) -> Self {
+        Self { name, alias }
+    }
+    
+    /// Get the key to use for lookups (alias if present, otherwise table name)
+    pub fn key(&self) -> &str {
+        self.alias.as_ref().unwrap_or(&self.name)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct Select {
     pub columns: Vec<Expression>,
-    pub from: String,
-    pub from_alias: Option<String>,
+    pub from: TableRef,
     pub joins: Vec<JoinClause>,
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
@@ -163,8 +180,7 @@ pub enum OrderDirection {
 
 #[derive(Debug, PartialEq)]
 pub struct JoinClause {
-    pub table: String,
-    pub alias: Option<String>,
+    pub table: TableRef,
     pub on: Expression,
     pub join_type: JoinType,
 }
@@ -515,13 +531,24 @@ impl Display for Statement {
             Statement::Select(Select {
                 columns,
                 from,
-                from_alias,
                 r#where,
                 joins,
                 order_by,
                 group_by,
             }) => {
-                write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
+                write!(f, "SELECT {} FROM {}", join(columns, ", "), from.name)?;
+                if let Some(alias) = &from.alias {
+                    write!(f, " AS {alias}")?;
+                }
+                
+                for join_clause in joins {
+                    write!(f, " JOIN {}", join_clause.table.name)?;
+                    if let Some(alias) = &join_clause.table.alias {
+                        write!(f, " AS {alias}")?;
+                    }
+                    write!(f, " ON {}", join_clause.on)?;
+                }
+                
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
@@ -1032,8 +1059,7 @@ impl From<SelectBuilder> for Select {
         Self {
             columns: value.columns,
             joins: value.joins,
-            from: value.from,
-            from_alias: value.from_alias,
+            from: TableRef::new(value.from, value.from_alias),
             r#where: value.r#where,
             order_by: value.order_by,
             group_by: value.group_by,

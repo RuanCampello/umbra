@@ -23,6 +23,43 @@ struct AliasCtx<'s> {
     aliases: &'s HashMap<String, &'s Expression>,
 }
 
+/// Context for analyzing expressions with table alias support
+pub(crate) struct TableAwareCtx<'s> {
+    /// Map of table names/aliases to their schemas
+    tables: &'s HashMap<String, Schema>,
+    /// Combined schema for unqualified column lookups
+    combined_schema: &'s Schema,
+}
+
+impl<'s> TableAwareCtx<'s> {
+    pub fn new(tables: &'s HashMap<String, Schema>, combined_schema: &'s Schema) -> Self {
+        Self {
+            tables,
+            combined_schema,
+        }
+    }
+    
+    /// Resolves a qualified identifier (table.column) to column index and type
+    pub fn resolve_qualified(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
+        // First, find the column in the specific table's schema
+        let table_schema = self.tables.get(table)?;
+        let col_idx_in_table = table_schema.index_of(column)?;
+        
+        // Now find where this column appears in the combined schema
+        // We need to calculate the offset based on which tables come before this one
+        let mut offset = 0;
+        for (table_key, schema) in self.tables.iter() {
+            if table_key == table {
+                // Found our table, return the index with offset
+                return Some((offset + col_idx_in_table, &table_schema.columns[col_idx_in_table].data_type));
+            }
+            offset += schema.len();
+        }
+        
+        None
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
     MissingCols,
@@ -172,18 +209,17 @@ pub(in crate::sql) fn analyze<'s>(
         Statement::Select(Select {
             columns,
             from,
-            from_alias,
             joins,
             order_by,
             group_by,
             r#where,
         }) => {
             // TODO: analyze correcly the join clauses
-            let metadata = ctx.metadata(from)?;
+            let metadata = ctx.metadata(&from.name)?;
             let mut schema = metadata.schema.clone();
 
             for join in joins {
-                let join_metadata = ctx.metadata(&join.table)?;
+                let join_metadata = ctx.metadata(&join.table.name)?;
                 schema.extend(join_metadata.schema.columns.clone());
             }
 
@@ -343,6 +379,15 @@ impl AnalyzeCtx for Schema {
     fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
         self.index_of(ident)
             .map(|idx| (idx, &self.columns[idx].data_type))
+    }
+}
+
+impl<'s> AnalyzeCtx for TableAwareCtx<'s> {
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
+        // For unqualified identifiers, use the combined schema
+        self.combined_schema
+            .index_of(ident)
+            .map(|idx| (idx, &self.combined_schema.columns[idx].data_type))
     }
 }
 
