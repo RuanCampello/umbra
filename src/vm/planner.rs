@@ -210,12 +210,9 @@ pub(crate) struct HashJoin<File: FileOperations> {
     left_schema: Schema,
     right_schema: Schema,
     
-    // Table mapping for proper qualified identifier resolution
-    // Maps table aliases to their schemas, with order preserved
-    left_tables: Option<HashMap<String, Schema>>,
-    right_tables: Option<HashMap<String, Schema>>,
-    left_table_order: Option<Vec<String>>,
-    right_table_order: Option<Vec<String>>,
+    // Simple table mapping: which table aliases are on left vs right
+    left_tables: HashSet<String>,
+    right_tables: HashSet<String>,
 
     index: usize,
 }
@@ -1320,10 +1317,8 @@ impl<File: FileOperations> HashJoin<File> {
             right_schema,
             left: Box::new(left),
             right: Box::new(right),
-            left_tables: None,
-            right_tables: None,
-            left_table_order: None,
-            right_table_order: None,
+            left_tables: HashSet::new(),
+            right_tables: HashSet::new(),
 
             hash_built: false,
             table: HashMap::new(),
@@ -1336,39 +1331,10 @@ impl<File: FileOperations> HashJoin<File> {
         }
     }
     
-    pub fn with_table_context(
-        left: Planner<File>,
-        right: Planner<File>,
-        left_schema: Schema,
-        right_schema: Schema,
-        join_type: JoinType,
-        condition: Expression,
-        left_tables: HashMap<String, Schema>,
-        right_tables: HashMap<String, Schema>,
-        left_table_order: Vec<String>,
-        right_table_order: Vec<String>,
-    ) -> Self {
-        Self {
-            join_type,
-            condition,
-            left_schema,
-            right_schema,
-            left: Box::new(left),
-            right: Box::new(right),
-            left_tables: Some(left_tables),
-            right_tables: Some(right_tables),
-            left_table_order: Some(left_table_order),
-            right_table_order: Some(right_table_order),
-
-            hash_built: false,
-            table: HashMap::new(),
-            current_left: None,
-            current_matches: None,
-            matched_right_keys: HashSet::new(),
-            unmatched_right: None,
-            unmatched_right_index: 0,
-            index: 0,
-        }
+    pub fn with_table_names(mut self, left_tables: HashSet<String>, right_tables: HashSet<String>) -> Self {
+        self.left_tables = left_tables;
+        self.right_tables = right_tables;
+        self
     }
 
     fn extract_join_keys(
@@ -1396,60 +1362,22 @@ impl<File: FileOperations> HashJoin<File> {
         let left = &**left;
         let right = &**right;
 
-        // Use TableAwareCtx if table mappings are available, otherwise use plain schemas
-        let left_expr = if let (Some(ref left_tables), Some(ref left_order)) = (&self.left_tables, &self.left_table_order) {
-            use crate::sql::analyzer::TableAwareCtx;
-            let ctx = TableAwareCtx::new(left_tables, &self.left_schema, left_order.clone());
-            analyze_expression(&ctx, None, left).is_ok()
-        } else {
-            analyze_expression(&self.left_schema, None, left).is_ok()
-        };
-
-        let right_expr = if let (Some(ref right_tables), Some(ref right_order)) = (&self.right_tables, &self.right_table_order) {
-            use crate::sql::analyzer::TableAwareCtx;
-            let ctx = TableAwareCtx::new(right_tables, &self.right_schema, right_order.clone());
-            analyze_expression(&ctx, None, right).is_ok()
-        } else {
-            analyze_expression(&self.right_schema, None, right).is_ok()
-        };
+        // Check which side each expression belongs to
+        let left_is_left = self.expr_belongs_to_side(left, true);
+        let right_is_right = self.expr_belongs_to_side(right, false);
 
         // 1: the left and right expressions are in their respective schemas
-        if left_expr && right_expr {
-            let r#type = if let (Some(ref left_tables), Some(ref left_order)) = (&self.left_tables, &self.left_table_order) {
-                use crate::sql::analyzer::TableAwareCtx;
-                let ctx = TableAwareCtx::new(left_tables, &self.left_schema, left_order.clone());
-                analyze_expression(&ctx, None, left)?
-            } else {
-                analyze_expression(&self.left_schema, None, left)?
-            };
+        if left_is_left && right_is_right {
+            let r#type = analyze_expression(&self.left_schema, None, left)?;
             return Ok((left.clone(), right.clone(), r#type));
         }
 
         // 2: if `left` expression belongs to right schema and `right` to left_schema (swapped)
-        let left_expr_for_right = if let (Some(ref right_tables), Some(ref right_order)) = (&self.right_tables, &self.right_table_order) {
-            use crate::sql::analyzer::TableAwareCtx;
-            let ctx = TableAwareCtx::new(right_tables, &self.right_schema, right_order.clone());
-            analyze_expression(&ctx, None, left).is_ok()
-        } else {
-            analyze_expression(&self.right_schema, None, left).is_ok()
-        };
+        let left_is_right = self.expr_belongs_to_side(left, false);
+        let right_is_left = self.expr_belongs_to_side(right, true);
 
-        let right_expr_for_left = if let (Some(ref left_tables), Some(ref left_order)) = (&self.left_tables, &self.left_table_order) {
-            use crate::sql::analyzer::TableAwareCtx;
-            let ctx = TableAwareCtx::new(left_tables, &self.left_schema, left_order.clone());
-            analyze_expression(&ctx, None, right).is_ok()
-        } else {
-            analyze_expression(&self.left_schema, None, right).is_ok()
-        };
-
-        if left_expr_for_right && right_expr_for_left {
-            let r#type = if let (Some(ref left_tables), Some(ref left_order)) = (&self.left_tables, &self.left_table_order) {
-                use crate::sql::analyzer::TableAwareCtx;
-                let ctx = TableAwareCtx::new(left_tables, &self.left_schema, left_order.clone());
-                analyze_expression(&ctx, None, right)?
-            } else {
-                analyze_expression(&self.left_schema, None, right)?
-            };
+        if left_is_right && right_is_left {
+            let r#type = analyze_expression(&self.left_schema, None, right)?;
             return Ok((right.clone(), left.clone(), r#type));
         }
 
@@ -1459,23 +1387,27 @@ impl<File: FileOperations> HashJoin<File> {
         )))
     }
     
-    /// Check if an expression can be resolved in a schema.
-    /// For QualifiedIdentifiers, only return true if the LAST occurrence of the column name
-    /// in the schema matches (to handle cases where multiple tables have the same column).
-    fn can_resolve_in_schema(&self, schema: &Schema, expr: &Expression) -> bool {
+    /// Check if an expression belongs to a specific side (left=true, right=false)
+    fn expr_belongs_to_side(&self, expr: &Expression, is_left: bool) -> bool {
         use crate::sql::statement::Expression;
+        use crate::sql::analyzer::analyze_expression;
         
-        match expr {
-            Expression::QualifiedIdentifier { column, .. } => {
-                // For qualified identifiers, check if the column exists
-                // We look for the LAST occurrence to prefer the most recently joined table
-                schema.columns.iter().rposition(|col| &col.name == column).is_some()
+        // For QualifiedIdentifiers, check the table name
+        if let Expression::QualifiedIdentifier { table, column } = expr {
+            let tables = if is_left { &self.left_tables } else { &self.right_tables };
+            let schema = if is_left { &self.left_schema } else { &self.right_schema };
+            
+            // If we have table information, use it to check
+            if !tables.is_empty() && !tables.contains(table) {
+                return false; // Table is not on this side
             }
-            _ => {
-                // For other expressions, use the standard analysis
-                use crate::sql::analyzer::analyze_expression;
-                analyze_expression(schema, None, expr).is_ok()
-            }
+            
+            // Also verify the column exists in the schema
+            schema.last_index_of(column).is_some()
+        } else {
+            // For non-qualified expressions, use standard analysis
+            let schema = if is_left { &self.left_schema} else { &self.right_schema };
+            analyze_expression(schema, None, expr).is_ok()
         }
     }
 
@@ -1984,8 +1916,6 @@ impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
             && self.right_schema == other.right_schema
             && self.left_tables == other.left_tables
             && self.right_tables == other.right_tables
-            && self.left_table_order == other.left_table_order
-            && self.right_table_order == other.right_table_order
     }
 }
 

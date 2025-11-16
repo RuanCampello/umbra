@@ -23,48 +23,6 @@ struct AliasCtx<'s> {
     aliases: &'s HashMap<String, &'s Expression>,
 }
 
-/// Context for analyzing expressions with table alias support
-pub(crate) struct TableAwareCtx<'s> {
-    /// Map of table names/aliases to their schemas
-    tables: &'s HashMap<String, Schema>,
-    /// Combined schema for unqualified column lookups
-    combined_schema: &'s Schema,
-    /// Ordered list of table keys matching the order they were added to combined schema
-    table_order: Vec<String>,
-}
-
-impl<'s> TableAwareCtx<'s> {
-    pub fn new(tables: &'s HashMap<String, Schema>, combined_schema: &'s Schema, table_order: Vec<String>) -> Self {
-        Self {
-            tables,
-            combined_schema,
-            table_order,
-        }
-    }
-    
-    /// Resolves a qualified identifier (table.column) to column index and type
-    pub fn resolve_qualified(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
-        // First, find the column in the specific table's schema
-        let table_schema = self.tables.get(table)?;
-        let col_idx_in_table = table_schema.index_of(column)?;
-        
-        // Now find where this column appears in the combined schema
-        // Calculate the offset based on tables that come before this one in table_order
-        let mut offset = 0;
-        for table_key in &self.table_order {
-            if table_key == table {
-                // Found our table, return the index with offset
-                return Some((offset + col_idx_in_table, &table_schema.columns[col_idx_in_table].data_type));
-            }
-            if let Some(schema) = self.tables.get(table_key) {
-                offset += schema.len();
-            }
-        }
-        
-        None
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
     MissingCols,
@@ -88,11 +46,9 @@ type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 pub(crate) trait AnalyzeCtx {
     fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)>;
     
-    /// Resolves a qualified identifier (table.column). Default implementation ignores the table.
-    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
-        let _ = table; // Ignore table by default
-        self.resolve_identifier(column)
-    }
+    /// Resolve a qualified identifier. Default implementation uses last_index_of
+    /// to find the most recently joined table with this column name.
+    fn resolve_qualified(&self, _table: &str, column: &str) -> Option<(usize, &Type)>;
 }
 
 pub(in crate::sql) fn analyze<'s>(
@@ -391,18 +347,11 @@ impl AnalyzeCtx for Schema {
         self.index_of(ident)
             .map(|idx| (idx, &self.columns[idx].data_type))
     }
-}
-
-impl<'s> AnalyzeCtx for TableAwareCtx<'s> {
-    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
-        // For unqualified identifiers, use the combined schema
-        self.combined_schema
-            .index_of(ident)
-            .map(|idx| (idx, &self.combined_schema.columns[idx].data_type))
-    }
     
-    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
-        self.resolve_qualified(table, column)
+    fn resolve_qualified(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
+        // For qualified identifiers, use last_index_of to find the most recently joined table
+        self.last_index_of(column)
+            .map(|idx| (idx, &self.columns[idx].data_type))
     }
 }
 
@@ -414,6 +363,13 @@ impl<'s> AnalyzeCtx for AliasCtx<'s> {
 
         self.schema
             .index_of(ident)
+            .map(|idx| (idx, &self.schema.columns[idx].data_type))
+    }
+    
+    fn resolve_qualified(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
+        // For qualified identifiers, use last_index_of
+        self.schema
+            .last_index_of(column)
             .map(|idx| (idx, &self.schema.columns[idx].data_type))
     }
 }
@@ -440,7 +396,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
         }
         Expression::QualifiedIdentifier { table, column } => {
             let data_type = ctx
-                .resolve_qualified_identifier(table, column)
+                .resolve_qualified(table, column)
                 .map(|tuple| tuple.1)
                 .ok_or(SqlError::InvalidQualifiedColumn {
                     table: table.clone(),

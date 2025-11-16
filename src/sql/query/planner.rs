@@ -59,10 +59,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let mut tables = HashMap::new();
             tables.insert(from.key().to_string(), table.schema.clone());
             
-            // Track which tables are on the left side (accumulated from previous joins)
-            let mut left_tables = HashMap::new();
-            left_tables.insert(from.key().to_string(), table.schema.clone());
-            let mut left_table_order = vec![from.key().to_string()];
+            // Track which tables are on the left (accumulated)
+            let mut left_table_names = std::collections::HashSet::new();
+            left_table_names.insert(from.key().to_string());
 
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
@@ -85,27 +84,21 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     _ => table.schema.clone(),
                 };
                 
-                // Build right_tables map with just the current table being joined
-                let mut right_tables = HashMap::new();
-                right_tables.insert(join.table.key().to_string(), right_table.schema.clone());
-                let right_table_order = vec![join.table.key().to_string()];
+                // Build right table set
+                let mut right_table_names = std::collections::HashSet::new();
+                right_table_names.insert(join.table.key().to_string());
 
-                source = Planner::HashJoin(HashJoin::with_table_context(
+                source = Planner::HashJoin(HashJoin::new(
                     source,
                     right,
                     left_schema,
-                    right_table.schema.clone(),
+                    right_table.schema,
                     join.join_type,
                     join.on.clone(),
-                    left_tables.clone(),
-                    right_tables,
-                    left_table_order.clone(),
-                    right_table_order,
-                ));
+                ).with_table_names(left_table_names.clone(), right_table_names));
                 
-                // Add the joined table to left_tables for the next join
-                left_tables.insert(join.table.key().to_string(), right_table.schema);
-                left_table_order.push(join.table.key().to_string());
+                // Add this table to left for the next join
+                left_table_names.insert(join.table.key().to_string());
             }
 
             // this is a special case for `type_of` function

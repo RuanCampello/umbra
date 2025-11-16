@@ -48,6 +48,12 @@ impl Schema {
     pub fn index_of(&self, col: &str) -> Option<usize> {
         self.index.get(col).copied()
     }
+    
+    /// Find the last occurrence of a column name in the schema.
+    /// Useful for qualified identifiers where we want the most recently joined table's column.
+    pub fn last_index_of(&self, col: &str) -> Option<usize> {
+        self.columns.iter().rposition(|c| c.name == col)
+    }
 
     pub fn columns_ids(&self) -> Vec<String> {
         self.columns.iter().map(|c| c.name.to_string()).collect()
