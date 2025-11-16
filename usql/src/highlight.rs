@@ -2,9 +2,11 @@ use rustyline::{Completer, Helper, Hinter, Validator, highlight::Highlighter};
 use std::{borrow::Cow, str::FromStr};
 use umbra::sql::Keyword;
 
-pub(crate) const KEYWORD_COLOUR: &str = "\x1b[38;5;207m";
-pub(crate) const STRING_COLOUR: &str = "\x1b[38;5;11m";
+// Catppuccin Mocha palette
+pub(crate) const KEYWORD_COLOUR: &str = "\x1b[38;5;183m"; // Mauve
+pub(crate) const STRING_COLOUR: &str = "\x1b[38;5;222m"; // Yellow (closer to Catppuccin)
 pub(crate) const RESET_COLOUR: &str = "\x1b[0m";
+pub(crate) const TIME_COLOUR: &str = "\x1b[38;5;111m"; // Sky/Blue
 
 #[derive(Completer, Helper, Hinter, Validator)]
 pub(crate) struct SqlHighlighter;

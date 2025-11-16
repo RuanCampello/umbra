@@ -1,6 +1,6 @@
 mod highlight;
 
-use crate::highlight::{KEYWORD_COLOUR, RESET_COLOUR, STRING_COLOUR, SqlHighlighter};
+use crate::highlight::{KEYWORD_COLOUR, RESET_COLOUR, STRING_COLOUR, SqlHighlighter, TIME_COLOUR};
 use rustyline::error::ReadlineError;
 use std::{
     collections::VecDeque,
@@ -142,11 +142,14 @@ fn main() -> rustyline::Result<()> {
                 Ok(response) => match response {
                     Response::Err(err) => println!("{err}"),
                     Response::Empty(affected_rows) => {
-                        println!("{affected_rows} ({:.2?})", packet_transmission.elapsed())
+                        println!(
+                            "{affected_rows} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
+                            packet_transmission.elapsed()
+                        )
                     }
                     Response::QuerySet(query_set) => {
                         println!(
-                            "{}\n{} {} ({:.2?})",
+                            "{}\n{} {} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
                             table(&query_set),
                             query_set.tuples.len(),
                             plural("row", query_set.tuples.len()),
