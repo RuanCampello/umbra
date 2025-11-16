@@ -41,7 +41,7 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             joins,
             ..
         }) if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) => {
-            let metadata = ctx.metadata(from)?;
+            let metadata = ctx.metadata(&from.name)?;
             let mut identifiers: Vec<Expression> = metadata
                 .schema
                 .columns
@@ -52,7 +52,7 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 .collect();
 
             for join in joins {
-                let metadata = ctx.metadata(&join.table)?;
+                let metadata = ctx.metadata(&join.table.name)?;
                 identifiers.extend(
                     metadata
                         .schema

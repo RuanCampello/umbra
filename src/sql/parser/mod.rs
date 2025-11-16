@@ -18,7 +18,7 @@ use crate::core::date::{
 };
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, JoinClause,
-    JoinType, Statement, Type, UnaryOperator, Value,
+    JoinType, Statement, TableRef, Type, UnaryOperator, Value,
 };
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -419,6 +419,8 @@ impl<'input> Parser<'input> {
         };
 
         let table = self.parse_ident()?;
+        let table_alias = self.parse_alias()?;
+        let table = TableRef::new(table, table_alias);
 
         self.expect_keyword(Keyword::On)?;
         let on = self.parse_expr(None)?;
@@ -428,6 +430,13 @@ impl<'input> Parser<'input> {
             table,
             on,
         }))
+    }
+
+    fn parse_alias(&mut self) -> ParserResult<Option<String>> {
+        Ok(match self.consume_optional(Token::Keyword(Keyword::As)) {
+            true => Some(self.parse_ident()?),
+            _ => None,
+        })
     }
 
     /// Operator's precedence from the [PostgreSQL documentation](https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-PRECEDENCE)
@@ -900,7 +909,7 @@ mod tests {
                     Expression::Identifier("title".to_string()),
                     Expression::Identifier("author".to_string())
                 ],
-                from: "books".to_string(),
+                from: "books".into(),
                 r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Eq,
                     left: Box::new(Expression::Identifier("author".to_string())),
@@ -924,7 +933,7 @@ mod tests {
             statement,
             Ok(Statement::Select(Select {
                 columns: vec![Expression::Wildcard],
-                from: "users".to_string(),
+                from: "users".into(),
                 r#where: None,
                 joins: vec![],
                 order_by: vec![],

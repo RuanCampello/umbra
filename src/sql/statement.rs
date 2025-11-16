@@ -69,7 +69,7 @@ pub(crate) enum Create {
 #[derive(Debug, PartialEq)]
 pub(crate) struct Select {
     pub columns: Vec<Expression>,
-    pub from: String,
+    pub from: TableRef,
     pub joins: Vec<JoinClause>,
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
@@ -80,11 +80,17 @@ pub(crate) struct Select {
 #[derive(Debug, Default, PartialEq)]
 pub struct SelectBuilder {
     columns: Vec<Expression>,
-    from: String,
+    from: TableRef,
     joins: Vec<JoinClause>,
     r#where: Option<Expression>,
     order_by: Vec<OrderBy>,
     group_by: Vec<Expression>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Hash)]
+pub struct TableRef {
+    pub name: String,
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -161,7 +167,7 @@ pub enum OrderDirection {
 
 #[derive(Debug, PartialEq)]
 pub struct JoinClause {
-    pub table: String,
+    pub table: TableRef,
     pub on: Expression,
     pub join_type: JoinType,
 }
@@ -517,7 +523,21 @@ impl Display for Statement {
                 order_by,
                 group_by,
             }) => {
-                write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
+                write!(f, "SELECT {} FROM {}", join(columns, ", "), from.name)?;
+                if let Some(alias) = &from.alias {
+                    write!(f, " AS {alias}")?;
+                }
+
+                for join in joins {
+                    write!(f, " JOIN {}", join.table.name)?;
+
+                    if let Some(alias) = &join.table.alias {
+                        write!(f, " AS {alias}")?;
+                    }
+
+                    write!(f, " ON {}", join.on)?;
+                }
+
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
@@ -988,7 +1008,7 @@ define_function_mapping! {
 
 impl SelectBuilder {
     pub fn from(mut self, from: impl Into<String>) -> Self {
-        self.from = from.into();
+        self.from.name = from.into();
         self
     }
 
@@ -1033,6 +1053,27 @@ impl From<SelectBuilder> for Select {
             order_by: value.order_by,
             group_by: value.group_by,
         }
+    }
+}
+
+impl TableRef {
+    pub fn new(name: String, alias: Option<String>) -> Self {
+        Self { name, alias }
+    }
+
+    /// Returns the key for lookups in the context.
+    /// Alias if present, otherwise table name.
+    pub fn key(&self) -> &str {
+        self.alias.as_ref().unwrap_or(&self.name)
+    }
+}
+
+impl<S> From<S> for TableRef
+where
+    S: AsRef<str>,
+{
+    fn from(value: S) -> Self {
+        TableRef::new(value.as_ref().into(), None)
     }
 }
 

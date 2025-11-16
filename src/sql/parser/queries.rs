@@ -1,5 +1,5 @@
 use crate::sql::statement::{
-    Create, Delete, Drop, Insert, OrderBy, OrderDirection, Select, Update,
+    Create, Delete, Drop, Insert, OrderBy, OrderDirection, Select, TableRef, Update,
 };
 
 use super::{
@@ -25,6 +25,8 @@ impl<'sql> Sql<'sql> for Select {
 
         parser.expect_keyword(Keyword::From)?;
         let from = parser.parse_ident()?;
+        let from_alias = parser.parse_alias()?;
+        let from = TableRef::new(from, from_alias);
 
         let mut joins = Vec::new();
         while let Some(clause) = parser.parse_join()? {
