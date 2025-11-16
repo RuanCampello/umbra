@@ -374,6 +374,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Aggregate(aggr) => &aggr.output,
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
+            Self::HashJoin(hash) => return Some(hash.schema()),
             _ => return None,
         };
 
@@ -1451,6 +1452,13 @@ impl<File: FileOperations> HashJoin<File> {
         }
 
         Ok(None)
+    }
+
+    fn schema(&self) -> Schema {
+        let mut combined = self.left_schema.clone();
+        combined.extend(self.right_schema.columns.clone());
+
+        combined
     }
 
     const fn right_matters(&self) -> bool {

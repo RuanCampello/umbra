@@ -1345,22 +1345,28 @@ mod tests {
                     Expression::Identifier("name".into()),
                     Expression::Identifier("order_id".into()),
                 ],
-                source: Box::new(Planner::HashJoin(HashJoin::new(
-                    Planner::SeqScan(SeqScan {
-                        table: users_table.clone(),
-                        pager: db.pager(),
-                        cursor: Cursor::new(users_table.root, 0),
-                    }),
-                    Planner::SeqScan(SeqScan {
-                        table: orders_table.clone(),
-                        pager: db.pager(),
-                        cursor: Cursor::new(orders_table.root, 0),
-                    }),
-                    users_table.schema,
-                    orders_table.schema,
-                    JoinType::Inner,
-                    parse_expr("id = user_id"),
-                ))),
+                source: Box::new(Planner::HashJoin(
+                    HashJoin::new(
+                        Planner::SeqScan(SeqScan {
+                            table: users_table.clone(),
+                            pager: db.pager(),
+                            cursor: Cursor::new(users_table.root, 0),
+                        }),
+                        Planner::SeqScan(SeqScan {
+                            table: orders_table.clone(),
+                            pager: db.pager(),
+                            cursor: Cursor::new(orders_table.root, 0),
+                        }),
+                        users_table.schema,
+                        orders_table.schema,
+                        JoinType::Inner,
+                        parse_expr("id = user_id"),
+                    )
+                    .with_table_names(
+                        HashSet::from(["users".to_string()]),
+                        HashSet::from(["orders".to_string()])
+                    )
+                )),
             })
         );
 
@@ -1406,22 +1412,28 @@ mod tests {
                         alias: "order_id".into(),
                     },
                 ],
-                source: Box::new(Planner::HashJoin(HashJoin::new(
-                    Planner::SeqScan(SeqScan {
-                        table: users_table.clone(),
-                        pager: db.pager(),
-                        cursor: Cursor::new(users_table.root, 0),
-                    }),
-                    Planner::SeqScan(SeqScan {
-                        table: orders_table.clone(),
-                        pager: db.pager(),
-                        cursor: Cursor::new(orders_table.root, 0),
-                    }),
-                    users_table.schema,
-                    orders_table.schema,
-                    JoinType::Inner,
-                    parse_expr("users.id = orders.user_id"),
-                ))),
+                source: Box::new(Planner::HashJoin(
+                    HashJoin::new(
+                        Planner::SeqScan(SeqScan {
+                            table: users_table.clone(),
+                            pager: db.pager(),
+                            cursor: Cursor::new(users_table.root, 0),
+                        }),
+                        Planner::SeqScan(SeqScan {
+                            table: orders_table.clone(),
+                            pager: db.pager(),
+                            cursor: Cursor::new(orders_table.root, 0),
+                        }),
+                        users_table.schema,
+                        orders_table.schema,
+                        JoinType::Inner,
+                        parse_expr("users.id = orders.user_id"),
+                    )
+                    .with_table_names(
+                        HashSet::from(["users".to_string()]),
+                        HashSet::from(["orders".to_string()])
+                    )
+                )),
             })
         );
 

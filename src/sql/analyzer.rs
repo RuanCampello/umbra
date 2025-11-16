@@ -23,12 +23,6 @@ struct AliasCtx<'s> {
     aliases: &'s HashMap<String, &'s Expression>,
 }
 
-struct TableAwareCtx<'s> {
-    tables: &'s HashMap<String, Schema>,
-    /// Combined schema for unqualified column lookups.
-    combined_schema: &'s Schema,
-}
-
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
     MissingCols,
