@@ -377,11 +377,9 @@ impl<File: FileOperations> Planner<File> {
             Self::Filter(filter) => return filter.source.schema(),
             Self::HashJoin(join) => {
                 // Return combined schema: left + right
-                let mut combined = join.left_schema.clone();
-                for col in &join.right_schema.columns {
-                    combined.push(col.clone());
-                }
-                return Some(combined);
+                let mut combined_columns = join.left_schema.columns.clone();
+                combined_columns.extend(join.right_schema.columns.clone());
+                return Some(Schema::new(combined_columns));
             }
             _ => return None,
         };
