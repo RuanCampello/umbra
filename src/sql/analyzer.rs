@@ -178,11 +178,11 @@ pub(in crate::sql) fn analyze<'s>(
             r#where,
         }) => {
             // TODO: analyze correcly the join clauses
-            let metadata = ctx.metadata(from)?;
+            let metadata = ctx.metadata(&from.name)?;
             let mut schema = metadata.schema.clone();
 
             for join in joins {
-                let join_metadata = ctx.metadata(&join.table)?;
+                let join_metadata = ctx.metadata(&join.table.name)?;
                 schema.extend(join_metadata.schema.columns.clone());
             }
 

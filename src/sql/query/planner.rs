@@ -49,26 +49,26 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             group_by,
             joins,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
+            let mut source = optimiser::generate_seq_plan(&from.name, r#where.clone(), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
-            let table = db.metadata(&from)?.clone();
+            let table = db.metadata(&from.name)?.clone();
             let mut schema = table.schema.clone();
 
             // map of table names to qualified column resolution
             let mut tables = HashMap::new();
-            tables.insert(from, table.schema.clone());
+            tables.insert(from.key(), table.schema.clone());
 
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
-                let right_table = db.metadata(&join_clause.table)?.clone();
-                tables.insert(join_clause.table.clone(), right_table.schema.clone());
+                let right_table = db.metadata(&join_clause.table.name)?.clone();
+                tables.insert(join_clause.table.key(), right_table.schema.clone());
 
                 join_metadata.push((join_clause, right_table));
             }
 
             for (join, right_table) in join_metadata {
-                let right = optimiser::generate_seq_plan(&join.table, None, db)?;
+                let right = optimiser::generate_seq_plan(&join.table.name, None, db)?;
                 right_table
                     .schema
                     .columns
@@ -501,7 +501,7 @@ fn resolve_order_index<'a>(
 fn resolve_qualified_column(
     table: &str,
     column: &str,
-    tables: &HashMap<String, Schema>,
+    tables: &HashMap<&str, Schema>,
 ) -> Result<Column, SqlError> {
     let schema = tables
         .get(table)
