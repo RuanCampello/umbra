@@ -832,7 +832,7 @@ impl Display for ErrorKind {
             ErrorKind::Unsupported(token) => write!(f, "Unexpected or unsupported token: {token}"),
             ErrorKind::Expected { expected, found } => write!(
                 f,
-                "Expected {} but found '{found}' instead",
+                "Expected '{}' but found '{found}' instead",
                 ErrorKind::expected_token_str(expected)
             ),
             ErrorKind::ExpectedOneOf { expected, found } => {

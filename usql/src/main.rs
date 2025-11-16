@@ -1,6 +1,6 @@
 mod highlight;
 
-use crate::highlight::SqlHighlighter;
+use crate::highlight::{KEYWORD_COLOUR, RESET_COLOUR, STRING_COLOUR, SqlHighlighter};
 use rustyline::error::ReadlineError;
 use std::{
     collections::VecDeque,
@@ -46,9 +46,13 @@ fn main() -> rustyline::Result<()> {
 
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
     println!("Connected to {}", stream.peer_addr()?);
-    println!("{}", UMBRA_ASCII);
+
+    println!("{KEYWORD_COLOUR}{UMBRA_ASCII}{RESET_COLOUR}");
+
     println!("󰭟  usql | Umbra's shadowy SQL shell.");
-    println!("Type \\help for guidance, \\quit to escape the void.");
+    println!(
+        "Type {STRING_COLOUR}\\help{RESET_COLOUR} for guidance, {STRING_COLOUR}\\quit{RESET_COLOUR} to escape the void."
+    );
 
     let mut single_quote = None;
     let mut sql = String::new();
@@ -248,4 +252,3 @@ fn plural(word: &str, length: usize) -> String {
         false => format!("{word}s"),
     }
 }
-

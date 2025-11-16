@@ -2,9 +2,9 @@ use rustyline::{Completer, Helper, Hinter, Validator, highlight::Highlighter};
 use std::{borrow::Cow, str::FromStr};
 use umbra::sql::Keyword;
 
-const KEYWORD_COLOR: &str = "\x1b[38;5;207m";
-const STRING_COLOR: &str = "\x1b[38;5;11m";
-const RESET_COLOR: &str = "\x1b[0m";
+pub(crate) const KEYWORD_COLOUR: &str = "\x1b[38;5;207m";
+pub(crate) const STRING_COLOUR: &str = "\x1b[38;5;11m";
+pub(crate) const RESET_COLOUR: &str = "\x1b[0m";
 
 #[derive(Completer, Helper, Hinter, Validator)]
 pub(crate) struct SqlHighlighter;
@@ -23,9 +23,9 @@ impl Highlighter for SqlHighlighter {
                         match quote == ch {
                             true => {
                                 current_word.push(ch);
-                                result.push_str(STRING_COLOR);
+                                result.push_str(STRING_COLOUR);
                                 result.push_str(&current_word);
-                                result.push_str(RESET_COLOR);
+                                result.push_str(RESET_COLOUR);
                                 current_word.clear();
                                 in_string = None;
                             }
@@ -58,9 +58,9 @@ impl Highlighter for SqlHighlighter {
         }
 
         if in_string.is_some() {
-            result.push_str(STRING_COLOR);
+            result.push_str(STRING_COLOUR);
             result.push_str(&current_word);
-            result.push_str(RESET_COLOR);
+            result.push_str(RESET_COLOUR);
         } else if !current_word.is_empty() {
             Self::flush_word(&mut result, &current_word);
         }
@@ -82,9 +82,9 @@ impl SqlHighlighter {
     fn flush_word(result: &mut String, word: &str) {
         if let Ok(keyword) = Keyword::from_str(word) {
             if !matches!(keyword, Keyword::None) {
-                result.push_str(KEYWORD_COLOR);
+                result.push_str(KEYWORD_COLOUR);
                 result.push_str(word);
-                result.push_str(RESET_COLOR);
+                result.push_str(RESET_COLOUR);
                 return;
             }
         }
