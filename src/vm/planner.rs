@@ -11,7 +11,7 @@ use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{
-    join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
+    join, Assignment, Constraint, Expression, Function, JoinType, OrderDirection, Value,
 };
 use crate::vm;
 use crate::vm::expression::evaluate_where;
@@ -378,7 +378,20 @@ impl<File: FileOperations> Planner<File> {
             Self::HashJoin(join) => {
                 // Return combined schema: left + right
                 let mut combined_columns = join.left_schema.columns.clone();
-                combined_columns.extend(join.right_schema.columns.clone());
+                
+                // For LEFT JOIN, right-side columns can be NULL for unmatched rows
+                if join.join_type == JoinType::Left {
+                    let mut right_columns = join.right_schema.columns.clone();
+                    for col in &mut right_columns {
+                        if !col.is_nullable() {
+                            col.constraints.push(Constraint::Nullable);
+                        }
+                    }
+                    combined_columns.extend(right_columns);
+                } else {
+                    combined_columns.extend(join.right_schema.columns.clone());
+                }
+                
                 return Some(Schema::new(combined_columns));
             }
             _ => return None,
