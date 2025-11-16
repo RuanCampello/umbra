@@ -1,3 +1,7 @@
+mod highlight;
+
+use crate::highlight::SqlHighlighter;
+use rustyline::error::ReadlineError;
 use std::{
     collections::VecDeque,
     env,
@@ -5,8 +9,6 @@ use std::{
     net::TcpStream,
     time::Instant,
 };
-
-use rustyline::{DefaultEditor, error::ReadlineError};
 use umbra::{
     db::QuerySet,
     sql::statement::Value,
@@ -35,7 +37,9 @@ fn main() -> rustyline::Result<()> {
         .parse::<u16>()
         .expect("Invalid port provided");
 
-    let mut rsl = DefaultEditor::new()?;
+    let mut rsl = rustyline::Editor::new()?;
+    rsl.set_helper(Some(SqlHighlighter));
+
     if rsl.load_history("history.usql").is_err() {
         println!("No previous history")
     };
@@ -244,3 +248,4 @@ fn plural(word: &str, length: usize) -> String {
         false => format!("{word}s"),
     }
 }
+

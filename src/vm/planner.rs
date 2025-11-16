@@ -371,7 +371,11 @@ impl<File: FileOperations> Planner<File> {
             Self::Aggregate(aggr) => &aggr.output,
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
-            Self::HashJoin(hash) => return Some(hash.schema()),
+            Self::HashJoin(hash) => {
+                let mut schema = hash.left_schema();
+                schema.extend_with_join(hash.right_schema().columns, &hash.join_type);
+                return Some(schema);
+            }
             _ => return None,
         };
 
@@ -1457,13 +1461,6 @@ impl<File: FileOperations> HashJoin<File> {
         self.right
             .schema()
             .expect("HashJoin must have a right node schema")
-    }
-
-    fn schema(&self) -> Schema {
-        let mut combined = self.left_schema();
-        combined.extend(self.right_schema().columns);
-
-        combined
     }
 
     const fn right_matters(&self) -> bool {

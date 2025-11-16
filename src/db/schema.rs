@@ -1,5 +1,5 @@
 use crate::db::ROW_COL_ID;
-use crate::sql::statement::{Column, Constraint, Type};
+use crate::sql::statement::{Column, Constraint, JoinType, Type};
 use std::collections::HashMap;
 
 /// The representation of the table schema during runtime.
@@ -43,6 +43,49 @@ impl Schema {
         for col in columns {
             self.push(col)
         }
+    }
+
+    pub fn extend_with_join(
+        &mut self,
+        columns: impl IntoIterator<Item = Column>,
+        join_type: &JoinType,
+    ) {
+        match join_type {
+            JoinType::Inner => self.columns.extend(columns),
+            JoinType::Left => {
+                self.columns
+                    .extend(Self::make_nullable_if_needed(columns, true));
+            }
+            JoinType::Full => {
+                for col in &mut self.columns {
+                    if !col.is_nullable() {
+                        col.constraints.push(Constraint::Nullable);
+                    }
+                }
+                self.columns
+                    .extend(Self::make_nullable_if_needed(columns, true));
+            }
+            JoinType::Right => {
+                for col in &mut self.columns {
+                    if !col.is_nullable() {
+                        col.constraints.push(Constraint::Nullable);
+                    }
+                }
+                self.columns.extend(columns);
+            }
+        }
+    }
+
+    fn make_nullable_if_needed(
+        columns: impl IntoIterator<Item = Column>,
+        should_make_nullable: bool,
+    ) -> impl Iterator<Item = Column> {
+        columns.into_iter().map(move |mut col| {
+            if should_make_nullable && !col.is_nullable() {
+                col.constraints.push(Constraint::Nullable);
+            }
+            col
+        })
     }
 
     pub fn index_of(&self, col: &str) -> Option<usize> {

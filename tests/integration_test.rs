@@ -1980,8 +1980,6 @@ fn multiple_join() -> Result<()> {
     LEFT JOIN comments AS c ON p.id = c.post_id;"#,
     )?;
 
-    println!("{query}");
-
     assert_eq!(
         query.tuples,
         vec![
