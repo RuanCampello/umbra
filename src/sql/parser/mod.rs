@@ -419,6 +419,11 @@ impl<'input> Parser<'input> {
         };
 
         let table = self.parse_ident()?;
+        let alias = if self.consume_optional(Token::Keyword(Keyword::As)) {
+            Some(self.parse_ident()?)
+        } else {
+            None
+        };
 
         self.expect_keyword(Keyword::On)?;
         let on = self.parse_expr(None)?;
@@ -426,6 +431,7 @@ impl<'input> Parser<'input> {
         Ok(Some(JoinClause {
             join_type,
             table,
+            alias,
             on,
         }))
     }
@@ -901,6 +907,7 @@ mod tests {
                     Expression::Identifier("author".to_string())
                 ],
                 from: "books".to_string(),
+                from_alias: None,
                 r#where: Some(Expression::BinaryOperation {
                     operator: BinaryOperator::Eq,
                     left: Box::new(Expression::Identifier("author".to_string())),
@@ -925,6 +932,7 @@ mod tests {
             Ok(Statement::Select(Select {
                 columns: vec![Expression::Wildcard],
                 from: "users".to_string(),
+                from_alias: None,
                 r#where: None,
                 joins: vec![],
                 order_by: vec![],
@@ -2087,6 +2095,7 @@ mod tests {
                     ])
                     .join(JoinClause {
                         table: "posts".into(),
+                        alias: None,
                         join_type: JoinType::Inner,
                         on: Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
@@ -2096,6 +2105,7 @@ mod tests {
                     })
                     .join(JoinClause {
                         table: "comments".into(),
+                        alias: None,
                         join_type: JoinType::Left,
                         on: Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
@@ -2124,6 +2134,7 @@ mod tests {
                     ])
                     .join(JoinClause {
                         table: "posts".into(),
+                        alias: None,
                         join_type: JoinType::Inner,
                         on: Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,

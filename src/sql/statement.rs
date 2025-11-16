@@ -70,6 +70,7 @@ pub(crate) enum Create {
 pub(crate) struct Select {
     pub columns: Vec<Expression>,
     pub from: String,
+    pub from_alias: Option<String>,
     pub joins: Vec<JoinClause>,
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
@@ -81,6 +82,7 @@ pub(crate) struct Select {
 pub struct SelectBuilder {
     columns: Vec<Expression>,
     from: String,
+    from_alias: Option<String>,
     joins: Vec<JoinClause>,
     r#where: Option<Expression>,
     order_by: Vec<OrderBy>,
@@ -162,6 +164,7 @@ pub enum OrderDirection {
 #[derive(Debug, PartialEq)]
 pub struct JoinClause {
     pub table: String,
+    pub alias: Option<String>,
     pub on: Expression,
     pub join_type: JoinType,
 }
@@ -512,6 +515,7 @@ impl Display for Statement {
             Statement::Select(Select {
                 columns,
                 from,
+                from_alias,
                 r#where,
                 joins,
                 order_by,
@@ -1029,6 +1033,7 @@ impl From<SelectBuilder> for Select {
             columns: value.columns,
             joins: value.joins,
             from: value.from,
+            from_alias: value.from_alias,
             r#where: value.r#where,
             order_by: value.order_by,
             group_by: value.group_by,

@@ -1975,9 +1975,9 @@ fn multiple_join() -> Result<()> {
 
     let query = db.exec(
         r#"
-    SELECT u.name, p.title, c.content FROM users u
-    JOIN posts p ON u.id = p.user_id
-    LEFT JOIN commnets c ON p.id = c.post_id;"#,
+    SELECT u.name, p.title, c.content FROM users AS u
+    JOIN posts AS p ON u.id = p.user_id
+    LEFT JOIN comments AS c ON p.id = c.post_id;"#,
     )?;
 
     assert_eq!(

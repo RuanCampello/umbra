@@ -172,6 +172,7 @@ pub(in crate::sql) fn analyze<'s>(
         Statement::Select(Select {
             columns,
             from,
+            from_alias,
             joins,
             order_by,
             group_by,

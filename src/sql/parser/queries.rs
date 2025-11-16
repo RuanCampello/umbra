@@ -12,12 +12,13 @@ impl<'sql> Sql<'sql> for Select {
         let columns = parser.parse_separated_tokens(
             |parser| {
                 let expr = parser.parse_expr(None)?;
-                match parser.consume_optional(Token::Keyword(Keyword::As)) {
-                    false => Ok(expr),
-                    _ => Ok(super::Expression::Alias {
+                if parser.consume_optional(Token::Keyword(Keyword::As)) {
+                    Ok(super::Expression::Alias {
                         alias: parser.parse_ident()?,
                         expr: Box::new(expr),
-                    }),
+                    })
+                } else {
+                    Ok(expr)
                 }
             },
             false,
@@ -25,6 +26,11 @@ impl<'sql> Sql<'sql> for Select {
 
         parser.expect_keyword(Keyword::From)?;
         let from = parser.parse_ident()?;
+        let from_alias = if parser.consume_optional(Token::Keyword(Keyword::As)) {
+            Some(parser.parse_ident()?)
+        } else {
+            None
+        };
 
         let mut joins = Vec::new();
         while let Some(clause) = parser.parse_join()? {
@@ -50,6 +56,7 @@ impl<'sql> Sql<'sql> for Select {
         Ok(Select {
             columns,
             from,
+            from_alias,
             joins,
             r#where,
             order_by,

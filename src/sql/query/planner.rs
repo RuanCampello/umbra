@@ -44,6 +44,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         Statement::Select(Select {
             columns,
             from,
+            from_alias,
             r#where,
             order_by,
             group_by,
@@ -55,14 +56,16 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let table = db.metadata(&from)?.clone();
             let mut schema = table.schema.clone();
 
-            // map of table names to qualified column resolution
+            // map of table names/aliases to qualified column resolution
             let mut tables = HashMap::new();
-            tables.insert(from, table.schema.clone());
+            let from_key = from_alias.as_ref().unwrap_or(&from);
+            tables.insert(from_key.clone(), table.schema.clone());
 
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
                 let right_table = db.metadata(&join_clause.table)?.clone();
-                tables.insert(join_clause.table.clone(), right_table.schema.clone());
+                let join_key = join_clause.alias.as_ref().unwrap_or(&join_clause.table);
+                tables.insert(join_key.clone(), right_table.schema.clone());
 
                 join_metadata.push((join_clause, right_table));
             }
