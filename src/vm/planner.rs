@@ -207,9 +207,6 @@ pub(crate) struct HashJoin<File: FileOperations> {
     unmatched_right: Option<IntoIter<Vec<u8>, Vec<Tuple>>>,
     unmatched_right_index: usize,
 
-    left_schema: Schema,
-    right_schema: Schema,
-
     left_tables: HashSet<String>,
     right_tables: HashSet<String>,
 
@@ -1227,7 +1224,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             // iterate over the right side and build the hash table
             while let Some(right) = self.right.try_next()? {
                 let key =
-                    vm::expression::resolve_expression(&right, &self.right_schema, &right_key)?;
+                    vm::expression::resolve_expression(&right, &self.right_schema(), &right_key)?;
 
                 let key = tuple::serialize(&r#type.into(), &key);
                 self.table.entry(key).or_default().push(right);
@@ -1259,7 +1256,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             if let Some(left) = self.current_left.take() {
                 if matches!(self.join_type, JoinType::Left | JoinType::Full) && self.index.eq(&0) {
                     let mut tuple = left;
-                    tuple.extend(vec![Value::Null; self.right_schema.len()]);
+                    tuple.extend(vec![Value::Null; self.right_schema().len()]);
 
                     return Ok(Some(tuple));
                 }
@@ -1277,7 +1274,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             // d: probe hash table with the new tuple
             let (left_key, _, r#type) = self.extract_join_keys()?;
             let key_value =
-                vm::expression::resolve_expression(&left, &self.left_schema, &left_key)?;
+                vm::expression::resolve_expression(&left, &self.left.schema().unwrap(), &left_key)?;
 
             let key = tuple::serialize(&r#type.into(), &key_value);
             self.current_left = Some(left);
@@ -1305,16 +1302,12 @@ impl<File: FileOperations> HashJoin<File> {
     pub fn new(
         left: Planner<File>,
         right: Planner<File>,
-        left_schema: Schema,
-        right_schema: Schema,
         join_type: JoinType,
         condition: Expression,
     ) -> Self {
         Self {
             join_type,
             condition,
-            left_schema,
-            right_schema,
             left: Box::new(left),
             right: Box::new(right),
 
@@ -1363,7 +1356,7 @@ impl<File: FileOperations> HashJoin<File> {
 
         // 1: the left and right expressions are in their respective schemas
         if left_is_left && right_is_right {
-            let r#type = analyze_expression(&self.left_schema, None, left)?;
+            let r#type = analyze_expression(&self.left_schema(), None, left)?;
             return Ok((left.clone(), right.clone(), r#type));
         }
 
@@ -1372,7 +1365,7 @@ impl<File: FileOperations> HashJoin<File> {
         let right_is_left = self.expr_belongs_to_side(right, true);
 
         if left_is_right && right_is_left {
-            let r#type = analyze_expression(&self.left_schema, None, right)?;
+            let r#type = analyze_expression(&self.left_schema(), None, right)?;
             return Ok((right.clone(), left.clone(), r#type));
         }
 
@@ -1401,7 +1394,7 @@ impl<File: FileOperations> HashJoin<File> {
             #[rustfmt::skip]
             let tables = if is_left { &self.left_tables } else { &self.right_tables };
             #[rustfmt::skip]
-            let schema = if is_left { &self.left_schema } else { &self.right_schema };
+            let schema = if is_left { &self.left_schema() } else { &self.right_schema() };
 
             if !tables.is_empty() && !tables.contains(table) {
                 return false;
@@ -1410,7 +1403,7 @@ impl<File: FileOperations> HashJoin<File> {
             schema.last_index_of(column).is_some()
         } else {
             #[rustfmt::skip]
-            let schema = if is_left { &self.left_schema } else { &self.right_schema };
+            let schema = if is_left { &self.left_schema() } else { &self.right_schema() };
             analyze_expression(schema, None, expr).is_ok()
         }
     }
@@ -1431,7 +1424,7 @@ impl<File: FileOperations> HashJoin<File> {
                 match self.unmatched_right_index < tuples.len() {
                     true => {
                         let right = &tuples[self.unmatched_right_index];
-                        let mut tuple = vec![Value::Null; self.left_schema.len()];
+                        let mut tuple = vec![Value::Null; self.left_schema().len()];
                         tuple.extend(right.clone());
 
                         self.unmatched_right_index += 1;
@@ -1454,9 +1447,21 @@ impl<File: FileOperations> HashJoin<File> {
         Ok(None)
     }
 
+    fn left_schema(&self) -> Schema {
+        self.left
+            .schema()
+            .expect("HashJoin must have a left node schema")
+    }
+
+    fn right_schema(&self) -> Schema {
+        self.right
+            .schema()
+            .expect("HashJoin must have a right node schema")
+    }
+
     fn schema(&self) -> Schema {
-        let mut combined = self.left_schema.clone();
-        combined.extend(self.right_schema.columns.clone());
+        let mut combined = self.left_schema();
+        combined.extend(self.right_schema().columns);
 
         combined
     }
@@ -1923,8 +1928,6 @@ impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
             && self.right == other.right
             && self.condition == other.condition
             && self.join_type == other.join_type
-            && self.left_schema == other.left_schema
-            && self.right_schema == other.right_schema
             && self.left_tables == other.left_tables
             && self.right_tables == other.right_tables
     }

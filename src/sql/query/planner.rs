@@ -78,24 +78,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     .iter()
                     .for_each(|col| schema.push(col.clone()));
 
-                let left_schema = match source.schema() {
-                    Some(schema) => schema,
-                    _ => table.schema.clone(),
-                };
-
                 let mut right_tables = HashSet::new();
                 right_tables.insert(join.table.key().to_string());
 
                 source = Planner::HashJoin(
-                    HashJoin::new(
-                        source,
-                        right,
-                        left_schema,
-                        right_table.schema,
-                        join.join_type,
-                        join.on.clone(),
-                    )
-                    .with_table_names(left_tables.clone(), right_tables),
+                    HashJoin::new(source, right, join.join_type, join.on.clone())
+                        .with_table_names(left_tables.clone(), right_tables),
                 );
 
                 left_tables.insert(join.table.key().to_string());
@@ -1357,8 +1345,6 @@ mod tests {
                             pager: db.pager(),
                             cursor: Cursor::new(orders_table.root, 0),
                         }),
-                        users_table.schema,
-                        orders_table.schema,
                         JoinType::Inner,
                         parse_expr("id = user_id"),
                     )
@@ -1424,8 +1410,6 @@ mod tests {
                             pager: db.pager(),
                             cursor: Cursor::new(orders_table.root, 0),
                         }),
-                        users_table.schema,
-                        orders_table.schema,
                         JoinType::Inner,
                         parse_expr("users.id = orders.user_id"),
                     )
