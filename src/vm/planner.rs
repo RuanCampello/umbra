@@ -1951,27 +1951,6 @@ impl<File: FileOperations> Display for Planner<File> {
 }
 
 impl<File: FileOperations> Planner<File> {
-    fn node_description(&self) -> String {
-        match self {
-            Self::SeqScan(seq) => format!("{seq}"),
-            Self::ExactMatch(exact_match) => format!("{exact_match}"),
-            Self::RangeScan(range) => format!("{range}"),
-            Self::KeyScan(key) => format!("{key}"),
-            Self::LogicalScan(_) => "LogicalScan".to_string(),
-            Self::Filter(filter) => format!("{filter}"),
-            Self::Sort(sort) => format!("{sort}"),
-            Self::Insert(insert) => format!("{insert}"),
-            Self::Update(update) => format!("{update}"),
-            Self::Delete(delete) => format!("{delete}"),
-            Self::SortKeys(keys) => format!("{keys}"),
-            Self::Project(projection) => format!("{projection}"),
-            Self::Collect(collection) => format!("{collection}"),
-            Self::Values(values) => format!("{values}"),
-            Self::Aggregate(aggr) => format!("{aggr}"),
-            Self::HashJoin(hash) => format!("HashJoin {:?}", hash.join_type),
-        }
-    }
-
     fn fmt_tree(&self, f: &mut std::fmt::Formatter<'_>, prefix: &str, is_last: bool, is_root: bool) -> std::fmt::Result {
         // Print current node with tree characters
         let connector = if is_root {
@@ -1982,7 +1961,27 @@ impl<File: FileOperations> Planner<File> {
             "├── "
         };
         
-        writeln!(f, "{}{}{}", prefix, connector, self.node_description())?;
+        // Use the Display implementation for the node
+        let node_str = match self {
+            Self::SeqScan(seq) => format!("{seq}"),
+            Self::ExactMatch(exact_match) => format!("{exact_match}"),
+            Self::RangeScan(range) => format!("{range}"),
+            Self::KeyScan(key) => format!("{key}"),
+            Self::LogicalScan(logical) => format!("{logical}"),
+            Self::Filter(filter) => format!("{filter}"),
+            Self::Sort(sort) => format!("{sort}"),
+            Self::Insert(insert) => format!("{insert}"),
+            Self::Update(update) => format!("{update}"),
+            Self::Delete(delete) => format!("{delete}"),
+            Self::SortKeys(keys) => format!("{keys}"),
+            Self::Project(projection) => format!("{projection}"),
+            Self::Collect(collection) => format!("{collection}"),
+            Self::Values(values) => format!("{values}"),
+            Self::Aggregate(aggr) => format!("{aggr}"),
+            Self::HashJoin(hash) => format!("{hash}"),
+        };
+        
+        writeln!(f, "{}{}{}", prefix, connector, node_str)?;
         
         // Calculate prefix for children
         let child_prefix = if is_root {
@@ -2052,13 +2051,7 @@ impl<File: FileOperations> Display for KeyScan<File> {
 
 impl<File: FileOperations> Display for LogicalScan<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LogicalScan")?;
-
-        for scan in &self.scans {
-            write!(f, "\n {}", scan.display())?;
-        }
-
-        Ok(())
+        write!(f, "LogicalScan")
     }
 }
 
@@ -2133,11 +2126,7 @@ impl<File: FileOperations> Display for Aggregate<File> {
 
 impl<File: FileOperations> Display for HashJoin<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "HashJoin on {} to {} with {:?}",
-            self.left, self.right, self.join_type
-        )
+        write!(f, "HashJoin {:?}", self.join_type)
     }
 }
 
