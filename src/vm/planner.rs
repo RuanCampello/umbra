@@ -335,10 +335,8 @@ impl<File: FileOperations> Planner<File> {
         })
     }
 
-    fn display(&self) -> String {
-        let prefix = "-> ";
-
-        let display = match self {
+    fn to_display(&self) -> String {
+        match self {
             Self::SeqScan(seq) => format!("{seq}"),
             Self::ExactMatch(exact_match) => format!("{exact_match}"),
             Self::RangeScan(range) => format!("{range}"),
@@ -355,9 +353,11 @@ impl<File: FileOperations> Planner<File> {
             Self::Values(values) => format!("{values}"),
             Self::Aggregate(aggr) => format!("{aggr}"),
             Self::HashJoin(hash) => format!("{hash}"),
-        };
+        }
+    }
 
-        format!("{prefix}{display}")
+    fn display(&self) -> String {
+        format!("-> {}", self.to_display())
     }
 
     pub(crate) fn schema(&self) -> Option<Schema> {
@@ -1961,27 +1961,7 @@ impl<File: FileOperations> Planner<File> {
             "├── "
         };
         
-        // Use the Display implementation for the node
-        let node_str = match self {
-            Self::SeqScan(seq) => format!("{seq}"),
-            Self::ExactMatch(exact_match) => format!("{exact_match}"),
-            Self::RangeScan(range) => format!("{range}"),
-            Self::KeyScan(key) => format!("{key}"),
-            Self::LogicalScan(logical) => format!("{logical}"),
-            Self::Filter(filter) => format!("{filter}"),
-            Self::Sort(sort) => format!("{sort}"),
-            Self::Insert(insert) => format!("{insert}"),
-            Self::Update(update) => format!("{update}"),
-            Self::Delete(delete) => format!("{delete}"),
-            Self::SortKeys(keys) => format!("{keys}"),
-            Self::Project(projection) => format!("{projection}"),
-            Self::Collect(collection) => format!("{collection}"),
-            Self::Values(values) => format!("{values}"),
-            Self::Aggregate(aggr) => format!("{aggr}"),
-            Self::HashJoin(hash) => format!("{hash}"),
-        };
-        
-        writeln!(f, "{}{}{}", prefix, connector, node_str)?;
+        writeln!(f, "{}{}{}", prefix, connector, self.to_display())?;
         
         // Calculate prefix for children
         let child_prefix = if is_root {
