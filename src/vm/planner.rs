@@ -1951,6 +1951,27 @@ impl<File: FileOperations> Display for Planner<File> {
 }
 
 impl<File: FileOperations> Planner<File> {
+    fn node_description(&self) -> String {
+        match self {
+            Self::SeqScan(seq) => format!("{seq}"),
+            Self::ExactMatch(exact_match) => format!("{exact_match}"),
+            Self::RangeScan(range) => format!("{range}"),
+            Self::KeyScan(key) => format!("{key}"),
+            Self::LogicalScan(_) => "LogicalScan".to_string(),
+            Self::Filter(filter) => format!("{filter}"),
+            Self::Sort(sort) => format!("{sort}"),
+            Self::Insert(insert) => format!("{insert}"),
+            Self::Update(update) => format!("{update}"),
+            Self::Delete(delete) => format!("{delete}"),
+            Self::SortKeys(keys) => format!("{keys}"),
+            Self::Project(projection) => format!("{projection}"),
+            Self::Collect(collection) => format!("{collection}"),
+            Self::Values(values) => format!("{values}"),
+            Self::Aggregate(aggr) => format!("{aggr}"),
+            Self::HashJoin(hash) => format!("HashJoin {:?}", hash.join_type),
+        }
+    }
+
     fn fmt_tree(&self, f: &mut std::fmt::Formatter<'_>, prefix: &str, is_last: bool, is_root: bool) -> std::fmt::Result {
         // Print current node with tree characters
         let connector = if is_root {
@@ -1961,30 +1982,7 @@ impl<File: FileOperations> Planner<File> {
             "├── "
         };
         
-        let node_name = match self {
-            Self::SeqScan(seq) => format!("SeqScan on table {}", seq.table.name),
-            Self::ExactMatch(exact_match) => format!("ExactMatch {} on {} {}", exact_match.expr, exact_match.relation.kind(), exact_match.relation.name()),
-            Self::RangeScan(range) => format!("RangeScan {} on {} {}", range.expr, range.relation.kind(), range.relation.name()),
-            Self::KeyScan(key) => format!("KeyScan {} on table {}", key.table.schema.columns[0].name, key.table.name),
-            Self::LogicalScan(_) => "LogicalScan".to_string(),
-            Self::Filter(filter) => format!("Filter {}", filter.filter),
-            Self::Sort(sort) => {
-                let col_names = sort.comparator.sort_indexes.iter()
-                    .map(|idx| &sort.comparator.sort_schema.columns[*idx].name);
-                format!("Sort by {}", join(col_names, ", "))
-            },
-            Self::Insert(insert) => format!("Insert on table {}", insert.table.name),
-            Self::Update(update) => format!("Update {}", update.table.name),
-            Self::Delete(delete) => format!("Delete from {}", delete.table.name),
-            Self::SortKeys(_) => "SortKeys".to_string(),
-            Self::Project(projection) => format!("Project {}", join(&projection.projection, ", ")),
-            Self::Collect(_) => "Collect".to_string(),
-            Self::Values(values) => format!("Values {}", join(&values.values[0], ", ")),
-            Self::Aggregate(aggr) => format!("Aggregate on {}", join(&aggr.group_by, ", ")),
-            Self::HashJoin(hash) => format!("HashJoin {:?}", hash.join_type),
-        };
-        
-        writeln!(f, "{}{}{}", prefix, connector, node_name)?;
+        writeln!(f, "{}{}{}", prefix, connector, self.node_description())?;
         
         // Calculate prefix for children
         let child_prefix = if is_root {
