@@ -1992,3 +1992,41 @@ fn multiple_join() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_explain_output() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);")?;
+    db.exec("CREATE TABLE posts (id SERIAL PRIMARY KEY, user_id INT, title TEXT);")?;
+    db.exec("CREATE TABLE comments (id SERIAL PRIMARY KEY, post_id INT, content TEXT);")?;
+
+    db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob');")?;
+    db.exec(
+        r#"INSERT INTO posts (user_id, title) VALUES
+        (1, 'Alice Post 1'),
+        (1, 'Alice Post 2'),
+        (2, 'Bob Post 1');"#,
+    )?;
+    db.exec(
+        r#"INSERT INTO comments (post_id, content) VALUES
+        (1, 'Nice post!'),
+        (1, 'I agree'),
+        (3, 'Cool');"#,
+    )?;
+
+    let query = db.exec(
+        r#"EXPLAIN SELECT u.name, p.title, c.content FROM users AS u
+    JOIN posts AS p ON u.id = p.user_id
+    LEFT JOIN comments AS c ON p.id = c.post_id;"#,
+    )?;
+
+    println!("\nCurrent EXPLAIN output:");
+    for tuple in &query.tuples {
+        for value in tuple {
+            println!("{}", value);
+        }
+    }
+
+    Ok(())
+}

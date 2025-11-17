@@ -330,6 +330,7 @@ impl<File: FileOperations> Planner<File> {
             Self::SortKeys(keys) => &keys.source,
             Self::Collect(collection) => &collection.source,
             Self::Aggregate(aggr) => &aggr.source,
+            Self::Project(project) => &project.source,
             _ => return None,
         })
     }
@@ -1945,19 +1946,68 @@ fn temp_file<File: FileOperations>(
 
 impl<File: FileOperations> Display for Planner<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut planners = vec![self.display()];
-        let mut node = self;
+        self.fmt_tree(f, "", true, true)
+    }
+}
 
-        while let Some(child) = node.child() {
-            planners.push(child.display());
-            node = child;
+impl<File: FileOperations> Planner<File> {
+    fn fmt_tree(&self, f: &mut std::fmt::Formatter<'_>, prefix: &str, is_last: bool, is_root: bool) -> std::fmt::Result {
+        // Print current node with tree characters
+        let connector = if is_root {
+            ""
+        } else if is_last {
+            "└── "
+        } else {
+            "├── "
+        };
+        
+        let node_name = match self {
+            Self::SeqScan(seq) => format!("SeqScan on table {}", seq.table.name),
+            Self::ExactMatch(exact_match) => format!("ExactMatch {} on {} {}", exact_match.expr, exact_match.relation.kind(), exact_match.relation.name()),
+            Self::RangeScan(range) => format!("RangeScan {} on {} {}", range.expr, range.relation.kind(), range.relation.name()),
+            Self::KeyScan(key) => format!("KeyScan {} on table {}", key.table.schema.columns[0].name, key.table.name),
+            Self::LogicalScan(_) => "LogicalScan".to_string(),
+            Self::Filter(filter) => format!("Filter {}", filter.filter),
+            Self::Sort(sort) => {
+                let col_names = sort.comparator.sort_indexes.iter()
+                    .map(|idx| &sort.comparator.sort_schema.columns[*idx].name);
+                format!("Sort by {}", join(col_names, ", "))
+            },
+            Self::Insert(insert) => format!("Insert on table {}", insert.table.name),
+            Self::Update(update) => format!("Update {}", update.table.name),
+            Self::Delete(delete) => format!("Delete from {}", delete.table.name),
+            Self::SortKeys(_) => "SortKeys".to_string(),
+            Self::Project(projection) => format!("Project {}", join(&projection.projection, ", ")),
+            Self::Collect(_) => "Collect".to_string(),
+            Self::Values(values) => format!("Values {}", join(&values.values[0], ", ")),
+            Self::Aggregate(aggr) => format!("Aggregate on {}", join(&aggr.group_by, ", ")),
+            Self::HashJoin(hash) => format!("HashJoin {:?}", hash.join_type),
+        };
+        
+        writeln!(f, "{}{}{}", prefix, connector, node_name)?;
+        
+        // Calculate prefix for children
+        let child_prefix = if is_root {
+            String::new()
+        } else {
+            format!("{}{}", prefix, if is_last { "    " } else { "│   " })
+        };
+        
+        // Handle children with appropriate indentation
+        match self {
+            Self::HashJoin(hash) => {
+                // Print left child
+                hash.left.fmt_tree(f, &child_prefix, false, false)?;
+                // Print right child (always last)
+                hash.right.fmt_tree(f, &child_prefix, true, false)?;
+            },
+            _ => {
+                if let Some(child) = self.child() {
+                    child.fmt_tree(f, &child_prefix, true, false)?;
+                }
+            }
         }
-
-        writeln!(f, "{}", planners.pop().unwrap())?;
-        while let Some(plan) = planners.pop() {
-            writeln!(f, "{plan}")?;
-        }
-
+        
         Ok(())
     }
 }
