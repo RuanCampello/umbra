@@ -1992,7 +1992,7 @@ fn multiple_join() -> Result<()> {
     );
 
     let query = db.exec(
-        "SELECT u.name, p.title, c.content FROM users AS u
+        "EXPLAIN SELECT u.name, p.title, c.content FROM users AS u
     JOIN posts AS p ON u.id = p.user_id
     LEFT JOIN comments AS c ON p.id = c.post_id;",
     )?;

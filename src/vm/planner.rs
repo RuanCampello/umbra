@@ -330,14 +330,13 @@ impl<File: FileOperations> Planner<File> {
             Self::SortKeys(keys) => &keys.source,
             Self::Collect(collection) => &collection.source,
             Self::Aggregate(aggr) => &aggr.source,
+            Self::Project(project) => &project.source,
             _ => return None,
         })
     }
 
-    fn display(&self) -> String {
-        let prefix = "-> ";
-
-        let display = match self {
+    fn to_display(&self) -> String {
+        match self {
             Self::SeqScan(seq) => format!("{seq}"),
             Self::ExactMatch(exact_match) => format!("{exact_match}"),
             Self::RangeScan(range) => format!("{range}"),
@@ -354,9 +353,42 @@ impl<File: FileOperations> Planner<File> {
             Self::Values(values) => format!("{values}"),
             Self::Aggregate(aggr) => format!("{aggr}"),
             Self::HashJoin(hash) => format!("{hash}"),
+        }
+    }
+
+    fn fmt_tree(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        is_root: bool,
+        is_last: bool,
+        prefix: &str,
+    ) -> std::fmt::Result {
+        let connector = match (is_root, is_last) {
+            (true, _) => "",
+            (_, true) => "└── ",
+            _ => "├── ",
         };
 
-        format!("{prefix}{display}")
+        let node = self.to_display();
+        writeln!(f, "{prefix}{connector}{node}")?;
+        let child_str = match is_root {
+            true => "".into(),
+            _ => format!("{prefix}{}", if is_last { "    " } else { "│   " }),
+        };
+
+        match self {
+            Self::HashJoin(hash) => {
+                hash.left.fmt_tree(f, false, false, &child_str)?;
+                hash.right.fmt_tree(f, false, true, &child_str)?;
+            }
+            _ => {
+                if let Some(child) = self.child() {
+                    child.fmt_tree(f, false, true, &child_str)?;
+                }
+            }
+        };
+
+        Ok(())
     }
 
     pub(crate) fn schema(&self) -> Option<Schema> {
@@ -1945,20 +1977,7 @@ fn temp_file<File: FileOperations>(
 
 impl<File: FileOperations> Display for Planner<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut planners = vec![self.display()];
-        let mut node = self;
-
-        while let Some(child) = node.child() {
-            planners.push(child.display());
-            node = child;
-        }
-
-        writeln!(f, "{}", planners.pop().unwrap())?;
-        while let Some(plan) = planners.pop() {
-            writeln!(f, "{plan}")?;
-        }
-
-        Ok(())
+        self.fmt_tree(f, true, false, "")
     }
 }
 
@@ -2004,13 +2023,7 @@ impl<File: FileOperations> Display for KeyScan<File> {
 
 impl<File: FileOperations> Display for LogicalScan<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LogicalScan")?;
-
-        for scan in &self.scans {
-            write!(f, "\n {}", scan.display())?;
-        }
-
-        Ok(())
+        write!(f, "LogicalScan")
     }
 }
 
@@ -2085,11 +2098,7 @@ impl<File: FileOperations> Display for Aggregate<File> {
 
 impl<File: FileOperations> Display for HashJoin<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "HashJoin on {} to {} with {:?}",
-            self.left, self.right, self.join_type
-        )
+        write!(f, "HashJoin {:?}", self.join_type)
     }
 }
 
