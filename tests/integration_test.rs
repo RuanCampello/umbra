@@ -2024,7 +2024,10 @@ fn test_explain_output() -> Result<()> {
     println!("\nCurrent EXPLAIN output:");
     for tuple in &query.tuples {
         for value in tuple {
-            println!("{}", value);
+            match value {
+                Value::String(s) => println!("{}", s),
+                other => println!("{}", other),
+            }
         }
     }
 
