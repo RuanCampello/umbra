@@ -2000,3 +2000,70 @@ fn multiple_join() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn qualified_identifier_in_order_by_and_where() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+        CREATE TABLE posts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER,
+            title VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob'), ('Charlie');")?;
+    db.exec(
+        r#"
+        INSERT INTO posts (user_id, title) VALUES
+            (1, 'Alice Post 1'),
+            (2, 'Bob Post 1'),
+            (1, 'Alice Post 2'),
+            (3, 'Charlie Post 1');"#,
+    )?;
+
+    // Test ORDER BY with qualified identifier
+    let query = db.exec(
+        r#"
+        SELECT u.name, p.title FROM users AS u
+        JOIN posts AS p ON u.id = p.user_id
+        ORDER BY u.name;"#,
+    )?;
+
+    // Should be sorted by name: Alice, Alice, Bob, Charlie
+    assert_eq!(query.tuples.len(), 4);
+    assert_eq!(query.tuples[0][0], "Alice".into());
+    assert_eq!(query.tuples[1][0], "Alice".into());
+    assert_eq!(query.tuples[2][0], "Bob".into());
+    assert_eq!(query.tuples[3][0], "Charlie".into());
+
+    // Test WHERE with qualified identifier
+    let query = db.exec(
+        r#"
+        SELECT u.name, p.title FROM users AS u
+        JOIN posts AS p ON u.id = p.user_id
+        WHERE u.name = 'Alice'
+        ORDER BY p.title;"#,
+    )?;
+
+    // Should only have Alice's posts
+    assert_eq!(query.tuples.len(), 2);
+    assert_eq!(query.tuples[0][0], "Alice".into());
+    assert_eq!(query.tuples[0][1], "Alice Post 1".into());
+    assert_eq!(query.tuples[1][0], "Alice".into());
+    assert_eq!(query.tuples[1][1], "Alice Post 2".into());
+
+    Ok(())
+}
