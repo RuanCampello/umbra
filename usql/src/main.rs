@@ -196,8 +196,9 @@ fn table(query: &QuerySet) -> String {
 
     (rows).iter().for_each(|row| {
         row.iter().enumerate().for_each(|(idx, col)| {
-            if col.len() > width[idx] {
-                width[idx] = col.len();
+            let chars_count = col.chars().count();
+            if chars_count > width[idx] {
+                width[idx] = chars_count;
             }
         })
     });
@@ -216,7 +217,8 @@ fn table(query: &QuerySet) -> String {
         row.iter().enumerate().for_each(|(idx, col)| {
             row_string.push(' ');
             row_string.push_str(col);
-            (0..width[idx] - col.len() - 1).for_each(|_| row_string.push(' '));
+            let char_count = col.chars().count();
+            (0..width[idx] - char_count - 1).for_each(|_| row_string.push(' '));
             row_string.push('|');
         });
 

@@ -1983,7 +1983,7 @@ impl<File: FileOperations> Display for Planner<File> {
 
 impl<File> Display for SeqScan<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SeqScan on table {}", self.table.name)
+        write!(f, "SeqScan on {}", self.table.name)
     }
 }
 
@@ -2015,7 +2015,7 @@ impl<File: FileOperations> Display for KeyScan<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "KeyScan {} on table {}",
+            "KeyScan {} on {}",
             self.table.schema.columns[0].name, self.table.name
         )
     }
@@ -2098,7 +2098,7 @@ impl<File: FileOperations> Display for Aggregate<File> {
 
 impl<File: FileOperations> Display for HashJoin<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HashJoin {:?}", self.join_type)
+        write!(f, "Hash {:?} Join on {}", self.join_type, self.condition)
     }
 }
 
