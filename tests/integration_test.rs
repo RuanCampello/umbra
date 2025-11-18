@@ -2169,3 +2169,99 @@ fn problem_statement_example() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn qualified_identifier_in_where_on_joined_table() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+        CREATE TABLE posts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER,
+            title VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob');")?;
+    db.exec(
+        r#"
+        INSERT INTO posts (user_id, title) VALUES
+            (1, 'Alice Post 1'),
+            (1, 'Alice Post 2'),
+            (2, 'Bob Post 1');"#,
+    )?;
+
+    // Test WHERE with qualified identifier from joined table
+    let query = db.exec(
+        r#"
+        SELECT u.name, p.title FROM users AS u
+        JOIN posts AS p ON u.id = p.user_id
+        WHERE p.title = 'Alice Post 1';"#,
+    )?;
+
+    // Should only have one row
+    assert_eq!(query.tuples.len(), 1);
+    assert_eq!(query.tuples[0][0], "Alice".into());
+    assert_eq!(query.tuples[0][1], "Alice Post 1".into());
+
+    Ok(())
+}
+
+#[test]
+fn qualified_identifier_in_where_on_base_table() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+        CREATE TABLE posts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER,
+            title VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob');")?;
+    db.exec(
+        r#"
+        INSERT INTO posts (user_id, title) VALUES
+            (1, 'Alice Post 1'),
+            (1, 'Alice Post 2'),
+            (2, 'Bob Post 1');"#,
+    )?;
+
+    // Test WHERE with qualified identifier from base table
+    let query = db.exec(
+        r#"
+        SELECT u.name, p.title FROM users AS u
+        JOIN posts AS p ON u.id = p.user_id
+        WHERE u.name = 'Alice';"#,
+    )?;
+
+    // Should only have Alice's posts
+    assert_eq!(query.tuples.len(), 2);
+    assert_eq!(query.tuples[0][0], "Alice".into());
+    assert_eq!(query.tuples[1][0], "Alice".into());
+
+    Ok(())
+}

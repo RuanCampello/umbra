@@ -12,7 +12,7 @@ use crate::{
     vm::{
         expression::VmType,
         planner::{
-            AggregateBuilder, Collect, CollectBuilder, Delete as DeletePlan, HashJoin,
+            AggregateBuilder, Collect, CollectBuilder, Delete as DeletePlan, Filter, HashJoin,
             Insert as InsertPlan, Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator,
             Update as UpdatePlan, Values, DEFAULT_SORT_BUFFER_SIZE,
         },
@@ -49,7 +49,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             group_by,
             joins,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&from.name, r#where.clone(), db)?;
+            // For queries with joins, we need to check if WHERE references joined tables
+            let (base_where, post_join_where) = if !joins.is_empty() && r#where.is_some() {
+                split_where_clause(r#where.as_ref().unwrap(), &from.key())
+            } else {
+                (r#where.clone(), None)
+            };
+
+            let mut source = optimiser::generate_seq_plan(&from.name, base_where, db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from.name)?.clone();
@@ -87,6 +94,15 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 );
 
                 left_tables.insert(join.table.key().to_string());
+            }
+
+            // Apply post-join WHERE filter if needed
+            if let Some(filter_expr) = post_join_where {
+                source = Planner::Filter(Filter {
+                    source: Box::new(source),
+                    schema: schema.clone(),
+                    filter: filter_expr,
+                });
             }
 
             // this is a special case for `type_of` function
@@ -548,6 +564,43 @@ fn resolve_qualified_order_index(
             table: table.into(),
             column: column.into(),
         })
+}
+
+/// Splits a WHERE clause into predicates that reference only the base table
+/// and predicates that reference joined tables.
+/// Returns (base_where, post_join_where)
+fn split_where_clause(
+    where_expr: &Expression,
+    base_table_key: &str,
+) -> (Option<Expression>, Option<Expression>) {
+    // Check if the expression references only the base table or joined tables
+    fn references_joined_table(expr: &Expression, base_table_key: &str) -> bool {
+        match expr {
+            Expression::QualifiedIdentifier { table, .. } => table != base_table_key,
+            Expression::Identifier(_) | Expression::Value(_) | Expression::Wildcard => false,
+            Expression::UnaryOperation { expr, .. } | Expression::IsNull { expr, .. } => {
+                references_joined_table(expr, base_table_key)
+            }
+            Expression::BinaryOperation { left, right, .. } => {
+                references_joined_table(left, base_table_key)
+                    || references_joined_table(right, base_table_key)
+            }
+            Expression::Function { args, .. } => args
+                .iter()
+                .any(|arg| references_joined_table(arg, base_table_key)),
+            Expression::Alias { expr, .. } | Expression::Nested(expr) => {
+                references_joined_table(expr, base_table_key)
+            }
+        }
+    }
+
+    if references_joined_table(where_expr, base_table_key) {
+        // If it references joined tables, apply after join
+        (None, Some(where_expr.clone()))
+    } else {
+        // If it only references base table, apply before join (optimization)
+        (Some(where_expr.clone()), None)
+    }
 }
 
 #[cfg(test)]
