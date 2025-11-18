@@ -516,6 +516,43 @@ fn resolve_qualified_column(
     Ok(schema.columns[idx].clone())
 }
 
+fn resolve_qualified_order_idx(
+    schema: &Schema,
+    column: &str,
+    table: &str,
+    //tables: &HashMap<&str, Schema>,
+) -> Result<usize, SqlError> {
+    schema
+        .last_index_of(column)
+        .ok_or(SqlError::InvalidQualifiedColumn {
+            table: table.into(),
+            column: column.into(),
+        })
+}
+
+fn split_where<'expr>(
+    r#where: &'expr Expression,
+    table: &str,
+) -> (Option<&'expr Expression>, Option<&'expr Expression>) {
+    #[rustfmt::skip]
+    fn references(expr: &Expression, table: &str) -> bool {
+        match expr {
+            Expression::Identifier(_) | Expression::Value(_) | Expression::Wildcard => false,
+            Expression::QualifiedIdentifier { table: table_name, .. } => table_name != table,
+            Expression::UnaryOperation {  expr , .. } | Expression::IsNull { expr, .. } => references(expr, table),
+            Expression::BinaryOperation { left, right, .. } => references(left, table) || references(right, table),
+            Expression::Function {args, .. } => args.iter().any(|a| references(a, table)),
+            Expression::Alias { expr, .. } => references(expr, table),
+            Expression::Nested(expr) => references(expr, table),
+        }
+    }
+
+    match references(r#where, table) {
+        true => (None, Some(r#where)),
+        _ => (Some(r#where), None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::sql::statement::{Function, JoinType};

@@ -1978,7 +1978,7 @@ fn multiple_join() -> Result<()> {
     SELECT u.name, p.title, c.content FROM users AS u
     JOIN posts AS p ON u.id = p.user_id
     LEFT JOIN comments AS c ON p.id = c.post_id
-    ORDER BY name;"#,
+    ORDER BY u.name;"#,
     )?;
 
     assert_eq!(
@@ -1990,13 +1990,6 @@ fn multiple_join() -> Result<()> {
             vec!["Bob".into(), "Bob Post 1".into(), "Cool".into()],
         ]
     );
-
-    let query = db.exec(
-        "EXPLAIN SELECT u.name, p.title, c.content FROM users AS u
-    JOIN posts AS p ON u.id = p.user_id
-    LEFT JOIN comments AS c ON p.id = c.post_id;",
-    )?;
-    println!("{query}");
 
     Ok(())
 }
