@@ -278,9 +278,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 let mut directions = Vec::new();
 
                 for order in &order_by {
-                    match order.expr {
-                        Expression::Identifier(ref ident) => {
+                    match &order.expr {
+                        Expression::Identifier(ident) => {
                             let idx = resolve_order_index(&schema, &columns, ident)?;
+                            indexes.push(idx);
+                            directions.push(order.direction);
+                        }
+                        Expression::QualifiedIdentifier { table, column } => {
+                            let idx = resolve_qualified_order_index(&schema, &tables, table, column)?;
                             indexes.push(idx);
                             directions.push(order.direction);
                         }
@@ -514,6 +519,35 @@ fn resolve_qualified_column(
         })?;
 
     Ok(schema.columns[idx].clone())
+}
+
+fn resolve_qualified_order_index(
+    merged_schema: &Schema,
+    tables: &HashMap<&str, Schema>,
+    table: &str,
+    column: &str,
+) -> Result<usize, SqlError> {
+    // First validate that the table and column exist
+    let table_schema = tables
+        .get(table)
+        .ok_or(SqlError::InvalidTable(table.to_string()))?;
+    
+    table_schema
+        .index_of(column)
+        .ok_or(SqlError::InvalidQualifiedColumn {
+            table: table.into(),
+            column: column.into(),
+        })?;
+    
+    // Now find the column in the merged schema
+    // We need to find the correct occurrence based on which table it belongs to
+    // For now, use last_index_of as a simple approach that matches the column name
+    merged_schema
+        .last_index_of(column)
+        .ok_or(SqlError::InvalidQualifiedColumn {
+            table: table.into(),
+            column: column.into(),
+        })
 }
 
 #[cfg(test)]

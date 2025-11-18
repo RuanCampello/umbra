@@ -2065,5 +2065,107 @@ fn qualified_identifier_in_order_by_and_where() -> Result<()> {
     assert_eq!(query.tuples[1][0], "Alice".into());
     assert_eq!(query.tuples[1][1], "Alice Post 2".into());
 
+    // Test ORDER BY with qualified identifier from joined table
+    let query = db.exec(
+        r#"
+        SELECT u.name, p.title FROM users AS u
+        JOIN posts AS p ON u.id = p.user_id
+        ORDER BY p.title DESC;"#,
+    )?;
+
+    // Should be sorted by title descending
+    assert_eq!(query.tuples.len(), 4);
+    assert_eq!(query.tuples[0][1], "Charlie Post 1".into());
+    assert_eq!(query.tuples[1][1], "Bob Post 1".into());
+    assert_eq!(query.tuples[2][1], "Alice Post 2".into());
+    assert_eq!(query.tuples[3][1], "Alice Post 1".into());
+
+    // Test multiple ORDER BY with qualified identifiers
+    let query = db.exec(
+        r#"
+        SELECT u.name, p.title FROM users AS u
+        JOIN posts AS p ON u.id = p.user_id
+        ORDER BY u.name ASC, p.title DESC;"#,
+    )?;
+
+    // Should be sorted by name ASC, then title DESC
+    assert_eq!(query.tuples.len(), 4);
+    assert_eq!(query.tuples[0][0], "Alice".into());
+    assert_eq!(query.tuples[0][1], "Alice Post 2".into());
+    assert_eq!(query.tuples[1][0], "Alice".into());
+    assert_eq!(query.tuples[1][1], "Alice Post 1".into());
+    assert_eq!(query.tuples[2][0], "Bob".into());
+    assert_eq!(query.tuples[3][0], "Charlie".into());
+
+    Ok(())
+}
+
+#[test]
+fn problem_statement_example() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+        CREATE TABLE users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+        CREATE TABLE posts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER,
+            title VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+        CREATE TABLE comments (
+            id SERIAL PRIMARY KEY,
+            post_id INTEGER,
+            content VARCHAR(255)
+        );
+    "#,
+    )?;
+
+    db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob');")?;
+    db.exec(
+        r#"
+        INSERT INTO posts (user_id, title) VALUES
+            (1, 'Alice Post 1'),
+            (1, 'Alice Post 2'),
+            (2, 'Bob Post 1');"#,
+    )?;
+    db.exec(
+        r#"
+        INSERT INTO comments (post_id, content) VALUES
+            (1, 'Nice post!'),
+            (1, 'I agree'),
+            (3, 'Cool');"#,
+    )?;
+
+    // This is the exact query from the problem statement
+    let query = db.exec(
+        r#"
+        SELECT u.name, p.title, c.content FROM users AS u
+        JOIN posts AS p ON u.id = p.user_id
+        LEFT JOIN comments AS c ON p.id = c.post_id
+        ORDER BY u.name;"#,
+    )?;
+
+    // Verify it works and returns results ordered by u.name
+    assert!(query.tuples.len() > 0);
+    // First rows should be Alice
+    assert_eq!(query.tuples[0][0], "Alice".into());
+    assert_eq!(query.tuples[1][0], "Alice".into());
+    assert_eq!(query.tuples[2][0], "Alice".into());
+    // Last row should be Bob
+    assert_eq!(query.tuples[3][0], "Bob".into());
+
     Ok(())
 }
