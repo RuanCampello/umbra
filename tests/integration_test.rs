@@ -2067,3 +2067,32 @@ fn more_complex_join() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn join_type_coercion() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE orders (id INT PRIMARY KEY, user_id BIGINT, amount INT);")?;
+
+    db.exec("INSERT INTO users (id, name) VALUES (1, 'Alice');")?;
+    db.exec("INSERT INTO orders (id, user_id, amount) VALUES (100, 1, 50);")?;
+
+    let query =
+        db.exec("SELECT users.name FROM users JOIN orders ON users.id = orders.user_id;")?;
+
+    assert_eq!(query.tuples, vec![vec![Value::String("Alice".into())]]);
+    Ok(())
+}
+
+#[test]
+#[should_panic]
+fn test_non_equi_join_panic() {
+    let mut db = State::default();
+    db.exec("CREATE TABLE t1 (val INT PRIMARY KEY);").unwrap();
+    db.exec("CREATE TABLE t2 (val INT PRIMARY KEY);").unwrap();
+
+    db.exec("INSERT INTO t1 VALUES (10);").unwrap();
+    db.exec("INSERT INTO t2 VALUES (5);").unwrap();
+
+    let _ = db.exec("SELECT t1.val FROM t1 JOIN t2 ON t1.val > t2.val;");
+}
