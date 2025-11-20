@@ -2047,7 +2047,7 @@ fn more_complex_join() -> Result<()> {
         c.first_name,
         c.last_name,
         COUNT(o.order_id) as total_orders,
-        SUM(o.total_amount) as total_spent
+        TRUNC(SUM(o.total_amount), 2) as total_spent
     FROM customers AS c
     LEFT JOIN orders AS o ON c.customer_id = o.customer_id
     GROUP BY c.customer_id, c.first_name, c.last_name
@@ -2055,7 +2055,15 @@ fn more_complex_join() -> Result<()> {
     "#,
     )?;
 
-    println!("{query}");
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["John".into(), "Doe".into(), 3.into(), 549.47.into()],
+            vec!["Bob".into(), "Johnson".into(), 1.into(), 200.into()],
+            vec!["Jane".into(), "Smith".into(), 2.into(), 121.24.into()],
+            vec!["Alice".into(), "Brown".into(), 1.into(), 89.75.into()]
+        ],
+    );
 
     Ok(())
 }
