@@ -23,6 +23,11 @@ struct AliasCtx<'s> {
     aliases: &'s HashMap<String, &'s Expression>,
 }
 
+struct JoinCtx<'s> {
+    schema: &'s Schema,
+    tables: &'s HashMap<&'s str, Schema>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
     MissingCols,
@@ -185,8 +190,12 @@ pub(in crate::sql) fn analyze<'s>(
             let metadata = ctx.metadata(&from.name)?;
             let mut schema = metadata.schema.clone();
 
+            let mut tables = HashMap::new();
+            tables.insert(from.key(), metadata.schema.clone());
+
             for join in joins {
                 let join_metadata = ctx.metadata(&join.table.name)?;
+                tables.insert(join.table.key(), join_metadata.schema.clone());
                 schema.extend(join_metadata.schema.columns.clone());
             }
 
@@ -222,18 +231,37 @@ pub(in crate::sql) fn analyze<'s>(
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
                 }
 
-                analyze_expression(&schema, None, expr)?;
+                match joins.is_empty() {
+                    true => analyze_expression(&schema, None, expr)?,
+                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, expr)?,
+                };
             }
 
-            analyze_where(&schema, r#where)?;
+            analyze_where_with_join(&schema, &tables, r#where, joins.is_empty())?;
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
-                analyze_expression_with_aliases(&schema, &aliases, None, &order.expr)?;
+                match joins.is_empty() {
+                    true => analyze_expression_with_aliases(&schema, &aliases, None, &order.expr)?,
+                    _ => analyze_expression_with_aliases_and_joins(
+                        &JoinCtx::new(&schema, &tables),
+                        &aliases,
+                        None,
+                        &order.expr,
+                    )?,
+                };
             }
 
             for expr in group_by {
-                analyze_expression_with_aliases(&schema, &aliases, None, expr)?;
+                match joins.is_empty() {
+                    true => analyze_expression_with_aliases(&schema, &aliases, None, expr)?,
+                    _ => analyze_expression_with_aliases_and_joins(
+                        &JoinCtx::new(&schema, &tables),
+                        &aliases,
+                        None,
+                        expr,
+                    )?,
+                };
             }
         }
 
@@ -369,6 +397,33 @@ impl<'s> AnalyzeCtx for AliasCtx<'s> {
         self.schema
             .last_index_of(column)
             .map(|idx| (idx, &self.schema.columns[idx].data_type))
+    }
+}
+
+impl<'s> AnalyzeCtx for JoinCtx<'s> {
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
+        self.schema
+            .index_of(ident)
+            .map(|idx| (idx, &self.schema.columns[idx].data_type))
+    }
+
+    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
+        if let Some(schema) = self.tables.get(table) {
+            if let Some(_) = schema.index_of(column) {
+                return self
+                    .schema
+                    .last_index_of(column)
+                    .map(|idx| (idx, &self.schema.columns[idx].data_type));
+            }
+        }
+
+        None
+    }
+}
+
+impl<'s> JoinCtx<'s> {
+    pub fn new(schema: &'s Schema, tables: &'s HashMap<&'s str, Schema>) -> Self {
+        Self { schema, tables }
     }
 }
 
@@ -541,6 +596,45 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
         }
     })
+}
+
+fn analyze_where_with_join<'exp>(
+    schema: &'exp Schema,
+    tables: &'exp HashMap<&'exp str, Schema>,
+    r#where: &'exp Option<Expression>,
+    has_join: bool,
+) -> Result<(), SqlError> {
+    let Some(expr) = r#where else { return Ok(()) };
+
+    let result = match has_join {
+        true => analyze_expression(&JoinCtx::new(schema, tables), None, expr)?,
+        _ => analyze_expression(schema, None, expr)?,
+    };
+
+    if let VmType::Bool = result {
+        return Ok(());
+    }
+
+    Err(TypeError::ExpectedType {
+        expected: VmType::Bool,
+        found: expr.clone(),
+    }
+    .into())
+}
+
+fn analyze_expression_with_aliases_and_joins<'exp>(
+    join_ctx: &JoinCtx,
+    aliases: &HashMap<String, &Expression>,
+    col_type: Option<&Type>,
+    expr: &'exp Expression,
+) -> Result<VmType, SqlError> {
+    if let Expression::Identifier(ident) = expr {
+        if let Some(alias) = aliases.get(ident) {
+            return analyze_expression_with_aliases_and_joins(join_ctx, aliases, col_type, &alias);
+        }
+    }
+
+    analyze_expression(join_ctx, col_type, expr)
 }
 
 fn analyze_expression_with_aliases<'exp>(
