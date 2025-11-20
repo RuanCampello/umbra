@@ -12,7 +12,7 @@ use crate::{
     vm::{
         expression::VmType,
         planner::{
-            AggregateBuilder, Collect, CollectBuilder, Delete as DeletePlan, HashJoin,
+            AggregateBuilder, Collect, CollectBuilder, Delete as DeletePlan, Filter, HashJoin,
             Insert as InsertPlan, Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator,
             Update as UpdatePlan, Values, DEFAULT_SORT_BUFFER_SIZE,
         },
@@ -49,7 +49,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             group_by,
             joins,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&from.name, r#where.clone(), db)?;
+            let (r#where, join_where) = match !joins.is_empty() && r#where.is_some() {
+                true => split_where(r#where.as_ref().unwrap(), &from.key()),
+                _ => (r#where.as_ref(), None),
+            };
+
+            let mut source = optimiser::generate_seq_plan(&from.name, r#where.cloned(), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
             let table = db.metadata(&from.name)?.clone();
@@ -87,6 +92,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 );
 
                 left_tables.insert(join.table.key().to_string());
+            }
+
+            if let Some(filter) = join_where {
+                source = Planner::Filter(Filter {
+                    source: Box::new(source),
+                    schema: schema.clone(),
+                    filter: filter.to_owned(),
+                })
             }
 
             // this is a special case for `type_of` function
@@ -281,6 +294,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     match order.expr {
                         Expression::Identifier(ref ident) => {
                             let idx = resolve_order_index(&schema, &columns, ident)?;
+                            indexes.push(idx);
+                            directions.push(order.direction);
+                        }
+                        Expression::QualifiedIdentifier {
+                            ref table,
+                            ref column,
+                        } => {
+                            let idx = resolve_qualified_order_idx(&schema, &column, &table)?;
                             indexes.push(idx);
                             directions.push(order.direction);
                         }
