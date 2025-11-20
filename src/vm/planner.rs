@@ -405,7 +405,16 @@ impl<File: FileOperations> Planner<File> {
             Self::Filter(filter) => return filter.source.schema(),
             Self::HashJoin(hash) => {
                 let mut schema = hash.left_schema();
+                let left_len = schema.len();
                 schema.extend_with_join(hash.right_schema().columns, &hash.join_type);
+
+                hash.left_tables
+                    .iter()
+                    .for_each(|table| schema.add_qualified_name(table, 0, left_len));
+                hash.right_tables
+                    .iter()
+                    .for_each(|table| schema.add_qualified_name(table, left_len, schema.len()));
+
                 return Some(schema);
             }
             _ => return None,

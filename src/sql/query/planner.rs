@@ -77,6 +77,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             }
 
             for (join, right_table) in join_metadata {
+                let left_len = schema.len();
                 let right = optimiser::generate_seq_plan(&join.table.name, None, db)?;
                 let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
 
@@ -86,6 +87,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     }
                     schema.push(col)
                 });
+
+                left_tables
+                    .iter()
+                    .for_each(|table| schema.add_qualified_name(table, 0, left_len));
+
+                schema.add_qualified_name(&join.table.key(), left_len, schema.len());
 
                 let mut right_tables = HashSet::new();
                 right_tables.insert(join.table.key().to_string());
@@ -539,10 +546,11 @@ fn resolve_qualified_order_idx(
     schema: &Schema,
     column: &str,
     table: &str,
-    //tables: &HashMap<&str, Schema>,
 ) -> Result<usize, SqlError> {
+    let qualified = format!("{table}.{column}");
     schema
-        .last_index_of(column)
+        .index_of(&qualified)
+        .or(schema.last_index_of(column))
         .ok_or(SqlError::InvalidQualifiedColumn {
             table: table.into(),
             column: column.into(),

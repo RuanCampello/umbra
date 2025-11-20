@@ -97,6 +97,18 @@ impl Schema {
         self.columns.iter().rposition(|c| c.name == col)
     }
 
+    /// Adds qualified column to index for all columns within the range.
+    /// This is usefull to support qualified identifier in self-joins where the same table appears
+    /// with different aliases.
+    pub fn add_qualified_name(&mut self, table: &str, start: usize, end: usize) {
+        for idx in start..end {
+            if let Some(col) = self.columns.get(idx) {
+                let qualified_name = format!("{table}.{}", col.name);
+                self.index.insert(qualified_name, idx);
+            }
+        }
+    }
+
     pub fn columns_ids(&self) -> Vec<String> {
         self.columns.iter().map(|c| c.name.to_string()).collect()
     }
