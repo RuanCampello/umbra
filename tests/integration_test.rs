@@ -1993,3 +1993,69 @@ fn multiple_join() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn more_complex_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+    CREATE TABLE customers (
+        customer_id SERIAL PRIMARY KEY,
+        first_name VARCHAR(50),
+        last_name VARCHAR(50),
+        email VARCHAR(100) UNIQUE
+    );
+    "#,
+    )?;
+    db.exec(
+        r#"
+    CREATE TABLE orders (
+        order_id SERIAL PRIMARY KEY,
+        customer_id INTEGER,
+        order_date DATE,
+        total_amount REAL,
+        status VARCHAR(20)
+    );
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO customers (first_name, last_name, email) VALUES
+        ('John', 'Doe', 'john.doe@email.com'),
+        ('Jane', 'Smith', 'jane.smith@email.com'),
+        ('Bob', 'Johnson', 'bob.johnson@email.com'),
+        ('Alice', 'Brown', 'alice.brown@email.com');
+    "#,
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO orders (customer_id, order_date, total_amount, status) VALUES
+        (1, '2024-01-15', 99.99, 'completed'),
+        (1, '2024-02-20', 149.50, 'pending'),
+        (2, '2024-01-20', 75.25, 'completed'),
+        (3, '2024-02-10', 200.00, 'shipped'),
+        (2, '2024-02-25', 45.99, 'pending'),
+        (1, '2024-03-01', 299.99, 'completed'),
+        (4, '2024-02-28', 89.75, 'pending');"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        c.first_name,
+        c.last_name,
+        COUNT(o.order_id) as total_orders,
+        SUM(o.total_amount) as total_spent
+    FROM customers AS c
+    LEFT JOIN orders AS o ON c.customer_id = o.customer_id
+    GROUP BY c.customer_id, c.first_name, c.last_name
+    ORDER BY total_spent DESC;
+    "#,
+    )?;
+
+    println!("{query}");
+
+    Ok(())
+}
