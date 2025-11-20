@@ -187,7 +187,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 if group_by.is_empty() && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(&schema, &columns, &order_by)?;
+                        extract_order_indexes_and_directions(&schema, &order_by)?;
 
                     source = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -236,7 +236,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 if is_grouped && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(&aggr_schema, &columns, &order_by)?;
+                        extract_order_indexes_and_directions(&aggr_schema, &order_by)?;
 
                     plan = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -435,7 +435,6 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
 
 fn extract_order_indexes_and_directions(
     schema: &Schema,
-    columns: &[Expression],
     order_by: &[OrderBy],
 ) -> Result<(Vec<usize>, Vec<OrderDirection>), DatabaseError> {
     order_by
@@ -443,25 +442,20 @@ fn extract_order_indexes_and_directions(
         .map(|order| {
             let idx = match &order.expr {
                 Expression::Identifier(ident) => {
-                    for (i, expr) in columns.iter().enumerate() {
-                        if let Expression::Alias { alias, .. } = expr {
-                            if alias == ident {
-                                return Ok((i, order.direction));
-                            }
-                        }
-                    }
-
+                    // Look up the identifier in the schema (whether it's an alias or not)
                     schema
                         .index_of(ident)
-                        .ok_or(SqlError::InvalidGroupBy(ident.into()))
+                        .ok_or_else(|| DatabaseError::Sql(SqlError::InvalidGroupBy(ident.into())))
                         .map(|idx| (idx, order.direction))
                 }
                 _ => schema
                     .index_of(&order.expr.to_string())
-                    .ok_or(SqlError::Other(format!(
-                        "ORDER BY expression `{}` not found in output columns",
-                        order.expr.to_string()
-                    )))
+                    .ok_or_else(|| {
+                        DatabaseError::Sql(SqlError::Other(format!(
+                            "ORDER BY expression `{}` not found in output columns",
+                            order.expr.to_string()
+                        )))
+                    })
                     .map(|idx| (idx, order.direction)),
             }?;
             Ok(idx)
