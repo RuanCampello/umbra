@@ -607,8 +607,8 @@ fn analyze_where_with_join<'exp>(
     let Some(expr) = r#where else { return Ok(()) };
 
     let result = match has_join {
-        true => analyze_expression(&JoinCtx::new(schema, tables), None, expr)?,
-        _ => analyze_expression(schema, None, expr)?,
+        true => analyze_expression(schema, None, expr)?,
+        _ => analyze_expression(&JoinCtx::new(schema, tables), None, expr)?,
     };
 
     if let VmType::Bool = result {

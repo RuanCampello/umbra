@@ -5,7 +5,8 @@ use crate::{
         analyzer::{self, contains_aggregate},
         query::optimiser,
         statement::{
-            Column, Delete, Expression, Insert, OrderBy, OrderDirection, Select, Type, Update,
+            Column, Constraint, Delete, Expression, Insert, JoinType, OrderBy, OrderDirection,
+            Select, Type, Update,
         },
         Statement,
     },
@@ -77,11 +78,14 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
             for (join, right_table) in join_metadata {
                 let right = optimiser::generate_seq_plan(&join.table.name, None, db)?;
-                right_table
-                    .schema
-                    .columns
-                    .iter()
-                    .for_each(|col| schema.push(col.clone()));
+                let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
+
+                right_table.schema.columns.into_iter().for_each(|mut col| {
+                    if should_be_null && !col.is_nullable() {
+                        col.constraints.push(Constraint::Nullable);
+                    }
+                    schema.push(col)
+                });
 
                 let mut right_tables = HashSet::new();
                 right_tables.insert(join.table.key().to_string());
@@ -551,8 +555,9 @@ fn split_where<'expr>(
 ) -> (Option<&'expr Expression>, Option<&'expr Expression>) {
     #[rustfmt::skip]
     fn references(expr: &Expression, table: &str) -> bool {
-        match expr {
-            Expression::Identifier(_) | Expression::Value(_) | Expression::Wildcard => false,
+        match  expr {
+            Expression::Identifier(_) => true,
+            Expression::Value(_) | Expression::Wildcard => false,
             Expression::QualifiedIdentifier { table: table_name, .. } => table_name != table,
             Expression::UnaryOperation {  expr , .. } | Expression::IsNull { expr, .. } => references(expr, table),
             Expression::BinaryOperation { left, right, .. } => references(left, table) || references(right, table),
