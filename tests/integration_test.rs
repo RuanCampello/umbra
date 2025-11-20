@@ -2071,6 +2071,7 @@ fn more_complex_join() -> Result<()> {
 #[test]
 fn join_type_coercion() -> Result<()> {
     let mut db = State::default();
+
     db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));")?;
     db.exec("CREATE TABLE orders (id INT PRIMARY KEY, user_id BIGINT, amount INT);")?;
 
@@ -2081,13 +2082,15 @@ fn join_type_coercion() -> Result<()> {
         db.exec("SELECT users.name FROM users JOIN orders ON users.id = orders.user_id;")?;
 
     assert_eq!(query.tuples, vec![vec![Value::String("Alice".into())]]);
+
     Ok(())
 }
 
 #[test]
 #[should_panic]
-fn test_non_equi_join_panic() {
+fn non_equi_join_panic() {
     let mut db = State::default();
+
     db.exec("CREATE TABLE t1 (val INT PRIMARY KEY);").unwrap();
     db.exec("CREATE TABLE t2 (val INT PRIMARY KEY);").unwrap();
 
@@ -2095,4 +2098,53 @@ fn test_non_equi_join_panic() {
     db.exec("INSERT INTO t2 VALUES (5);").unwrap();
 
     let _ = db.exec("SELECT t1.val FROM t1 JOIN t2 ON t1.val > t2.val;");
+}
+
+#[test]
+fn self_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(50), manager_id INT NULLABLE);",
+    )?;
+    db.exec(
+        r#"
+        INSERT INTO employees (id, name, manager_id) VALUES 
+        (1, 'The Boss', NULL),
+        (2, 'Alice', 1),
+        (3, 'Bob', 1),
+        (4, 'Charlie', 2);
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT e.name, m.name 
+        FROM employees AS e 
+        JOIN employees AS m ON e.manager_id = m.id
+        ORDER BY e.name;
+    "#,
+    )?;
+
+    println!("{query}");
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![
+                Value::String("Alice".into()),
+                Value::String("The Boss".into())
+            ],
+            vec![
+                Value::String("Bob".into()),
+                Value::String("The Boss".into())
+            ],
+            vec![
+                Value::String("Charlie".into()),
+                Value::String("Alice".into())
+            ],
+        ]
+    );
+
+    Ok(())
 }

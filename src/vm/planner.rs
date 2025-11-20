@@ -1262,8 +1262,10 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
                 let key =
                     vm::expression::resolve_expression(&right, &self.right_schema(), &right_key)?;
 
-                let key = tuple::serialize(&r#type.into(), &key);
-                self.table.entry(key).or_default().push(right);
+                if !key.is_null() {
+                    let key = tuple::serialize(&r#type.into(), &key);
+                    self.table.entry(key).or_default().push(right);
+                }
             }
 
             self.hash_built = true;
@@ -1312,21 +1314,23 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             let key_value =
                 vm::expression::resolve_expression(&left, &self.left.schema().unwrap(), &left_key)?;
 
-            let key = tuple::serialize(&r#type.into(), &key_value);
             self.current_left = Some(left);
 
             match key_value.is_null() {
                 true => self.current_matches = None,
-                _ => match self.table.get(&key) {
-                    Some(matches) => {
-                        if self.right_matters() {
-                            self.matched_right_keys.insert(key);
-                        }
+                _ => {
+                    let key = tuple::serialize(&r#type.into(), &key_value);
+                    match self.table.get(&key) {
+                        Some(matches) => {
+                            if self.right_matters() {
+                                self.matched_right_keys.insert(key);
+                            }
 
-                        self.current_matches = Some(matches.clone())
+                            self.current_matches = Some(matches.clone())
+                        }
+                        _ => self.current_matches = None,
                     }
-                    _ => self.current_matches = None,
-                },
+                }
             }
 
             self.index = 0;
