@@ -53,6 +53,7 @@ enum ErrorKind {
     Unsupported(Token),
     UnexpectedEof,
     FormatError(String),
+    InvalidValue { clause: Keyword, found: Token },
 }
 
 pub(in crate::sql) type ParserResult<T> = Result<T, ParserError>;
@@ -430,6 +431,46 @@ impl<'input> Parser<'input> {
             table,
             on,
         }))
+    }
+
+    fn parse_limit(&mut self) -> ParserResult<Option<usize>> {
+        match self.consume_optional(Token::Keyword(Keyword::Limit)) {
+            true => match self.next_token()? {
+                Token::Number(num) => {
+                    let value = num.parse::<i64>().map_err(|_| ParserError {
+                        kind: ErrorKind::InvalidValue {
+                            clause: Keyword::Limit,
+                            found: Token::String(num),
+                        },
+                        input: self.input.into(),
+                        location: self.location,
+                    })?;
+
+                    if value < 0 {
+                        return Err(ParserError {
+                            kind: ErrorKind::FormatError(format!(
+                                "LIMIT expects a non-negative integer, got {value}"
+                            )),
+                            location: self.location,
+                            input: self.input.into(),
+                        });
+                    }
+
+                    Ok(Some(value as usize))
+                }
+                token => {
+                    return Err(ParserError {
+                        kind: ErrorKind::Expected {
+                            expected: Token::Number(String::new()),
+                            found: token,
+                        },
+                        location: self.location,
+                        input: self.input.into(),
+                    })
+                }
+            },
+            _ => Ok(None),
+        }
     }
 
     fn parse_alias(&mut self) -> ParserResult<Option<String>> {
@@ -853,6 +894,9 @@ impl Display for ErrorKind {
 
                 write!(f, "Expected {one_of} but found '{found}' instead")
             }
+            ErrorKind::InvalidValue { clause, found } => {
+                write!(f, "{clause} received an invalid value: {found}")
+            }
         }
     }
 }
@@ -876,7 +920,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
+    use crate::sql::statement::{Expression, OrderBy, OrderDirection, SelectBuilder};
 
     #[test]
     fn test_parse_select() {
@@ -904,23 +948,22 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select(Select {
-                columns: vec![
-                    Expression::Identifier("title".to_string()),
-                    Expression::Identifier("author".to_string())
-                ],
-                from: "books".into(),
-                r#where: Some(Expression::BinaryOperation {
-                    operator: BinaryOperator::Eq,
-                    left: Box::new(Expression::Identifier("author".to_string())),
-                    right: Box::new(Expression::Value(Value::String(
-                        "Agatha Christie".to_string()
-                    ))),
-                }),
-                joins: vec![],
-                order_by: vec![],
-                group_by: vec![],
-            }))
+            Ok(Statement::Select(
+                SelectBuilder::default()
+                    .from("books")
+                    .columns(vec![
+                        Expression::Identifier("title".to_string()),
+                        Expression::Identifier("author".to_string())
+                    ])
+                    .r#where(Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(Expression::Identifier("author".to_string())),
+                        right: Box::new(Expression::Value(Value::String(
+                            "Agatha Christie".to_string()
+                        ))),
+                    })
+                    .into()
+            )),
         );
     }
 
@@ -931,14 +974,12 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select(Select {
-                columns: vec![Expression::Wildcard],
-                from: "users".into(),
-                r#where: None,
-                joins: vec![],
-                order_by: vec![],
-                group_by: vec![],
-            }))
+            Ok(Statement::Select(
+                SelectBuilder::default()
+                    .from("users")
+                    .select(Expression::Wildcard)
+                    .into()
+            ))
         );
     }
 

@@ -48,6 +48,7 @@ impl<'sql> Sql<'sql> for Select {
 
             Ok(OrderBy { expr, direction })
         })?;
+        let limit = parser.parse_limit()?;
 
         Ok(Select {
             columns,
@@ -56,6 +57,7 @@ impl<'sql> Sql<'sql> for Select {
             r#where,
             order_by,
             group_by,
+            limit,
         })
     }
 }

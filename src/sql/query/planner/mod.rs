@@ -47,6 +47,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             order_by,
             group_by,
             joins,
+            limit,
         }) => {
             let (r#where, join_where) = match !joins.is_empty() && r#where.is_some() {
                 true => split_where(r#where.as_ref().unwrap(), &from.key()),
