@@ -2192,3 +2192,48 @@ fn self_join() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn limit() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+    CREATE TABLE employees (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100),
+        department VARCHAR(50),
+        salary REAL
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO employees (name, department, salary) VALUES
+        ('Alice', 'Engineering', 70000),
+        ('Bob', 'HR', 50000),
+        ('Carol', 'Engineering', 75000),
+        ('Dave', 'Marketing', 60000),
+        ('Eve', 'Engineering', 72000),
+        ('Frank', 'HR', 52000),
+        ('Grace', 'Marketing', 58000),
+        ('Hank', 'Engineering', 69000),
+        ('Ivy', 'HR', 51000),
+        ('Jack', 'Marketing', 62000);
+        "#,
+    )?;
+
+    let query =
+        db.exec("SELECT name, department, salary FROM employees ORDER BY salary DESC LIMIT 3;")?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Carol".into(), "Engineering".into(), 75000.into()],
+            vec!["Eve".into(), "Engineering".into(), 72000.into()],
+            vec!["Alice".into(), "Engineering".into(), 70000.into()],
+        ]
+    );
+
+    Ok(())
+}

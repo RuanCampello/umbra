@@ -218,11 +218,11 @@ pub(crate) struct HashJoin<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Limit<File: FileOperations> {
-    source: Box<Planner<File>>,
+    pub source: Box<Planner<File>>,
     // maximum amount of rows to yield
-    limit: usize,
+    pub limit: usize,
     /// number of rows yield so far
-    count: usize,
+    pub count: usize,
 }
 
 #[derive(Debug, PartialEq)]
