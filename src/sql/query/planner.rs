@@ -68,6 +68,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let mut left_tables = HashSet::new();
             left_tables.insert(from.key().to_string());
 
+            let mut base_names: HashSet<&str> = HashSet::new();
+            base_names.insert(from.name.as_ref());
+
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
                 let right_table = db.metadata(&join_clause.table.name)?.clone();
@@ -88,11 +91,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     schema.push(col)
                 });
 
-                left_tables
-                    .iter()
-                    .for_each(|table| schema.add_qualified_name(table, 0, left_len));
-
-                schema.add_qualified_name(&join.table.key(), left_len, schema.len());
+                let is_self_join = base_names.contains(&join.table.name.as_ref());
+                if is_self_join {
+                    left_tables
+                        .iter()
+                        .for_each(|t| schema.add_qualified_name(t, 0, left_len));
+                }
 
                 let mut right_tables = HashSet::new();
                 right_tables.insert(join.table.key().to_string());

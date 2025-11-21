@@ -2109,7 +2109,7 @@ fn self_join() -> Result<()> {
     )?;
     db.exec(
         r#"
-        INSERT INTO employees (id, name, manager_id) VALUES 
+    INSERT INTO employees (id, name, manager_id) VALUES 
         (1, 'The Boss', NULL),
         (2, 'Alice', 1),
         (3, 'Bob', 1),
@@ -2119,10 +2119,10 @@ fn self_join() -> Result<()> {
 
     let query = db.exec(
         r#"
-        SELECT e.name, m.name 
-        FROM employees AS e 
-        JOIN employees AS m ON e.manager_id = m.id
-        ORDER BY e.name;
+    SELECT e.name, m.name 
+    FROM employees AS e 
+    JOIN employees AS m ON e.manager_id = m.id
+    ORDER BY e.name;
     "#,
     )?;
 
