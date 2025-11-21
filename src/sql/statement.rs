@@ -74,7 +74,7 @@ pub(crate) struct Select {
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
-    // TODO: limit
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -85,6 +85,7 @@ pub struct SelectBuilder {
     r#where: Option<Expression>,
     order_by: Vec<OrderBy>,
     group_by: Vec<Expression>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Hash)]
@@ -522,6 +523,7 @@ impl Display for Statement {
                 joins,
                 order_by,
                 group_by,
+                limit,
             }) => {
                 write!(f, "SELECT {} FROM {}", join(columns, ", "), from.name)?;
                 if let Some(alias) = &from.alias {
@@ -548,6 +550,10 @@ impl Display for Statement {
 
                 if !group_by.is_empty() {
                     write!(f, " GROUP BY {}", join(group_by, ", "))?;
+                }
+
+                if let Some(limit) = limit {
+                    write!(f, " LIMIT {limit}")?;
                 }
             }
 
@@ -1041,6 +1047,11 @@ impl SelectBuilder {
         self.order_by.push(order_expr);
         self
     }
+
+    pub fn limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
 }
 
 impl From<SelectBuilder> for Select {
@@ -1052,6 +1063,7 @@ impl From<SelectBuilder> for Select {
             r#where: value.r#where,
             order_by: value.order_by,
             group_by: value.group_by,
+            limit: value.limit,
         }
     }
 }
