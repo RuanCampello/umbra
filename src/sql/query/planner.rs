@@ -42,6 +42,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 pager: Rc::clone(&db.pager),
             })
         }
+
         Statement::Select(Select {
             columns,
             from,
@@ -65,11 +66,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let mut tables = HashMap::new();
             tables.insert(from.key(), table.schema.clone());
 
-            let mut left_tables = HashSet::new();
-            left_tables.insert(from.key().to_string());
-
-            let mut base_names: HashSet<&str> = HashSet::new();
-            base_names.insert(from.name.as_ref());
+            let mut left_tables = HashSet::from([from.key().to_string()]);
+            let base_names: HashSet<&str> = HashSet::from([from.name.as_ref()]);
 
             let mut join_metadata = Vec::new();
             for join_clause in &joins {
@@ -97,9 +95,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         .iter()
                         .for_each(|t| schema.add_qualified_name(t, 0, left_len));
                 }
-
-                let mut right_tables = HashSet::new();
-                right_tables.insert(join.table.key().to_string());
+                let right_tables = HashSet::from([join.table.key().to_string()]);
 
                 source = Planner::HashJoin(
                     HashJoin::new(source, right, join.join_type, join.on.clone())

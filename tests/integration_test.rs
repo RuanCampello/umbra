@@ -2126,8 +2126,6 @@ fn self_join() -> Result<()> {
     "#,
     )?;
 
-    println!("{query}");
-
     assert_eq!(
         query.tuples,
         vec![
@@ -2143,6 +2141,52 @@ fn self_join() -> Result<()> {
                 Value::String("Charlie".into()),
                 Value::String("Alice".into())
             ],
+        ]
+    );
+
+    db.exec(
+        r#"
+    CREATE TABLE employee (
+        employee_id INT PRIMARY KEY,
+        first_name VARCHAR (255),
+        last_name VARCHAR (255),
+        manager_id INT NULLABLE
+    );"#,
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO employee (employee_id, first_name, last_name, manager_id)
+        VALUES
+        (1, 'Windy', 'Hays', NULL),
+        (2, 'Ava', 'Christensen', 1),
+        (3, 'Hassan', 'Conner', 1),
+        (4, 'Anna', 'Reeves', 2),
+        (5, 'Sau', 'Norman', 2),
+        (6, 'Kelsie', 'Hays', 3),
+        (7, 'Tory', 'Goff', 3),
+        (8, 'Salley', 'Lester', 3);"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT
+        CONCAT(e.first_name, ' ', e.last_name) AS employee,
+        CONCAT(m.first_name, ' ', m.last_name) AS manager
+    FROM employee AS e
+    INNER JOIN employee AS m ON m.employee_id = e.manager_id
+    ORDER BY manager;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Sau Norman".into(), "Ava Christensen".into()],
+            vec!["Anna Reeves".into(), "Ava Christensen".into()],
+            vec!["Salley Lester".into(), "Hassan Conner".into()],
+            vec!["Kelsie Hays".into(), "Hassan Conner".into()],
+            vec!["Tory Goff".into(), "Hassan Conner".into()],
+            vec!["Ava Christensen".into(), "Windy Hays".into()],
+            vec!["Hassan Conner".into(), "Windy Hays".into()],
         ]
     );
 
