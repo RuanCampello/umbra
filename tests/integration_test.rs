@@ -2174,16 +2174,18 @@ fn self_join() -> Result<()> {
         CONCAT(m.first_name, ' ', m.last_name) AS manager
     FROM employee AS e
     INNER JOIN employee AS m ON m.employee_id = e.manager_id
-    ORDER BY manager;"#,
+    ORDER BY manager, employee;"#,
     )?;
+
+    println!("{query}");
 
     assert_eq!(
         query.tuples,
         vec![
-            vec!["Sau Norman".into(), "Ava Christensen".into()],
             vec!["Anna Reeves".into(), "Ava Christensen".into()],
-            vec!["Salley Lester".into(), "Hassan Conner".into()],
+            vec!["Sau Norman".into(), "Ava Christensen".into()],
             vec!["Kelsie Hays".into(), "Hassan Conner".into()],
+            vec!["Salley Lester".into(), "Hassan Conner".into()],
             vec!["Tory Goff".into(), "Hassan Conner".into()],
             vec!["Ava Christensen".into(), "Windy Hays".into()],
             vec!["Hassan Conner".into(), "Windy Hays".into()],

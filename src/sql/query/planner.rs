@@ -304,9 +304,20 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 for order in &order_by {
                     match order.expr {
                         Expression::Identifier(ref ident) => {
-                            let idx = resolve_order_index(&schema, &columns, ident)?;
-                            indexes.push(idx);
-                            directions.push(order.direction);
+                            match find_aliased_expression(&columns, ident) {
+                                Some(expr) => {
+                                    let typ = resolve_type(&schema, expr)?;
+                                    indexes.push(sorted_schema.len());
+                                    directions.push(order.direction);
+                                    sorted_schema.push(Column::new(&order.expr.to_string(), typ));
+                                    extra_exprs.push(expr.clone());
+                                }
+                                _ => {
+                                    let idx = resolve_order_index(&schema, &columns, ident)?;
+                                    indexes.push(idx);
+                                    directions.push(order.direction);
+                                }
+                            }
                         }
                         Expression::QualifiedIdentifier {
                             ref table,
@@ -345,7 +356,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         mem_buff_size: page_size,
                     }),
                     comparator: TupleComparator::new(
-                        schema.clone(),
+                        sorted_schema.clone(),
                         sorted_schema,
                         indexes,
                         directions,
@@ -499,6 +510,28 @@ fn single_typeof_column<'a>(
             let idx = schema.index_of(ident)?;
             let type_of = schema.columns[idx].data_type.to_string();
             return Some((format!("typeof({ident})"), type_of));
+        }
+    }
+
+    None
+}
+
+fn find_aliased_expression<'a>(
+    columns: &'a [Expression],
+    ident: &'a str,
+) -> Option<&'a Expression> {
+    for expr in columns {
+        if let Expression::Alias {
+            expr: aliased_expr,
+            alias,
+        } = expr
+        {
+            if alias == ident {
+                return match aliased_expr.as_ref() {
+                    Expression::Identifier(_) | Expression::QualifiedIdentifier { .. } => None,
+                    _ => Some(aliased_expr.as_ref()),
+                };
+            }
         }
     }
 
