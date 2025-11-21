@@ -437,7 +437,7 @@ impl<'input> Parser<'input> {
         match self.consume_optional(Token::Keyword(Keyword::Limit)) {
             true => match self.next_token()? {
                 Token::Number(num) => {
-                    let value = num.parse::<i64>().map_err(|_| ParserError {
+                    let value = num.parse::<usize>().map_err(|_| ParserError {
                         kind: ErrorKind::InvalidValue {
                             clause: Keyword::Limit,
                             found: Token::String(num),
@@ -446,17 +446,7 @@ impl<'input> Parser<'input> {
                         location: self.location,
                     })?;
 
-                    if value < 0 {
-                        return Err(ParserError {
-                            kind: ErrorKind::FormatError(format!(
-                                "LIMIT expects a non-negative integer, got {value}"
-                            )),
-                            location: self.location,
-                            input: self.input.into(),
-                        });
-                    }
-
-                    Ok(Some(value as usize))
+                    Ok(Some(value))
                 }
                 token => {
                     return Err(ParserError {

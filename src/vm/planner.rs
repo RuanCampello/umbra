@@ -53,6 +53,9 @@ pub(crate) enum Planner<File: FileOperations> {
     Aggregate(Aggregate<File>),
     /// Used for `JOIN`s with an equal `ON` condition.
     HashJoin(HashJoin<File>),
+    // Limits the number of rows returned by the query.
+    // Wraps another planner and stops yielding after the specified number of rows.
+    Limit(Limit<File>),
     Project(Project<File>),
     Collect(Collect<File>),
     /// Handles literal values from INSERT statements.
@@ -214,6 +217,15 @@ pub(crate) struct HashJoin<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct Limit<File: FileOperations> {
+    source: Box<Planner<File>>,
+    // maximum amount of rows to yield
+    limit: usize,
+    /// number of rows yield so far
+    count: usize,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct Values {
     pub values: VecDeque<Vec<Expression>>,
 }
@@ -312,6 +324,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Project(projection) => projection.try_next(),
             Self::Aggregate(aggr) => aggr.try_next(),
             Self::HashJoin(hash) => hash.try_next(),
+            Self::Limit(limit) => limit.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
@@ -331,6 +344,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Collect(collection) => &collection.source,
             Self::Aggregate(aggr) => &aggr.source,
             Self::Project(project) => &project.source,
+            Self::Limit(limit) => &limit.source,
             _ => return None,
         })
     }
@@ -353,6 +367,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Values(values) => format!("{values}"),
             Self::Aggregate(aggr) => format!("{aggr}"),
             Self::HashJoin(hash) => format!("{hash}"),
+            Self::Limit(limit) => format!("{limit}"),
         }
     }
 
@@ -403,6 +418,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Aggregate(aggr) => &aggr.output,
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
+            Self::Limit(limit) => return limit.source.schema(),
             Self::HashJoin(hash) => {
                 let mut schema = hash.left_schema();
                 let left_len = schema.len();
@@ -1517,6 +1533,22 @@ impl<File: FileOperations> HashJoin<File> {
     }
 }
 
+impl<File: PlanExecutor> Execute for Limit<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if self.count >= self.limit {
+            return Ok(None);
+        }
+
+        match self.source.try_next()? {
+            Some(tuple) => {
+                self.count += 1;
+                return Ok(Some(tuple));
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
 impl<File: PlanExecutor> Aggregate<File> {
     fn apply_aggr(
         &self,
@@ -2112,6 +2144,12 @@ impl<File: FileOperations> Display for Aggregate<File> {
 impl<File: FileOperations> Display for HashJoin<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Hash {:?} Join on {}", self.join_type, self.condition)
+    }
+}
+
+impl<File: FileOperations> Display for Limit<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Limit {}", self.limit)
     }
 }
 
