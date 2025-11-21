@@ -2237,3 +2237,53 @@ fn limit() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn limit_zero() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("INSERT INTO items (name) VALUES ('item1'), ('item2'), ('item3');")?;
+
+    let query = db.exec("SELECT name FROM items LIMIT 0;")?;
+    assert!(query.tuples.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn limit_with_join() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE departments (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(50), dept_id INT);")?;
+
+    db.exec(
+        r#"
+        INSERT INTO departments (name)
+        VALUES ('Engineering'), ('Sales'), ('HR');"#,
+    )?;
+
+    db.exec(
+        r#"
+        INSERT INTO employees (name, dept_id)
+        VALUES ('Alice', 1), ('Bob', 1), ('Charlie', 2), ('David', 2), ('Eve', 3);"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT employees.name, departments.name
+        FROM employees
+        JOIN departments ON employees.dept_id = departments.id
+        ORDER BY employees.name
+        LIMIT 2;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "Engineering".into()],
+            vec!["Bob".into(), "Engineering".into()]
+        ]
+    );
+
+    Ok(())
+}
