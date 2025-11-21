@@ -80,10 +80,23 @@ pub(crate) fn resolve_expression<'exp>(
 ) -> Result<Value, SqlError> {
     match expression {
         Expression::Value(value) => Ok(value.clone()),
-        Expression::Identifier(ident) => match schema.index_of(ident) {
+        Expression::Identifier(column) => match schema.index_of(column) {
             Some(idx) => Ok(val[idx].clone()),
-            None => Err(SqlError::InvalidColumn(ident.clone())),
+            None => Err(SqlError::InvalidColumn(column.clone())),
         },
+        Expression::QualifiedIdentifier { column, table } => {
+            let idx = schema
+                .index_of(&format!("{table}.{column}"))
+                .or_else(|| schema.last_index_of(column));
+
+            match idx {
+                Some(idx) => Ok(val[idx].clone()),
+                None => Err(SqlError::InvalidQualifiedColumn {
+                    table: table.into(),
+                    column: column.into(),
+                }),
+            }
+        }
         Expression::UnaryOperation { operator, expr } => {
             let value = resolve_expression(val, schema, expr)?;
             Ok(match operator {
@@ -392,6 +405,19 @@ impl From<&Type> for VmType {
                 VmType::Number
             }
             _ => panic!("Cannot convert type {value} to VmType"),
+        }
+    }
+}
+
+impl From<VmType> for Type {
+    fn from(value: VmType) -> Self {
+        match value {
+            VmType::Bool => Self::Boolean,
+            VmType::String => Self::Text,
+            VmType::Number => Self::BigInteger,
+            VmType::Float => Self::DoublePrecision,
+            VmType::Date => Self::DateTime,
+            VmType::Interval => Self::Interval,
         }
     }
 }

@@ -69,11 +69,28 @@ pub(crate) enum Create {
 #[derive(Debug, PartialEq)]
 pub(crate) struct Select {
     pub columns: Vec<Expression>,
-    pub from: String,
+    pub from: TableRef,
+    pub joins: Vec<JoinClause>,
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
     // TODO: limit
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct SelectBuilder {
+    columns: Vec<Expression>,
+    from: TableRef,
+    joins: Vec<JoinClause>,
+    r#where: Option<Expression>,
+    order_by: Vec<OrderBy>,
+    group_by: Vec<Expression>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Hash)]
+pub struct TableRef {
+    pub name: String,
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -105,6 +122,10 @@ pub(crate) enum Drop {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub enum Expression {
     Identifier(String),
+    QualifiedIdentifier {
+        table: String,
+        column: String,
+    },
     Value(Value),
     Wildcard,
     UnaryOperation {
@@ -132,16 +153,31 @@ pub enum Expression {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
-pub(crate) struct OrderBy {
+pub struct OrderBy {
     pub expr: Expression,
     pub direction: OrderDirection,
 }
 
 #[derive(Debug, Default, PartialEq, PartialOrd, Clone, Copy)]
-pub(crate) enum OrderDirection {
+pub enum OrderDirection {
     #[default]
     Asc,
     Desc,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct JoinClause {
+    pub table: TableRef,
+    pub on: Expression,
+    pub join_type: JoinType,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum JoinType {
+    Left,
+    Right,
+    Inner,
+    Full,
 }
 
 /// Date/Time related types.
@@ -483,10 +519,25 @@ impl Display for Statement {
                 columns,
                 from,
                 r#where,
+                joins,
                 order_by,
                 group_by,
             }) => {
-                write!(f, "SELECT {} FROM {from}", join(columns, ", "))?;
+                write!(f, "SELECT {} FROM {}", join(columns, ", "), from.name)?;
+                if let Some(alias) = &from.alias {
+                    write!(f, " AS {alias}")?;
+                }
+
+                for join in joins {
+                    write!(f, " JOIN {}", join.table.name)?;
+
+                    if let Some(alias) = &join.table.alias {
+                        write!(f, " AS {alias}")?;
+                    }
+
+                    write!(f, " ON {}", join.on)?;
+                }
+
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
@@ -749,6 +800,7 @@ impl Display for Expression {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Identifier(ident) => f.write_str(ident),
+            Self::QualifiedIdentifier { table, column } => write!(f, "{table}.{column}"),
             Self::Value(value) => write!(f, "{value}"),
             Self::Wildcard => f.write_char('*'),
             Self::BinaryOperation {
@@ -954,6 +1006,83 @@ define_function_mapping! {
     UuidV4 => "UUIDV4",
 }
 
+impl SelectBuilder {
+    pub fn from(mut self, from: impl Into<String>) -> Self {
+        self.from.name = from.into();
+        self
+    }
+
+    pub fn select(mut self, expression: Expression) -> Self {
+        self.columns.push(expression);
+        self
+    }
+
+    pub fn columns(mut self, expressions: impl IntoIterator<Item = Expression>) -> Self {
+        self.columns.extend(expressions);
+        self
+    }
+
+    pub fn r#where(mut self, condition: Expression) -> Self {
+        self.r#where = Some(condition);
+        self
+    }
+
+    pub fn join(mut self, join: JoinClause) -> Self {
+        self.joins.push(join);
+        self
+    }
+
+    pub fn group_by(mut self, expression: Expression) -> Self {
+        self.group_by.push(expression);
+        self
+    }
+
+    pub fn order_by(mut self, order_expr: OrderBy) -> Self {
+        self.order_by.push(order_expr);
+        self
+    }
+}
+
+impl From<SelectBuilder> for Select {
+    fn from(value: SelectBuilder) -> Self {
+        Self {
+            columns: value.columns,
+            joins: value.joins,
+            from: value.from,
+            r#where: value.r#where,
+            order_by: value.order_by,
+            group_by: value.group_by,
+        }
+    }
+}
+
+impl TableRef {
+    pub fn new(name: String, alias: Option<String>) -> Self {
+        Self { name, alias }
+    }
+
+    /// Returns the key for lookups in the context.
+    /// Alias if present, otherwise table name.
+    pub fn key(&self) -> &str {
+        self.alias.as_ref().unwrap_or(&self.name)
+    }
+}
+
+impl<S> From<S> for TableRef
+where
+    S: AsRef<str>,
+{
+    fn from(value: S) -> Self {
+        TableRef::new(value.as_ref().into(), None)
+    }
+}
+
+impl Select {
+    pub fn builder() -> SelectBuilder {
+        SelectBuilder::default()
+    }
+}
+
 impl From<Function> for Keyword {
     fn from(value: Function) -> Self {
         match value {
@@ -975,6 +1104,18 @@ impl From<Function> for Keyword {
             Function::Coalesce => Self::Coalesce,
             Function::Extract => Self::Extract,
             Function::UuidV4 => unimplemented!(),
+        }
+    }
+}
+
+impl From<Keyword> for JoinType {
+    fn from(value: Keyword) -> Self {
+        match value {
+            Keyword::Left => Self::Left,
+            Keyword::Right => Self::Right,
+            Keyword::Inner => Self::Inner,
+            Keyword::Full => Self::Full,
+            _ => Self::Inner,
         }
     }
 }
@@ -1031,6 +1172,17 @@ impl From<Expression> for OrderBy {
             expr,
             direction: Default::default(),
         }
+    }
+}
+
+impl Display for JoinType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Left => "LEFT",
+            Self::Right => "RIGHT",
+            Self::Inner => "INNER",
+            Self::Full => "FULL",
+        })
     }
 }
 

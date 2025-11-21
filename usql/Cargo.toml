@@ -5,5 +5,5 @@ description = "Umbra's (mostly) friendly CLI client"
 edition = "2024"
 
 [dependencies]
-rustyline = "16.0.0"
+rustyline = { version = "16.0.0", features = ["derive"] }
 umbra = {path = ".."}

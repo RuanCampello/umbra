@@ -10,11 +10,12 @@ use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 /// Takes a given [statement](crate::sql::statement::Statement) and prepares it to the plan
 /// generation.
 ///
-/// Here we basic do three things:
+/// Here we basic do four things:
 ///
 /// 1.Remove wildcards for [select](crate::sql::statement::Select) statements.
 /// 2.Reorder the values in [insert](crate::sql::statement::Insert) statements to match the [schema](crate::db::Schema) ordering.
 /// 3.Increment `SERIAL` (and its variants) columns.
+/// 4.Combine [schemas](crate::db::Schema) of possible table joins.
 ///
 /// ```sql
 /// -- table
@@ -34,11 +35,14 @@ use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 /// ```
 pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
-        Statement::Select(Select { columns, from, .. })
-            if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) =>
-        {
-            let metadata = ctx.metadata(from)?;
-            let identifiers: Vec<Expression> = metadata
+        Statement::Select(Select {
+            columns,
+            from,
+            joins,
+            ..
+        }) if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) => {
+            let metadata = ctx.metadata(&from.name)?;
+            let mut identifiers: Vec<Expression> = metadata
                 .schema
                 .columns
                 .iter()
@@ -46,6 +50,19 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 .cloned()
                 .map(|col| Expression::Identifier(col.name))
                 .collect();
+
+            for join in joins {
+                let metadata = ctx.metadata(&join.table.name)?;
+                identifiers.extend(
+                    metadata
+                        .schema
+                        .columns
+                        .iter()
+                        .filter(|col| col.name.ne(&ROW_COL_ID))
+                        .cloned()
+                        .map(|col| Expression::Identifier(col.name)),
+                )
+            }
 
             let mut wildcards = Vec::new();
 

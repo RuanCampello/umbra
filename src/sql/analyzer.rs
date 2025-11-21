@@ -23,6 +23,11 @@ struct AliasCtx<'s> {
     aliases: &'s HashMap<String, &'s Expression>,
 }
 
+struct JoinCtx<'s> {
+    schema: &'s Schema,
+    tables: &'s HashMap<&'s str, Schema>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
     MissingCols,
@@ -43,8 +48,12 @@ pub enum AlreadyExists {
 
 type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
-pub(in crate::sql) trait AnalyzeCtx {
+pub(crate) trait AnalyzeCtx {
     fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)>;
+
+    /// Resolves a qualified identifier `table.column`.
+    /// Default implementation ignores the table.
+    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)>;
 }
 
 pub(in crate::sql) fn analyze<'s>(
@@ -172,11 +181,23 @@ pub(in crate::sql) fn analyze<'s>(
         Statement::Select(Select {
             columns,
             from,
+            joins,
             order_by,
             group_by,
             r#where,
         }) => {
-            let metadata = ctx.metadata(from)?;
+            // TODO: analyze correcly the join clauses
+            let metadata = ctx.metadata(&from.name)?;
+            let mut schema = metadata.schema.clone();
+
+            let mut tables = HashMap::new();
+            tables.insert(from.key(), metadata.schema.clone());
+
+            for join in joins {
+                let join_metadata = ctx.metadata(&join.table.name)?;
+                tables.insert(join.table.key(), join_metadata.schema.clone());
+                schema.extend(join_metadata.schema.columns.clone());
+            }
 
             let aliases: HashMap<String, &Expression> = columns
                 .iter()
@@ -210,18 +231,37 @@ pub(in crate::sql) fn analyze<'s>(
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
                 }
 
-                analyze_expression(&metadata.schema, None, expr)?;
+                match joins.is_empty() {
+                    true => analyze_expression(&schema, None, expr)?,
+                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, expr)?,
+                };
             }
 
-            analyze_where(&metadata.schema, r#where)?;
+            analyze_where_with_join(&schema, &tables, r#where, joins.is_empty())?;
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
-                analyze_expression_with_aliases(&metadata.schema, &aliases, None, &order.expr)?;
+                match joins.is_empty() {
+                    true => analyze_expression_with_aliases(&schema, &aliases, None, &order.expr)?,
+                    _ => analyze_expression_with_aliases_and_joins(
+                        &JoinCtx::new(&schema, &tables),
+                        &aliases,
+                        None,
+                        &order.expr,
+                    )?,
+                };
             }
 
             for expr in group_by {
-                analyze_expression_with_aliases(&metadata.schema, &aliases, None, expr)?;
+                match joins.is_empty() {
+                    true => analyze_expression_with_aliases(&schema, &aliases, None, expr)?,
+                    _ => analyze_expression_with_aliases_and_joins(
+                        &JoinCtx::new(&schema, &tables),
+                        &aliases,
+                        None,
+                        expr,
+                    )?,
+                };
             }
         }
 
@@ -335,6 +375,11 @@ impl AnalyzeCtx for Schema {
         self.index_of(ident)
             .map(|idx| (idx, &self.columns[idx].data_type))
     }
+
+    fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
+        self.last_index_of(column)
+            .map(|idx| (idx, &self.columns[idx].data_type))
+    }
 }
 
 impl<'s> AnalyzeCtx for AliasCtx<'s> {
@@ -347,23 +392,70 @@ impl<'s> AnalyzeCtx for AliasCtx<'s> {
             .index_of(ident)
             .map(|idx| (idx, &self.schema.columns[idx].data_type))
     }
+
+    fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
+        self.schema
+            .last_index_of(column)
+            .map(|idx| (idx, &self.schema.columns[idx].data_type))
+    }
 }
 
-pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
+impl<'s> AnalyzeCtx for JoinCtx<'s> {
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
+        self.schema
+            .index_of(ident)
+            .map(|idx| (idx, &self.schema.columns[idx].data_type))
+    }
+
+    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
+        if let Some(schema) = self.tables.get(table) {
+            if let Some(_) = schema.index_of(column) {
+                return self
+                    .schema
+                    .last_index_of(column)
+                    .map(|idx| (idx, &self.schema.columns[idx].data_type));
+            }
+        }
+
+        None
+    }
+}
+
+impl<'s> JoinCtx<'s> {
+    pub fn new(schema: &'s Schema, tables: &'s HashMap<&'s str, Schema>) -> Self {
+        Self { schema, tables }
+    }
+}
+
+pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
     ctx: &Ctx,
     data_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError> {
     Ok(match expr {
         Expression::Value(value) => analyze_value(value, data_type)?,
-        Expression::Identifier(ident) => {
+        Expression::Identifier(column) => {
             let data_type = ctx
-                .resolve_identifier(ident)
+                .resolve_identifier(column)
                 .map(|tuple| tuple.1)
-                .ok_or(SqlError::InvalidColumn(ident.into()))?;
+                .ok_or(SqlError::InvalidColumn(column.into()))?;
 
             // this is an expection because when dealing with outside input, UUID's treated as a
             // String, but inside the engine, we treat it as a Number.
+            match data_type {
+                Type::Uuid => VmType::String,
+                r#type => r#type.into(),
+            }
+        }
+        Expression::QualifiedIdentifier { table, column } => {
+            let data_type = ctx
+                .resolve_qualified_identifier(table, column)
+                .map(|tuple| tuple.1)
+                .ok_or(SqlError::InvalidQualifiedColumn {
+                    table: table.clone(),
+                    column: column.clone(),
+                })?;
+
             match data_type {
                 Type::Uuid => VmType::String,
                 r#type => r#type.into(),
@@ -377,8 +469,10 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
         } => {
             fn get_hint<'e, C: AnalyzeCtx>(ctx: &'e C, expr: &'e Expression) -> Option<&'e Type> {
                 match expr {
-                    #[rustfmt::skip]
-                    Expression::Identifier(ident) => ctx.resolve_identifier(ident).map(|(_, ty)| ty),
+                    Expression::Identifier(column)
+                    | Expression::QualifiedIdentifier { column, .. } => {
+                        ctx.resolve_identifier(column).map(|(_, ty)| ty)
+                    }
                     _ => None,
                 }
             }
@@ -502,6 +596,45 @@ pub(in crate::sql) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
         }
     })
+}
+
+fn analyze_where_with_join<'exp>(
+    schema: &'exp Schema,
+    tables: &'exp HashMap<&'exp str, Schema>,
+    r#where: &'exp Option<Expression>,
+    has_join: bool,
+) -> Result<(), SqlError> {
+    let Some(expr) = r#where else { return Ok(()) };
+
+    let result = match has_join {
+        true => analyze_expression(schema, None, expr)?,
+        _ => analyze_expression(&JoinCtx::new(schema, tables), None, expr)?,
+    };
+
+    if let VmType::Bool = result {
+        return Ok(());
+    }
+
+    Err(TypeError::ExpectedType {
+        expected: VmType::Bool,
+        found: expr.clone(),
+    }
+    .into())
+}
+
+fn analyze_expression_with_aliases_and_joins<'exp>(
+    join_ctx: &JoinCtx,
+    aliases: &HashMap<String, &Expression>,
+    col_type: Option<&Type>,
+    expr: &'exp Expression,
+) -> Result<VmType, SqlError> {
+    if let Expression::Identifier(ident) = expr {
+        if let Some(alias) = aliases.get(ident) {
+            return analyze_expression_with_aliases_and_joins(join_ctx, aliases, col_type, &alias);
+        }
+    }
+
+    analyze_expression(join_ctx, col_type, expr)
 }
 
 fn analyze_expression_with_aliases<'exp>(

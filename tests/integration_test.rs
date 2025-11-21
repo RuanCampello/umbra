@@ -1844,3 +1844,351 @@ fn extraction_on_intervals() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn simple_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE basket_a(a SERIAL PRIMARY KEY, fruit_a VARCHAR (100));")?;
+    db.exec("CREATE TABLE basket_b(b SERIAL PRIMARY KEY, fruit_b VARCHAR (100));")?;
+
+    db.exec(
+        r#"
+    INSERT INTO basket_a (a, fruit_a)
+    VALUES
+        (1, 'Apple'),
+        (2, 'Orange'),
+        (3, 'Banana'),
+        (4, 'Cucumber');
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO basket_b (b, fruit_b)
+    VALUES
+        (1, 'Orange'),
+        (2, 'Apple'),
+        (3, 'Watermelon'),
+        (4, 'Pear');
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT fruit_a, fruit_b
+    FROM basket_a
+    INNER JOIN basket_b ON fruit_a = fruit_b;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Apple".into(), "Apple".into()],
+            vec!["Orange".into(), "Orange".into()]
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT fruit_a, fruit_b
+    FROM basket_a
+    LEFT JOIN basket_b
+    ON fruit_a = fruit_b
+    ORDER BY fruit_a;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Apple".into(), "Apple".into()],
+            vec!["Banana".into(), Value::Null],
+            vec!["Cucumber".into(), Value::Null],
+            vec!["Orange".into(), "Orange".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT fruit_a, fruit_b
+    FROM basket_a
+    RIGHT JOIN basket_b ON fruit_a = fruit_b
+    ORDER BY fruit_b;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Apple".into(), "Apple".into()],
+            vec!["Orange".into(), "Orange".into()],
+            vec![Value::Null, "Pear".into()],
+            vec![Value::Null, "Watermelon".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT fruit_a, fruit_b FROM basket_a
+    FULL JOIN basket_b ON fruit_a = fruit_b
+    ORDER BY fruit_a, fruit_b;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Apple".into(), "Apple".into()],
+            vec!["Banana".into(), Value::Null],
+            vec!["Cucumber".into(), Value::Null],
+            vec!["Orange".into(), "Orange".into()],
+            vec![Value::Null, "Pear".into()],
+            vec![Value::Null, "Watermelon".into()],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn multiple_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);")?;
+    db.exec("CREATE TABLE posts (id SERIAL PRIMARY KEY, user_id INT, title TEXT);")?;
+    db.exec("CREATE TABLE comments (id SERIAL PRIMARY KEY, post_id INT, content TEXT);")?;
+
+    db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob');")?;
+    db.exec(
+        r#"
+    INSERT INTO posts (user_id, title) VALUES
+        (1, 'Alice Post 1'),
+        (1, 'Alice Post 2'),
+        (2, 'Bob Post 1');"#,
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO comments (post_id, content) VALUES
+        (1, 'Nice post!'),
+        (1, 'I agree'),
+        (3, 'Cool');"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT u.name, p.title, c.content FROM users AS u
+    JOIN posts AS p ON u.id = p.user_id
+    LEFT JOIN comments AS c ON p.id = c.post_id
+    ORDER BY u.name;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "Alice Post 1".into(), "Nice post!".into()],
+            vec!["Alice".into(), "Alice Post 1".into(), "I agree".into()],
+            vec!["Alice".into(), "Alice Post 2".into(), Value::Null],
+            vec!["Bob".into(), "Bob Post 1".into(), "Cool".into()],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn more_complex_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+    CREATE TABLE customers (
+        customer_id SERIAL PRIMARY KEY,
+        first_name VARCHAR(50),
+        last_name VARCHAR(50),
+        email VARCHAR(100) UNIQUE
+    );
+    "#,
+    )?;
+    db.exec(
+        r#"
+    CREATE TABLE orders (
+        order_id SERIAL PRIMARY KEY,
+        customer_id INTEGER,
+        order_date DATE,
+        total_amount REAL,
+        status VARCHAR(20)
+    );
+    "#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO customers (first_name, last_name, email) VALUES
+        ('John', 'Doe', 'john.doe@email.com'),
+        ('Jane', 'Smith', 'jane.smith@email.com'),
+        ('Bob', 'Johnson', 'bob.johnson@email.com'),
+        ('Alice', 'Brown', 'alice.brown@email.com');
+    "#,
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO orders (customer_id, order_date, total_amount, status) VALUES
+        (1, '2024-01-15', 99.99, 'completed'),
+        (1, '2024-02-20', 149.50, 'pending'),
+        (2, '2024-01-20', 75.25, 'completed'),
+        (3, '2024-02-10', 200.00, 'shipped'),
+        (2, '2024-02-25', 45.99, 'pending'),
+        (1, '2024-03-01', 299.99, 'completed'),
+        (4, '2024-02-28', 89.75, 'pending');"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        c.first_name,
+        c.last_name,
+        COUNT(o.order_id) as total_orders,
+        TRUNC(SUM(o.total_amount), 2) as total_spent
+    FROM customers AS c
+    LEFT JOIN orders AS o ON c.customer_id = o.customer_id
+    GROUP BY c.customer_id, c.first_name, c.last_name
+    ORDER BY total_spent DESC;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["John".into(), "Doe".into(), 3.into(), 549.47.into()],
+            vec!["Bob".into(), "Johnson".into(), 1.into(), 200.into()],
+            vec!["Jane".into(), "Smith".into(), 2.into(), 121.24.into()],
+            vec!["Alice".into(), "Brown".into(), 1.into(), 89.75.into()]
+        ],
+    );
+
+    Ok(())
+}
+
+#[test]
+fn join_type_coercion() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE orders (id INT PRIMARY KEY, user_id BIGINT, amount INT);")?;
+
+    db.exec("INSERT INTO users (id, name) VALUES (1, 'Alice');")?;
+    db.exec("INSERT INTO orders (id, user_id, amount) VALUES (100, 1, 50);")?;
+
+    let query =
+        db.exec("SELECT users.name FROM users JOIN orders ON users.id = orders.user_id;")?;
+
+    assert_eq!(query.tuples, vec![vec![Value::String("Alice".into())]]);
+
+    Ok(())
+}
+
+#[test]
+#[should_panic]
+fn non_equi_join_panic() {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE t1 (val INT PRIMARY KEY);").unwrap();
+    db.exec("CREATE TABLE t2 (val INT PRIMARY KEY);").unwrap();
+
+    db.exec("INSERT INTO t1 VALUES (10);").unwrap();
+    db.exec("INSERT INTO t2 VALUES (5);").unwrap();
+
+    let _ = db.exec("SELECT t1.val FROM t1 JOIN t2 ON t1.val > t2.val;");
+}
+
+#[test]
+fn self_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(50), manager_id INT NULLABLE);",
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO employees (id, name, manager_id) VALUES 
+        (1, 'The Boss', NULL),
+        (2, 'Alice', 1),
+        (3, 'Bob', 1),
+        (4, 'Charlie', 2);
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT e.name, m.name 
+    FROM employees AS e 
+    JOIN employees AS m ON e.manager_id = m.id
+    ORDER BY e.name;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![
+                Value::String("Alice".into()),
+                Value::String("The Boss".into())
+            ],
+            vec![
+                Value::String("Bob".into()),
+                Value::String("The Boss".into())
+            ],
+            vec![
+                Value::String("Charlie".into()),
+                Value::String("Alice".into())
+            ],
+        ]
+    );
+
+    db.exec(
+        r#"
+    CREATE TABLE employee (
+        employee_id INT PRIMARY KEY,
+        first_name VARCHAR (255),
+        last_name VARCHAR (255),
+        manager_id INT NULLABLE
+    );"#,
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO employee (employee_id, first_name, last_name, manager_id)
+        VALUES
+        (1, 'Windy', 'Hays', NULL),
+        (2, 'Ava', 'Christensen', 1),
+        (3, 'Hassan', 'Conner', 1),
+        (4, 'Anna', 'Reeves', 2),
+        (5, 'Sau', 'Norman', 2),
+        (6, 'Kelsie', 'Hays', 3),
+        (7, 'Tory', 'Goff', 3),
+        (8, 'Salley', 'Lester', 3);"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    SELECT
+        CONCAT(e.first_name, ' ', e.last_name) AS employee,
+        CONCAT(m.first_name, ' ', m.last_name) AS manager
+    FROM employee AS e
+    INNER JOIN employee AS m ON m.employee_id = e.manager_id
+    ORDER BY manager, employee;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Anna Reeves".into(), "Ava Christensen".into()],
+            vec!["Sau Norman".into(), "Ava Christensen".into()],
+            vec!["Kelsie Hays".into(), "Hassan Conner".into()],
+            vec!["Salley Lester".into(), "Hassan Conner".into()],
+            vec!["Tory Goff".into(), "Hassan Conner".into()],
+            vec!["Ava Christensen".into(), "Windy Hays".into()],
+            vec!["Hassan Conner".into(), "Windy Hays".into()],
+        ]
+    );
+
+    Ok(())
+}

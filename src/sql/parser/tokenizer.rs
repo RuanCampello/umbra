@@ -134,6 +134,7 @@ impl<'input> Tokenizer<'input> {
             ',' => self.consume(Token::Comma),
             '(' => self.consume(Token::LeftParen),
             ')' => self.consume(Token::RightParen),
+            '.' => self.consume(Token::Dot),
             ';' => self.consume(Token::Semicolon),
             '"' | '\'' => self.tokenize_string(),
             '0'..='9' => self.tokenize_number(),

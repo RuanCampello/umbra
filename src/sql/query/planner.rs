@@ -5,21 +5,22 @@ use crate::{
         analyzer::{self, contains_aggregate},
         query::optimiser,
         statement::{
-            Column, Delete, Expression, Insert, OrderBy, OrderDirection, Select, Type, Update,
+            Column, Constraint, Delete, Expression, Insert, JoinType, OrderBy, OrderDirection,
+            Select, Type, Update,
         },
         Statement,
     },
     vm::{
         expression::VmType,
         planner::{
-            AggregateBuilder, Collect, CollectBuilder, Delete as DeletePlan, Insert as InsertPlan,
-            Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator, Update as UpdatePlan,
-            Values, DEFAULT_SORT_BUFFER_SIZE,
+            AggregateBuilder, Collect, CollectBuilder, Delete as DeletePlan, Filter, HashJoin,
+            Insert as InsertPlan, Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator,
+            Update as UpdatePlan, Values, DEFAULT_SORT_BUFFER_SIZE,
         },
     },
 };
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet, VecDeque},
     io::{Read, Seek, Write},
     rc::Rc,
 };
@@ -41,18 +42,76 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 pager: Rc::clone(&db.pager),
             })
         }
+
         Statement::Select(Select {
             columns,
             from,
             r#where,
             order_by,
             group_by,
+            joins,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&from, r#where.clone(), db)?;
+            let (r#where, join_where) = match !joins.is_empty() && r#where.is_some() {
+                true => split_where(r#where.as_ref().unwrap(), &from.key()),
+                _ => (r#where.as_ref(), None),
+            };
+
+            let mut source = optimiser::generate_seq_plan(&from.name, r#where.cloned(), db)?;
             let page_size = db.pager.borrow().page_size;
             let work_dir = db.work_dir.clone();
-            let table = db.metadata(&from)?;
-            let schema = &table.schema;
+            let table = db.metadata(&from.name)?.clone();
+            let mut schema = table.schema.clone();
+
+            // map of table names to qualified column resolution
+            let mut tables = HashMap::new();
+            tables.insert(from.key(), table.schema.clone());
+
+            let mut left_tables = HashSet::from([from.key().to_string()]);
+            let base_names: HashSet<&str> = HashSet::from([from.name.as_ref()]);
+
+            let mut join_metadata = Vec::new();
+            for join_clause in &joins {
+                let right_table = db.metadata(&join_clause.table.name)?.clone();
+                tables.insert(join_clause.table.key(), right_table.schema.clone());
+
+                join_metadata.push((join_clause, right_table));
+            }
+
+            for (join, right_table) in join_metadata {
+                let left_len = schema.len();
+                let right = optimiser::generate_seq_plan(&join.table.name, None, db)?;
+                let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
+
+                right_table.schema.columns.into_iter().for_each(|mut col| {
+                    if should_be_null && !col.is_nullable() {
+                        col.constraints.push(Constraint::Nullable);
+                    }
+                    schema.push(col)
+                });
+
+                let is_self_join = base_names.contains(&join.table.name.as_ref());
+                if is_self_join {
+                    left_tables
+                        .iter()
+                        .for_each(|t| schema.add_qualified_name(t, 0, left_len));
+                }
+                let right_tables = HashSet::from([join.table.key().to_string()]);
+
+                source = Planner::HashJoin(
+                    HashJoin::new(source, right, join.join_type, join.on.clone())
+                        .with_table_names(left_tables.clone(), right_tables),
+                );
+
+                left_tables.insert(join.table.key().to_string());
+            }
+
+            if let Some(filter) = join_where {
+                source = Planner::Filter(Filter {
+                    source: Box::new(source),
+                    schema: schema.clone(),
+                    filter: filter.to_owned(),
+                })
+            }
 
             // this is a special case for `type_of` function
             if let Some((col_name, type_of)) = single_typeof_column(&columns, &schema) {
@@ -73,13 +132,22 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 columns
                     .iter()
                     .map(|expr| match expr {
-                        Expression::Identifier(ident) => {
-                            Ok(schema.columns[schema.index_of(ident).unwrap()].clone())
+                        Expression::Alias { expr, alias } => match expr.as_ref() {
+                            Expression::QualifiedIdentifier { column, table } => {
+                                let mut column = resolve_qualified_column(table, column, &tables)?;
+                                column.name = alias.clone();
+
+                                Ok(column)
+                            }
+                            _ => Ok(Column::new(alias, resolve_type(&schema, expr)?)),
+                        },
+                        Expression::QualifiedIdentifier { column, table } => {
+                            resolve_qualified_column(&table, column, &tables)
                         }
-                        Expression::Alias { expr, alias } => {
-                            Ok(Column::new(alias, resolve_type(schema, expr)?))
+                        Expression::Identifier(column) => {
+                            Ok(schema.columns[schema.index_of(column).unwrap()].clone())
                         }
-                        _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+                        _ => Ok(Column::new(&expr.to_string(), resolve_type(&schema, expr)?)),
                     })
                     .collect::<Result<Vec<_>, SqlError>>()?,
             );
@@ -108,7 +176,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                                 }
                                 _ => None,
                             }) {
-                                aggr_schema.push(Column::new(ident, resolve_type(schema, expr)?));
+                                aggr_schema.push(Column::new(ident, resolve_type(&schema, expr)?));
                             } else if let Some(idx) = schema.index_of(ident) {
                                 aggr_schema.push(schema.columns[idx].clone());
                             } else {
@@ -118,19 +186,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         other => {
                             aggr_schema.push(Column::new(
                                 &other.to_string(),
-                                resolve_type(schema, other)?,
+                                resolve_type(&schema, other)?,
                             ));
                         }
                     }
                 }
 
                 for (aggr_fn, name) in &aggr_exprs {
-                    aggr_schema.push(Column::new(name, resolve_type(schema, &aggr_fn)?))
+                    aggr_schema.push(Column::new(name, resolve_type(&schema, &aggr_fn)?))
                 }
 
                 if group_by.is_empty() && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(schema, &columns, &order_by)?;
+                        extract_order_indexes_and_directions(&schema, &order_by)?;
 
                     source = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -179,7 +247,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 
                 if is_grouped && !order_by.is_empty() {
                     let (indexes, directions) =
-                        extract_order_indexes_and_directions(&aggr_schema, &columns, &order_by)?;
+                        extract_order_indexes_and_directions(&aggr_schema, &order_by)?;
 
                     plan = Planner::Sort(Sort::from(SortBuilder {
                         page_size,
@@ -236,12 +304,31 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 for order in &order_by {
                     match order.expr {
                         Expression::Identifier(ref ident) => {
-                            let idx = resolve_order_index(schema, &columns, ident)?;
+                            match find_aliased_expression(&columns, ident) {
+                                Some(expr) => {
+                                    let typ = resolve_type(&schema, expr)?;
+                                    indexes.push(sorted_schema.len());
+                                    directions.push(order.direction);
+                                    sorted_schema.push(Column::new(&order.expr.to_string(), typ));
+                                    extra_exprs.push(expr.clone());
+                                }
+                                _ => {
+                                    let idx = resolve_order_index(&schema, &columns, ident)?;
+                                    indexes.push(idx);
+                                    directions.push(order.direction);
+                                }
+                            }
+                        }
+                        Expression::QualifiedIdentifier {
+                            ref table,
+                            ref column,
+                        } => {
+                            let idx = resolve_qualified_order_idx(&schema, &column, &table)?;
                             indexes.push(idx);
                             directions.push(order.direction);
                         }
                         _ => {
-                            let ty = resolve_type(schema, &order.expr)?;
+                            let ty = resolve_type(&schema, &order.expr)?;
                             indexes.push(sorted_schema.len());
                             directions.push(order.direction);
                             sorted_schema.push(Column::new(&order.expr.to_string(), ty));
@@ -269,7 +356,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                         mem_buff_size: page_size,
                     }),
                     comparator: TupleComparator::new(
-                        schema.clone(),
+                        sorted_schema.clone(),
                         sorted_schema,
                         indexes,
                         directions,
@@ -370,7 +457,6 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
 
 fn extract_order_indexes_and_directions(
     schema: &Schema,
-    columns: &[Expression],
     order_by: &[OrderBy],
 ) -> Result<(Vec<usize>, Vec<OrderDirection>), DatabaseError> {
     order_by
@@ -378,25 +464,20 @@ fn extract_order_indexes_and_directions(
         .map(|order| {
             let idx = match &order.expr {
                 Expression::Identifier(ident) => {
-                    for (i, expr) in columns.iter().enumerate() {
-                        if let Expression::Alias { alias, .. } = expr {
-                            if alias == ident {
-                                return Ok((i, order.direction));
-                            }
-                        }
-                    }
-
+                    // Look up the identifier in the schema (whether it's an alias or not)
                     schema
                         .index_of(ident)
-                        .ok_or(SqlError::InvalidGroupBy(ident.into()))
+                        .ok_or_else(|| DatabaseError::Sql(SqlError::InvalidGroupBy(ident.into())))
                         .map(|idx| (idx, order.direction))
                 }
                 _ => schema
                     .index_of(&order.expr.to_string())
-                    .ok_or(SqlError::Other(format!(
-                        "ORDER BY expression `{}` not found in output columns",
-                        order.expr.to_string()
-                    )))
+                    .ok_or_else(|| {
+                        DatabaseError::Sql(SqlError::Other(format!(
+                            "ORDER BY expression `{}` not found in output columns",
+                            order.expr.to_string()
+                        )))
+                    })
                     .map(|idx| (idx, order.direction)),
             }?;
             Ok(idx)
@@ -435,6 +516,28 @@ fn single_typeof_column<'a>(
     None
 }
 
+fn find_aliased_expression<'a>(
+    columns: &'a [Expression],
+    ident: &'a str,
+) -> Option<&'a Expression> {
+    for expr in columns {
+        if let Expression::Alias {
+            expr: aliased_expr,
+            alias,
+        } = expr
+        {
+            if alias == ident {
+                return match aliased_expr.as_ref() {
+                    Expression::Identifier(_) | Expression::QualifiedIdentifier { .. } => None,
+                    _ => Some(aliased_expr.as_ref()),
+                };
+            }
+        }
+    }
+
+    None
+}
+
 fn resolve_order_index<'a>(
     schema: &'a Schema,
     columns: &'a [Expression],
@@ -453,9 +556,67 @@ fn resolve_order_index<'a>(
         .ok_or(SqlError::InvalidColumn(ident.into()))
 }
 
+fn resolve_qualified_column(
+    table: &str,
+    column: &str,
+    tables: &HashMap<&str, Schema>,
+) -> Result<Column, SqlError> {
+    let schema = tables
+        .get(table)
+        .ok_or(SqlError::InvalidTable(table.to_string()))?;
+
+    let idx = schema
+        .index_of(column)
+        .ok_or(SqlError::InvalidQualifiedColumn {
+            table: table.into(),
+            column: column.into(),
+        })?;
+
+    Ok(schema.columns[idx].clone())
+}
+
+fn resolve_qualified_order_idx(
+    schema: &Schema,
+    column: &str,
+    table: &str,
+) -> Result<usize, SqlError> {
+    let qualified = format!("{table}.{column}");
+    schema
+        .index_of(&qualified)
+        .or(schema.last_index_of(column))
+        .ok_or(SqlError::InvalidQualifiedColumn {
+            table: table.into(),
+            column: column.into(),
+        })
+}
+
+fn split_where<'expr>(
+    r#where: &'expr Expression,
+    table: &str,
+) -> (Option<&'expr Expression>, Option<&'expr Expression>) {
+    #[rustfmt::skip]
+    fn references(expr: &Expression, table: &str) -> bool {
+        match  expr {
+            Expression::Identifier(_) => true,
+            Expression::Value(_) | Expression::Wildcard => false,
+            Expression::QualifiedIdentifier { table: table_name, .. } => table_name != table,
+            Expression::UnaryOperation {  expr , .. } | Expression::IsNull { expr, .. } => references(expr, table),
+            Expression::BinaryOperation { left, right, .. } => references(left, table) || references(right, table),
+            Expression::Function {args, .. } => args.iter().any(|a| references(a, table)),
+            Expression::Alias { expr, .. } => references(expr, table),
+            Expression::Nested(expr) => references(expr, table),
+        }
+    }
+
+    match references(r#where, table) {
+        true => (None, Some(r#where)),
+        _ => (Some(r#where), None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::sql::statement::Function;
+    use crate::sql::statement::{Function, JoinType};
     use std::{cell::RefCell, collections::HashMap, ops::Bound, path::PathBuf};
 
     use super::*;
@@ -912,7 +1073,7 @@ mod tests {
                     work_dir: work_dir.clone(),
                     input_buffers: DEFAULT_SORT_BUFFER_SIZE,
                     comparator: TupleComparator::new(
-                        db.tables["users"].schema.clone(),
+                        sort_schema.clone(),
                         sort_schema.clone(),
                         vec![1, 4, 5],
                         vec![Default::default(), Default::default(), Default::default()]
@@ -1242,6 +1403,137 @@ mod tests {
                 .into()
             )
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_join() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));",
+            "CREATE TABLE orders (order_id SERIAL PRIMARY KEY, user_id INT, item VARCHAR(50));",
+        ])?;
+
+        let users_table = db.tables["users"].clone();
+        let orders_table = db.tables["orders"].clone();
+
+        let mut schema = db.tables["users"].schema.clone();
+        schema.extend(orders_table.schema.columns.clone());
+
+        assert_eq!(
+            db.gen_plan("SELECT name, order_id FROM users JOIN orders ON id = user_id;")?,
+            Planner::Project(Project {
+                input: schema.clone(),
+                output: Schema::new(vec![
+                    Column::new("name", Type::Varchar(100)),
+                    Column::primary_key("order_id", Type::Serial)
+                ]),
+                projection: vec![
+                    Expression::Identifier("name".into()),
+                    Expression::Identifier("order_id".into()),
+                ],
+                source: Box::new(Planner::HashJoin(
+                    HashJoin::new(
+                        Planner::SeqScan(SeqScan {
+                            table: users_table.clone(),
+                            pager: db.pager(),
+                            cursor: Cursor::new(users_table.root, 0),
+                        }),
+                        Planner::SeqScan(SeqScan {
+                            table: orders_table.clone(),
+                            pager: db.pager(),
+                            cursor: Cursor::new(orders_table.root, 0),
+                        }),
+                        JoinType::Inner,
+                        parse_expr("id = user_id"),
+                    )
+                    .with_table_names(
+                        HashSet::from(["users".to_string()]),
+                        HashSet::from(["orders".to_string()])
+                    )
+                )),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_with_qualified_identifiers() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));",
+            "CREATE TABLE orders (order_id SERIAL PRIMARY KEY, user_id INT, item VARCHAR(50));",
+        ])?;
+
+        let users_table = db.tables["users"].clone();
+        let orders_table = db.tables["orders"].clone();
+
+        let mut joined_schema = db.tables["users"].schema.clone();
+        joined_schema.extend(orders_table.schema.columns.clone());
+
+        let plan = db.gen_plan("SELECT users.name as name, orders.order_id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
+
+        assert_eq!(
+            plan,
+            Planner::Project(Project {
+                input: joined_schema,
+                output: Schema::new(vec![
+                    Column::new("name", Type::Varchar(100)),
+                    Column::primary_key("order_id", Type::Serial),
+                ]),
+                projection: vec![
+                    Expression::Alias {
+                        expr: Box::new(Expression::QualifiedIdentifier {
+                            table: "users".into(),
+                            column: "name".into(),
+                        }),
+                        alias: "name".into(),
+                    },
+                    Expression::Alias {
+                        expr: Box::new(Expression::QualifiedIdentifier {
+                            table: "orders".into(),
+                            column: "order_id".into(),
+                        }),
+                        alias: "order_id".into(),
+                    },
+                ],
+                source: Box::new(Planner::HashJoin(
+                    HashJoin::new(
+                        Planner::SeqScan(SeqScan {
+                            table: users_table.clone(),
+                            pager: db.pager(),
+                            cursor: Cursor::new(users_table.root, 0),
+                        }),
+                        Planner::SeqScan(SeqScan {
+                            table: orders_table.clone(),
+                            pager: db.pager(),
+                            cursor: Cursor::new(orders_table.root, 0),
+                        }),
+                        JoinType::Inner,
+                        parse_expr("users.id = orders.user_id"),
+                    )
+                    .with_table_names(
+                        HashSet::from(["users".to_string()]),
+                        HashSet::from(["orders".to_string()])
+                    )
+                )),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_qualified_column_non_existent() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100));",
+            "CREATE TABLE orders (order_id SERIAL PRIMARY KEY, user_id INT, item VARCHAR(50));",
+        ])?;
+
+        assert_eq!(
+            db.gen_plan("SELECT users.name as name, orders.id as order_id FROM users JOIN orders ON users.id = orders.user_id;").unwrap_err(),
+            SqlError::InvalidQualifiedColumn { table: "orders".into(), column: "id".into() }.into()
+        );
+
         Ok(())
     }
 }

@@ -1,3 +1,7 @@
+mod highlight;
+
+use crate::highlight::{KEYWORD_COLOUR, RESET_COLOUR, STRING_COLOUR, SqlHighlighter, TIME_COLOUR};
+use rustyline::error::ReadlineError;
 use std::{
     collections::VecDeque,
     env,
@@ -5,8 +9,6 @@ use std::{
     net::TcpStream,
     time::Instant,
 };
-
-use rustyline::{DefaultEditor, error::ReadlineError};
 use umbra::{
     db::QuerySet,
     sql::statement::Value,
@@ -35,16 +37,22 @@ fn main() -> rustyline::Result<()> {
         .parse::<u16>()
         .expect("Invalid port provided");
 
-    let mut rsl = DefaultEditor::new()?;
+    let mut rsl = rustyline::Editor::new()?;
+    rsl.set_helper(Some(SqlHighlighter));
+
     if rsl.load_history("history.usql").is_err() {
         println!("No previous history")
     };
 
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
     println!("Connected to {}", stream.peer_addr()?);
-    println!("{}", UMBRA_ASCII);
+
+    println!("{KEYWORD_COLOUR}{UMBRA_ASCII}{RESET_COLOUR}");
+
     println!("󰭟  usql | Umbra's shadowy SQL shell.");
-    println!("Type \\help for guidance, \\quit to escape the void.");
+    println!(
+        "Type {STRING_COLOUR}\\help{RESET_COLOUR} for guidance, {STRING_COLOUR}\\quit{RESET_COLOUR} to escape the void."
+    );
 
     let mut single_quote = None;
     let mut sql = String::new();
@@ -134,11 +142,14 @@ fn main() -> rustyline::Result<()> {
                 Ok(response) => match response {
                     Response::Err(err) => println!("{err}"),
                     Response::Empty(affected_rows) => {
-                        println!("{affected_rows} ({:.2?})", packet_transmission.elapsed())
+                        println!(
+                            "{affected_rows} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
+                            packet_transmission.elapsed()
+                        )
                     }
                     Response::QuerySet(query_set) => {
                         println!(
-                            "{}\n{} {} ({:.2?})",
+                            "{}\n{} {} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
                             table(&query_set),
                             query_set.tuples.len(),
                             plural("row", query_set.tuples.len()),
@@ -185,8 +196,9 @@ fn table(query: &QuerySet) -> String {
 
     (rows).iter().for_each(|row| {
         row.iter().enumerate().for_each(|(idx, col)| {
-            if col.len() > width[idx] {
-                width[idx] = col.len();
+            let chars_count = col.chars().count();
+            if chars_count > width[idx] {
+                width[idx] = chars_count;
             }
         })
     });
@@ -205,7 +217,8 @@ fn table(query: &QuerySet) -> String {
         row.iter().enumerate().for_each(|(idx, col)| {
             row_string.push(' ');
             row_string.push_str(col);
-            (0..width[idx] - col.len() - 1).for_each(|_| row_string.push(' '));
+            let char_count = col.chars().count();
+            (0..width[idx] - char_count - 1).for_each(|_| row_string.push(' '));
             row_string.push('|');
         });
 
