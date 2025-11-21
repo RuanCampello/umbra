@@ -2177,8 +2177,6 @@ fn self_join() -> Result<()> {
     ORDER BY manager, employee;"#,
     )?;
 
-    println!("{query}");
-
     assert_eq!(
         query.tuples,
         vec![

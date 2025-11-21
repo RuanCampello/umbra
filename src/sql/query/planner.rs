@@ -1073,7 +1073,7 @@ mod tests {
                     work_dir: work_dir.clone(),
                     input_buffers: DEFAULT_SORT_BUFFER_SIZE,
                     comparator: TupleComparator::new(
-                        db.tables["users"].schema.clone(),
+                        sort_schema.clone(),
                         sort_schema.clone(),
                         vec![1, 4, 5],
                         vec![Default::default(), Default::default(), Default::default()]
