@@ -2180,4 +2180,45 @@ mod tests {
             )
         )
     }
+
+    #[test]
+    fn test_parse_limit() {
+        let sql = "SELECT name FROM users LIMIT 5;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .select(Expression::Identifier("name".into()))
+                    .from("users")
+                    .limit(5)
+                    .into()
+            )
+        )
+    }
+
+    #[test]
+    fn test_parse_limit_with_order() {
+        let sql = "SELECT id, name FROM products ORDER BY name DESC LIMIT 10;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .columns(vec![
+                        Expression::Identifier("id".into()),
+                        Expression::Identifier("name".into())
+                    ])
+                    .order_by(OrderBy {
+                        direction: OrderDirection::Desc,
+                        expr: Expression::Identifier("name".into())
+                    })
+                    .from("products")
+                    .limit(10)
+                    .into()
+            )
+        )
+    }
 }
