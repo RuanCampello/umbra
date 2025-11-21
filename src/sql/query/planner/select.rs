@@ -15,7 +15,7 @@ use crate::{
         },
     },
     vm::planner::{
-        AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, Planner, Project, Sort,
+        AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, Limit, Planner, Project, Sort,
         SortBuilder, SortKeys, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
     },
 };
@@ -351,6 +351,17 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
         }
 
         Ok(())
+    }
+
+    pub fn apply_limit(&mut self, limit: Option<usize>) {
+        if let Some(limit) = limit {
+            let source = self.source.take().unwrap();
+            self.source = Some(Planner::Limit(Limit {
+                source: Box::new(source),
+                count: 0,
+                limit,
+            }));
+        }
     }
 
     pub fn build_output_schema(&self) -> Result<Schema, SqlError> {

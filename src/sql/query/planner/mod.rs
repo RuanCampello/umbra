@@ -99,6 +99,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }
             }
 
+            builder.apply_limit(limit);
             builder.build()
         }
         Statement::Update(Update {
