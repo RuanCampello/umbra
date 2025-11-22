@@ -13,9 +13,9 @@ pub enum Numeric {
 
     /// variable-length numeric. Uses base-10000 representation.
     Long {
-        weight: u16,
-        sigh_dscale: u16,
-        digits: Vec<u16>,
+        weight: i16,
+        sign_dscale: u16,
+        digits: Vec<i16>,
     },
 
     /// Not a number. Represents an invalid/undefined numeric values.
@@ -52,12 +52,56 @@ impl Numeric {
     }
 
     fn from_long_i64(value: i64) -> Self {
-        todo!()
+        if value == 0 {
+            return Self::zero();
+        }
+
+        let abs = value.unsigned_abs();
+
+        let mut digits = Vec::new();
+        let mut remaining = abs;
+
+        while remaining > 0 {
+            digits.push((remaining % N_BASE as u64) as i16);
+            remaining /= N_BASE as u64;
+        }
+
+        digits.reverse();
+
+        let weight = (digits.len() as i16) - 1;
+        let sign_dscale = match value.is_negative() {
+            true => NUMERIC_NEG,
+            _ => NUMERIC_POS,
+        };
+
+        Self::Long {
+            weight,
+            sign_dscale,
+            digits,
+        }
     }
 }
 
 impl From<i64> for Numeric {
+    #[inline]
     fn from(value: i64) -> Self {
-        todo!()
+        if value == 0 {
+            return Self::zero();
+        }
+
+        let sign = if value.is_negative() { 1u64 } else { 0u64 };
+        let abs = value.unsigned_abs();
+
+        if abs <= PAYLOAD_MASK {
+            let packed = (TAG_SHORT << TAG_SHIFT)
+                | (sign << SIGN_SHIFT)
+                | (0 << SCALE_SHIFT)
+                | (0 << WEIGHT_SHIFT)
+                | abs;
+
+            return Self::Short(packed);
+        }
+
+        Self::from_long_i64(value)
     }
 }
