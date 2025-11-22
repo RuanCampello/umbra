@@ -3,7 +3,8 @@
 //! This module implements a numeric type optimised for storage and operations,
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
-use std::cmp::Ordering;
+use crate::core::date::Serialize;
+use std::{cmp::Ordering, fmt::Display, str::FromStr};
 
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
@@ -22,6 +23,11 @@ pub enum Numeric {
 
     /// Not a number. Represents an invalid/undefined numeric values.
     NaN,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum NumericError {
+    InvalidFormat,
 }
 
 /// Base for internal digit representation. Each digit represents a value from 0 to 9999.
@@ -182,6 +188,90 @@ impl Numeric {
             _ => result,
         }
     }
+
+    fn from_scaled_i128(value: i128, scale: u16) -> Result<Self, NumericError> {
+        if value == 0 {
+            return Ok(Self::zero());
+        }
+
+        let is_negative = value.is_negative();
+        let abs = value.unsigned_abs();
+
+        // try the short format to see if it fits (that's what she said)
+        if scale <= 127 && abs <= PAYLOAD_MASK as u128 {
+            let sign = if is_negative { 1u64 } else { 0u64 };
+            let packed = (TAG_SHORT << TAG_SHIFT)
+                | (sign << SIGN_SHIFT)
+                | ((scale as u64) << SCALE_SHIFT)
+                | (0 << WEIGHT_SHIFT)
+                | (abs as u64);
+            return Ok(Self::Short(packed));
+        }
+
+        let mut digits = Vec::new();
+        let mut remaining = abs;
+
+        while remaining > 0 {
+            digits.push((remaining % N_BASE as u128) as i16);
+            remaining /= N_BASE as u128;
+        }
+
+        if digits.is_empty() {
+            return Ok(Self::zero());
+        }
+
+        digits.reverse();
+
+        let weight = (digits.len() as i16) - 1;
+        let sign_part = match is_negative {
+            true => NUMERIC_NEG,
+            _ => NUMERIC_POS,
+        };
+
+        let sign_dscale = sign_part | (scale & DSCALE_MASK);
+
+        Ok(Self::Long {
+            weight,
+            sign_dscale,
+            digits,
+        })
+    }
+}
+
+impl Serialize for Numeric {
+    fn serialize(&self, buff: &mut Vec<u8>) {
+        match self {
+            // in short format, just serialise the 8 bytes as is
+            Self::Short(packed) => buff.extend_from_slice(&packed.to_le_bytes()),
+
+            // variable-length format:
+            // 8 bytes: tag marker (0x01 shifted to TAG_SHIFT position)
+            // 2 bytes: number of digits (length)
+            // 2 bytes: weight
+            // 2 bytes: sign_dscale
+            // N * 2 bytes: digits
+            Self::Long {
+                weight,
+                sign_dscale,
+                digits,
+            } => {
+                let tag = 0b01u64 << TAG_SHIFT;
+                buff.extend_from_slice(&tag.to_le_bytes());
+
+                let len = digits.len() as u16;
+                buff.extend_from_slice(&len.to_le_bytes());
+                buff.extend_from_slice(&weight.to_le_bytes());
+                buff.extend_from_slice(&sign_dscale.to_le_bytes());
+
+                digits
+                    .iter()
+                    .for_each(|d| buff.extend_from_slice(&d.to_le_bytes()));
+            }
+
+            // nan is represented as a short format with a special bit pattern
+            Self::NaN => buff.extend_from_slice(&(0b10u64 << TAG_SHIFT).to_le_bytes()),
+        }
+    }
 }
 
 impl PartialEq for Numeric {
@@ -232,6 +322,58 @@ impl PartialOrd for Numeric {
 
 impl Eq for Numeric {}
 
+impl Default for Numeric {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
+impl TryFrom<&[u8]> for Numeric {
+    type Error = NumericError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        if bytes.len() < 8 {
+            return Err(NumericError::InvalidFormat);
+        }
+
+        let packed = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let tag = (packed >> TAG_SHIFT) & 0b11;
+
+        match tag {
+            0b00 => Ok(Self::Short(packed)),
+            0b10 => Ok(Self::NaN),
+            0b01 => {
+                if bytes.len() < 14 {
+                    return Err(NumericError::InvalidFormat);
+                }
+
+                let len = u16::from_le_bytes(bytes[8..10].try_into().unwrap()) as usize;
+                let weight = i16::from_le_bytes(bytes[10..12].try_into().unwrap());
+                let sign_dscale = u16::from_le_bytes(bytes[12..14].try_into().unwrap());
+
+                let expected_len = 14 + len * 2;
+                if bytes.len() < expected_len {
+                    return Err(NumericError::InvalidFormat);
+                }
+
+                let mut digits = Vec::with_capacity(len);
+                (0..len).for_each(|idx| {
+                    let offset = 14 + idx * 2;
+                    let digit = i16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+                    digits.push(digit);
+                });
+
+                Ok(Self::Long {
+                    weight,
+                    sign_dscale,
+                    digits,
+                })
+            }
+            _ => Err(NumericError::InvalidFormat),
+        }
+    }
+}
+
 impl From<i64> for Numeric {
     #[inline]
     fn from(value: i64) -> Self {
@@ -253,66 +395,6 @@ impl From<i64> for Numeric {
         }
 
         Self::from_long_i64(value)
-    }
-}
-
-impl From<&Numeric> for Option<i64> {
-    fn from(value: &Numeric) -> Self {
-        match value {
-            Numeric::NaN => None,
-            Numeric::Short(packed) => {
-                let payload = packed & PAYLOAD_MASK;
-                let sign = (packed & SIGN_MASK) >> SIGN_SHIFT;
-                let scale = ((packed & SCALE_MASK) >> SCALE_SHIFT) as u32;
-
-                // divide by 10^scale to remove fractional part
-                let mut value = payload;
-
-                (0..scale).for_each(|_| value /= 10);
-
-                if value > i64::MAX as u64 {
-                    return None;
-                }
-
-                let value = value as i64;
-                Some(if sign != 0 { -value } else { value })
-            }
-
-            Numeric::Long {
-                weight,
-                sign_dscale,
-                digits,
-            } => {
-                if digits.is_empty() {
-                    return Some(0);
-                }
-
-                let mut value: i128 = 0;
-                for (idx, &digit) in digits.iter().enumerate() {
-                    let power = weight - idx as i16;
-                    if power < 0 {
-                        break;
-                    }
-
-                    let multiplier = (N_BASE as i128).pow(power as u32);
-                    value += digit as i128 * multiplier;
-                }
-
-                if value > i64::MAX as i128 {
-                    return None;
-                }
-
-                let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
-                let value = value as i64;
-                Some(if is_negative { -value } else { value })
-            }
-        }
-    }
-}
-
-impl From<Numeric> for i64 {
-    fn from(value: Numeric) -> Self {
-        Option::<i64>::from(&value).expect("Invalid numeric conversion to i64")
     }
 }
 
@@ -361,9 +443,181 @@ impl From<&Numeric> for Option<f64> {
     }
 }
 
+impl From<&Numeric> for Option<i64> {
+    fn from(value: &Numeric) -> Self {
+        match value {
+            Numeric::NaN => None,
+
+            Numeric::Short(packed) => {
+                let payload = packed & PAYLOAD_MASK;
+                let sign = (packed & SIGN_MASK) >> SIGN_SHIFT;
+                let scale = ((packed & SCALE_MASK) >> SCALE_SHIFT) as u32;
+
+                // divide by 10^scale to remove fractional part
+                let mut value = payload;
+                (0..scale).for_each(|_| value /= 10);
+
+                if value > i64::MAX as u64 {
+                    return None;
+                }
+
+                let value = value as i64;
+                Some(if sign != 0 { -value } else { value })
+            }
+
+            Numeric::Long {
+                weight,
+                sign_dscale,
+                digits,
+            } => {
+                if digits.is_empty() {
+                    return Some(0);
+                }
+
+                let mut value: i128 = 0;
+                for (idx, &digit) in digits.iter().enumerate() {
+                    let power = weight - idx as i16;
+                    if power < 0 {
+                        break;
+                    }
+
+                    let multiplier = (N_BASE as i128).pow(power as u32);
+                    value += digit as i128 * multiplier;
+                }
+
+                if value > i64::MAX as i128 {
+                    return None;
+                }
+
+                let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
+                let value = value as i64;
+                Some(if is_negative { -value } else { value })
+            }
+        }
+    }
+}
+
+impl FromStr for Numeric {
+    type Err = NumericError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(NumericError::InvalidFormat);
+        }
+
+        if s.eq_ignore_ascii_case("nan") {
+            return Ok(Self::NaN);
+        }
+
+        let is_negative = s.starts_with('-');
+        let s = s.trim_start_matches(&['+', '-'][..]);
+        if s.is_empty() {
+            return Err(NumericError::InvalidFormat);
+        }
+
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() > 2 {
+            return Err(NumericError::InvalidFormat);
+        }
+
+        let int = parts[0];
+        let fract = if parts.len() == 2 { parts[1] } else { "" };
+        let scale = fract.len();
+
+        let combined = format!("{int}{fract}");
+
+        let value = combined
+            .parse::<i128>()
+            .map_err(|_| NumericError::InvalidFormat)?;
+
+        let value = if is_negative { -value } else { value };
+        Self::from_scaled_i128(value, scale as u16)
+    }
+}
+
+impl Display for Numeric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NaN => write!(f, "NaN"),
+            Self::Short(packed) => {
+                let payload = packed & PAYLOAD_MASK;
+                let sign = (packed & SIGN_MASK) >> SIGN_SHIFT;
+                let scale = ((packed & SCALE_MASK) >> SCALE_SHIFT) as u32;
+
+                if payload == 0 {
+                    return write!(f, "0");
+                }
+
+                let sign_str = if sign != 0 { "-" } else { "" };
+
+                match scale == 0 {
+                    true => write!(f, "{sign_str}{payload}"),
+                    _ => {
+                        let divisor = 10_u64.pow(scale);
+                        let int = payload / divisor;
+                        let fract = payload % divisor;
+
+                        write!(f, "{sign_str}{int}.{fract:0width$}", width = scale as usize)
+                    }
+                }
+            }
+            Self::Long {
+                sign_dscale,
+                digits,
+                ..
+            } => {
+                if digits.is_empty() {
+                    return write!(f, "0");
+                }
+
+                let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
+                let scale = (sign_dscale & DSCALE_MASK) as i16;
+
+                if is_negative {
+                    write!(f, "-")?;
+                }
+
+                let mut decimal_str = String::new();
+                for (i, &digit) in digits.iter().enumerate() {
+                    match i == 0 {
+                        true => decimal_str.push_str(&format!("{}", digit)),
+                        _ => decimal_str.push_str(&format!("{:04}", digit)),
+                    }
+                }
+
+                if scale > 0 {
+                    let point_pos = decimal_str.len().saturating_sub(scale as usize);
+                    if point_pos == 0 {
+                        decimal_str.insert_str(0, "0.");
+                    } else if point_pos < decimal_str.len() {
+                        decimal_str.insert(point_pos, '.');
+                    }
+                }
+
+                write!(f, "{decimal_str}")
+            }
+        }
+    }
+}
+
+impl Display for NumericError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidFormat => write!(f, "Invalid numeric format"),
+        }
+    }
+}
+
 impl From<Numeric> for f64 {
     fn from(value: Numeric) -> Self {
         Option::<f64>::from(&value).unwrap_or(f64::NAN)
+    }
+}
+
+impl From<Numeric> for i64 {
+    fn from(value: Numeric) -> Self {
+        Option::<i64>::from(&value).expect("Invalid numeric conversion for i64")
     }
 }
 
