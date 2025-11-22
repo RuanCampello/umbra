@@ -2289,6 +2289,89 @@ fn limit_with_join() -> Result<()> {
 }
 
 #[test]
+fn offset() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE weather_data (
+        id SERIAL PRIMARY KEY,
+        device_id VARCHAR(50),
+        temperature DOUBLE PRECISION,
+        humidity DOUBLE PRECISION,
+        wind_speed DOUBLE PRECISION,
+        recorded_at TIMESTAMP
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO weather_data (device_id, temperature, humidity, wind_speed, recorded_at) VALUES
+        ('device_1', 22.5, 55.0, 12.5, '2023-01-15 08:00:00'),
+        ('device_2', 21.0, 60.0, 10.0, '2023-01-15 08:05:00'),
+        ('device_1', 23.0, 57.0, 11.0, '2023-01-15 08:10:00'),
+        ('device_2', 19.5, 62.0, 8.0, '2023-01-15 08:15:00'),
+        ('device_1', 20.0, 59.0, 9.5, '2023-01-15 08:20:00'),
+        ('device_3', 24.0, 54.0, 13.0, '2023-01-15 08:25:00'),
+        ('device_2', 18.5, 63.0, 7.5, '2023-01-15 08:30:00'),
+        ('device_3', 22.0, 55.5, 12.0, '2023-01-15 08:35:00'),
+        ('device_1', 21.5, 58.0, 10.5, '2023-01-15 08:40:00'),
+        ('device_3', 23.5, 53.0, 13.5, '2023-01-15 08:45:00');"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT temperature, humidity, wind_speed, recorded_at
+        FROM weather_data OFFSET 5;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![
+                24.into(),
+                54.into(),
+                13.into(),
+                temporal!("2023-01-15 08:25:00")?,
+            ],
+            vec![
+                18.5.into(),
+                63.into(),
+                7.5.into(),
+                temporal!("2023-01-15 08:30:00")?
+            ],
+            vec![
+                22.into(),
+                55.5.into(),
+                12.into(),
+                temporal!("2023-01-15 08:35:00")?
+            ],
+            vec![
+                21.5.into(),
+                58.into(),
+                10.5.into(),
+                temporal!("2023-01-15 08:40:00")?
+            ],
+            vec![
+                23.5.into(),
+                53.into(),
+                13.5.into(),
+                temporal!("2023-01-15 08:45:00")?
+            ]
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT temperature, humidity, wind_speed, recorded_at
+    FROM weather_data ORDER BY recorded_at DESC LIMIT 5 OFFSET 5;"#,
+    )?;
+
+    println!("{query}");
+
+    Ok(())
+}
+
+#[test]
 fn pagination_pattern() -> Result<()> {
     let mut db = State::default();
     db.exec("CREATE TABLE data (id SERIAL PRIMARY KEY, value INT);")?;
