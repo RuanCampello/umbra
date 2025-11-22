@@ -369,8 +369,8 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             let source = self.source.take().unwrap();
             self.source = Some(Planner::Limit(Limit {
                 source: Box::new(source),
-                offset: offset.unwrap_or(usize::MAX),
-                limit: limit.unwrap_or(0),
+                limit: limit.unwrap_or(usize::MAX),
+                offset: offset.unwrap_or(0),
                 count: 0,
             }));
         }
