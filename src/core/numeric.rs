@@ -51,6 +51,37 @@ impl Numeric {
         Self::Short(TAG_SHORT << TAG_SHIFT)
     }
 
+    pub const fn is_zero(&self) -> bool {
+        match self {
+            Self::Short(packed) => (*packed & PAYLOAD_MASK) == 0,
+            Self::Long { digits, .. } => digits.is_empty(),
+            Self::NaN => false,
+        }
+    }
+
+    pub const fn is_nan(&self) -> bool {
+        matches!(self, Self::NaN)
+    }
+
+    pub const fn is_negative(&self) -> bool {
+        match self {
+            Self::Short(packed) => {
+                let sign = (*packed & SIGN_MASK) >> SIGN_SHIFT;
+                sign != 0 && !self.is_zero()
+            }
+            Self::Long { sign_dscale, .. } => (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG,
+            Self::NaN => false,
+        }
+    }
+
+    pub const fn scale(&self) -> u16 {
+        match self {
+            Self::Short(packed) => ((*packed & SCALE_MASK) >> SCALE_SHIFT) as u16,
+            Self::Long { sign_dscale, .. } => *sign_dscale & DSCALE_MASK,
+            Self::NaN => 0,
+        }
+    }
+
     fn from_long_i64(value: i64) -> Self {
         if value == 0 {
             return Self::zero();
