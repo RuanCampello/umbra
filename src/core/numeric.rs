@@ -3,9 +3,8 @@
 //! This module implements a numeric type optimised for storage and operations,
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
-use std::cmp::Ordering;
-
 use crate::core::date::Serialize;
+use std::cmp::Ordering;
 
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
@@ -24,6 +23,11 @@ pub enum Numeric {
 
     /// Not a number. Represents an invalid/undefined numeric values.
     NaN,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum NumericError {
+    InvalidFormat,
 }
 
 /// Base for internal digit representation. Each digit represents a value from 0 to 9999.
@@ -215,6 +219,7 @@ impl Serialize for Numeric {
                     .iter()
                     .for_each(|d| buff.extend_from_slice(&d.to_le_bytes()));
             }
+
             // nan is represented as a short format with a special bit pattern
             Self::NaN => buff.extend_from_slice(&(0b10u64 << TAG_SHIFT).to_le_bytes()),
         }
@@ -255,7 +260,8 @@ impl Ord for Numeric {
                 _ => Ordering::Greater,
             },
 
-            _ => todo!(),
+            // both have the same sign, so we need to compare its value
+            _ => self.cmp_mag(other, self.is_negative()),
         }
     }
 }
@@ -267,6 +273,52 @@ impl PartialOrd for Numeric {
 }
 
 impl Eq for Numeric {}
+
+impl TryFrom<&[u8]> for Numeric {
+    type Error = NumericError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        if bytes.len() < 8 {
+            return Err(NumericError::InvalidFormat);
+        }
+
+        let packed = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let tag = (packed >> TAG_SHIFT) & 0b11;
+
+        match tag {
+            0b00 => Ok(Self::Short(packed)),
+            0b10 => Ok(Self::NaN),
+            0b01 => {
+                if bytes.len() < 14 {
+                    return Err(NumericError::InvalidFormat);
+                }
+
+                let len = u16::from_le_bytes(bytes[8..10].try_into().unwrap()) as usize;
+                let weight = i16::from_le_bytes(bytes[10..12].try_into().unwrap());
+                let sign_dscale = u16::from_le_bytes(bytes[12..14].try_into().unwrap());
+
+                let expected_len = 14 + len * 2;
+                if bytes.len() < expected_len {
+                    return Err(NumericError::InvalidFormat);
+                }
+
+                let mut digits = Vec::with_capacity(len);
+                (0..len).for_each(|idx| {
+                    let offset = 14 + idx * 2;
+                    let digit = i16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+                    digits.push(digit);
+                });
+
+                Ok(Self::Long {
+                    weight,
+                    sign_dscale,
+                    digits,
+                })
+            }
+            _ => Err(NumericError::InvalidFormat),
+        }
+    }
+}
 
 impl From<i64> for Numeric {
     #[inline]
