@@ -4,7 +4,7 @@
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
 use crate::core::date::Serialize;
-use std::{cmp::Ordering, fmt::Display};
+use std::{cmp::Ordering, fmt::Display, str::FromStr};
 
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
@@ -187,6 +187,54 @@ impl Numeric {
             true => result.reverse(),
             _ => result,
         }
+    }
+
+    fn from_scaled_i128(value: i128, scale: u16) -> Result<Self, NumericError> {
+        if value == 0 {
+            return Ok(Self::zero());
+        }
+
+        let is_negative = value.is_negative();
+        let abs = value.unsigned_abs();
+
+        // try the short format to see if it fits (that's what she said)
+        if scale <= 127 && abs <= PAYLOAD_MASK as u128 {
+            let sign = if is_negative { 1u64 } else { 0u64 };
+            let packed = (TAG_SHORT << TAG_SHIFT)
+                | (sign << SIGN_SHIFT)
+                | ((scale as u64) << SCALE_SHIFT)
+                | (0 << WEIGHT_SHIFT)
+                | (abs as u64);
+            return Ok(Self::Short(packed));
+        }
+
+        let mut digits = Vec::new();
+        let mut remaining = abs;
+
+        while remaining > 0 {
+            digits.push((remaining % N_BASE as u128) as i16);
+            remaining /= N_BASE as u128;
+        }
+
+        if digits.is_empty() {
+            return Ok(Self::zero());
+        }
+
+        digits.reverse();
+
+        let weight = (digits.len() as i16) - 1;
+        let sign_part = match is_negative {
+            true => NUMERIC_NEG,
+            _ => NUMERIC_POS,
+        };
+
+        let sign_dscale = sign_part | (scale & DSCALE_MASK);
+
+        Ok(Self::Long {
+            weight,
+            sign_dscale,
+            digits,
+        })
     }
 }
 
@@ -392,6 +440,45 @@ impl From<&Numeric> for Option<f64> {
 
             Numeric::NaN => Some(f64::NAN),
         }
+    }
+}
+
+impl FromStr for Numeric {
+    type Err = NumericError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(NumericError::InvalidFormat);
+        }
+
+        if s.eq_ignore_ascii_case("nan") {
+            return Ok(Self::NaN);
+        }
+
+        let is_negative = s.starts_with('-');
+        let s = s.trim_start_matches(&['+', '-'][..]);
+        if s.is_empty() {
+            return Err(NumericError::InvalidFormat);
+        }
+
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() > 2 {
+            return Err(NumericError::InvalidFormat);
+        }
+
+        let int = parts[0];
+        let fract = if parts.len() == 2 { parts[1] } else { "" };
+        let scale = fract.len();
+
+        let combined = format!("{int}{fract}");
+
+        let value = combined
+            .parse::<i128>()
+            .map_err(|_| NumericError::InvalidFormat)?;
+
+        let value = if is_negative { -value } else { value };
+        Self::from_scaled_i128(value, scale as u16)
     }
 }
 
