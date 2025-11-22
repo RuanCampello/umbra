@@ -2424,5 +2424,8 @@ fn pagination_pattern() -> Result<()> {
     let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 9;")?;
     assert_eq!(query.tuples, vec![vec![Value::Number(10)]]);
 
+    let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 10;")?;
+    assert!(query.tuples.is_empty());
+
     Ok(())
 }
