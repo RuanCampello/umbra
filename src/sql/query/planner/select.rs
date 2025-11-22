@@ -25,6 +25,8 @@ pub struct SelectBuilder<'s, File: Seek + Read + Write + FileOperations> {
     schema: Schema,
     tables: HashMap<String, Schema>,
     columns: &'s [Expression],
+    /// maps table keys to their column index ranges in the joined schema.
+    ranges: HashMap<&'s str, (usize, usize)>,
     work_dir: PathBuf,
     page_size: usize,
 }
@@ -41,10 +43,13 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
         columns: &'s [Expression],
         page_size: usize,
         work_dir: std::path::PathBuf,
-        table_key: String,
+        table_key: &'s str,
     ) -> Self {
         let mut tables = HashMap::new();
-        tables.insert(table_key, schema.clone());
+        tables.insert(table_key.to_string(), schema.clone());
+
+        let mut ranges = HashMap::new();
+        ranges.insert(table_key, (0, schema.len()));
 
         Self {
             source: Some(source),
@@ -53,6 +58,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             tables,
             work_dir,
             page_size,
+            ranges,
         }
     }
 
@@ -159,15 +165,22 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
     pub fn apply_joins(
         &mut self,
         from: &TableRef,
-        joins: &[JoinClause],
+        joins: &'s [JoinClause],
         db: &mut Database<File>,
     ) -> Result<(), DatabaseError> {
         if joins.is_empty() {
             return Ok(());
         }
 
-        let mut left_tables = HashSet::from([from.key().to_string()]);
-        let base_names: HashSet<&str> = HashSet::from([from.name.as_ref()]);
+        let from = from.key();
+        let (start, end) = self
+            .ranges
+            .get(from)
+            .copied()
+            .expect("FROM table should always be in ranges");
+        self.schema.add_qualified_name(from, start, end);
+
+        let mut left_tables = HashSet::from([from.to_string()]);
 
         for join in joins {
             let right_table = db.metadata(&join.table.name)?.clone();
@@ -188,14 +201,13 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                     self.schema.push(col)
                 });
 
-            let is_self_join = base_names.contains(&join.table.name.as_ref());
-            if is_self_join {
-                left_tables
-                    .iter()
-                    .for_each(|t| self.schema.add_qualified_name(t, 0, left_len));
-            }
+            let right_key = join.table.key();
+            let right_end = self.schema.len();
+            self.schema
+                .add_qualified_name(right_key, left_len, right_end);
+            self.ranges.insert(right_key, (left_len, right_end));
 
-            let right_tables = HashSet::from([join.table.key().to_string()]);
+            let right_tables = HashSet::from([right_key.to_string()]);
             let left = self.source.take().unwrap();
 
             self.source = Some(Planner::HashJoin(
@@ -203,9 +215,8 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                     .with_table_names(left_tables.clone(), right_tables),
             ));
 
-            left_tables.insert(join.table.key().to_string());
-            self.tables
-                .insert(join.table.key().to_string(), right_table.schema);
+            left_tables.insert(right_key.to_string());
+            self.tables.insert(right_key.into(), right_table.schema);
         }
 
         Ok(())

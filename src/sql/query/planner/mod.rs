@@ -77,7 +77,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 &columns,
                 db.pager.borrow().page_size,
                 db.work_dir.clone(),
-                from.key().to_string(),
+                from.key(),
             );
 
             builder.apply_joins(&from, &joins, db)?;
@@ -1050,6 +1050,8 @@ mod tests {
 
         let mut schema = db.tables["users"].schema.clone();
         schema.extend(orders_table.schema.columns.clone());
+        schema.add_qualified_name("users", 0, users_table.schema.len());
+        schema.add_qualified_name("orders", users_table.schema.len(), schema.len());
 
         assert_eq!(
             db.gen_plan("SELECT name, order_id FROM users JOIN orders ON id = user_id;")?,
@@ -1101,6 +1103,8 @@ mod tests {
 
         let mut joined_schema = db.tables["users"].schema.clone();
         joined_schema.extend(orders_table.schema.columns.clone());
+        joined_schema.add_qualified_name("users", 0, users_table.schema.len());
+        joined_schema.add_qualified_name("orders", users_table.schema.len(), joined_schema.len());
 
         let plan = db.gen_plan("SELECT users.name as name, orders.order_id as order_id FROM users JOIN orders ON users.id = orders.user_id;")?;
 
