@@ -443,6 +443,12 @@ impl From<&Numeric> for Option<f64> {
     }
 }
 
+impl From<Numeric> for Option<f64> {
+    fn from(value: Numeric) -> Self {
+        Self::from(&value)
+    }
+}
+
 impl From<&Numeric> for Option<i64> {
     fn from(value: &Numeric) -> Self {
         match value {
@@ -494,6 +500,12 @@ impl From<&Numeric> for Option<i64> {
                 Some(if is_negative { -value } else { value })
             }
         }
+    }
+}
+
+impl From<Numeric> for Option<i64> {
+    fn from(value: Numeric) -> Self {
+        Self::from(&value)
     }
 }
 
@@ -642,5 +654,33 @@ mod tests {
         let n = Numeric::from_str("-456.78").unwrap();
         let val = f64::from(n);
         assert!((val + 456.78).abs() < 0.001);
+    }
+
+    #[test]
+    fn base_10000_representation() {
+        // 10000 should be represented as a single digit in base-10000
+        let num = Numeric::from(10000);
+        if let Numeric::Long { digits, weight, .. } = num {
+            assert_eq!(digits.len(), 1);
+            assert_eq!(digits[0], 1);
+            assert_eq!(weight, 0);
+        }
+    }
+
+    #[test]
+    fn comparison() {
+        let a = Numeric::from(10);
+        let b = Numeric::from(20);
+        assert!(a < b);
+
+        let c = Numeric::from(-5);
+        assert!(c < a);
+    }
+
+    #[test]
+    fn large_number() {
+        // about 9.22 quintillions, that's huge
+        let large = Numeric::from(i64::MAX);
+        assert!(Option::<i64>::from(large).is_some());
     }
 }
