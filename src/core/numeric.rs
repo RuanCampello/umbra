@@ -113,6 +113,75 @@ impl Numeric {
             digits,
         }
     }
+
+    /// Compares absolute values, flipping if both are negative.
+    #[inline]
+    fn cmp_mag(&self, other: &Self, both_negative: bool) -> Ordering {
+        let result = match (self, other) {
+            (Self::Short(a), Self::Short(b)) => {
+                let (a_payload, b_payload) = (a & PAYLOAD_MASK, b & PAYLOAD_MASK);
+                let a_scale = ((a & SCALE_MASK) >> SCALE_SHIFT) as i32;
+                let b_scale = ((b & SCALE_MASK) >> SCALE_SHIFT) as i32;
+
+                // normalise if needed to compare
+                if a_scale == b_scale {
+                    a_payload.cmp(&b_payload)
+                } else if a_scale < b_scale {
+                    let a_scaled = a_payload * 10_u64.pow((b_scale - a_scale) as u32);
+                    a_scaled.cmp(&b_payload)
+                } else {
+                    let b_scaled = b_payload * 10_u64.pow((a_scale - b_scale) as u32);
+                    a_payload.cmp(&b_scaled)
+                }
+            }
+
+            (Self::Short(_), Self::Long { .. }) | (Self::Long { .. }, Self::Short(_)) => {
+                let a_val = Option::<f64>::from(self).unwrap();
+                let b_val = Option::<f64>::from(other).unwrap();
+
+                a_val
+                    .abs()
+                    .partial_cmp(&b_val.abs())
+                    .unwrap_or(Ordering::Equal)
+            }
+
+            (
+                Self::Long {
+                    weight: w1,
+                    digits: d1,
+                    ..
+                },
+                Self::Long {
+                    weight: w2,
+                    digits: d2,
+                    ..
+                },
+            ) => match w1.cmp(w2) {
+                Ordering::Equal => {
+                    for i in 0..d1.len().min(d2.len()) {
+                        match d1[i].cmp(&d2[i]) {
+                            Ordering::Equal => continue,
+                            other => {
+                                return if both_negative {
+                                    other.reverse()
+                                } else {
+                                    other
+                                }
+                            }
+                        }
+                    }
+                    d1.len().cmp(&d2.len())
+                }
+                other => other,
+            },
+            _ => Ordering::Equal,
+        };
+
+        match both_negative {
+            true => result.reverse(),
+            _ => result,
+        }
+    }
 }
 
 impl PartialEq for Numeric {
@@ -183,5 +252,50 @@ impl From<i64> for Numeric {
         }
 
         Self::from_long_i64(value)
+    }
+}
+
+impl From<&Numeric> for Option<f64> {
+    fn from(value: &Numeric) -> Self {
+        match value {
+            Numeric::Short(packed) => {
+                let payload = (packed & PAYLOAD_MASK) as f64;
+                let sign = (packed & SIGN_MASK) >> SIGN_SHIFT;
+                let scale = ((packed & SCALE_MASK) >> SCALE_SHIFT) as u32;
+
+                let divisor = 10_f64.powi(scale as i32);
+                let value = payload / divisor;
+
+                Some(if sign != 0 { -value } else { value })
+            }
+
+            Numeric::Long {
+                weight,
+                sign_dscale,
+                digits,
+            } => {
+                if digits.is_empty() {
+                    return Some(0.0);
+                }
+
+                let mut value = 0.0f64;
+
+                digits.iter().enumerate().for_each(|(idx, &digit)| {
+                    let power = weight - idx as i16;
+                    let mul = (N_BASE as f64).powi(power as i32);
+
+                    value += digit as f64 * mul;
+                });
+
+                let scale = (sign_dscale & DSCALE_MASK) as u32;
+                let divisor = 10_f64.powi(scale as i32);
+                value /= divisor;
+
+                let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
+                Some(if is_negative { -value } else { value })
+            }
+
+            Numeric::NaN => Some(f64::NAN),
+        }
     }
 }
