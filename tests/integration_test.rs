@@ -2362,11 +2362,20 @@ fn offset() -> Result<()> {
 
     let query = db.exec(
         r#"
-    SELECT temperature, humidity, wind_speed, recorded_at
+    SELECT temperature, humidity, wind_speed
     FROM weather_data ORDER BY recorded_at DESC LIMIT 5 OFFSET 5;"#,
     )?;
 
-    println!("{query}");
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![20.into(), 59.into(), 9.5.into()],
+            vec![19.5.into(), 62.into(), 8.into()],
+            vec![23.into(), 57.into(), 11.into()],
+            vec![21.into(), 60.into(), 10.into()],
+            vec![22.5.into(), 55.into(), 12.5.into()]
+        ]
+    );
 
     Ok(())
 }
