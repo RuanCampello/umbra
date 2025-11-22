@@ -2199,6 +2199,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_offset() {
+        let sql = "SELECT name FROM users OFFSET 10;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .select(Expression::Identifier("name".into()))
+                    .from("users")
+                    .offset(10)
+                    .into()
+            )
+        )
+    }
+
+    #[test]
     fn test_parse_limit_with_order() {
         let sql = "SELECT id, name FROM products ORDER BY name DESC LIMIT 10;";
         let statement = Parser::new(sql).parse_statement();

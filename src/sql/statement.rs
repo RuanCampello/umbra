@@ -1055,6 +1055,11 @@ impl SelectBuilder {
         self.limit = Some(limit);
         self
     }
+
+    pub fn offset(mut self, offset: usize) -> Self {
+        self.offset = Some(offset);
+        self
+    }
 }
 
 impl From<SelectBuilder> for Select {
