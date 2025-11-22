@@ -558,6 +558,10 @@ impl Display for Statement {
                 if let Some(limit) = limit {
                     write!(f, " LIMIT {limit}")?;
                 }
+
+                if let Some(offset) = offset {
+                    write!(f, " OFFSET {offset}")?;
+                }
             }
 
             Statement::Delete(Delete { from, r#where }) => {

@@ -223,6 +223,7 @@ pub(crate) struct Limit<File: FileOperations> {
     pub limit: usize,
     /// number of rows yield so far
     pub count: usize,
+    pub offset: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1535,15 +1536,21 @@ impl<File: FileOperations> HashJoin<File> {
 
 impl<File: PlanExecutor> Execute for Limit<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        if self.count >= self.limit {
-            return Ok(None);
+        while self.count < self.offset {
+            match self.source.try_next()? {
+                Some(_) => self.count += 1,
+                None => return Ok(None),
+            }
         }
 
-        match self.source.try_next()? {
-            Some(tuple) => {
-                self.count += 1;
-                return Ok(Some(tuple));
-            }
+        match self.limit == usize::MAX || self.count - self.offset < self.limit {
+            true => match self.source.try_next()? {
+                Some(tuple) => {
+                    self.count += 1;
+                    return Ok(Some(tuple));
+                }
+                _ => Ok(None),
+            },
             _ => Ok(None),
         }
     }

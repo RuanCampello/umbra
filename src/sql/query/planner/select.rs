@@ -364,13 +364,14 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
         Ok(())
     }
 
-    pub fn apply_limit(&mut self, limit: Option<usize>) {
-        if let Some(limit) = limit {
+    pub fn apply_limit(&mut self, limit: Option<usize>, offset: Option<usize>) {
+        if limit.is_some() || offset.is_some() {
             let source = self.source.take().unwrap();
             self.source = Some(Planner::Limit(Limit {
                 source: Box::new(source),
+                offset: offset.unwrap_or(usize::MAX),
+                limit: limit.unwrap_or(0),
                 count: 0,
-                limit,
             }));
         }
     }
