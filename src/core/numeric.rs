@@ -4,7 +4,7 @@
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
 use crate::core::date::Serialize;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, fmt::Display};
 
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
@@ -274,6 +274,12 @@ impl PartialOrd for Numeric {
 
 impl Eq for Numeric {}
 
+impl Default for Numeric {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
 impl TryFrom<&[u8]> for Numeric {
     type Error = NumericError;
 
@@ -385,6 +391,79 @@ impl From<&Numeric> for Option<f64> {
             }
 
             Numeric::NaN => Some(f64::NAN),
+        }
+    }
+}
+
+impl Display for Numeric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NaN => write!(f, "NaN"),
+            Self::Short(packed) => {
+                let payload = packed & PAYLOAD_MASK;
+                let sign = (packed & SIGN_MASK) >> SIGN_SHIFT;
+                let scale = ((packed & SCALE_MASK) >> SCALE_SHIFT) as u32;
+
+                if payload == 0 {
+                    return write!(f, "0");
+                }
+
+                let sign_str = if sign != 0 { "-" } else { "" };
+
+                match scale == 0 {
+                    true => write!(f, "{sign_str}{payload}"),
+                    _ => {
+                        let divisor = 10_u64.pow(scale);
+                        let int = payload / divisor;
+                        let fract = payload % divisor;
+
+                        write!(f, "{sign_str}{int}.{fract:0width$}", width = scale as usize)
+                    }
+                }
+            }
+            Self::Long {
+                sign_dscale,
+                digits,
+                ..
+            } => {
+                if digits.is_empty() {
+                    return write!(f, "0");
+                }
+
+                let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
+                let scale = (sign_dscale & DSCALE_MASK) as i16;
+
+                if is_negative {
+                    write!(f, "-")?;
+                }
+
+                let mut decimal_str = String::new();
+                for (i, &digit) in digits.iter().enumerate() {
+                    match i == 0 {
+                        true => decimal_str.push_str(&format!("{}", digit)),
+                        _ => decimal_str.push_str(&format!("{:04}", digit)),
+                    }
+                }
+
+                if scale > 0 {
+                    let point_pos = decimal_str.len().saturating_sub(scale as usize);
+                    if point_pos == 0 {
+                        decimal_str.insert_str(0, "0.");
+                    } else if point_pos < decimal_str.len() {
+                        decimal_str.insert(point_pos, '.');
+                    }
+                }
+
+                write!(f, "{decimal_str}")
+            }
+        }
+    }
+}
+
+impl Display for NumericError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidFormat => write!(f, "Invalid numeric format"),
         }
     }
 }
