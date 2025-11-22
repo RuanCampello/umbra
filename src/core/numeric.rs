@@ -632,4 +632,15 @@ mod tests {
         assert!(zero.is_zero());
         assert_eq!(i64::from(zero), 0);
     }
+
+    #[test]
+    fn from_str() {
+        let n = Numeric::from_str("123.45").unwrap();
+        let val = f64::from(n);
+        assert!((val - 123.45).abs() < 0.001);
+
+        let n = Numeric::from_str("-456.78").unwrap();
+        let val = f64::from(n);
+        assert!((val + 456.78).abs() < 0.001);
+    }
 }
