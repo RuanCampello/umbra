@@ -186,6 +186,7 @@ pub(in crate::sql) fn analyze<'s>(
             group_by,
             r#where,
             limit: _,
+            offset: _,
         }) => {
             // TODO: analyze correcly the join clauses
             let metadata = ctx.metadata(&from.name)?;

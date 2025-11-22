@@ -75,6 +75,7 @@ pub(crate) struct Select {
     pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -86,6 +87,7 @@ pub struct SelectBuilder {
     order_by: Vec<OrderBy>,
     group_by: Vec<Expression>,
     limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Hash)]
@@ -524,6 +526,7 @@ impl Display for Statement {
                 order_by,
                 group_by,
                 limit,
+                offset,
             }) => {
                 write!(f, "SELECT {} FROM {}", join(columns, ", "), from.name)?;
                 if let Some(alias) = &from.alias {
@@ -1064,6 +1067,7 @@ impl From<SelectBuilder> for Select {
             order_by: value.order_by,
             group_by: value.group_by,
             limit: value.limit,
+            offset: value.offset,
         }
     }
 }

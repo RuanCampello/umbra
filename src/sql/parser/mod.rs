@@ -433,13 +433,13 @@ impl<'input> Parser<'input> {
         }))
     }
 
-    fn parse_limit(&mut self) -> ParserResult<Option<usize>> {
-        match self.consume_optional(Token::Keyword(Keyword::Limit)) {
+    fn parse_usize_by_keyword(&mut self, keyword: Keyword) -> ParserResult<Option<usize>> {
+        match self.consume_optional(Token::Keyword(keyword)) {
             true => match self.next_token()? {
                 Token::Number(num) => {
                     let value = num.parse::<usize>().map_err(|_| ParserError {
                         kind: ErrorKind::InvalidValue {
-                            clause: Keyword::Limit,
+                            clause: keyword,
                             found: Token::String(num),
                         },
                         input: self.input.into(),

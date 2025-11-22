@@ -48,7 +48,8 @@ impl<'sql> Sql<'sql> for Select {
 
             Ok(OrderBy { expr, direction })
         })?;
-        let limit = parser.parse_limit()?;
+        let limit = parser.parse_usize_by_keyword(Keyword::Limit)?;
+        let offset = parser.parse_usize_by_keyword(Keyword::Offset)?;
 
         Ok(Select {
             columns,
@@ -58,6 +59,7 @@ impl<'sql> Sql<'sql> for Select {
             order_by,
             group_by,
             limit,
+            offset,
         })
     }
 }
