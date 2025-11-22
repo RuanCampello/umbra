@@ -3,6 +3,8 @@
 //! This module implements a numeric type optimised for storage and operations,
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
+use std::cmp::Ordering;
+
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
 #[derive(Debug, Clone)]
@@ -112,6 +114,53 @@ impl Numeric {
         }
     }
 }
+
+impl PartialEq for Numeric {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::NaN, Self::NaN) => true,
+            (Self::NaN, _) | (_, Self::NaN) => false,
+            _ => self.cmp(other).eq(&Ordering::Equal),
+        }
+    }
+}
+
+impl Ord for Numeric {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::NaN, Self::NaN) => Ordering::Equal,
+            (Self::NaN, _) => Ordering::Greater,
+            (_, Self::NaN) => Ordering::Less,
+
+            (a, b) if a.is_zero() && b.is_zero() => Ordering::Equal,
+            (a, _) if a.is_zero() && !a.is_negative() => match other.is_negative() {
+                true => Ordering::Greater,
+                _ => Ordering::Less,
+            },
+
+            (_, b) if b.is_zero() && !b.is_negative() => match self.is_negative() {
+                true => Ordering::Less,
+                _ => Ordering::Greater,
+            },
+
+            (a, b) if a.is_negative() != b.is_negative() => match a.is_negative() {
+                true => Ordering::Less,
+                _ => Ordering::Greater,
+            },
+
+            _ => todo!(),
+        }
+    }
+}
+
+impl PartialOrd for Numeric {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for Numeric {}
 
 impl From<i64> for Numeric {
     #[inline]
