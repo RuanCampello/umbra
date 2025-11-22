@@ -5,6 +5,8 @@
 
 use std::cmp::Ordering;
 
+use crate::core::date::Serialize;
+
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
 #[derive(Debug, Clone)]
@@ -180,6 +182,41 @@ impl Numeric {
         match both_negative {
             true => result.reverse(),
             _ => result,
+        }
+    }
+}
+
+impl Serialize for Numeric {
+    fn serialize(&self, buff: &mut Vec<u8>) {
+        match self {
+            // in short format, just serialise the 8 bytes as is
+            Self::Short(packed) => buff.extend_from_slice(&packed.to_le_bytes()),
+
+            // variable-length format:
+            // 8 bytes: tag marker (0x01 shifted to TAG_SHIFT position)
+            // 2 bytes: number of digits (length)
+            // 2 bytes: weight
+            // 2 bytes: sign_dscale
+            // N * 2 bytes: digits
+            Self::Long {
+                weight,
+                sign_dscale,
+                digits,
+            } => {
+                let tag = 0b01u64 << TAG_SHIFT;
+                buff.extend_from_slice(&tag.to_le_bytes());
+
+                let len = digits.len() as u16;
+                buff.extend_from_slice(&len.to_le_bytes());
+                buff.extend_from_slice(&weight.to_le_bytes());
+                buff.extend_from_slice(&sign_dscale.to_le_bytes());
+
+                digits
+                    .iter()
+                    .for_each(|d| buff.extend_from_slice(&d.to_le_bytes()));
+            }
+            // nan is represented as a short format with a special bit pattern
+            Self::NaN => buff.extend_from_slice(&(0b10u64 << TAG_SHIFT).to_le_bytes()),
         }
     }
 }
