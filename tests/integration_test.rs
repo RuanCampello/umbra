@@ -2287,3 +2287,50 @@ fn limit_with_join() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn pagination_pattern() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE data (id SERIAL PRIMARY KEY, value INT);")?;
+    db.exec(
+        r#"
+        INSERT INTO data (value)
+        VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+        "#,
+    )?;
+
+    let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 0;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1)],
+            vec![Value::Number(2)],
+            vec![Value::Number(3)]
+        ]
+    );
+
+    let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 3;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(4)],
+            vec![Value::Number(5)],
+            vec![Value::Number(6)]
+        ]
+    );
+
+    let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 6;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(7)],
+            vec![Value::Number(8)],
+            vec![Value::Number(9)]
+        ]
+    );
+
+    let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 9;")?;
+    assert_eq!(query.tuples, vec![vec![Value::Number(10)]]);
+
+    Ok(())
+}
