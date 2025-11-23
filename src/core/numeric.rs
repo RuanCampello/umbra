@@ -4,6 +4,7 @@
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
 use crate::core::Serialize;
+use std::cmp::{max, min};
 use std::{cmp::Ordering, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
@@ -121,72 +122,65 @@ impl Numeric {
         }
     }
 
-    /// Compares absolute values, flipping if both are negative.
+    /// Compares absolute values: |A| vs |B|
     #[inline]
-    fn cmp_mag(&self, other: &Self, both_negative: bool) -> Ordering {
-        let result = match (self, other) {
-            (Self::Short(a), Self::Short(b)) => {
-                let (a_payload, b_payload) = (a & PAYLOAD_MASK, b & PAYLOAD_MASK);
-                let a_scale = ((a & SCALE_MASK) >> SCALE_SHIFT) as i32;
-                let b_scale = ((b & SCALE_MASK) >> SCALE_SHIFT) as i32;
+    pub fn cmp_abs(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Short(_), Self::Short(_)) => {
+                let (val_a, scale_a) = self.unpack_short();
+                let (val_b, scale_b) = other.unpack_short();
 
-                // normalise if needed to compare
-                if a_scale == b_scale {
-                    a_payload.cmp(&b_payload)
-                } else if a_scale < b_scale {
-                    let a_scaled = a_payload * 10_u64.pow((b_scale - a_scale) as u32);
-                    a_scaled.cmp(&b_payload)
+                let abs_a = val_a.unsigned_abs();
+                let abs_b = val_b.unsigned_abs();
+
+                if scale_a == scale_b {
+                    abs_a.cmp(&abs_b)
                 } else {
-                    let b_scaled = b_payload * 10_u64.pow((a_scale - b_scale) as u32);
-                    a_payload.cmp(&b_scaled)
-                }
-            }
-
-            (Self::Short(_), Self::Long { .. }) | (Self::Long { .. }, Self::Short(_)) => {
-                let a_val = Option::<f64>::from(self).unwrap();
-                let b_val = Option::<f64>::from(other).unwrap();
-
-                a_val
-                    .abs()
-                    .partial_cmp(&b_val.abs())
-                    .unwrap_or(Ordering::Equal)
-            }
-
-            (
-                Self::Long {
-                    weight: w1,
-                    digits: d1,
-                    ..
-                },
-                Self::Long {
-                    weight: w2,
-                    digits: d2,
-                    ..
-                },
-            ) => match w1.cmp(w2) {
-                Ordering::Equal => {
-                    for i in 0..d1.len().min(d2.len()) {
-                        match d1[i].cmp(&d2[i]) {
-                            Ordering::Equal => continue,
-                            other => {
-                                return if both_negative {
-                                    other.reverse()
-                                } else {
-                                    other
-                                }
-                            }
+                    if scale_a < scale_b {
+                        let diff = (scale_b - scale_a) as u32;
+                        match 10u128.checked_pow(diff) {
+                            Some(pow) => match abs_a.checked_mul(pow) {
+                                Some(scaled_a) => scaled_a.cmp(&abs_b),
+                                None => Ordering::Greater,
+                            },
+                            None => Ordering::Greater,
+                        }
+                    } else {
+                        let diff = (scale_a - scale_b) as u32;
+                        match 10u128.checked_pow(diff) {
+                            Some(pow) => match abs_b.checked_mul(pow) {
+                                Some(scaled_b) => abs_a.cmp(&scaled_b),
+                                None => Ordering::Less,
+                            },
+                            None => Ordering::Less,
                         }
                     }
-                    d1.len().cmp(&d2.len())
                 }
-                other => other,
-            },
-            _ => Ordering::Equal,
-        };
+            }
 
-        match both_negative {
-            true => result.reverse(),
-            _ => result,
+            _ => {
+                let (w1, d1, _, _) = self.as_long_view();
+                let (w2, d2, _, _) = other.as_long_view();
+
+                match w1.cmp(&w2) {
+                    Ordering::Equal => {
+                        let len = max(d1.len(), d2.len());
+
+                        for i in 0..len {
+                            let v1 = *d1.get(i).unwrap_or(&0);
+                            let v2 = *d2.get(i).unwrap_or(&0);
+
+                            match v1.cmp(&v2) {
+                                Ordering::Equal => continue,
+                                ord => return ord,
+                            }
+                        }
+
+                        Ordering::Equal
+                    }
+                    ord => ord,
+                }
+            }
         }
     }
 
@@ -262,8 +256,6 @@ impl Numeric {
     #[inline]
     /// Performs addition of absolute values: |A| + |B|
     fn add_abs(w1: i16, d1: &[i16], w2: i16, d2: &[i16]) -> Self {
-        use std::cmp::{max, min};
-
         let w1_end = w1 - (d1.len() as i16) + 1;
         let w2_end = w2 - (d2.len() as i16) + 1;
 
@@ -314,6 +306,72 @@ impl Numeric {
         }
 
         digits.reverse();
+
+        Numeric::Long {
+            weight,
+            sign_dscale: 0,
+            digits,
+        }
+    }
+
+    #[inline]
+    fn sub_abs(w_large: i16, d_large: &[i16], w_small: i16, d_small: &[i16]) -> Numeric {
+        let w_large_end = w_large - (d_large.len() as i16) + 1;
+        let w_small_end = w_small - (d_small.len() as i16) + 1;
+
+        let weight_max = w_large;
+        let weight_min = min(w_large_end, w_small_end);
+
+        let mut digits = Vec::new();
+        let mut borrow: i32 = 0;
+
+        for weigth in weight_min..=weight_max {
+            let val_large = match weigth <= w_large && weigth >= w_large_end {
+                true => d_large[(w_large - weigth) as usize] as i32,
+                _ => 0,
+            };
+
+            let val_small = match weigth <= w_small && weigth >= w_small_end {
+                true => d_small[(w_small - weigth) as usize] as i32,
+                _ => 0,
+            };
+            let mut diff = val_large - val_small - borrow;
+
+            match diff < 0 {
+                true => {
+                    diff += 10000;
+                    borrow = 1;
+                }
+                _ => borrow = 0,
+            };
+
+            digits.push(diff as i16);
+        }
+
+        if borrow > 0 {
+            panic!("sub_abs underflow. inputs must be sorted |A| >= |B|.");
+        }
+
+        digits.reverse();
+        let mut weight = weight_max;
+        let mut offset = 0;
+
+        while offset < digits.len() && digits[offset] == 0 {
+            offset += 1;
+        }
+
+        if offset > 0 {
+            digits.drain(0..offset);
+            weight -= offset as i16;
+        }
+
+        if digits.is_empty() {
+            return Numeric::Long {
+                weight: 0,
+                sign_dscale: 0,
+                digits: vec![0],
+            };
+        }
 
         Numeric::Long {
             weight,
@@ -470,14 +528,12 @@ impl Ord for Numeric {
                 true => Ordering::Less,
                 _ => Ordering::Greater,
             },
-
-            (a, b) if a.is_negative() != b.is_negative() => match a.is_negative() {
-                true => Ordering::Less,
-                _ => Ordering::Greater,
+            _ => match (self.is_negative(), other.is_negative()) {
+                (false, false) => self.cmp_abs(other),
+                (true, true) => other.cmp_abs(self),
+                (false, true) => Ordering::Greater,
+                (true, false) => Ordering::Less,
             },
-
-            // both have the same sign, so we need to compare its value
-            _ => self.cmp_mag(other, self.is_negative()),
         }
     }
 }
@@ -517,7 +573,7 @@ impl Add for Numeric {
             let (val_a, scale_a) = self.unpack_short();
             let (val_b, scale_b) = rhs.unpack_short();
 
-            let res_scale = std::cmp::max(scale_a, scale_b);
+            let res_scale = max(scale_a, scale_b);
 
             let a = match scale_a < res_scale {
                 true => val_a.checked_mul(10i128.pow((res_scale - scale_a) as u32)),
@@ -549,7 +605,7 @@ impl Add for Numeric {
             true => {
                 let mut result = Numeric::add_abs(w_a, &digits_a, w_b, &digits_b);
                 result.set_sign(neg_a);
-                result.set_scale(std::cmp::max(scale_a, scale_b));
+                result.set_scale(max(scale_a, scale_b));
 
                 result
             }
