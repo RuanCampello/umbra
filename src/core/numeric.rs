@@ -355,6 +355,35 @@ impl Numeric {
         }
     }
 
+    fn set_sign(&mut self, neg: bool) {
+        match self {
+            Self::Long { sign_dscale, .. } => match neg {
+                true => *sign_dscale |= NUMERIC_NEG,
+                _ => *sign_dscale &= !NUMERIC_NEG,
+            },
+            Self::Short(packed) => match neg {
+                true => *packed |= 1 << SIGN_SHIFT,
+                _ => *packed &= !(1 << SIGN_SHIFT),
+            },
+            Self::NaN => {}
+        }
+    }
+
+    fn set_scale(&mut self, scale: u16) {
+        match self {
+            Self::Long { sign_dscale, .. } => {
+                *sign_dscale = (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK)
+            }
+
+            Self::Short(packed) => {
+                *packed &= !(SCALE_MASK);
+                *packed |= (scale as u64) << SCALE_SHIFT;
+            }
+
+            _ => {}
+        }
+    }
+
     #[inline]
     fn unpack_short(&self) -> (i128, u16) {
         match self {
@@ -517,7 +546,13 @@ impl Add for Numeric {
             // case: (+A) + (+B) or (-A) + (-B)
             // operation has the same magnitudes
             // results the same sign as A
-            true => Numeric::add_abs(w_a, &digits_a, w_b, &digits_b),
+            true => {
+                let mut result = Numeric::add_abs(w_a, &digits_a, w_b, &digits_b);
+                result.set_sign(neg_a);
+                result.set_scale(std::cmp::max(scale_a, scale_b));
+
+                result
+            }
 
             // case: (+A) + (-B) or (-A) + (+B)
             // operation is a sub magnitudes: |A| - |B|
@@ -901,12 +936,5 @@ mod tests {
         // about 9.22 quintillions, that's huge
         let large = Numeric::from(i64::MAX);
         assert!(Option::<i64>::from(large).is_some());
-    }
-
-    #[test]
-    fn xxx() {
-        let n = Numeric::from_scaled_i128(12345, 131).unwrap();
-        //assert_eq!(n.digits, vec![12, 345]);
-        println!("numeric: {n:#?} {n}");
     }
 }
