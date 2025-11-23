@@ -905,33 +905,68 @@ impl Display for Numeric {
             Self::Long {
                 sign_dscale,
                 digits,
-                ..
+                weight,
             } => {
                 if digits.is_empty() {
                     return write!(f, "0");
                 }
 
                 let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
-                let scale = (sign_dscale & DSCALE_MASK) as i16;
+                let scale = (sign_dscale & DSCALE_MASK) as usize;
 
                 if is_negative {
                     write!(f, "-")?;
                 }
 
                 let mut decimal_str = String::new();
-                for (i, &digit) in digits.iter().enumerate() {
-                    match i == 0 {
-                        true => decimal_str.push_str(&format!("{}", digit)),
-                        _ => decimal_str.push_str(&format!("{:04}", digit)),
+
+                match *weight < 0 {
+                    true => {
+                        // case 1: pure fraction (0.00...xyz)
+                        // weight < 0 means the number is smaller than 0.0001
+                        let zeros = (-weight - 1) as usize;
+                        decimal_str.push_str("0.");
+                        // The 'gap' between 0. and our digits
+                        decimal_str.push_str(&"0000".repeat(zeros));
+
+                        digits
+                            .iter()
+                            .for_each(|d| decimal_str.push_str(&format!("{:04}", d)));
+                    }
+
+                    _ => {
+                        // case 2: number with integer part (123.456)
+                        for (i, &digit) in digits.iter().enumerate() {
+                            match i == 0 {
+                                true => decimal_str.push_str(&format!("{}", digit)),
+                                _ => decimal_str.push_str(&format!("{:04}", digit)),
+                            }
+                            // insert the decimal point naturally
+                            // weight is the index of the 10^0 group.
+                            if scale > 0 && i as i16 == *weight {
+                                decimal_str.push('.');
+                            }
+                        }
                     }
                 }
 
                 if scale > 0 {
-                    let point_pos = decimal_str.len().saturating_sub(scale as usize);
-                    if point_pos == 0 {
-                        decimal_str.insert_str(0, "0.");
-                    } else if point_pos < decimal_str.len() {
-                        decimal_str.insert(point_pos, '.');
+                    // 1. ensure dot exists (edge case: 1.00 where digits=[1])
+                    if !decimal_str.contains('.') {
+                        decimal_str.push('.');
+                    }
+
+                    // 2. pad right if needed (e.g. 1.00 -> "1." -> "1.00")
+                    let dot_pos = decimal_str.find('.').unwrap();
+                    let current_decimals = decimal_str.len() - dot_pos - 1;
+                    if current_decimals < scale {
+                        decimal_str.push_str(&"0".repeat(scale - current_decimals));
+                    }
+
+                    // 3. truncate excess
+                    let max_len = dot_pos + 1 + scale;
+                    if decimal_str.len() > max_len {
+                        decimal_str.truncate(max_len);
                     }
                 }
 
@@ -940,7 +975,6 @@ impl Display for Numeric {
         }
     }
 }
-
 impl Display for NumericError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1074,17 +1108,39 @@ mod tests {
         let (a, b) = (num(1, 131), num(2, 131));
         let result = a + b;
 
+        // scale 131 means we need 33 groups of 4 digits (132 digits capacity).
+        // 131 % 4 = 3, so we pad the single digit by 10^1.
+        // 3 becomes 30 internally.
         match result {
             Numeric::Long {
                 weight,
                 sign_dscale,
-                digits,
+                ref digits,
             } => {
+                assert_eq!(digits, &vec![30]);
                 assert_eq!(weight, -33);
                 assert_eq!(sign_dscale & DSCALE_MASK, 131);
-                assert_eq!(digits, vec![30]);
             }
             _ => panic!(),
-        }
+        };
+
+        let s = result.to_string();
+        let zeros = s.matches('0').count();
+
+        assert!(s.starts_with('0'));
+        assert!(s.ends_with('3'));
+        assert_eq!(zeros, 131);
+    }
+
+    #[test]
+    fn display_fractions() {
+        let n = Numeric::from_str("0.00001234").unwrap();
+        assert_eq!(n.to_string(), "0.00001234");
+
+        let n = Numeric::from_str("0.0001").unwrap();
+        assert_eq!(n.to_string(), "0.0001");
+
+        let n = Numeric::from_str("0.00000001").unwrap();
+        assert_eq!(n.to_string(), "0.00000001")
     }
 }
