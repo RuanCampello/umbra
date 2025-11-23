@@ -1337,4 +1337,69 @@ mod tests {
             assert!(nums[i] < nums[i + 1], "order failed at index {}", i);
         }
     }
+
+    #[test]
+    fn arithmetic_sub_basic() {
+        let a = Numeric::from(10i64);
+        let b = Numeric::from(5i64);
+        assert_eq!(a - b, Numeric::from(5i64));
+
+        let a = Numeric::from(10i64);
+        let b = Numeric::from(20i64);
+        assert_eq!(a - b, Numeric::from(-10i64));
+
+        let a = Numeric::from(10i64);
+        let b = Numeric::from(-5i64);
+        assert_eq!(a - b, Numeric::from(15i64));
+
+        let a = Numeric::from(-10i64);
+        let b = Numeric::from(-5i64);
+        assert_eq!(a - b, Numeric::from(-5i64));
+    }
+
+    #[test]
+    fn arithmetic_sub_zero_identity() {
+        let a = Numeric::from(42u64);
+        let zero = Numeric::zero();
+
+        assert_eq!(&a - &zero, a);
+        assert_eq!(&zero - &a, Numeric::from(-42i64));
+        assert_eq!(&a - &a, zero);
+    }
+
+    #[test]
+    fn arithmetic_sub_decimals() {
+        let a = Numeric::from_str("0.3").unwrap();
+        let b = Numeric::from_str("0.1").unwrap();
+        assert_eq!((&a - &b).to_string(), "0.2");
+
+        let a = Numeric::from_str("1.0000").unwrap();
+        let b = Numeric::from_str("0.0001").unwrap();
+        let res = a - b;
+        assert_eq!(res.to_string(), "0.9999");
+
+        let a = Numeric::from_str("0.5").unwrap();
+        let b = Numeric::from_str("0.6").unwrap();
+        assert_eq!((a - b).to_string(), "-0.1");
+    }
+
+    #[test]
+    fn arithmetic_sub_tiny_numbers() {
+        let a = num(3, 131);
+        let b = num(1, 131);
+        let res = &a - &b;
+
+        let s = res.to_string();
+        assert!(s.ends_with("2"));
+        assert_eq!(s.matches('0').count(), 131);
+
+        let a = num(1, 131);
+        let b = num(2, 131);
+        let res = a - b;
+
+        let s = res.to_string();
+        assert_eq!(s.matches('0').count(), 131);
+        assert!(s.starts_with("-0."));
+        assert!(s.ends_with("1"));
+    }
 }
