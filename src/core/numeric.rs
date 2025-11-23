@@ -265,7 +265,7 @@ impl Numeric {
         let mut digits = Vec::new();
         let mut carry = 0i32;
 
-        for weight in weight_min..weight_max {
+        for weight in weight_min..=weight_max {
             let v1 = match weight <= w1 && weight >= w1_end {
                 true => d1[(w1 - weight) as usize] as i32,
                 _ => 0,
@@ -385,6 +385,7 @@ impl Numeric {
     fn as_long_view(&self) -> (i16, Vec<i16>, bool, u16) {
         match self {
             Self::NaN => panic!("NaN must be handled elsewhere"),
+
             Self::Short(_) => {
                 let (v, s) = self.unpack_short();
 
@@ -400,6 +401,7 @@ impl Numeric {
                     unreachable!()
                 }
             }
+
             Self::Long {
                 weight,
                 sign_dscale,
@@ -413,7 +415,8 @@ impl Numeric {
         }
     }
 
-    fn set_sign(&mut self, neg: bool) {
+    #[inline]
+    const fn set_sign(&mut self, neg: bool) {
         match self {
             Self::Long { sign_dscale, .. } => match neg {
                 true => *sign_dscale |= NUMERIC_NEG,
@@ -427,7 +430,8 @@ impl Numeric {
         }
     }
 
-    fn set_scale(&mut self, scale: u16) {
+    #[inline]
+    const fn set_scale(&mut self, scale: u16) {
         match self {
             Self::Long { sign_dscale, .. } => {
                 *sign_dscale = (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK)
@@ -447,9 +451,7 @@ impl Numeric {
         match self {
             Self::Short(packed) => {
                 let abs = packed & PAYLOAD_MASK;
-
                 let scale = ((packed & SCALE_MASK) >> SCALE_SHIFT) as u16;
-
                 let is_negative = ((packed >> SIGN_SHIFT) & 1) == 1;
 
                 let val = match is_negative {
@@ -596,8 +598,7 @@ impl Add for Numeric {
 
         // slow path: values are long or some of them is a long variant
         let (w_a, digits_a, neg_a, scale_a) = self.as_long_view();
-        let (w_b, digits_b, neg_b, scale_b) = self.as_long_view();
-
+        let (w_b, digits_b, neg_b, scale_b) = rhs.as_long_view();
         let scale = max(scale_a, scale_b);
 
         match neg_a == neg_b {
@@ -1073,6 +1074,17 @@ mod tests {
         let (a, b) = (num(1, 131), num(2, 131));
         let result = a + b;
 
-        unimplemented!()
+        match result {
+            Numeric::Long {
+                weight,
+                sign_dscale,
+                digits,
+            } => {
+                assert_eq!(weight, -33);
+                assert_eq!(sign_dscale & DSCALE_MASK, 131);
+                assert_eq!(digits, vec![30]);
+            }
+            _ => panic!(),
+        }
     }
 }
