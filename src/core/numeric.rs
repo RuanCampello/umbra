@@ -4,6 +4,7 @@
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
 use crate::core::Serialize;
+use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::{cmp::Ordering, fmt::Display, ops::Add, str::FromStr};
 
@@ -382,7 +383,7 @@ impl Numeric {
 
     /// standardise short and long format access
     #[inline]
-    fn as_long_view(&self) -> (i16, Vec<i16>, bool, u16) {
+    fn as_long_view(&self) -> (i16, Cow<'_, [i16]>, bool, u16) {
         match self {
             Self::NaN => panic!("NaN must be handled elsewhere"),
 
@@ -396,7 +397,7 @@ impl Numeric {
                 } = Numeric::from_scaled_i128(v, s).unwrap()
                 {
                     let is_neg = (sign_dscale & NUMERIC_NEG) != 0;
-                    (weight, digits, is_neg, s)
+                    (weight, Cow::Owned(digits), is_neg, s)
                 } else {
                     unreachable!()
                 }
@@ -410,7 +411,7 @@ impl Numeric {
                 let is_neg = (sign_dscale & NUMERIC_NEG) != 0;
                 let scale = sign_dscale & DSCALE_MASK;
 
-                (*weight, digits.clone(), is_neg, scale)
+                (*weight, Cow::Borrowed(digits), is_neg, scale)
             }
         }
     }
@@ -554,21 +555,21 @@ impl Default for Numeric {
     }
 }
 
-impl Add for Numeric {
-    type Output = Self;
+impl<'a, 'b> Add<&'b Numeric> for &'a Numeric {
+    type Output = Numeric;
 
     #[inline]
     /// Hardly based on [postgres](https://github.com/postgres/postgres/blob/7d9043aee803bf9bf3307ce5f45f3464ea288cb1/src/backend/utils/adt/numeric.c#L8062) implementation.
-    fn add(self, rhs: Self) -> Self::Output {
+    fn add(self, rhs: &'b Numeric) -> Self::Output {
         if self.is_nan() || rhs.is_nan() {
-            return Self::NaN;
+            return Numeric::NaN;
         }
 
         if self.is_zero() {
-            return rhs;
+            return rhs.clone();
         }
         if rhs.is_zero() {
-            return self;
+            return self.clone();
         }
 
         if let (Numeric::Short(_), Numeric::Short(_)) = (&self, &rhs) {
@@ -634,6 +635,30 @@ impl Add for Numeric {
                 }
             },
         }
+    }
+}
+
+impl Add for Numeric {
+    type Output = Self;
+    #[inline]
+    fn add(self, rhs: Self) -> Self::Output {
+        &self + &rhs
+    }
+}
+
+impl<'n> Add<&'n Numeric> for Numeric {
+    type Output = Numeric;
+    #[inline]
+    fn add(self, rhs: &'n Numeric) -> Self::Output {
+        &self + rhs
+    }
+}
+
+impl<'n> Add<Numeric> for &'n Numeric {
+    type Output = Numeric;
+    #[inline]
+    fn add(self, rhs: Numeric) -> Self::Output {
+        self + &rhs
     }
 }
 
@@ -1142,5 +1167,16 @@ mod tests {
 
         let n = Numeric::from_str("0.00000001").unwrap();
         assert_eq!(n.to_string(), "0.00000001")
+    }
+
+    #[test]
+    fn arithmetic_add_integers() {
+        let a = Numeric::from(100u64);
+        let b = Numeric::from(200u64);
+        assert_eq!(a + b, Numeric::from(300u64));
+
+        let big_short = Numeric::from(1_000_000_000_000u64);
+        let sum = &big_short + &big_short;
+        assert_eq!(i64::from(sum), 2_000_000_000_000);
     }
 }
