@@ -965,6 +965,10 @@ impl From<Numeric> for i64 {
 mod tests {
     use super::*;
 
+    fn num(val: i128, scale: u16) -> Numeric {
+        Numeric::from_scaled_i128(val, scale).expect("Invalid test numeric data")
+    }
+
     #[test]
     fn zero() {
         let zero = Numeric::zero();
@@ -1010,5 +1014,65 @@ mod tests {
         // about 9.22 quintillions, that's huge
         let large = Numeric::from(i64::MAX);
         assert!(Option::<i64>::from(large).is_some());
+    }
+
+    #[test]
+    fn add_basic_numerics() {
+        let (a, b) = (num(1, 0), num(2, 0));
+        let result = a + b;
+
+        match result {
+            Numeric::Short(_) => assert_eq!(result.unpack_short(), (3, 0)),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn add_decimals_same_scale() {
+        let (a, b) = (num(11, 1), num(22, 1));
+        let result = a + b;
+
+        assert_eq!(result.unpack_short(), (33, 1));
+    }
+
+    #[test]
+    fn aligment_boundary_crossing() {
+        let (a, b) = (num(12345, 3), num(1, 4));
+        let result = a + b;
+        let (val, scale) = result.unpack_short();
+
+        assert_eq!((val, scale), (123451, 4));
+    }
+
+    #[test]
+    fn add_diff_sign() {
+        let (a, b) = (num(10, 0), num(-3, 0));
+        let result = a + b;
+
+        assert_eq!(result.unpack_short(), (7, 0));
+    }
+
+    #[test]
+    fn sub_across_chunks() {
+        let (a, b) = (num(10000, 4), num(-1, 4));
+        let res = a + b;
+
+        assert_eq!(res.unpack_short(), (9999, 4));
+    }
+
+    #[test]
+    fn result_zero() {
+        let (a, b) = (num(5, 0), num(-5, 0));
+        let result = a + b;
+
+        assert_eq!(result.unpack_short(), (0, 0));
+    }
+
+    #[test]
+    fn add_long_format() {
+        let (a, b) = (num(1, 131), num(2, 131));
+        let result = a + b;
+
+        unimplemented!()
     }
 }
