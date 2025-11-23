@@ -190,6 +190,7 @@ impl Numeric {
         }
     }
 
+    #[inline]
     fn from_scaled_i128(value: i128, scale: u16) -> Result<Self, NumericError> {
         if value == 0 {
             return Ok(Self::zero());
@@ -256,6 +257,123 @@ impl Numeric {
             sign_dscale,
             digits,
         })
+    }
+
+    #[inline]
+    /// Performs addition of absolute values: |A| + |B|
+    fn add_abs(w1: i16, d1: &[i16], w2: i16, d2: &[i16]) -> Self {
+        use std::cmp::{max, min};
+
+        let w1_end = w1 - (d1.len() as i16) + 1;
+        let w2_end = w2 - (d2.len() as i16) + 1;
+
+        let weight_max = max(w1, w2);
+        let weight_min = min(w1_end, w2_end);
+
+        let mut digits = Vec::new();
+        let mut carry = 0i32;
+
+        for weight in weight_min..weight_max {
+            let v1 = match weight <= w1 && weight >= w1_end {
+                true => d1[(w1 - weight) as usize] as i32,
+                _ => 0,
+            };
+
+            let v2 = match weight <= w2 && weight >= w2_end {
+                true => d2[(w2 - weight) as usize] as i32,
+                _ => 0,
+            };
+
+            let sum = v1 + v2 + carry;
+            match sum > N_BASE {
+                true => {
+                    carry = 1;
+                    digits.push((sum - N_BASE) as i16);
+                }
+                _ => {
+                    carry = 0;
+                    digits.push(sum as i16)
+                }
+            }
+        }
+
+        let weight = match carry > 0 {
+            true => {
+                digits.push(carry as i16);
+                weight_max + 1
+            }
+            _ => weight_max,
+        };
+
+        while digits.last() == Some(&0) {
+            digits.pop();
+        }
+
+        if digits.is_empty() {
+            return Numeric::from_scaled_i128(0, 0).unwrap();
+        }
+
+        digits.reverse();
+
+        Numeric::Long {
+            weight,
+            sign_dscale: 0,
+            digits,
+        }
+    }
+
+    /// standardise short and long format access
+    #[inline]
+    fn as_long_view(&self) -> (i16, Vec<i16>, bool, u16) {
+        match self {
+            Self::NaN => panic!("NaN must be handled elsewhere"),
+            Self::Short(_) => {
+                let (v, s) = self.unpack_short();
+
+                if let Numeric::Long {
+                    weight,
+                    sign_dscale,
+                    digits,
+                } = Numeric::from_scaled_i128(v, s).unwrap()
+                {
+                    let is_neg = (sign_dscale & NUMERIC_NEG) != 0;
+                    (weight, digits, is_neg, s)
+                } else {
+                    unreachable!()
+                }
+            }
+            Self::Long {
+                weight,
+                sign_dscale,
+                digits,
+            } => {
+                let is_neg = (sign_dscale & NUMERIC_NEG) != 0;
+                let scale = sign_dscale & DSCALE_MASK;
+
+                (*weight, digits.clone(), is_neg, scale)
+            }
+        }
+    }
+
+    #[inline]
+    fn unpack_short(&self) -> (i128, u16) {
+        match self {
+            Self::Short(packed) => {
+                let abs = packed & PAYLOAD_MASK;
+
+                let scale = ((packed & SCALE_MASK) >> SCALE_SHIFT) as u16;
+
+                let is_negative = ((packed >> SIGN_SHIFT) & 1) == 1;
+
+                let val = match is_negative {
+                    true => -(abs as i128),
+                    _ => abs as i128,
+                };
+
+                (val, scale)
+            }
+            _ => panic!("unpack_short called on non-Short variant"),
+        }
     }
 }
 
@@ -353,6 +471,7 @@ impl Add for Numeric {
     type Output = Self;
 
     #[inline]
+    /// Hardly based on [postgres](https://github.com/postgres/postgres/blob/7d9043aee803bf9bf3307ce5f45f3464ea288cb1/src/backend/utils/adt/numeric.c#L8062) implementation.
     fn add(self, rhs: Self) -> Self::Output {
         if self.is_nan() || rhs.is_nan() {
             return Self::NaN;
@@ -363,6 +482,31 @@ impl Add for Numeric {
         }
         if rhs.is_zero() {
             return self;
+        }
+
+        if let (Numeric::Short(_), Numeric::Short(_)) = (&self, &rhs) {
+            let (val_a, scale_a) = self.unpack_short();
+            let (val_b, scale_b) = rhs.unpack_short();
+
+            let res_scale = std::cmp::max(scale_a, scale_b);
+
+            let a = match scale_a < res_scale {
+                true => val_a.checked_mul(10i128.pow((res_scale - scale_a) as u32)),
+                _ => Some(val_a),
+            };
+
+            let b = match scale_b < res_scale {
+                true => val_b.checked_mul(10i128.pow((res_scale - scale_b) as u32)),
+                _ => Some(val_b),
+            };
+
+            if let (Some(a), Some(b)) = (a, b) {
+                if let Some(sum) = a.checked_add(b) {
+                    if let Ok(res) = Numeric::from_scaled_i128(sum, res_scale) {
+                        return res;
+                    }
+                }
+            }
         }
 
         todo!()
