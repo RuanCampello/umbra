@@ -4,7 +4,7 @@
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
 use crate::core::Serialize;
-use std::{cmp::Ordering, fmt::Display, str::FromStr};
+use std::{cmp::Ordering, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
@@ -28,6 +28,7 @@ pub enum Numeric {
 #[derive(Debug, PartialEq)]
 pub enum NumericError {
     InvalidFormat,
+    Overflow,
 }
 
 /// Base for internal digit representation. Each digit represents a value from 0 to 9999.
@@ -195,7 +196,7 @@ impl Numeric {
         }
 
         let is_negative = value.is_negative();
-        let abs = value.unsigned_abs();
+        let mut abs = value.unsigned_abs();
 
         // try the short format to see if it fits (that's what she said)
         if scale <= 127 && abs <= PAYLOAD_MASK as u128 {
@@ -206,6 +207,16 @@ impl Numeric {
                 | (0 << WEIGHT_SHIFT)
                 | (abs as u64);
             return Ok(Self::Short(packed));
+        }
+
+        // alignment padding
+        //
+        // ex: if scale is 3 (e.g 0.123), we have 3 decimals. We need 4 to fill a chunk.
+        // we must multiply by 10 to get 0.1230 (represented as integer 1230)
+        let align_pad = scale % 4;
+        if align_pad > 0 {
+            let multiplier = 10u128.pow((4 - align_pad) as u32);
+            abs = abs.checked_mul(multiplier).ok_or(NumericError::Overflow)?;
         }
 
         let mut digits = Vec::new();
@@ -222,7 +233,17 @@ impl Numeric {
 
         digits.reverse();
 
-        let weight = (digits.len() as i16) - 1;
+        // calculate the weight
+        //
+        // the weight is the index of the base-10000 digit where 10^0 starts
+        // to calculate how many groups of 4 decimals we have:
+        //     Scale 0-4 -> 1 group, Scale 5-8 -> 2 groups
+        //     so we ceil(scale / 4)
+        //
+
+        let fract_groups = (scale + 3) / 4;
+        let weight = (digits.len() as i16) - (fract_groups as i16) - 1;
+
         let sign_part = match is_negative {
             true => NUMERIC_NEG,
             _ => NUMERIC_POS,
@@ -325,6 +346,26 @@ impl Eq for Numeric {}
 impl Default for Numeric {
     fn default() -> Self {
         Self::zero()
+    }
+}
+
+impl Add for Numeric {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: Self) -> Self::Output {
+        if self.is_nan() || rhs.is_nan() {
+            return Self::NaN;
+        }
+
+        if self.is_zero() {
+            return rhs;
+        }
+        if rhs.is_zero() {
+            return self;
+        }
+
+        todo!()
     }
 }
 
@@ -636,6 +677,7 @@ impl Display for NumericError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidFormat => write!(f, "Invalid numeric format"),
+            Self::Overflow => write!(f, "Numeric overflow"),
         }
     }
 }
@@ -701,5 +743,12 @@ mod tests {
         // about 9.22 quintillions, that's huge
         let large = Numeric::from(i64::MAX);
         assert!(Option::<i64>::from(large).is_some());
+    }
+
+    #[test]
+    fn xxx() {
+        let n = Numeric::from_scaled_i128(12345, 131).unwrap();
+        //assert_eq!(n.digits, vec![12, 345]);
+        println!("numeric: {n:#?} {n}");
     }
 }
