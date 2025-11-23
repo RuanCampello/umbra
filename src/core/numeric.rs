@@ -598,6 +598,8 @@ impl Add for Numeric {
         let (w_a, digits_a, neg_a, scale_a) = self.as_long_view();
         let (w_b, digits_b, neg_b, scale_b) = self.as_long_view();
 
+        let scale = max(scale_a, scale_b);
+
         match neg_a == neg_b {
             // case: (+A) + (+B) or (-A) + (-B)
             // operation has the same magnitudes
@@ -613,7 +615,23 @@ impl Add for Numeric {
             // case: (+A) + (-B) or (-A) + (+B)
             // operation is a sub magnitudes: |A| - |B|
             // results sign need to involve the comparison of magnitudes
-            _ => unimplemented!(),
+            _ => match Numeric::cmp_abs(&self, &rhs) {
+                Ordering::Equal => Numeric::from_scaled_i128(0, scale).unwrap(),
+                Ordering::Greater => {
+                    let mut result = Numeric::sub_abs(w_a, &digits_a, w_b, &digits_b);
+                    result.set_sign(neg_a);
+                    result.set_scale(scale);
+
+                    result
+                }
+                Ordering::Less => {
+                    let mut result = Numeric::sub_abs(w_b, &digits_b, w_a, &digits_a);
+                    result.set_sign(neg_b);
+                    result.set_scale(scale);
+
+                    result
+                }
+            },
         }
     }
 }
