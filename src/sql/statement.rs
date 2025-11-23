@@ -7,6 +7,7 @@
 use super::Keyword;
 use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
 use crate::vm::expression::{TypeError, VmType};
 use std::borrow::Borrow;
@@ -238,6 +239,7 @@ pub enum Value {
     Temporal(Temporal),
     Uuid(Uuid),
     Interval(Interval),
+    Numeric(Numeric),
     Null,
 }
 
@@ -321,6 +323,9 @@ pub enum Type {
     DoublePrecision,
     /// 8-byte Universal Unique Identifier defined by [RFC 4122](https://datatracker.ietf.org/doc/html/rfc4122).
     Uuid,
+    /// Arbitrary-precision numeric type (like PostgreSQL `NUMERIC`/`DECIMAL`).
+    /// Uses optimised bit-packing for small values and Base-10000 for arbitrary precision.
+    Numeric,
     Date,
     Time,
     DateTime,
@@ -760,6 +765,9 @@ impl Hash for Value {
             Value::Uuid(u) => u.hash(state),
             Value::Interval(i) => i.hash(state),
             Value::Null => NULL_HASH.hash(state),
+            Value::Numeric(n) => {
+                todo!()
+            }
         }
     }
 }
@@ -896,6 +904,7 @@ impl Display for Type {
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
             Type::Text => write!(f, "TEXT"),
             Type::Interval => f.write_str("INTERVAL"),
+            Type::Numeric => f.write_str("NUMERIC"),
         }
     }
 }
@@ -910,6 +919,7 @@ impl Display for Value {
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
             Value::Interval(interval) => write!(f, "{interval}"),
+            Value::Numeric(numeric) => write!(f, "{numeric}"),
             Value::Null => write!(f, "NULL"),
         }
     }

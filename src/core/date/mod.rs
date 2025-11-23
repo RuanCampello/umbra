@@ -13,6 +13,8 @@ mod functions;
 pub mod interval;
 pub use functions::{Extract, ExtractError, ExtractKind};
 
+use crate::core::Serialize;
+
 /// A combined date and time representation without timezone information.
 ///
 /// This struct combines [`NaiveDate`] (4 bytes)
@@ -103,11 +105,6 @@ const SECS_IN_DAY: i64 = 86400;
 pub trait Parse: Sized {
     fn parse_str(date: &str) -> DateError<Self>;
     fn timestamp(&self) -> i64;
-}
-
-/// This serializes the date types into a compact binary format.
-pub trait Serialize {
-    fn serialize(&self, buff: &mut Vec<u8>);
 }
 
 pub trait Current {

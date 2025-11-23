@@ -3,7 +3,7 @@
 //! This module implements a numeric type optimised for storage and operations,
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
-use crate::core::date::Serialize;
+use crate::core::Serialize;
 use std::{cmp::Ordering, fmt::Display, str::FromStr};
 
 /// Arbitrary-precision numeric type.
@@ -328,6 +328,25 @@ impl Default for Numeric {
     }
 }
 
+impl From<[u8; 8]> for Numeric {
+    fn from(value: [u8; 8]) -> Self {
+        let packed = u64::from_le_bytes(value);
+        Self::Short(packed)
+    }
+}
+
+impl From<&[u8; 8]> for Numeric {
+    fn from(value: &[u8; 8]) -> Self {
+        Self::from(*value)
+    }
+}
+
+impl From<u64> for Numeric {
+    fn from(value: u64) -> Self {
+        Self::Short(value)
+    }
+}
+
 impl TryFrom<&[u8]> for Numeric {
     type Error = NumericError;
 
@@ -340,7 +359,7 @@ impl TryFrom<&[u8]> for Numeric {
         let tag = (packed >> TAG_SHIFT) & 0b11;
 
         match tag {
-            0b00 => Ok(Self::Short(packed)),
+            0b00 => Ok(Self::from(packed)),
             0b10 => Ok(Self::NaN),
             0b01 => {
                 if bytes.len() < 14 {
@@ -659,7 +678,7 @@ mod tests {
     #[test]
     fn base_10000_representation() {
         // 10000 should be represented as a single digit in base-10000
-        let num = Numeric::from(10000);
+        let num = Numeric::from(10000u64);
         if let Numeric::Long { digits, weight, .. } = num {
             assert_eq!(digits.len(), 1);
             assert_eq!(digits[0], 1);
@@ -669,11 +688,11 @@ mod tests {
 
     #[test]
     fn comparison() {
-        let a = Numeric::from(10);
-        let b = Numeric::from(20);
+        let a = Numeric::from(10u64);
+        let b = Numeric::from(20u64);
         assert!(a < b);
 
-        let c = Numeric::from(-5);
+        let c = Numeric::from(-5i64);
         assert!(c < a);
     }
 

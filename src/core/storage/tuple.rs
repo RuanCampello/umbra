@@ -5,8 +5,10 @@ use std::{
 };
 
 use crate::{
+    core::Serialize,
     core::{
-        date::{interval::Interval, NaiveDate, NaiveDateTime, NaiveTime, Parse, Serialize},
+        date::{interval::Interval, NaiveDate, NaiveDateTime, NaiveTime, Parse},
+        numeric::Numeric,
         uuid::Uuid,
     },
     db::{RowId, Schema},
@@ -90,6 +92,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
         Value::Interval(i) => i.serialize(buff, r#type),
+        Value::Numeric(n) => n.serialize(buff),
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
@@ -228,6 +231,17 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             Ok(Value::String(
                 String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
             ))
+        }
+
+        Type::Numeric => {
+            let mut header = [0; 8];
+            reader.read_exact(&mut header)?;
+
+            let tag = (u64::from_le_bytes(header) >> 62) & 0b11;
+            match tag {
+                0b00 | 0b10 => Ok(Value::Numeric(Numeric::try_from(header).unwrap())),
+                _ => todo!(),
+            }
         }
 
         Type::Boolean => {
