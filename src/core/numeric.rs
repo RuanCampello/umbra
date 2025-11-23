@@ -509,7 +509,21 @@ impl Add for Numeric {
             }
         }
 
-        todo!()
+        // slow path: values are long or some of them is a long variant
+        let (w_a, digits_a, neg_a, scale_a) = self.as_long_view();
+        let (w_b, digits_b, neg_b, scale_b) = self.as_long_view();
+
+        match neg_a == neg_b {
+            // case: (+A) + (+B) or (-A) + (-B)
+            // operation has the same magnitudes
+            // results the same sign as A
+            true => Numeric::add_abs(w_a, &digits_a, w_b, &digits_b),
+
+            // case: (+A) + (-B) or (-A) + (+B)
+            // operation is a sub magnitudes: |A| - |B|
+            // results sign need to involve the comparison of magnitudes
+            _ => unimplemented!(),
+        }
     }
 }
 
