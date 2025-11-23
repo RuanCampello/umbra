@@ -1179,4 +1179,44 @@ mod tests {
         let sum = &big_short + &big_short;
         assert_eq!(i64::from(sum), 2_000_000_000_000);
     }
+
+    #[test]
+    fn arithmetic_mixed_signs() {
+        let a = Numeric::from(10i64);
+        let b = Numeric::from(-3i64);
+        assert_eq!(a + b, Numeric::from(7i64));
+
+        let a = Numeric::from(3i64);
+        let b = Numeric::from(-10i64);
+        assert_eq!(a + b, Numeric::from(-7i64));
+
+        let a = Numeric::from(-10i64);
+        let b = Numeric::from(3i64);
+        assert_eq!(a + b, Numeric::from(-7i64));
+    }
+
+    #[test]
+    fn nan_propagation() {
+        let n = Numeric::from(10u64);
+        let nan = Numeric::NaN;
+
+        assert!((&n + &nan).is_nan());
+        assert!((nan + n).is_nan());
+    }
+
+    #[test]
+    fn comparison_order() {
+        let nums = vec![
+            Numeric::from(-10i64),
+            Numeric::from(-5i64),
+            Numeric::zero(),
+            Numeric::from(5u64),
+            Numeric::from(10u64),
+            Numeric::NaN,
+        ];
+
+        for i in 0..nums.len() - 1 {
+            assert!(nums[i] < nums[i + 1], "order failed at index {}", i);
+        }
+    }
 }
