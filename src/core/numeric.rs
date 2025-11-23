@@ -6,6 +6,7 @@
 use crate::core::Serialize;
 use std::borrow::Cow;
 use std::cmp::{max, min};
+use std::ops::Sub;
 use std::{cmp::Ordering, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
@@ -658,6 +659,123 @@ impl<'n> Add<Numeric> for &'n Numeric {
     type Output = Numeric;
     #[inline]
     fn add(self, rhs: Numeric) -> Self::Output {
+        self + &rhs
+    }
+}
+
+impl<'a, 'b> Sub<&'b Numeric> for &'a Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    /// Based on postgres `sub_var` implementation.
+    /// Conceptually A - B is A + (-B).
+    fn sub(self, rhs: &'b Numeric) -> Self::Output {
+        if self.is_nan() || rhs.is_nan() {
+            return Numeric::NaN;
+        }
+
+        match (self.is_zero(), rhs.is_zero()) {
+            (true, _) => {
+                let mut res = rhs.clone();
+                res.set_sign(!rhs.is_negative());
+                return res;
+            }
+            (_, true) => return self.clone(),
+            _ => {}
+        };
+
+        if let (Numeric::Short(_), Numeric::Short(_)) = (self, rhs) {
+            let (val_a, scale_a) = self.unpack_short();
+            let (val_b, scale_b) = rhs.unpack_short();
+
+            let scale = max(scale_a, scale_b);
+
+            let a = match scale_a < scale {
+                true => val_a.checked_mul(10i128.pow((scale - scale_a) as u32)),
+                _ => Some(val_a),
+            };
+
+            let b = match scale_b < scale {
+                true => val_b.checked_mul(10i128.pow((scale - scale_b) as u32)),
+                _ => Some(val_b),
+            };
+
+            if let (Some(a), Some(b)) = (a, b) {
+                if let Some(diff) = a.checked_sub(b) {
+                    if let Ok(res) = Numeric::from_scaled_i128(diff, scale) {
+                        return res;
+                    }
+                }
+            }
+        }
+
+        let (w_a, digits_a, neg_a, scale_a) = self.as_long_view();
+        let (w_b, digits_b, neg_b, scale_b) = rhs.as_long_view();
+        let scale = max(scale_a, scale_b);
+
+        // in subtraction:
+        // different signs (A - (-B)) -> add magnitudes
+        // same signs (A - B) -> subtract magnitudes
+        match neg_a != neg_b {
+            true => {
+                let mut res = Numeric::add_abs(w_a, &digits_b, w_b, &digits_b);
+                res.set_sign(neg_a);
+                res.set_scale(scale);
+                res
+            }
+            _ => {
+                // case: (+A) - (+B) -> |A| - |B|
+                // case: (-A) - (-B) -> -|A| + |B| -> |B| - |A|
+                match Numeric::cmp_abs(self, rhs) {
+                    Ordering::Equal => Numeric::from_scaled_i128(0, scale).unwrap(),
+                    Ordering::Greater => {
+                        // |A| > |B|
+                        // if (+A) - (+B) -> positive (neg_a)
+                        // if (-A) - (-B) -> negative (neg_a)
+                        let mut result = Numeric::sub_abs(w_a, &digits_a, w_b, &digits_b);
+                        result.set_sign(neg_a);
+                        result.set_scale(scale);
+                        result
+                    }
+
+                    Ordering::Less => {
+                        // |A| < |B|
+                        // if (+A) - (+B) -> negative (!neg_a)
+                        // if (-A) - (-B) -> positive (!neg_a)
+                        let mut result = Numeric::sub_abs(w_b, &digits_b, w_a, &digits_a);
+                        result.set_sign(!neg_a);
+                        result.set_scale(scale);
+                        result
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Sub<Numeric> for Numeric {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: Numeric) -> Self::Output {
+        &self - &rhs
+    }
+}
+
+impl<'n> Sub<&'n Numeric> for Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    fn sub(self, rhs: &'n Numeric) -> Self::Output {
+        &self + rhs
+    }
+}
+
+impl<'n> Sub<Numeric> for &'n Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    fn sub(self, rhs: Numeric) -> Self::Output {
         self + &rhs
     }
 }
