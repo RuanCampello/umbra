@@ -598,8 +598,11 @@ fn skip_col_conditions(col: &str, expr: &mut Expression) {
             }
         }
         _ => match (&**left, &**right) {
-            (Expression::Identifier(ident), _) | (_, Expression::Identifier(ident))
-                if ident.eq(&col) =>
+            (Expression::Identifier(column), _)
+            | (_, Expression::Identifier(column))
+            | (Expression::QualifiedIdentifier { column, .. }, _)
+            | (_, Expression::QualifiedIdentifier { column, .. })
+                if column.eq(&col) =>
             {
                 *expr = Expression::Wildcard;
             }

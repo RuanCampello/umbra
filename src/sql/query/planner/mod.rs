@@ -1207,10 +1207,8 @@ mod tests {
             emit_only_key: false,
         });
 
-        let plan = db.gen_plan(query)?;
-        println!("{plan:#?}");
         assert_eq!(
-            plan,
+            db.gen_plan(query)?,
             Planner::Project(Project {
                 input: joined_schema,
                 output: Schema::new(vec![
@@ -1218,8 +1216,14 @@ mod tests {
                     Column::new("name", Type::Varchar(50)),
                 ]),
                 projection: vec![
-                    Expression::Identifier("amount".into()),
-                    Expression::Identifier("name".into()),
+                    Expression::QualifiedIdentifier {
+                        column: "amount".into(),
+                        table: "orders".into(),
+                    },
+                    Expression::QualifiedIdentifier {
+                        table: "users".into(),
+                        column: "name".into()
+                    },
                 ],
                 source: Box::new(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
                     left: Box::new(left_plan),
