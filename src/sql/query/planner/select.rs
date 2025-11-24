@@ -190,8 +190,17 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             let index_cadidate = join.index_cadidate(&right_table);
             let left = self.source.take().unwrap();
 
-            match index_cadidate {
-                Some((index, left_key_expr)) => {
+            // heuristic: we only want to use index nested loop join if the left side is selective
+            // if the left side is a sequential scan, we prefer hash join
+            let use_inlj = match (&index_cadidate, &left) {
+                (Some(_), Planner::KeyScan(_) | Planner::ExactMatch(_) | Planner::RangeScan(_)) => {
+                    true
+                }
+                _ => false,
+            };
+
+            match (use_inlj, index_cadidate) {
+                (true, Some((index, left_key_expr))) => {
                     let right_key = join.table.key();
                     let right_end = self.schema.len() + right_table.schema.len();
 

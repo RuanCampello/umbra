@@ -1423,25 +1423,14 @@ impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
             }
 
             let mut pager = self.pager.borrow_mut();
-            let comparator = Relation::Index(self.index.clone()).comp();
-            let mut index_btree = BTree::new(&mut pager, self.index.root, comparator);
+            if self.index.root == self.right_table.root {
+                let comparator = Relation::Table(self.right_table.clone()).comp();
+                let mut table_btree = BTree::new(&mut pager, self.right_table.root, comparator);
 
-            let key_bytes = tuple::serialize(&self.index.schema.columns[0].data_type, &key);
-            if let Some(entry) = index_btree.get(&key_bytes)? {
-                let index_entry = tuple::deserialize(entry.as_ref(), &self.index.schema);
+                let key_bytes =
+                    tuple::serialize(&self.right_table.schema.columns[0].data_type, &key);
 
-                // the index entry contains [indexedkey, primarykey]
-                // we need the primary key to fetch the full row from the main table
-                let pk_val = &index_entry[1];
-
-                let table_comparator = Relation::Table(self.right_table.clone()).comp();
-                let mut table_btree =
-                    BTree::new(&mut pager, self.right_table.root, table_comparator);
-
-                let pk_bytes =
-                    tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val);
-
-                if let Some(row_bytes) = table_btree.get(&pk_bytes)? {
+                if let Some(row_bytes) = table_btree.get(&key_bytes)? {
                     let right_tuple =
                         tuple::deserialize(row_bytes.as_ref(), &self.right_table.schema);
 
@@ -1449,7 +1438,34 @@ impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
                     result.extend(right_tuple);
                     return Ok(Some(result));
                 }
-            } else if matches!(self.join_type, JoinType::Left) {
+            } else {
+                let comparator = Relation::Index(self.index.clone()).comp();
+                let mut index_btree = BTree::new(&mut pager, self.index.root, comparator);
+
+                let key_bytes = tuple::serialize(&self.index.schema.columns[0].data_type, &key);
+                if let Some(entry) = index_btree.get(&key_bytes)? {
+                    let index_entry = tuple::deserialize(entry.as_ref(), &self.index.schema);
+                    let pk_val = &index_entry[1];
+
+                    let table_comparator = Relation::Table(self.right_table.clone()).comp();
+                    let mut table_btree =
+                        BTree::new(&mut pager, self.right_table.root, table_comparator);
+
+                    let pk_bytes =
+                        tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val);
+
+                    if let Some(row_bytes) = table_btree.get(&pk_bytes)? {
+                        let right_tuple =
+                            tuple::deserialize(row_bytes.as_ref(), &self.right_table.schema);
+
+                        let mut result = left_tuple;
+                        result.extend(right_tuple);
+                        return Ok(Some(result));
+                    }
+                }
+            }
+
+            if matches!(self.join_type, JoinType::Left) {
                 let mut result = left_tuple;
                 result.extend(vec![Value::Null; self.right_table.schema.len()]);
                 return Ok(Some(result));
@@ -2269,11 +2285,7 @@ impl<File: FileOperations> Display for HashJoin<File> {
 
 impl<File: FileOperations> Display for IndexNestedLoopJoin<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Index {:?} Join on {} using index {}",
-            self.join_type, self.condition, self.index.name
-        )
+        write!(f, "Index {:?} Join on {}", self.join_type, self.condition)
     }
 }
 

@@ -10,6 +10,7 @@ use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Par
 use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
 use crate::db::{IndexMetadata, TableMetadata};
+use crate::index;
 use crate::vm::expression::{TypeError, VmType};
 use std::borrow::Borrow;
 use std::borrow::Cow;
@@ -688,11 +689,28 @@ impl JoinClause {
                             column: col_name, ..
                         } => {
                             // find if there is an index on this column in the right table
-                            right_table
+                            if let Some(idx) = right_table
                                 .indexes
                                 .iter()
                                 .find(|idx| idx.column.name == *col_name)
-                                .map(|idx| (idx.clone(), left_key_expr.clone()))
+                            {
+                                return Some((idx.clone(), left_key_expr.clone()));
+                            }
+
+                            // check if the column is the primary key of the right table
+                            // if so, we can treat the table itself as an index
+                            if right_table.schema.columns[0].name == *col_name {
+                                let pk_index = IndexMetadata {
+                                    name: index!(primary on (right_table.name)),
+                                    root: right_table.root,
+                                    column: right_table.schema.columns[0].clone(),
+                                    schema: right_table.schema.clone(),
+                                    unique: true,
+                                };
+                                return Some((pk_index, left_key_expr.clone()));
+                            }
+
+                            None
                         }
                         _ => None,
                     },

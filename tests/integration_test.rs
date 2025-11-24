@@ -2443,12 +2443,11 @@ fn index_nested_loop_join() -> Result<()> {
 
     let query = db.exec(
         r#"
-        EXPLAIN SELECT orders.amount, users.name 
+        SELECT orders.amount, users.name 
         FROM orders 
         JOIN users ON orders.user_id = users.id 
         ORDER BY orders.id;"#,
     )?;
-    println!("{query}");
     assert_eq!(
         query.tuples,
         vec![
