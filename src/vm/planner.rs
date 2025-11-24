@@ -1438,8 +1438,9 @@ impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
                 let mut table_btree =
                     BTree::new(&mut pager, self.right_table.root, table_comparator);
 
-                let pk_bytes =
-                    tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val);
+                // Serialize the primary key for lookup in the table
+                // The table's btree comparator expects keys with structure matching the table schema
+                let pk_bytes = tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val);
 
                 if let Some(row_bytes) = table_btree.get(&pk_bytes)? {
                     let right_tuple =

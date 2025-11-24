@@ -2449,6 +2449,23 @@ fn index_nested_loop_join() -> Result<()> {
         ORDER BY orders.id;"#,
     )?;
     println!("{query}");
+    
+    // Verify that the query plan uses an Index Inner Join (nested loop join with index)
+    let plan = query.tuples.iter()
+        .map(|row| row[0].to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(plan.contains("Index Inner Join"), 
+        "Expected Index Inner Join in query plan, got:\n{}", plan);
+    
+    // Now execute the actual query and verify results
+    let query = db.exec(
+        r#"
+        SELECT orders.amount, users.name 
+        FROM orders 
+        JOIN users ON orders.user_id = users.id 
+        ORDER BY orders.id;"#,
+    )?;
     assert_eq!(
         query.tuples,
         vec![

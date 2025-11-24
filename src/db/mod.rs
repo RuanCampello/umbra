@@ -891,13 +891,22 @@ mod tests {
             query,
             QuerySet::new(
                 umbra_schema(),
-                vec![vec![
-                    Value::String("table".into()),
-                    Value::String("users".into()),
-                    Value::Number(1),
-                    Value::String("users".into()),
-                    Value::String(Parser::new(sql).parse_statement()?.to_string())
-                ]]
+                vec![
+                    vec![
+                        Value::String("table".into()),
+                        Value::String("users".into()),
+                        Value::Number(1),
+                        Value::String("users".into()),
+                        Value::String(Parser::new(sql).parse_statement()?.to_string())
+                    ],
+                    vec![
+                        Value::String("index".into()),
+                        Value::String("users_pk_index".into()),
+                        Value::Number(2),
+                        Value::String("users".into()),
+                        Value::String("CREATE UNIQUE INDEX users_pk_index ON users(id);".into())
+                    ]
+                ]
             )
         );
         Ok(())
@@ -1181,13 +1190,22 @@ mod tests {
             QuerySet {
                 schema: umbra_schema(),
 
-                tuples: vec![vec![
-                    Value::String("table".into()),
-                    Value::String("users".into()),
-                    Value::Number(1),
-                    Value::String("users".into()),
-                    Value::String(Parser::new(create_query).parse_statement()?.to_string())
-                ]]
+                tuples: vec![
+                    vec![
+                        Value::String("table".into()),
+                        Value::String("users".into()),
+                        Value::Number(1),
+                        Value::String("users".into()),
+                        Value::String(Parser::new(create_query).parse_statement()?.to_string())
+                    ],
+                    vec![
+                        Value::String("index".into()),
+                        Value::String("users_pk_index".into()),
+                        Value::Number(2),
+                        Value::String("users".into()),
+                        Value::String("CREATE UNIQUE INDEX users_pk_index ON users(id);".into())
+                    ]
+                ]
             }
         );
 

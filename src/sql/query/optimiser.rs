@@ -72,9 +72,15 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
     let mut index_scans: Vec<(&str, VecDeque<Planner<File>>)> = paths
         .into_iter()
         .map(|(col, ranges)| {
-            let relation = match indexes.get(col) {
-                Some(&index) => Relation::Index(index.clone()),
-                None => Relation::Table(table.clone()),
+            // Prefer using the table's btree over a separate index when the column
+            // is the PRIMARY KEY and the table has a btree key
+            let is_primary_btree_key = table.schema.has_btree_key() 
+                && col == table.schema.columns[0].name.as_str();
+            
+            let relation = match (is_primary_btree_key, indexes.get(col)) {
+                (true, _) => Relation::Table(table.clone()),
+                (false, Some(&index)) => Relation::Index(index.clone()),
+                (false, None) => Relation::Table(table.clone()),
             };
 
             let col_position = table.schema.index_of(col).unwrap();

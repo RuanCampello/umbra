@@ -56,14 +56,8 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 exec(Statement::Create(sequence), db)?;
             }
 
-            let skip_pk_idx = match has_btree_key(&columns) {
-                true => 1,
-                false => 0,
-            };
-
             let indexes = columns
                 .into_iter()
-                .skip(skip_pk_idx)
                 .filter(|col| !col.constraints.is_empty())
                 .flat_map(|col| {
                     let table = name.clone();
