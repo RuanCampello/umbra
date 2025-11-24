@@ -21,6 +21,8 @@ pub enum EncodingError {
     InvalidType(u8),
 }
 
+impl std::error::Error for EncodingError {}
+
 const BOOLEAN_CATEGORY: u8 = 0x00;
 const INTEGER_CATEGORY: u8 = 0x10;
 const FLOAT_CATEGORY: u8 = 0x20;

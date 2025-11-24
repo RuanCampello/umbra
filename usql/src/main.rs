@@ -1,6 +1,10 @@
+mod commands;
 mod highlight;
 
-use crate::highlight::{KEYWORD_COLOUR, RESET_COLOUR, STRING_COLOUR, SqlHighlighter, TIME_COLOUR};
+use crate::{
+    commands::handle_command,
+    highlight::{KEYWORD_COLOUR, RESET_COLOUR, STRING_COLOUR, SqlHighlighter, TIME_COLOUR},
+};
 use rustyline::error::ReadlineError;
 use std::{
     collections::VecDeque,
@@ -48,16 +52,14 @@ fn main() -> rustyline::Result<()> {
     println!("Connected to {}", stream.peer_addr()?);
 
     println!("{KEYWORD_COLOUR}{UMBRA_ASCII}{RESET_COLOUR}");
-
     println!("󰭟  usql | Umbra's shadowy SQL shell.");
     println!(
-        "Type {STRING_COLOUR}\\help{RESET_COLOUR} for guidance, {STRING_COLOUR}\\quit{RESET_COLOUR} to escape the void."
+        "Type {STRING_COLOUR}/help{RESET_COLOUR} for guidance, {STRING_COLOUR}/quit{RESET_COLOUR} to escape the void."
     );
 
     let mut single_quote = None;
     let mut sql = String::new();
     let mut cursor = 0;
-    let mut content = Vec::new();
     let mut prompt = PROMPT;
 
     loop {
@@ -73,6 +75,15 @@ fn main() -> rustyline::Result<()> {
                 break;
             }
         };
+
+        if sql.is_empty() && line.trim_start().starts_with('/') {
+            rsl.add_history_entry(&line)?;
+            if handle_command(line.trim(), &mut stream) {
+                break;
+            }
+
+            continue;
+        }
 
         let mut position = VecDeque::new();
         for (index, byte) in line.bytes().enumerate() {
@@ -126,40 +137,7 @@ fn main() -> rustyline::Result<()> {
 
         while let Some(pos) = position.pop_front() {
             let statement = &sql[cursor..=pos];
-
-            let packet_transmission = Instant::now();
-            stream.write_all(&(statement.len() as u32).to_le_bytes())?;
-            stream.write_all(statement.as_bytes())?;
-
-            let mut content_len_buff = [0; 4];
-            stream.read_exact(&mut content_len_buff)?;
-            let content_len = u32::from_le_bytes(content_len_buff) as usize;
-
-            content.resize(content_len, 0);
-            stream.read_exact(&mut content)?;
-
-            match tcp::deserialize(&content) {
-                Ok(response) => match response {
-                    Response::Err(err) => println!("{err}"),
-                    Response::Empty(affected_rows) => {
-                        println!(
-                            "{affected_rows} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
-                            packet_transmission.elapsed()
-                        )
-                    }
-                    Response::QuerySet(query_set) => {
-                        println!(
-                            "{}\n{} {} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
-                            table(&query_set),
-                            query_set.tuples.len(),
-                            plural("row", query_set.tuples.len()),
-                            packet_transmission.elapsed()
-                        )
-                    }
-                },
-                Err(err) => println!("Decoding error: {err}"),
-            }
-
+            process_query(&mut stream, statement);
             cursor += 1;
         }
 
@@ -171,6 +149,45 @@ fn main() -> rustyline::Result<()> {
 
     rsl.save_history("history.usql")?;
     Ok(())
+}
+
+fn run_query(stream: &mut TcpStream, query: &str) -> Result<Response, Box<dyn std::error::Error>> {
+    stream.write_all(&(query.len() as u32).to_le_bytes())?;
+    stream.write_all(query.as_bytes())?;
+
+    let mut content_len_buff = [0; 4];
+    stream.read_exact(&mut content_len_buff)?;
+    let content_len = u32::from_le_bytes(content_len_buff) as usize;
+
+    let mut content = vec![0; content_len];
+    stream.read_exact(&mut content)?;
+
+    Ok(tcp::deserialize(&content)?)
+}
+
+fn process_query(stream: &mut TcpStream, statement: &str) {
+    let packet_transmission = Instant::now();
+    match run_query(stream, statement) {
+        Ok(response) => match response {
+            Response::Err(err) => println!("{err}"),
+            Response::Empty(affected_rows) => {
+                println!(
+                    "{affected_rows} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
+                    packet_transmission.elapsed()
+                )
+            }
+            Response::QuerySet(query_set) => {
+                println!(
+                    "{}\n{} {} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
+                    table(&query_set),
+                    query_set.tuples.len(),
+                    plural("row", query_set.tuples.len()),
+                    packet_transmission.elapsed()
+                )
+            }
+        },
+        Err(err) => println!("Error: {err}"),
+    }
 }
 
 fn table(query: &QuerySet) -> String {
