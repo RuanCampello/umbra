@@ -3,9 +3,11 @@
 
 #![allow(unused)]
 
+mod context;
 mod metadata;
 mod schema;
 
+pub(crate) use context::Context;
 use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
@@ -41,12 +43,6 @@ pub struct Database<File> {
     pub(crate) context: Context,
     pub(crate) work_dir: PathBuf,
     transaction_state: TransactionState,
-}
-
-#[derive(Debug)]
-pub(crate) struct Context {
-    tables: HashMap<String, TableMetadata>,
-    max_size: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -490,126 +486,6 @@ impl<File> Database<File> {
 }
 
 unsafe impl Send for Database<File> {}
-
-impl Context {
-    pub fn new() -> Self {
-        Self {
-            tables: HashMap::new(),
-            max_size: None,
-        }
-    }
-
-    pub fn with_size(size: usize) -> Self {
-        Self {
-            tables: HashMap::with_capacity(size),
-            max_size: Some(size),
-        }
-    }
-
-    pub fn insert(&mut self, metadata: TableMetadata) {
-        if self.max_size.is_some_and(|size| self.tables.len() >= size) {
-            let evict = self.tables.keys().next().unwrap().clone();
-            self.tables.remove(&evict);
-        }
-
-        self.tables.insert(metadata.name.to_string(), metadata);
-    }
-
-    fn contains(&self, table: &str) -> bool {
-        self.tables.contains_key(table)
-    }
-
-    pub fn invalidate(&mut self, table: &str) {
-        self.tables.remove(table);
-    }
-}
-
-/// Test-only implementation: clones everything for simplicity
-#[cfg(test)]
-impl TryFrom<&[&str]> for Context {
-    type Error = DatabaseError;
-
-    fn try_from(statements: &[&str]) -> Result<Self, Self::Error> {
-        let mut context = Self::new();
-        let mut root = 1;
-
-        for sql in statements {
-            let statement = Parser::new(sql).parse_statement()?;
-            match statement {
-                Statement::Create(Create::Table { name, columns }) => {
-                    let mut schema = Schema::from(&columns);
-                    schema.prepend_id();
-
-                    let mut metadata = TableMetadata {
-                        root,
-                        name: name.clone(),
-                        row_id: 1,
-                        schema,
-                        indexes: vec![],
-                        serials: HashMap::new(),
-                    };
-                    root += 1;
-
-                    columns.iter().for_each(|col| {
-                        col.constraints.iter().for_each(|constraint| {
-                            let index = match constraint {
-                                Constraint::Unique => index!(unique on name (col.name)),
-                                Constraint::PrimaryKey => index!(primary on (name)),
-                                _ => unreachable!("This ain't a index")
-                            };
-
-                            let mut index_col = col.clone();
-                            let mut pk_col = columns[0].clone();
-
-                            index_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
-                            pk_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
-
-                            metadata.indexes.push(IndexMetadata {
-                                column: col.clone(),
-                                schema: Schema::new(vec![index_col, pk_col]),
-                                name: index,
-                                root,
-                                unique: true,
-                            });
-
-                            root += 1;
-                        })
-                    });
-
-                    context.insert(metadata);
-                }
-                Statement::Create(Create::Index { name, column, unique, .. }) if unique => {
-                    let table = context.metadata(&name)?;
-                    let index_col = &table.schema.columns[table.schema.index_of(&column).unwrap()];
-
-                    table.indexes.push(IndexMetadata {
-                        column: index_col.clone(),
-                        schema: Schema::new(vec![index_col.clone(), table.schema.columns[0].clone()]),
-                        name,
-                        root,
-                        unique,
-                    });
-
-                    root += 1;
-                }
-
-                statement => {
-                    return Err(SqlError::Other(format!("Only create unique index and create table should be called by test context, but found {statement:#?}")).into())
-                }
-            }
-        }
-
-        Ok(context)
-    }
-}
-
-impl Ctx for Context {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
-        self.tables
-            .get_mut(table)
-            .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
-    }
-}
 
 impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
