@@ -1438,9 +1438,19 @@ impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
                 let mut table_btree =
                     BTree::new(&mut pager, self.right_table.root, table_comparator);
 
-                // Serialize the primary key for lookup in the table
-                // The table's btree comparator expects keys with structure matching the table schema
-                let pk_bytes = tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val);
+                // Serialize the primary key for lookup in the table.
+                // If the table has nullable columns, the btree keys include a null bitmap prefix.
+                // We need to create a search key with the same structure.
+                let pk_bytes = if self.right_table.schema.has_nullable() {
+                    // Create a partial tuple: [pk_value, null, null, ...] for other columns
+                    // The null bitmap will mark all columns except the first as "not present"
+                    let mut search_tuple = vec![pk_val.clone()];
+                    // Pad with nulls for the remaining columns
+                    search_tuple.extend(vec![Value::Null; self.right_table.schema.len() - 1]);
+                    tuple::serialize_tuple(&self.right_table.schema, &search_tuple)
+                } else {
+                    tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val)
+                };
 
                 if let Some(row_bytes) = table_btree.get(&pk_bytes)? {
                     let right_tuple =
