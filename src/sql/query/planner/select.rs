@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{Read, Seek, Write},
     path::PathBuf,
+    rc::Rc,
 };
 
 use crate::{
@@ -15,8 +16,8 @@ use crate::{
         },
     },
     vm::planner::{
-        AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, Limit, Planner, Project, Sort,
-        SortBuilder, SortKeys, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
+        AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, IndexNestedLoopJoin, Limit,
+        Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
     },
 };
 
@@ -185,38 +186,81 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
         for join in joins {
             let right_table = db.metadata(&join.table.name)?.clone();
             let left_len = self.schema.len();
-            let right = query::optimiser::generate_seq_plan(&join.table.name, None, db)?;
-            let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
 
-            right_table
-                .schema
-                .columns
-                .clone()
-                .into_iter()
-                .for_each(|mut col| {
-                    if !col.is_nullable() && should_be_null {
-                        col.constraints.push(Constraint::Nullable);
-                    }
-
-                    self.schema.push(col)
-                });
-
-            let right_key = join.table.key();
-            let right_end = self.schema.len();
-            self.schema
-                .add_qualified_name(right_key, left_len, right_end);
-            self.ranges.insert(right_key, (left_len, right_end));
-
-            let right_tables = HashSet::from([right_key.to_string()]);
+            let index_cadidate = join.index_cadidate(&right_table);
             let left = self.source.take().unwrap();
 
-            self.source = Some(Planner::HashJoin(
-                HashJoin::new(left, right, join.join_type, join.on.clone())
-                    .with_table_names(left_tables.clone(), right_tables),
-            ));
+            match index_cadidate {
+                Some((index, left_key_expr)) => {
+                    let right_key = join.table.key();
+                    let right_end = self.schema.len() + right_table.schema.len();
 
-            left_tables.insert(right_key.to_string());
-            self.tables.insert(right_key.into(), right_table.schema);
+                    let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
+                    right_table
+                        .schema
+                        .columns
+                        .clone()
+                        .into_iter()
+                        .for_each(|mut col| {
+                            if !col.is_nullable() && should_be_null {
+                                col.constraints.push(Constraint::Nullable);
+                            }
+                            self.schema.push(col)
+                        });
+
+                    self.schema
+                        .add_qualified_name(right_key, left_len, right_end);
+                    self.ranges.insert(right_key, (left_len, right_end));
+
+                    let right_tables = HashSet::from([right_key.to_string()]);
+                    self.source = Some(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
+                        left: Box::new(left),
+                        right_table: right_table.clone(),
+                        index,
+                        condition: join.on.clone(),
+                        join_type: join.join_type,
+                        left_key_expr,
+                        pager: Rc::clone(&db.pager),
+                        left_tables: left_tables.clone(),
+                        right_tables,
+                    }));
+                }
+
+                _ => {
+                    let right = query::optimiser::generate_seq_plan(&join.table.name, None, db)?;
+                    let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
+
+                    right_table
+                        .schema
+                        .columns
+                        .clone()
+                        .into_iter()
+                        .for_each(|mut col| {
+                            if !col.is_nullable() && should_be_null {
+                                col.constraints.push(Constraint::Nullable);
+                            }
+
+                            self.schema.push(col)
+                        });
+
+                    let right_key = join.table.key();
+                    let right_end = self.schema.len();
+                    self.schema
+                        .add_qualified_name(right_key, left_len, right_end);
+                    self.ranges.insert(right_key, (left_len, right_end));
+
+                    let right_tables = HashSet::from([right_key.to_string()]);
+
+                    self.source = Some(Planner::HashJoin(
+                        HashJoin::new(left, right, join.join_type, join.on.clone())
+                            .with_table_names(left_tables.clone(), right_tables),
+                    ));
+                }
+            };
+
+            left_tables.insert(join.table.key().to_string());
+            self.tables
+                .insert(join.table.key().into(), right_table.schema);
         }
 
         Ok(())

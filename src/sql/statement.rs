@@ -9,6 +9,7 @@ use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
+use crate::db::{IndexMetadata, TableMetadata};
 use crate::vm::expression::{TypeError, VmType};
 use std::borrow::Borrow;
 use std::borrow::Cow;
@@ -657,6 +658,58 @@ impl Expression {
 impl Default for Expression {
     fn default() -> Self {
         Expression::Wildcard
+    }
+}
+
+impl JoinClause {
+    pub(in crate::sql) fn index_cadidate(
+        &self,
+        right_table: &TableMetadata,
+    ) -> Option<(IndexMetadata, Expression)> {
+        match &self.on {
+            Expression::BinaryOperation {
+                left: l,
+                operator: BinaryOperator::Eq,
+                right: r,
+            } => {
+                let (right_key_expr, left_key_expr) = match (
+                    Self::is_col_of_table(l, &self.table.key()),
+                    Self::is_col_of_table(r, &self.table.key()),
+                ) {
+                    (true, _) => (Some(l.as_ref()), r.as_ref()),
+                    (_, true) => (Some(r.as_ref()), l.as_ref()),
+                    _ => (None, l.as_ref()), // left_key_expr value here doesn't matter since right_key_expr is None
+                };
+
+                match right_key_expr {
+                    Some(right_key) => match right_key {
+                        Expression::Identifier(col_name)
+                        | Expression::QualifiedIdentifier {
+                            column: col_name, ..
+                        } => {
+                            // find if there is an index on this column in the right table
+                            right_table
+                                .indexes
+                                .iter()
+                                .find(|idx| idx.column.name == *col_name)
+                                .map(|idx| (idx.clone(), left_key_expr.clone()))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn is_col_of_table(expr: &Expression, table: &str) -> bool {
+        match expr {
+            Expression::QualifiedIdentifier { table: t, .. } => t == table,
+            // TODO: maybe we need to verify better this
+            Expression::Identifier(_) => true,
+            _ => false,
+        }
     }
 }
 
