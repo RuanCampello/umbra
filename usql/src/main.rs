@@ -49,6 +49,7 @@ fn main() -> rustyline::Result<()> {
     };
 
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_nodelay(true)?;
     println!("Connected to {}", stream.peer_addr()?);
 
     println!("{KEYWORD_COLOUR}{UMBRA_ASCII}{RESET_COLOUR}");
