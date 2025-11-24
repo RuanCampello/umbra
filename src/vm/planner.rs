@@ -9,7 +9,7 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
+use crate::db::{DatabaseError, IndexMetadata, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{
     join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
 };
@@ -53,6 +53,8 @@ pub(crate) enum Planner<File: FileOperations> {
     Aggregate(Aggregate<File>),
     /// Used for `JOIN`s with an equal `ON` condition.
     HashJoin(HashJoin<File>),
+    /// Used for `JOIN`s when the inner table has an index on the join key.
+    IndexNestedLoopJoin(IndexNestedLoopJoin<File>),
     // Limits the number of rows returned by the query.
     // Wraps another planner and stops yielding after the specified number of rows.
     Limit(Limit<File>),
@@ -217,6 +219,25 @@ pub(crate) struct HashJoin<File: FileOperations> {
 }
 
 #[derive(Debug, PartialEq)]
+pub(crate) struct IndexNestedLoopJoin<File: FileOperations> {
+    pub left: Box<Planner<File>>,
+    pub right_table: TableMetadata,
+    pub index: IndexMetadata,
+
+    /// the equality expression used for the join (e.g., `u.id = o.user_id`)
+    pub condition: Expression,
+    pub join_type: JoinType,
+
+    /// expression to extract the key from the left tuple
+    pub left_key_expr: Expression,
+
+    pub pager: Rc<RefCell<Pager<File>>>,
+
+    pub left_tables: HashSet<String>,
+    pub right_tables: HashSet<String>,
+}
+
+#[derive(Debug, PartialEq)]
 pub(crate) struct Limit<File: FileOperations> {
     pub source: Box<Planner<File>>,
     // maximum amount of rows to yield
@@ -325,6 +346,7 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Project(projection) => projection.try_next(),
             Self::Aggregate(aggr) => aggr.try_next(),
             Self::HashJoin(hash) => hash.try_next(),
+            Self::IndexNestedLoopJoin(idx) => idx.try_next(),
             Self::Limit(limit) => limit.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
@@ -346,6 +368,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Aggregate(aggr) => &aggr.source,
             Self::Project(project) => &project.source,
             Self::Limit(limit) => &limit.source,
+            Self::IndexNestedLoopJoin(idx) => &idx.left,
             _ => return None,
         })
     }
@@ -368,6 +391,7 @@ impl<File: FileOperations> Planner<File> {
             Self::Values(values) => format!("{values}"),
             Self::Aggregate(aggr) => format!("{aggr}"),
             Self::HashJoin(hash) => format!("{hash}"),
+            Self::IndexNestedLoopJoin(idx) => format!("{idx}"),
             Self::Limit(limit) => format!("{limit}"),
         }
     }
@@ -397,6 +421,7 @@ impl<File: FileOperations> Planner<File> {
                 hash.left.fmt_tree(f, false, false, &child_str)?;
                 hash.right.fmt_tree(f, false, true, &child_str)?;
             }
+            Self::IndexNestedLoopJoin(inl) => inl.left.fmt_tree(f, false, true, &child_str)?,
             _ => {
                 if let Some(child) = self.child() {
                     child.fmt_tree(f, false, true, &child_str)?;
@@ -429,6 +454,20 @@ impl<File: FileOperations> Planner<File> {
                     .iter()
                     .for_each(|table| schema.add_qualified_name(table, 0, left_len));
                 hash.right_tables
+                    .iter()
+                    .for_each(|table| schema.add_qualified_name(table, left_len, schema.len()));
+
+                return Some(schema);
+            }
+            Self::IndexNestedLoopJoin(inl) => {
+                let mut schema = inl.left_schema();
+                let left_len = schema.len();
+                schema.extend_with_join(inl.right_table.schema.columns.clone(), &inl.join_type);
+
+                inl.left_tables
+                    .iter()
+                    .for_each(|table| schema.add_qualified_name(table, 0, left_len));
+                inl.right_tables
                     .iter()
                     .for_each(|table| schema.add_qualified_name(table, left_len, schema.len()));
 
@@ -1364,6 +1403,61 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
     }
 }
 
+impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        loop {
+            let left_tuple = match self.left.try_next()? {
+                Some(tuple) => tuple,
+                None => return Ok(None),
+            };
+
+            let key = resolve_expression(&left_tuple, &self.left_schema(), &self.left_key_expr)?;
+
+            if key.is_null() {
+                if matches!(self.join_type, JoinType::Left) {
+                    let mut result = left_tuple.clone();
+                    result.extend(vec![Value::Null; self.right_table.schema.len()]);
+                    return Ok(Some(result));
+                }
+                continue;
+            }
+
+            let mut pager = self.pager.borrow_mut();
+            let comparator = Relation::Index(self.index.clone()).comp();
+            let mut index_btree = BTree::new(&mut pager, self.index.root, comparator);
+
+            let key_bytes = tuple::serialize(&self.index.schema.columns[0].data_type, &key);
+            if let Some(entry) = index_btree.get(&key_bytes)? {
+                let index_entry = tuple::deserialize(entry.as_ref(), &self.index.schema);
+
+                // the index entry contains [indexedkey, primarykey]
+                // we need the primary key to fetch the full row from the main table
+                let pk_val = &index_entry[1];
+
+                let table_comparator = Relation::Table(self.right_table.clone()).comp();
+                let mut table_btree =
+                    BTree::new(&mut pager, self.right_table.root, table_comparator);
+
+                let pk_bytes =
+                    tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val);
+
+                if let Some(row_bytes) = table_btree.get(&pk_bytes)? {
+                    let right_tuple =
+                        tuple::deserialize(row_bytes.as_ref(), &self.right_table.schema);
+
+                    let mut result = left_tuple;
+                    result.extend(right_tuple);
+                    return Ok(Some(result));
+                }
+            } else if matches!(self.join_type, JoinType::Left) {
+                let mut result = left_tuple;
+                result.extend(vec![Value::Null; self.right_table.schema.len()]);
+                return Ok(Some(result));
+            }
+        }
+    }
+}
+
 impl<File: FileOperations> HashJoin<File> {
     pub fn new(
         left: Planner<File>,
@@ -1531,6 +1625,25 @@ impl<File: FileOperations> HashJoin<File> {
 
     const fn reset_index(&mut self) {
         self.unmatched_right_index = 0;
+    }
+}
+
+impl<File: FileOperations> IndexNestedLoopJoin<File> {
+    pub fn with_table_names(
+        mut self,
+        left_tables: HashSet<String>,
+        right_tables: HashSet<String>,
+    ) -> Self {
+        self.left_tables = left_tables;
+        self.right_tables = right_tables;
+
+        self
+    }
+
+    fn left_schema(&self) -> Schema {
+        self.left
+            .schema()
+            .expect("IndexNestedLoopJoin must have a left node schema")
     }
 }
 
@@ -2151,6 +2264,16 @@ impl<File: FileOperations> Display for Aggregate<File> {
 impl<File: FileOperations> Display for HashJoin<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Hash {:?} Join on {}", self.join_type, self.condition)
+    }
+}
+
+impl<File: FileOperations> Display for IndexNestedLoopJoin<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Index {:?} Join on {} using index {}",
+            self.join_type, self.condition, self.index.name
+        )
     }
 }
 
