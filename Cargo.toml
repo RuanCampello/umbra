@@ -18,3 +18,7 @@ rusqlite = "0.36.0"
 [[bench]]
 name = "db_benchmark"
 harness = false
+
+[[bench]]
+name = "select_benchmark"
+harness = false
