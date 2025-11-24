@@ -132,9 +132,7 @@ fn benchmark_simple_join(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("Umbra", size), size, |b, _| {
             b.iter(|| {
-                let query = black_box(query);
-                println!("query: {query}");
-                let result = match umbra_db.exec(query) {
+                let result = match umbra_db.exec(black_box(query)) {
                     Ok(res) => res,
                     Err(err) => {
                         eprintln!("{err}");
@@ -331,4 +329,3 @@ criterion_group!(
     benchmark_join_with_group_by
 );
 criterion_main!(benches);
-

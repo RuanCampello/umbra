@@ -848,8 +848,8 @@ impl<File: PlanExecutor> Sort<File> {
 
         input_file.truncate()?;
 
-        self.input_file = Some(input_file);
-        self.output_file = Some(output_file);
+        self.input_file = Some(output_file);
+        self.output_file = Some(input_file);
 
         Ok(())
     }

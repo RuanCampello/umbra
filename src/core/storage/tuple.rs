@@ -155,7 +155,7 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                             Type::Varchar(max) => utf_8_length_bytes(max) + str.as_bytes().len(),
                             Type::Text => {
                                 let len = str.as_bytes().len();
-                                let header_len = varlena_header_len(len as _);
+                                let header_len = if len < 127 { 1 } else { 4 };
 
                                 header_len + len
                             }
