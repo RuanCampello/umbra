@@ -242,7 +242,8 @@ mod tests {
     use crate::{
         sql::statement::{Function, JoinType},
         vm::planner::{
-            AggregateBuilder, HashJoin, Sort, SortKeys, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
+            AggregateBuilder, HashJoin, IndexNestedLoopJoin, Sort, SortKeys, TupleComparator,
+            DEFAULT_SORT_BUFFER_SIZE,
         },
     };
     use std::{
@@ -1169,6 +1170,72 @@ mod tests {
         assert_eq!(
             db.gen_plan("SELECT users.name as name, orders.id as order_id FROM users JOIN orders ON users.id = orders.user_id;").unwrap_err(),
             SqlError::InvalidQualifiedColumn { table: "orders".into(), column: "id".into() }.into()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_index_nested_loop_join_plan() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));",
+            "CREATE UNIQUE INDEX users_pk_index ON users(id);",
+            "CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount INT);",
+        ])?;
+
+        let users_table = db.tables["users"].clone();
+        let orders_table = db.tables["orders"].clone();
+        let users_pk_index = db.indexes[&index!(primary on users)].clone();
+
+        let mut joined_schema = orders_table.schema.clone();
+        joined_schema.extend(users_table.schema.columns.clone());
+        joined_schema.add_qualified_name("orders", 0, orders_table.schema.len());
+        joined_schema.add_qualified_name("users", orders_table.schema.len(), joined_schema.len());
+
+        // selective on orders (id=100) -> INLJ with users
+        let query = r#"
+            SELECT orders.amount, users.name
+            FROM orders JOIN users ON orders.user_id = users.id
+            WHERE orders.id = 100;"#;
+
+        let left_plan = Planner::ExactMatch(ExactMatch {
+            relation: Relation::Table(orders_table.clone()),
+            key: serialize(&Type::Integer, &Value::Number(100)),
+            expr: parse_expr("id = 100"),
+            pager: db.pager(),
+            done: false,
+            emit_only_key: false,
+        });
+
+        let plan = db.gen_plan(query)?;
+        println!("{plan:#?}");
+        assert_eq!(
+            plan,
+            Planner::Project(Project {
+                input: joined_schema,
+                output: Schema::new(vec![
+                    Column::new("amount", Type::Integer),
+                    Column::new("name", Type::Varchar(50)),
+                ]),
+                projection: vec![
+                    Expression::Identifier("amount".into()),
+                    Expression::Identifier("name".into()),
+                ],
+                source: Box::new(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
+                    left: Box::new(left_plan),
+                    right_table: users_table.clone(),
+                    index: users_pk_index,
+                    condition: parse_expr("orders.user_id = users.id"),
+                    join_type: JoinType::Inner,
+                    left_key_expr: Expression::QualifiedIdentifier {
+                        table: "orders".to_string(),
+                        column: "user_id".to_string(),
+                    },
+                    pager: db.pager(),
+                    left_tables: HashSet::from(["orders".to_string()]),
+                    right_tables: HashSet::from(["users".to_string()]),
+                })),
+            })
         );
 
         Ok(())
