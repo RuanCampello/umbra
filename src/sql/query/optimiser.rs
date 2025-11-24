@@ -218,6 +218,8 @@ fn find_index_paths<'exp>(
         } => match (&**left, &**right) {
             (Expression::Identifier(col), Expression::Value(_))
             | (Expression::Value(_), Expression::Identifier(col))
+            | (Expression::QualifiedIdentifier { column: col, .. }, Expression::Value(_))
+            | (Expression::Value(_), Expression::QualifiedIdentifier { column: col, .. })
                 if (indexes.contains(col.as_str()) || col == k_col)
                     && matches!(
                         operator,
@@ -393,38 +395,60 @@ fn determine_bounds(expr: &Expression) -> (Bound<&Value>, Bound<&Value>) {
     match (&**left, operator, &**right) {
         // SELECT * FROM t WHERE x = 13;
         // SELECT * FROM t WHERE 13 = x;
-        (Expression::Identifier(_col), BinaryOperator::Eq, Expression::Value(value))
-        | (Expression::Value(value), BinaryOperator::Eq, Expression::Identifier(_col)) => {
+        (Expression::Identifier(_), BinaryOperator::Eq, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Eq, Expression::Identifier(_))
+        | (Expression::QualifiedIdentifier { .. }, BinaryOperator::Eq, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Eq, Expression::QualifiedIdentifier { .. }) => {
             (Bound::Included(value), Bound::Included(value))
         }
 
         // SELECT * FROM t WHERE x > 13;
         // SELECT * FROM t WHERE 13 < x;
-        (Expression::Identifier(_col), BinaryOperator::Gt, Expression::Value(value))
-        | (Expression::Value(value), BinaryOperator::Lt, Expression::Identifier(_col)) => {
+        (Expression::Identifier(_), BinaryOperator::Gt, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Lt, Expression::Identifier(_))
+        | (Expression::QualifiedIdentifier { .. }, BinaryOperator::Gt, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Lt, Expression::QualifiedIdentifier { .. }) => {
             (Bound::Excluded(value), Bound::Unbounded)
         }
 
         // SELECT * FROM t WHERE x < 13;
         // SELECT * FROM t WHERE 13 > x;
-        (Expression::Identifier(_col), BinaryOperator::Lt, Expression::Value(value))
-        | (Expression::Value(value), BinaryOperator::Gt, Expression::Identifier(_col)) => {
+        (Expression::Identifier(_), BinaryOperator::Lt, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Gt, Expression::Identifier(_))
+        | (Expression::QualifiedIdentifier { .. }, BinaryOperator::Lt, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::Gt, Expression::QualifiedIdentifier { .. }) => {
             (Bound::Unbounded, Bound::Excluded(value))
         }
 
         // SELECT * FROM t WHERE x >= 13;
         // SELECT * FROM t WHERE 13 <= x;
-        (Expression::Identifier(_col), BinaryOperator::GtEq, Expression::Value(value))
-        | (Expression::Value(value), BinaryOperator::LtEq, Expression::Identifier(_col)) => {
-            (Bound::Included(value), Bound::Unbounded)
-        }
+        (Expression::Identifier(_), BinaryOperator::GtEq, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::LtEq, Expression::Identifier(_))
+        | (
+            Expression::QualifiedIdentifier { .. },
+            BinaryOperator::GtEq,
+            Expression::Value(value),
+        )
+        | (
+            Expression::Value(value),
+            BinaryOperator::LtEq,
+            Expression::QualifiedIdentifier { .. },
+        ) => (Bound::Included(value), Bound::Unbounded),
 
         // SELECT * FROM t WHERE x <= 13;
         // SELECT * FROM t WHERE 13 >= x;
-        (Expression::Identifier(_col), BinaryOperator::LtEq, Expression::Value(value))
-        | (Expression::Value(value), BinaryOperator::GtEq, Expression::Identifier(_col)) => {
-            (Bound::Unbounded, Bound::Included(value))
-        }
+        (Expression::Identifier(_), BinaryOperator::LtEq, Expression::Value(value))
+        | (Expression::Value(value), BinaryOperator::GtEq, Expression::Identifier(_))
+        | (
+            Expression::QualifiedIdentifier { .. },
+            BinaryOperator::LtEq,
+            Expression::Value(value),
+        )
+        | (
+            Expression::Value(value),
+            BinaryOperator::GtEq,
+            Expression::QualifiedIdentifier { .. },
+        ) => (Bound::Unbounded, Bound::Included(value)),
 
         _ => unreachable!("determine_bounds() called with unsupported operator: {expr}"),
     }
