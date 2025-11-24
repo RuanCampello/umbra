@@ -2429,3 +2429,44 @@ fn pagination_pattern() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn index_nested_loop_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount INT);")?;
+    db.exec("INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');")?;
+    db.exec(
+        "INSERT INTO orders (id, user_id, amount) VALUES (100, 1, 50), (101, 1, 75), (102, 2, 100);",
+    )?;
+
+    let query = db.exec(
+        r#"
+        EXPLAIN SELECT orders.amount, users.name 
+        FROM orders 
+        JOIN users ON orders.user_id = users.id 
+        ORDER BY orders.id;"#,
+    )?;
+    println!("{query}");
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(50), Value::String("Alice".into())],
+            vec![Value::Number(75), Value::String("Alice".into())],
+            vec![Value::Number(100), Value::String("Bob".into())],
+        ]
+    );
+
+    db.exec("INSERT INTO orders (id, user_id, amount) VALUES (103, 99, 200);")?;
+    let query = db.exec(
+        r#"
+        SELECT orders.amount, users.name 
+        FROM orders 
+        LEFT JOIN users ON orders.user_id = users.id 
+        WHERE orders.id = 103;"#,
+    )?;
+    assert_eq!(query.tuples, vec![vec![Value::Number(200), Value::Null],]);
+
+    Ok(())
+}
