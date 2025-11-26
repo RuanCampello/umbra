@@ -381,9 +381,10 @@ pub enum Function {
 }
 
 #[derive(Debug)]
-pub(crate) enum ArithmeticPair {
+pub(crate) enum ArithmeticPair<'p> {
     Numeric(f64, f64),
     Temporal(Temporal, Interval),
+    Arbitrary(Cow<'p, Numeric>, Cow<'p, Numeric>),
 }
 
 const NULL_HASH: u32 = 0x4E554C4C;
@@ -739,16 +740,25 @@ impl Value {
     }
 
     /// Tries to convert a pair of `Value`s into a representation suitable for arithmetic.
-    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<ArithmeticPair> {
+    pub(crate) fn as_arithmetic_pair<'p>(&'p self, other: &'p Self) -> Option<ArithmeticPair<'p>> {
+        use crate::core::numeric::Numeric as Num;
+        use std::borrow::Cow::*;
+        use ArithmeticPair as Pair;
+        use Value::*;
+
         match (self, other) {
-            (Value::Number(a), Value::Number(b)) => {
-                Some(ArithmeticPair::Numeric(*a as f64, *b as f64))
-            }
-            (Value::Float(a), Value::Float(b)) => Some(ArithmeticPair::Numeric(*a, *b)),
-            (Value::Number(a), Value::Float(b)) => Some(ArithmeticPair::Numeric(*a as f64, *b)),
-            (Value::Float(a), Value::Number(b)) => Some(ArithmeticPair::Numeric(*a, *b as f64)),
-            (Value::Temporal(t), Value::Interval(i)) => Some(ArithmeticPair::Temporal(*t, *i)),
-            (Value::Interval(i), Value::Temporal(t)) => Some(ArithmeticPair::Temporal(*t, *i)),
+            (Float(a), Float(b)) => Some(Pair::Numeric(*a, *b)),
+            (Number(a), Float(b)) => Some(Pair::Numeric(*a as f64, *b)),
+            (Float(a), Number(b)) => Some(Pair::Numeric(*a, *b as f64)),
+            (Number(a), Number(b)) => Some(Pair::Numeric(*a as f64, *b as f64)),
+
+            (Temporal(t), Interval(i)) => Some(Pair::Temporal(*t, *i)),
+            (Interval(i), Temporal(t)) => Some(Pair::Temporal(*t, *i)),
+
+            (Numeric(a), Numeric(b)) => Some(Pair::Arbitrary(Borrowed(a), Borrowed(b))),
+            (Numeric(a), Number(b)) => Some(Pair::Arbitrary(Borrowed(a), Owned(Num::from(*b)))),
+            (Number(a), Numeric(b)) => Some(Pair::Arbitrary(Owned(Num::from(*a)), Borrowed(b))),
+
             _ => None,
         }
     }

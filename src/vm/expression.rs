@@ -1,6 +1,7 @@
 use super::{functions, math};
 use crate::core::date::interval::IntervalParseError;
 use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
+use crate::core::numeric::Numeric;
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
@@ -19,6 +20,7 @@ pub enum VmType {
     Float,
     Date,
     Interval,
+    Numeric,
 }
 
 #[derive(Debug, PartialEq)]
@@ -204,6 +206,12 @@ pub(crate) fn resolve_expression<'exp>(
                             BinaryOperator::Minus => Value::Temporal(temporal - interval),
                             _ => unreachable!("not implemented this operation: {arithmetic}"),
                         },
+
+                        ArithmeticPair::Arbitrary(left_value, right_value) => match arithmetic {
+                            BinaryOperator::Plus => Value::Numeric(&*left_value + &*right_value),
+                            BinaryOperator::Minus => Value::Numeric(&*left_value - &*right_value),
+                            _ => unreachable!("not implemented this operation: {arithmetic}"),
+                        },
                     }
                 }
             })
@@ -331,7 +339,8 @@ impl_value_extractor! {
     Number => (i128, Number),
     Float => (f64, Float),
     Boolean => (bool, Bool),
-    Temporal => (Temporal, Date)
+    Temporal => (Temporal, Date),
+    Numeric => (Numeric, Numeric)
 }
 
 fn get_value<T>(val: &[Value], schema: &Schema, argument: &Expression) -> Result<T, SqlError>
@@ -418,6 +427,7 @@ impl From<VmType> for Type {
             VmType::Float => Self::DoublePrecision,
             VmType::Date => Self::DateTime,
             VmType::Interval => Self::Interval,
+            VmType::Numeric => Self::Numeric,
         }
     }
 }

@@ -179,6 +179,7 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             VmType::String => Type::Text,
             VmType::Date => Type::Date,
             VmType::Interval => Type::Interval,
+            VmType::Numeric => Type::Numeric,
         },
     })
 }

@@ -869,6 +869,13 @@ impl From<i64> for Numeric {
     }
 }
 
+impl From<i128> for Numeric {
+    #[inline]
+    fn from(value: i128) -> Self {
+        Self::from_scaled_i128(value, 0).expect("i128 must always fit into numeric")
+    }
+}
+
 impl From<&Numeric> for Option<f64> {
     fn from(value: &Numeric) -> Self {
         match value {
