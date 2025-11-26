@@ -192,10 +192,8 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
 
             // heuristic: we only want to use index nested loop join if the left side is selective
             // if the left side is a sequential scan, we prefer hash join
-            let use_inlj = match (&index_cadidate, &left) {
-                (Some(_), Planner::KeyScan(_) | Planner::ExactMatch(_) | Planner::RangeScan(_)) => {
-                    true
-                }
+            let use_inlj = match (&index_cadidate, &left.is_selective()) {
+                (Some(_), true) => true,
                 _ => false,
             };
 

@@ -478,6 +478,17 @@ impl<File: FileOperations> Planner<File> {
 
         Some(schema.to_owned())
     }
+
+    pub(crate) const fn is_selective(&self) -> bool {
+        matches!(
+            self,
+            Planner::KeyScan(_)
+                | Planner::ExactMatch(_)
+                | Planner::RangeScan(_)
+                | Planner::Filter(_)
+                | Planner::IndexNestedLoopJoin(_)
+        )
+    }
 }
 
 impl<File: PlanExecutor> Execute for SeqScan<File> {

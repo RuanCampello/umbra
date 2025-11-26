@@ -1244,4 +1244,77 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_inlj_with_filter_on_left() -> PlannerResult {
+        let mut db = new_db(&[
+            "CREATE TABLE customers (id INT PRIMARY KEY, name VARCHAR(50), tier VARCHAR(20));",
+            "CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT, amount INT);",
+            "CREATE UNIQUE INDEX orders_cust_idx ON orders(customer_id);",
+        ])?;
+
+        let customers = db.tables["customers"].clone();
+        let orders = db.tables["orders"].clone();
+        let orders_idx = db.indexes["orders_cust_idx"].clone();
+
+        let mut joined_schema = customers.schema.clone();
+        joined_schema.extend(orders.schema.columns.clone());
+        joined_schema.add_qualified_name("customers", 0, customers.schema.len());
+        joined_schema.add_qualified_name("orders", customers.schema.len(), joined_schema.len());
+
+        // the query has a filter on customers (tier = 'gold').
+        // the heuristic should now pick inlj because the left side is filtered (selective).
+        let query = r#"
+            SELECT customers.name, orders.amount
+            FROM customers 
+            JOIN orders ON customers.id = orders.customer_id
+            WHERE customers.tier = 'Gold';"#;
+
+        let left_plan = Planner::Filter(Filter {
+            filter: parse_expr("customers.tier = 'Gold'"),
+            schema: customers.schema.clone(),
+            source: Box::new(Planner::SeqScan(SeqScan {
+                pager: db.pager(),
+                table: customers.clone(),
+                cursor: Cursor::new(customers.root, 0),
+            })),
+        });
+
+        assert_eq!(
+            db.gen_plan(query)?,
+            Planner::Project(Project {
+                input: joined_schema,
+                output: Schema::new(vec![
+                    Column::new("name", Type::Varchar(50)),
+                    Column::new("amount", Type::Integer),
+                ]),
+                projection: vec![
+                    Expression::QualifiedIdentifier {
+                        table: "customers".into(),
+                        column: "name".into()
+                    },
+                    Expression::QualifiedIdentifier {
+                        column: "amount".into(),
+                        table: "orders".into(),
+                    },
+                ],
+                source: Box::new(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
+                    left: Box::new(left_plan),
+                    right_table: orders.clone(),
+                    index: orders_idx,
+                    condition: parse_expr("customers.id = orders.customer_id"),
+                    join_type: JoinType::Inner,
+                    left_key_expr: Expression::QualifiedIdentifier {
+                        table: "customers".to_string(),
+                        column: "id".to_string(),
+                    },
+                    pager: db.pager(),
+                    left_tables: HashSet::from(["customers".to_string()]),
+                    right_tables: HashSet::from(["orders".to_string()]),
+                })),
+            })
+        );
+
+        Ok(())
+    }
 }
