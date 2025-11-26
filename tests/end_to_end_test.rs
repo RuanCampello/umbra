@@ -139,3 +139,39 @@ fn join_over_tcp() {
         ]
     )
 }
+
+/// this should be valid until we make the core engine non-blocking with a MVCC
+#[test]
+fn transaction_blocks_concurrent_reads() {
+    let server = State::new("sql/employees-and-departments.sql");
+    let mut client_a = server.client();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let handler = std::thread::spawn(move || {
+        client_a.exec("BEGIN TRANSACTION;");
+        tx.send(()).unwrap();
+
+        client_a.exec(
+            r#"
+            INSERT INTO departments (department_id, department_name, location)
+            VALUES (5, 'Accounting', 'Trenton');
+            "#,
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        client_a.exec("COMMIT;");
+    });
+    rx.recv().expect("Client A failed to start transaction");
+
+    let mut client_b = server.client();
+    let start = std::time::Instant::now();
+
+    let query = client_b.exec("SELECT * FROM departments WHERE location = 'Trenton';");
+    let duration = start.elapsed();
+
+    assert!(duration >= std::time::Duration::from_millis(500));
+    assert_eq!(query.tuples[0][1], "Accounting".into());
+
+    handler.join().unwrap();
+}
