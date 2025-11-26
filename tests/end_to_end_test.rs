@@ -21,29 +21,12 @@ struct Client {
 
 impl State {
     fn new(path: &str) -> Self {
-        let port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap().port()
-        };
-
-        let db_path = std::env::temp_dir().join(format!("umbra_test_{port}.db"));
-        let _ = std::fs::remove_file(&db_path);
-        let server_db_path = db_path.clone();
-
-        thread::spawn(move || {
-            let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            umbra::tcp::server::start(addr, server_db_path).unwrap()
-        });
-
-        let server = Self {
-            path: db_path,
-            port,
-        };
+        let server = Self::default();
+        let full_path = Path::new(file!()).parent().unwrap().join(path);
+        let full_path = std::fs::canonicalize(&full_path)
+            .unwrap_or_else(|_| panic!("Script file not found: {:#?}", full_path));
 
         let mut client = server.client();
-        let full_path = Path::new(file!()).parent().unwrap().join(path);
-        let full_path = std::fs::canonicalize(full_path)
-            .unwrap_or_else(|_| panic!("Script file not found: {:#?}", path));
 
         client.exec(&format!("SOURCE '{}';", full_path.display()));
         server
@@ -65,6 +48,30 @@ impl State {
                 }
                 Err(e) => panic!("Failed to connect to server at {addr}: {e}"),
             }
+        }
+    }
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+
+        let db_path = std::env::temp_dir().join(format!("umbra_test_{port}.db"));
+
+        let _ = std::fs::remove_file(&db_path);
+        let server_db_path = db_path.clone();
+
+        thread::spawn(move || {
+            let addr = SocketAddr::from(([127, 0, 0, 1], port));
+            umbra::tcp::server::start(addr, server_db_path).unwrap()
+        });
+
+        Self {
+            path: db_path,
+            port,
         }
     }
 }
@@ -174,4 +181,39 @@ fn transaction_blocks_concurrent_reads() {
     assert_eq!(query.tuples[0][1], "Accounting".into());
 
     handler.join().unwrap();
+}
+
+#[test]
+fn concurrent_inserts_are_atomic() {
+    let server = State::default();
+    let mut setup_client = server.client();
+    setup_client.exec("CREATE TABLE traffic (id SERIAL PRIMARY KEY, thread_id INT);");
+
+    let mut handles = vec![];
+    for i in 0..10 {
+        let mut client = server.client();
+
+        handles.push(thread::spawn(move || {
+            for _ in 0..50 {
+                client.exec(&format!("INSERT INTO traffic (thread_id) VALUES ({});", i));
+            }
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let mut verifier = server.client();
+
+    let query = verifier.exec("SELECT count(*) FROM traffic;");
+    assert_eq!(query.tuples[0][0], 500.into());
+
+    let query = verifier.exec("SELECT id FROM traffic;");
+
+    let original_tuples = query.tuples;
+    let mut sorted_tuples = original_tuples.clone();
+    sorted_tuples.sort_unstable();
+
+    assert_eq!(original_tuples, sorted_tuples)
 }

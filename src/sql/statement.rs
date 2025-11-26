@@ -791,22 +791,30 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
-impl PartialOrd for Value {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
-            (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
-            (Value::String(a), Value::String(b)) => a.partial_cmp(b),
-            (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
-            (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
-            (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
+            (Value::Float(a), Value::Float(b)) => a.total_cmp(b),
+            (Value::Number(a), Value::Number(b)) => a.cmp(b),
+            (Value::String(a), Value::String(b)) => a.cmp(b),
+            (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
+            (Value::Temporal(a), Value::Temporal(b)) => a.cmp(b),
+            (Value::Uuid(a), Value::Uuid(b)) => a.cmp(b),
+            (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
+            (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
             // For sorting, NULL values are considered equal to each other
             // and sort after all non-NULL values.
-            (Value::Null, Value::Null) => Some(Ordering::Equal),
-            (Value::Null, _) => Some(Ordering::Greater),
-            (_, Value::Null) => Some(Ordering::Less),
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Null, _) => Ordering::Greater,
+            (_, Value::Null) => Ordering::Less,
             _ => panic!("these values are not comparable"),
         }
+    }
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
