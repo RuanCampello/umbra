@@ -2540,6 +2540,73 @@ fn complex_where_with_join() -> Result<()> {
 }
 
 #[test]
+fn multiple_chained_joins() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE countries (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE cities (id SERIAL PRIMARY KEY, name VARCHAR(50), country_id INT);")?;
+    db.exec("CREATE TABLE people (id SERIAL PRIMARY KEY, name VARCHAR(50), city_id INT);")?;
+
+    db.exec("INSERT INTO countries (name) VALUES ('USA'), ('Canada');")?;
+    db.exec(
+        r#"
+        INSERT INTO cities (name, country_id) VALUES
+            ('New York', 1),
+            ('Los Angeles', 1),
+            ('Toronto', 2);
+        "#,
+    )?;
+    db.exec(
+        r#"
+        INSERT INTO people (name, city_id) VALUES
+            ('Alice', 1),
+            ('Bob', 2),
+            ('Carol', 3),
+            ('Dave', 1);
+        "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT p.name, ci.name, co.name
+        FROM people AS p
+        JOIN cities AS ci ON p.city_id = ci.id
+        JOIN countries AS co ON ci.country_id = co.id
+        ORDER BY p.name;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "New York".into(), "USA".into()],
+            vec!["Bob".into(), "Los Angeles".into(), "USA".into()],
+            vec!["Carol".into(), "Toronto".into(), "Canada".into()],
+            vec!["Dave".into(), "New York".into(), "USA".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT co.name, COUNT(*) AS people_count
+        FROM people AS p
+        JOIN cities AS ci ON p.city_id = ci.id
+        JOIN countries AS co ON ci.country_id = co.id
+        GROUP BY co.name
+        ORDER BY people_count DESC;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["USA".into(), 3.into()],
+            vec!["Canada".into(), 1.into()],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
 fn interval_with_null() -> Result<()> {
     let mut db = State::default();
     db.exec("CREATE TABLE nullable_dates (id INT PRIMARY KEY, d DATE NULLABLE);")?;
@@ -2591,6 +2658,189 @@ fn boundary_date_operations() -> Result<()> {
 
     let query = db.exec("SELECT d - INTERVAL '1 month' FROM boundary_dates WHERE id = 2;")?;
     assert_eq!(query.tuples, vec![vec![temporal!("2024-01-29")?]]);
+
+    Ok(())
+}
+
+#[test]
+fn interval_subtraction() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+        CREATE TABLE events (
+            id SERIAL PRIMARY KEY,
+            event_date DATE,
+            event_time TIME,
+            event_datetime TIMESTAMP
+        );
+        "#,
+    )?;
+    db.exec(
+        r#"
+        INSERT INTO events (event_date, event_time, event_datetime) VALUES
+            ('2024-03-15', '14:30:00', '2024-03-15 14:30:00'),
+            ('2024-06-01', '09:00:00', '2024-06-01 09:00:00');
+        "#,
+    )?;
+
+    let query = db
+        .exec("SELECT id, event_date - INTERVAL '10 days' AS past_date FROM events ORDER BY id;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2024-03-05")?],
+            vec![Value::Number(2), temporal!("2024-05-22")?],
+        ]
+    );
+
+    let query = db.exec(
+        "SELECT id, event_time - INTERVAL '2 hours 15 minutes' AS past_time FROM events ORDER BY id;",
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("12:15:00")?],
+            vec![Value::Number(2), temporal!("06:45:00")?],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn min_max_on_different_types() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE int_test (id INT PRIMARY KEY, val INT);")?;
+    db.exec("INSERT INTO int_test (id, val) VALUES (1, 100), (2, -50), (3, 0), (4, 999);")?;
+    let query = db.exec("SELECT MIN(val), MAX(val) FROM int_test;")?;
+    assert_eq!(query.tuples, vec![vec![(-50).into(), 999.into()]]);
+
+    db.exec("CREATE TABLE str_test (id INT PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("INSERT INTO str_test (id, name) VALUES (1, 'zebra'), (2, 'apple'), (3, 'mango');")?;
+    let query = db.exec("SELECT MIN(name), MAX(name) FROM str_test;")?;
+    assert_eq!(query.tuples, vec![vec!["apple".into(), "zebra".into()]]);
+
+    db.exec("CREATE TABLE date_test (id INT PRIMARY KEY, event_date DATE);")?;
+    db.exec(
+        r#"
+        INSERT INTO date_test (id, event_date) VALUES
+            (1, '2024-01-15'),
+            (2, '2020-06-30'),
+            (3, '2025-12-25');
+        "#,
+    )?;
+    let query = db.exec("SELECT MIN(event_date), MAX(event_date) FROM date_test;")?;
+    assert_eq!(
+        query.tuples,
+        vec![vec![temporal!("2020-06-30")?, temporal!("2025-12-25")?]]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn nested_aggregate_expressions() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        "CREATE TABLE measurements (id SERIAL PRIMARY KEY, category VARCHAR(20), value REAL);",
+    )?;
+    db.exec(
+        r#"
+        INSERT INTO measurements (category, value) VALUES
+            ('A', 10.0),
+            ('A', 20.0),
+            ('A', 15.0),
+            ('B', 100.0),
+            ('B', 200.0);
+        "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT category, TRUNC(AVG(value), 1) AS avg_val
+        FROM measurements
+        GROUP BY category
+        ORDER BY category;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["A".into(), 15.0.into()],
+            vec!["B".into(), 150.0.into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT category, ABS(MIN(value) - MAX(value)) AS range
+        FROM measurements
+        GROUP BY category
+        ORDER BY category;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["A".into(), 10.0.into()],
+            vec!["B".into(), 100.0.into()],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn limit_with_aggregate_functions() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE sales (id SERIAL PRIMARY KEY, product VARCHAR(50), amount REAL, region VARCHAR(20));")?;
+    db.exec(
+        r#"
+        INSERT INTO sales (product, amount, region) VALUES
+            ('Widget A', 100.0, 'North'),
+            ('Widget B', 150.0, 'North'),
+            ('Widget A', 200.0, 'South'),
+            ('Widget B', 75.0, 'South'),
+            ('Widget C', 300.0, 'North'),
+            ('Widget C', 250.0, 'East'),
+            ('Widget A', 50.0, 'East');
+        "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT product, SUM(amount) AS total
+        FROM sales
+        GROUP BY product
+        ORDER BY total DESC
+        LIMIT 2;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Widget C".into(), 550.0.into()],
+            vec!["Widget A".into(), 350.0.into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT region, COUNT(*) AS region_count
+        FROM sales
+        GROUP BY region
+        ORDER BY region
+        LIMIT 2 OFFSET 1;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["North".into(), 3.into()],
+            vec!["South".into(), 2.into()],
+        ]
+    );
 
     Ok(())
 }
