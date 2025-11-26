@@ -2607,6 +2607,64 @@ fn multiple_chained_joins() -> Result<()> {
 }
 
 #[test]
+fn join_with_null_values() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        "CREATE TABLE products (id SERIAL PRIMARY KEY, name VARCHAR(50), category_id INT NULLABLE);",
+    )?;
+    db.exec("CREATE TABLE categories (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
+
+    db.exec("INSERT INTO categories (name) VALUES ('Electronics'), ('Clothing');")?;
+    db.exec(
+        r#"
+        INSERT INTO products (name, category_id) VALUES
+            ('Phone', 1),
+            ('Laptop', 1),
+            ('T-shirt', 2),
+            ('Unknown Item', NULL);
+        "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT p.name, c.name
+        FROM products AS p
+        LEFT JOIN categories AS c ON p.category_id = c.id
+        ORDER BY p.id;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Phone".into(), "Electronics".into()],
+            vec!["Laptop".into(), "Electronics".into()],
+            vec!["T-shirt".into(), "Clothing".into()],
+            vec!["Unknown Item".into(), Value::Null],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT p.name
+        FROM products AS p
+        JOIN categories AS c ON p.category_id = c.id
+        ORDER BY p.name;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Laptop".into()],
+            vec!["Phone".into()],
+            vec!["T-shirt".into()],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
 fn interval_with_null() -> Result<()> {
     let mut db = State::default();
     db.exec("CREATE TABLE nullable_dates (id INT PRIMARY KEY, d DATE NULLABLE);")?;
