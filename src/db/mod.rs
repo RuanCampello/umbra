@@ -9,7 +9,7 @@ mod schema;
 
 pub(crate) use context::Context;
 use metadata::SequenceMetadata;
-pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
+pub(crate) use metadata::{ForeignKeyMetadata, IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
 
 use crate::core::date::{DateParseError, ExtractError};
@@ -98,6 +98,7 @@ pub enum SqlError {
     InvalidGroupBy(String),
     /// Duplicated UNIQUE or PRIMARY KEY col.
     DuplicatedKey(Value),
+    ConstraintViolation(String),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
     /// Invalid function arguments. Expected x but found y.
@@ -286,20 +287,32 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
     fn load_metadata(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
         if table == DB_METADATA {
-            let mut schema = umbra_schema();
-            schema.prepend_id();
-
-            let row_id = self.load_next_row_id(0)?;
-            return Ok(TableMetadata {
-                root: 0,
-                name: String::from(table),
-                row_id,
-                indexes: vec![],
-                serials: HashMap::new(),
-                schema,
-            });
+            return self.load_umbra_metadata();
         }
 
+        let mut metadata = self.load_table_definition(table)?;
+        self.load_serial_values(&mut metadata)?;
+        metadata.references = self.load_references(table)?;
+
+        Ok(metadata)
+    }
+
+    fn load_umbra_metadata(&mut self) -> Result<TableMetadata, DatabaseError> {
+        let mut schema = umbra_schema();
+        schema.prepend_id();
+
+        Ok(TableMetadata {
+            root: 0,
+            name: String::from(DB_METADATA),
+            row_id: self.load_next_row_id(0)?,
+            indexes: vec![],
+            references: vec![],
+            serials: HashMap::new(),
+            schema,
+        })
+    }
+
+    fn load_table_definition(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
         let mut metadata = TableMetadata {
             root: 1,
             row_id: 1,
@@ -307,10 +320,11 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             schema: Schema::empty(),
             indexes: Vec::new(),
             serials: HashMap::new(),
+            references: Vec::new(),
         };
 
         let mut serials_to_load = Vec::new();
-        let mut found_table_def = false;
+        let mut found_def = false;
 
         let (schema, mut results) = self.prepare(&format!(
             "SELECT root, sql FROM {DB_METADATA} WHERE table_name = '{table}';"
@@ -322,74 +336,72 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             ))
         };
 
+        let root_idx = schema.index_of("root").ok_or_else(corrupted_err)?;
+        let sql_idx = schema.index_of("sql").ok_or_else(corrupted_err)?;
+
         while let Some(tuple) = results.try_next()? {
-            let Value::Number(root) = &tuple[schema.index_of("root").ok_or(corrupted_err())?]
-            else {
+            let Value::Number(root) = &tuple[root_idx] else {
                 return Err(corrupted_err());
             };
-            match &tuple[schema.index_of("sql").ok_or(corrupted_err())?] {
-                Value::String(sql) => match Parser::new(sql).parse_statement()? {
-                    Statement::Create(Create::Table { columns, .. }) => {
-                        assert!(!found_table_def, "Multiple definitions of table {table}");
+            let Value::String(sql) = &tuple[sql_idx] else {
+                return Err(corrupted_err());
+            };
 
-                        metadata.root = *root as PageNumber;
-                        metadata.schema = Schema::new(columns);
+            match Parser::new(sql).parse_statement()? {
+                Statement::Create(Create::Table { columns, .. }) => {
+                    assert!(!found_def, "Multiple definitions of table {table}");
 
-                        if !metadata.schema.has_btree_key() {
-                            metadata.schema.prepend_id();
-                        }
+                    metadata.root = *root as PageNumber;
+                    metadata.schema = Schema::new(columns);
 
-                        found_table_def = true;
+                    if !metadata.schema.has_btree_key() {
+                        metadata.schema.prepend_id();
                     }
-                    Statement::Create(Create::Index {
+
+                    found_def = true;
+                }
+                Statement::Create(Create::Index {
+                    name,
+                    column,
+                    unique,
+                    ..
+                }) => {
+                    let col_idx = metadata.schema.index_of(&column).ok_or_else(|| {
+                        SqlError::Other(format!(
+                            "Couldn't find index column {column} in table {table}"
+                        ))
+                    })?;
+
+                    let idx_col = metadata.schema.columns[col_idx].clone();
+                    metadata.indexes.push(IndexMetadata {
+                        root: *root as PageNumber,
                         name,
-                        column,
+                        column: idx_col.clone(),
+                        schema: Schema::new(vec![idx_col, metadata.schema.columns[0].clone()]),
                         unique,
-                        ..
-                    }) => {
-                        let col_idx =
-                            metadata
-                                .schema
-                                .index_of(&column)
-                                .ok_or(SqlError::Other(format!(
-                                    "Couldn't find index column {column} in table {table}"
-                                )))?;
-
-                        let idx_col = metadata.schema.columns[col_idx].clone();
-
-                        metadata.indexes.push(IndexMetadata {
+                    });
+                }
+                Statement::Create(Create::Sequence {
+                    name,
+                    table,
+                    r#type,
+                }) => {
+                    metadata.serials.insert(
+                        name.clone(),
+                        SequenceMetadata {
                             root: *root as PageNumber,
-                            name,
-                            column: idx_col.clone(),
-                            schema: Schema::new(vec![idx_col, metadata.schema.columns[0].clone()]),
-                            unique,
-                        });
-                    }
-                    Statement::Create(Create::Sequence {
-                        name,
-                        table,
-                        r#type,
-                    }) => {
-                        let root = *root as PageNumber;
-                        metadata.serials.insert(
-                            name.clone(),
-                            SequenceMetadata {
-                                root,
-                                name: name.clone(),
-                                value: AtomicU64::new(0),
-                                data_type: r#type.clone(),
-                            },
-                        );
-
-                        serials_to_load.push((name, table, r#type));
-                    }
-                    _ => return Err(corrupted_err()),
-                },
+                            name: name.clone(),
+                            value: AtomicU64::new(0),
+                            data_type: r#type.clone(),
+                        },
+                    );
+                    serials_to_load.push((name, table, r#type));
+                }
                 _ => return Err(corrupted_err()),
             }
         }
 
-        if !found_table_def {
+        if !found_def {
             return Err(DatabaseError::Sql(SqlError::InvalidTable(table.into())));
         }
 
@@ -397,9 +409,79 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             metadata.row_id = self.load_next_row_id(metadata.root)?;
         }
 
-        for (name, table, data_type) in serials_to_load {
+        Ok(metadata)
+    }
+
+    fn load_references(&mut self, table: &str) -> Result<Vec<ForeignKeyMetadata>, DatabaseError> {
+        let (schema, mut results) = self.prepare(&format!(
+            "SELECT table_name, sql FROM {DB_METADATA} WHERE type = 'table';"
+        ))?;
+
+        let table_name_idx = schema.index_of("table_name").unwrap();
+        let sql_idx = schema.index_of("sql").unwrap();
+
+        let mut references: Vec<(String, String)> = Vec::new();
+
+        while let Some(tuple) = results.try_next()? {
+            let Value::String(ref table_name) = tuple[table_name_idx] else {
+                continue;
+            };
+            let Value::String(ref sql) = tuple[sql_idx] else {
+                continue;
+            };
+
+            let Ok(Statement::Create(Create::Table { columns, .. })) =
+                Parser::new(sql).parse_statement()
+            else {
+                continue;
+            };
+
+            for col in &columns {
+                for constraint in &col.constraints {
+                    if let Constraint::ForeignKey {
+                        table: ref fk_table,
+                        ..
+                    } = constraint
+                    {
+                        if fk_table == table {
+                            references.push((table_name.clone(), col.name.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut childs = Vec::new();
+        for (child_table, fk_column) in references {
+            let child_metadata = self.metadata(&child_table)?;
+            let fk_col_idx = child_metadata
+                .schema
+                .index_of(&fk_column)
+                .expect("FK column should exist in child table schema");
+
+            let index = child_metadata
+                .indexes
+                .iter()
+                .find(|idx| idx.column.name == fk_column)
+                .map(|idx| (idx.root, Relation::Index(idx.clone()).comp()));
+
+            childs.push(ForeignKeyMetadata {
+                child_root: child_metadata.root,
+                child_comparator: child_metadata.comp()?,
+                child_schema: child_metadata.schema.clone(),
+                fk_col_idx,
+                child_table,
+                index,
+            });
+        }
+
+        Ok(childs)
+    }
+
+    fn load_serial_values(&mut self, metadata: &mut TableMetadata) -> Result<(), DatabaseError> {
+        for (name, seq) in &mut metadata.serials {
             let column = name
-                .strip_prefix(&format!("{}_", table))
+                .strip_prefix(&format!("{}_", metadata.name))
                 .expect("Sequence name doesn't start with table name")
                 .strip_suffix("_seq")
                 .expect("Sequence name doesn't end with '_seq'");
@@ -413,7 +495,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             let mut btree = BTree::new(
                 &mut pager,
                 metadata.root,
-                FixedSizeCmp::try_from(&data_type).unwrap_or(FixedSizeCmp::new::<RowId>()),
+                FixedSizeCmp::try_from(&seq.data_type).unwrap_or(FixedSizeCmp::new::<RowId>()),
             );
 
             let curr_val = match btree.max()? {
@@ -427,12 +509,10 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 None => 0,
             };
 
-            if let Some(seq) = metadata.serials.get_mut(&name) {
-                seq.value = AtomicU64::new(curr_val);
-            }
+            seq.value = AtomicU64::new(curr_val);
         }
 
-        Ok(metadata)
+        Ok(())
     }
 
     fn load_next_row_id(&mut self, root: PageNumber) -> Result<RowId, DatabaseError> {
@@ -709,6 +789,7 @@ impl Display for SqlError {
             Self::InvalidQualifiedColumn { table, column } => write!(f, "Column '{column}' not found on table '{table}'"),
             Self::InvalidGroupBy(column) => write!(f, "Column '{column}' must appear in GROUP BY clause or be used in an aggregate function"),
             Self::DuplicatedKey(key) => write!(f, "Duplicated key {key}"),
+            Self::ConstraintViolation(violation) => todo!(),
             Self::Analyzer(err) => write!(f, "{err}"),
             Self::Vm(err) => write!(f, "{err}"),
             Self::Type(err) => write!(f, "{err}"),

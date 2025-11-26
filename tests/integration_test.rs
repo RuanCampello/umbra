@@ -2465,7 +2465,55 @@ fn index_nested_loop_join() -> Result<()> {
         LEFT JOIN users ON orders.user_id = users.id 
         WHERE orders.id = 103;"#,
     )?;
-    assert_eq!(query.tuples, vec![vec![Value::Number(200), Value::Null],]);
+    assert_eq!(query.tuples, vec![vec![Value::Number(200), Value::Null]]);
+
+    Ok(())
+}
+
+#[test]
+fn test_complex_join_integrity_scenario() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE authors (id SERIAL PRIMARY KEY, name VARCHAR(100));")?;
+    db.exec("CREATE TABLE books (id SERIAL PRIMARY KEY, author_id INT REFERENCES authors(id), title VARCHAR(100), year INT);")?;
+    db.exec("INSERT INTO authors (id, name) VALUES (1, 'J.R.R. Tolkien'), (2, 'George R.R. Martin'), (3, 'Patrick Rothfuss');")?;
+    db.exec("INSERT INTO books (author_id, title, year) VALUES (1, 'The Hobbit', 1937);")?;
+    db.exec("INSERT INTO books (author_id, title, year) VALUES (1, 'The Fellowship of the Ring', 1954);")?;
+    db.exec("INSERT INTO books (author_id, title, year) VALUES (2, 'A Game of Thrones', 1996);")?;
+    assert!(db
+        .exec("INSERT INTO books (author_id, title, year) VALUES (99, 'Unknown', 2000);")
+        .is_err());
+
+    let query = db.exec(
+        r#"
+        SELECT a.name, b.title 
+        FROM authors AS a 
+        JOIN books AS b ON a.id = b.author_id 
+        WHERE a.id = 1
+        ORDER BY b.year;
+        "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["J.R.R. Tolkien".into(), "The Hobbit".into()],
+            vec!["J.R.R. Tolkien".into(), "The Fellowship of the Ring".into()]
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT a.name, b.title 
+        FROM authors AS a 
+        LEFT JOIN books AS b ON a.id = b.author_id 
+        WHERE a.name = 'Patrick Rothfuss';
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![vec!["Patrick Rothfuss".into(), Value::Null]]
+    );
 
     Ok(())
 }

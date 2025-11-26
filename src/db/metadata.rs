@@ -26,6 +26,7 @@ pub(crate) struct TableMetadata {
     pub schema: Schema,
     pub indexes: Vec<IndexMetadata>,
     pub serials: HashMap<String, SequenceMetadata>,
+    pub references: Vec<ForeignKeyMetadata>,
     pub(in crate::db) row_id: RowId,
 }
 
@@ -38,6 +39,24 @@ pub(crate) struct IndexMetadata {
     pub schema: Schema,
     /// This is an illusion because we only support `UNIQUE` indexes :)
     pub(crate) unique: bool,
+}
+
+/// Represents a child table that references a parent table via a foreign key.
+/// Used to check FK integrity when deleting from the parent table.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct ForeignKeyMetadata {
+    /// Root page of the child table (for scanning when no index exists)
+    pub child_root: PageNumber,
+    /// Comparator for the child table
+    pub child_comparator: BTreeKeyCmp,
+    /// Schema of the child table
+    pub child_schema: Schema,
+    /// Column index of the FK column in the child table
+    pub fk_col_idx: usize,
+    /// Name of the child table (for error messages)
+    pub child_table: String,
+    /// Index metadata if an index exists on the FK column
+    pub index: Option<(PageNumber, BTreeKeyCmp)>,
 }
 
 /// The data we need to know about the table sequences during runtime.
@@ -95,6 +114,14 @@ macro_rules! index {
 
     (unique on ( $table:expr ) ( $col:ident )) => {{
         format!("{}_{}_uq_index", $table, stringify!($col))
+    }};
+
+    (idx on ( $table:expr ) ( $col:expr )) => {{
+        format!("{}_{}_idx", $table, $col)
+    }};
+
+    (idx on $table:ident ( $col:ident )) => {{
+        format!("{}_{}_idx", stringify!($table), stringify!($col))
     }};
 }
 
@@ -197,9 +224,15 @@ impl Relation {
                             }
                         }
                     }
+                    not_var if !idx.unique => {
+                        let len = byte_len_of_type(not_var);
+                        let pk_len = byte_len_of_type(&idx.schema.columns[1].data_type);
+                        BTreeKeyCmp::MemCmp(FixedSizeCmp(len + pk_len))
+                    }
                     _ => BTreeKeyCmp::from(first),
                 }
             }
+
             Self::Table(table) => {
                 let pk = &table.schema.columns[0].data_type;
 

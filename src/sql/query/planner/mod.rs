@@ -30,7 +30,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         Statement::Insert(Insert { into, values, .. }) => {
             let values = VecDeque::from(values);
             let source = Box::new(Planner::Values(Values { values }));
-            let table = db.metadata(&into)?;
+            let table = db.metadata(&into)?.clone();
 
             Planner::Insert(InsertPlan {
                 source,
@@ -137,6 +137,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let work_dir = db.work_dir.clone();
             let page_size = db.pager.borrow().page_size;
             let metadata = db.metadata(&from)?;
+            let table = metadata.clone();
+            let comparator = metadata.comp()?;
 
             if needs_collection(&source) {
                 source = Planner::Collect(
@@ -151,8 +153,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             }
 
             Planner::Delete(DeletePlan {
-                table: metadata.clone(),
-                comparator: metadata.comp()?,
+                table,
+                comparator,
                 pager: Rc::clone(&db.pager),
                 source: Box::new(source),
             })
@@ -1238,7 +1240,39 @@ mod tests {
                     pager: db.pager(),
                     left_tables: HashSet::from(["orders".to_string()]),
                     right_tables: HashSet::from(["users".to_string()]),
+                    current_left: None,
+                    current_right: None,
+                    match_found: false,
                 })),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_planner_populates_foreign_key_metadata() -> PlannerResult {
+        let mut ctx = new_db(&[
+            "CREATE TABLE parents (id INT PRIMARY KEY);",
+            "CREATE TABLE children (id INT, p_id INT REFERENCES parents(id));",
+        ])?;
+
+        let plan = ctx.gen_plan("INSERT INTO children (id, p_id) VALUES (1, 1);")?;
+        let children = ctx.db.metadata("children")?.clone();
+
+        assert_eq!(
+            plan,
+            Planner::Insert(InsertPlan {
+                pager: ctx.pager(),
+                source: Box::new(Planner::Values(Values {
+                    values: VecDeque::from(vec![vec![
+                        Expression::Value(Value::Number(1)),
+                        Expression::Value(Value::Number(1)),
+                        Expression::Value(Value::Number(1)),
+                    ]]),
+                })),
+                comparator: children.comp()?,
+                table: children,
             })
         );
 

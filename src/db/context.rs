@@ -194,6 +194,7 @@ impl TryFrom<&[&str]> for Context {
                         schema,
                         indexes: vec![],
                         serials: HashMap::new(),
+                        references: vec![],
                     };
                     root += 1;
 

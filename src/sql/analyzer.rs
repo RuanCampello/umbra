@@ -89,26 +89,38 @@ pub(in crate::sql) fn analyze<'s>(
                     return Err(AnalyzerError::RowIdAssignment.into());
                 }
 
-                if col.constraints.contains(&Constraint::PrimaryKey) {
-                    if primary_key {
-                        return Err(AnalyzerError::MultiplePrimaryKeys.into());
-                    }
+                for constraint in &col.constraints {
+                    match constraint {
+                        Constraint::PrimaryKey => {
+                            if primary_key {
+                                return Err(AnalyzerError::MultiplePrimaryKeys.into());
+                            }
 
-                    primary_key = true;
+                            primary_key = true;
+                        }
+                        Constraint::ForeignKey { table, column } => {
+                            let parent = ctx.metadata(table)?;
+                            let idx = parent
+                                .schema
+                                .index_of(&column)
+                                .ok_or(SqlError::InvalidColumn(column.to_string()))?;
+
+                            let p_type = parent.schema.columns[idx].data_type;
+                            if VmType::from(&p_type) != VmType::from(&col.data_type) {
+                                return Err(TypeError::Mismatch {
+                                    expected: p_type,
+                                    found: col.data_type,
+                                }
+                                .into());
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
 
-        Statement::Create(Create::Index {
-            table,
-            unique,
-            name,
-            ..
-        }) => {
-            if !unique {
-                return Err(SqlError::Other("Non-unique index is not yet supported".into()).into());
-            }
-
+        Statement::Create(Create::Index { table, name, .. }) => {
             let metadata = ctx.metadata(table)?;
 
             if metadata.indexes.iter().any(|idx| idx.name.eq(name)) {
@@ -1390,6 +1402,50 @@ mod tests {
             sql: "SELECT EXTRACT(YEAR FROM birth_date) FROM users;",
             ctx,
             expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_analyze_foreign_key_valid() -> AnalyzerResult {
+        Analyze {
+            ctx: &["CREATE TABLE parents (id INT PRIMARY KEY);"],
+            sql: "CREATE TABLE children (id INT, parent_id INT REFERENCES parents(id));",
+            expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_analyze_foreign_key_missing_table() -> AnalyzerResult {
+        Analyze {
+            ctx: &[],
+            sql: "CREATE TABLE children (id INT, parent_id INT REFERENCES missing_parents(id));",
+            expected: Err(SqlError::InvalidTable("missing_parents".into()).into()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_analyze_foreign_key_missing_column() -> AnalyzerResult {
+        Analyze {
+            ctx: &["CREATE TABLE parents (id INT PRIMARY KEY);"],
+            sql: "CREATE TABLE children (id INT, parent_id INT REFERENCES parents(missing_id));",
+            expected: Err(SqlError::InvalidColumn("missing_id".into()).into()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_analyze_foreign_key_type_mismatch() -> AnalyzerResult {
+        Analyze {
+            ctx: &["CREATE TABLE parents (id INT PRIMARY KEY);"],
+            sql: "CREATE TABLE children (id INT, parent_id VARCHAR(10) REFERENCES parents(id));",
+            expected: Err(SqlError::Type(TypeError::Mismatch {
+                expected: Type::Integer,
+                found: Type::Varchar(10),
+            })
+            .into()),
         }
         .assert()
     }

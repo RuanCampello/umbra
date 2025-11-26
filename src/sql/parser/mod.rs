@@ -309,7 +309,12 @@ impl<'input> Parser<'input> {
 
         let mut constraints = Vec::new();
         while let Some(constraint) = self
-            .consume_one(&[Keyword::Primary, Keyword::Unique, Keyword::Nullable])
+            .consume_one(&[
+                Keyword::Primary,
+                Keyword::Unique,
+                Keyword::Nullable,
+                Keyword::References,
+            ])
             .as_optional()
         {
             match constraint {
@@ -319,6 +324,14 @@ impl<'input> Parser<'input> {
                 }
                 Keyword::Unique => constraints.push(Constraint::Unique),
                 Keyword::Nullable => constraints.push(Constraint::Nullable),
+                Keyword::References => {
+                    let table = self.parse_ident()?;
+                    self.expect_token(Token::LeftParen)?;
+                    let column = self.parse_ident()?;
+                    self.expect_token(Token::RightParen)?;
+
+                    constraints.push(Constraint::ForeignKey { table, column });
+                }
                 _ => unreachable!(),
             }
         }
@@ -2236,6 +2249,23 @@ mod tests {
                     .limit(10)
                     .into()
             )
+        )
+    }
+
+    #[test]
+    fn test_create_table_with_foreign_key() {
+        let sql = "CREATE TABLE orders (id INT PRIMARY KEY, user_id INT REFERENCES users(id));";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Create(Create::Table {
+                name: "orders".to_string(),
+                columns: vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::foreign_key("user_id", "users", "id", Type::Integer),
+                ],
+            })
         )
     }
 }

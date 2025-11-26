@@ -251,6 +251,7 @@ pub enum Constraint {
     Unique,
     Nullable,
     Default(Expression),
+    ForeignKey { table: String, column: String },
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
@@ -417,6 +418,17 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::Nullable],
+        }
+    }
+
+    pub fn foreign_key(name: &str, table: &str, column: &str, data_type: Type) -> Self {
+        Self {
+            name: name.to_string(),
+            data_type,
+            constraints: vec![Constraint::ForeignKey {
+                table: table.to_string(),
+                column: column.to_string(),
+            }],
         }
     }
 
@@ -876,12 +888,15 @@ impl Display for Column {
 
         for constraint in &self.constraints {
             f.write_char(' ')?;
-            f.write_str(match constraint {
-                Constraint::PrimaryKey => "PRIMARY KEY",
-                Constraint::Unique => "UNIQUE",
-                Constraint::Nullable => "NULLABLE",
-                Constraint::Default(value) => "DEFAULT {value}",
-            })?;
+            match constraint {
+                Constraint::PrimaryKey => write!(f, "PRIMARY KEY")?,
+                Constraint::Unique => write!(f, "UNIQUE")?,
+                Constraint::Nullable => write!(f, "NULLABLE")?,
+                Constraint::Default(value) => write!(f, "DEFAULT {}", value)?,
+                Constraint::ForeignKey { table, column } => {
+                    write!(f, "REFERENCES {}({})", table, column)?
+                }
+            }
         }
 
         Ok(())

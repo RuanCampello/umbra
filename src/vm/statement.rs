@@ -56,6 +56,15 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 exec(Statement::Create(sequence), db)?;
             }
 
+            columns
+                .iter()
+                .flat_map(|col| &col.constraints)
+                .filter_map(|constraint| match constraint {
+                    Constraint::ForeignKey { table, .. } => Some(table.clone()),
+                    _ => None,
+                })
+                .for_each(|table| db.context.invalidate(&table));
+
             let skip_pk_idx = match has_btree_key(&columns) {
                 true => 1,
                 false => 0,
@@ -82,7 +91,9 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                                 column: col.name.clone(),
                                 unique: true,
                             }),
-                            Constraint::Nullable | Constraint::Default(_) => None,
+                            Constraint::Nullable
+                            | Constraint::Default(_)
+                            | Constraint::ForeignKey { .. } => None,
                         })
                 });
 
@@ -96,12 +107,6 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             column,
             unique,
         }) => {
-            if !unique {
-                return Err(DatabaseError::Sql(SqlError::Other(
-                    "Non-unique indexes are not supported yet".into(),
-                )));
-            }
-
             let root = allocate_root(db)?;
             insert_into_metadata(
                 db,

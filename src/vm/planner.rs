@@ -227,7 +227,6 @@ pub(crate) struct IndexNestedLoopJoin<File: FileOperations> {
     /// the equality expression used for the join (e.g., `u.id = o.user_id`)
     pub condition: Expression,
     pub join_type: JoinType,
-
     /// expression to extract the key from the left tuple
     pub left_key_expr: Expression,
 
@@ -235,6 +234,11 @@ pub(crate) struct IndexNestedLoopJoin<File: FileOperations> {
 
     pub left_tables: HashSet<String>,
     pub right_tables: HashSet<String>,
+
+    pub current_left: Option<Tuple>,
+    pub current_right: Option<RangeScan<File>>,
+
+    pub match_found: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1003,6 +1007,51 @@ impl<File: PlanExecutor> Execute for Insert<File> {
             return Ok(None);
         };
 
+        let pk_type = &self.table.schema.columns[0].data_type;
+        let value = &tuple[0];
+
+        for fk in &self.table.references {
+            let mut pager = self.pager.borrow_mut();
+
+            let referenced = match fk.index {
+                Some((idx, comp)) => {
+                    let mut btree = BTree::new(&mut pager, idx, comp);
+
+                    let key = tuple::serialize(pk_type, value);
+
+                    btree.get(&key)?.is_some()
+                }
+                _ => {
+                    let mut cursor = Cursor::new(fk.child_root, 0);
+                    let mut found = false;
+                    while let Some((page, slot)) = cursor.try_next(&mut pager)? {
+                        let entry = reassemble_content(&mut pager, page, slot)?;
+                        let child_tuple = tuple::deserialize(entry.as_ref(), &fk.child_schema);
+                        let fk_value = &child_tuple[fk.fk_col_idx];
+
+                        if fk_value.is_null() {
+                            continue;
+                        }
+
+                        if fk_value == value {
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    found
+                }
+            };
+
+            if referenced {
+                return Err(SqlError::ConstraintViolation(format!(
+                    "Cannot delete key {} from {} because it is referenced by table {}",
+                    value, self.table.name, fk.child_table
+                ))
+                .into());
+            }
+        }
+
         let mut pager = self.pager.borrow_mut();
 
         BTree::new(&mut pager, self.table.root, self.comparator.clone())
@@ -1406,6 +1455,55 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         loop {
+            if let Some(scan) = &mut self.current_right {
+                match scan.try_next()? {
+                    Some(idx) => {
+                        self.match_found = true;
+                        let right_tuple = match self.index.root == self.right_table.root {
+                            true => idx,
+                            _ => {
+                                // 'idx' is the index entry [Key, PK]. Extract PK and fetch row.
+                                let pk = &idx[1];
+
+                                let mut pager = self.pager.borrow_mut();
+                                let table_comp = Relation::Table(self.right_table.clone()).comp();
+                                let mut table_btree =
+                                    BTree::new(&mut pager, self.right_table.root, table_comp);
+
+                                let pk_key = tuple::serialize(
+                                    &self.right_table.schema.columns[0].data_type,
+                                    pk,
+                                );
+
+                                match table_btree.get(&pk_key)? {
+                                    Some(content) => tuple::deserialize(
+                                        content.as_ref(),
+                                        &self.right_table.schema,
+                                    ),
+                                    None => unreachable!(),
+                                }
+                            }
+                        };
+
+                        let mut result = self.current_left.clone().unwrap();
+                        result.extend(right_tuple);
+                        return Ok(Some(result));
+                    }
+
+                    None => {
+                        self.current_right = None;
+
+                        if !self.match_found && matches!(self.join_type, JoinType::Left) {
+                            if let Some(left) = &self.current_left {
+                                let mut result = left.clone();
+                                result.extend(vec![Value::Null; self.right_table.schema.len()]);
+                                return Ok(Some(result));
+                            }
+                        }
+                    }
+                }
+            }
+
             let left_tuple = match self.left.try_next()? {
                 Some(tuple) => tuple,
                 None => return Ok(None),
@@ -1419,57 +1517,40 @@ impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
                     result.extend(vec![Value::Null; self.right_table.schema.len()]);
                     return Ok(Some(result));
                 }
+
                 continue;
             }
 
-            let mut pager = self.pager.borrow_mut();
-            if self.index.root == self.right_table.root {
-                let comparator = Relation::Table(self.right_table.clone()).comp();
-                let mut table_btree = BTree::new(&mut pager, self.right_table.root, comparator);
+            self.current_left = Some(left_tuple);
 
-                let key_bytes =
-                    tuple::serialize(&self.right_table.schema.columns[0].data_type, &key);
+            let idx_col_type = &self.index.schema.columns[0].data_type;
+            let bytes = tuple::serialize(idx_col_type, &key);
 
-                if let Some(row_bytes) = table_btree.get(&key_bytes)? {
-                    let right_tuple =
-                        tuple::deserialize(row_bytes.as_ref(), &self.right_table.schema);
+            let (start, end) = match self.index.unique {
+                true => (bytes.clone(), bytes), // exact-match range
+                _ => {
+                    let pk_col_type = &self.index.schema.columns[1].data_type;
+                    let pk_len = tuple::byte_len_of_type(pk_col_type);
+                    let (min, max) = (vec![0u8; pk_len], vec![0xFFu8; pk_len]);
 
-                    let mut result = left_tuple;
-                    result.extend(right_tuple);
-                    return Ok(Some(result));
+                    let mut start = bytes.clone();
+                    start.extend(min);
+                    let mut end = bytes;
+                    end.extend(max);
+
+                    (start, end)
                 }
-            } else {
-                let comparator = Relation::Index(self.index.clone()).comp();
-                let mut index_btree = BTree::new(&mut pager, self.index.root, comparator);
+            };
 
-                let key_bytes = tuple::serialize(&self.index.schema.columns[0].data_type, &key);
-                if let Some(entry) = index_btree.get(&key_bytes)? {
-                    let index_entry = tuple::deserialize(entry.as_ref(), &self.index.schema);
-                    let pk_val = &index_entry[1];
+            let relation = Relation::Index(self.index.clone());
 
-                    let table_comparator = Relation::Table(self.right_table.clone()).comp();
-                    let mut table_btree =
-                        BTree::new(&mut pager, self.right_table.root, table_comparator);
-
-                    let pk_bytes =
-                        tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val);
-
-                    if let Some(row_bytes) = table_btree.get(&pk_bytes)? {
-                        let right_tuple =
-                            tuple::deserialize(row_bytes.as_ref(), &self.right_table.schema);
-
-                        let mut result = left_tuple;
-                        result.extend(right_tuple);
-                        return Ok(Some(result));
-                    }
-                }
-            }
-
-            if matches!(self.join_type, JoinType::Left) {
-                let mut result = left_tuple;
-                result.extend(vec![Value::Null; self.right_table.schema.len()]);
-                return Ok(Some(result));
-            }
+            self.current_right = Some(RangeScan::new(
+                (Bound::Included(start), Bound::Included(end)),
+                relation,
+                false,
+                Expression::Wildcard,
+                Rc::clone(&self.pager),
+            ))
         }
     }
 }

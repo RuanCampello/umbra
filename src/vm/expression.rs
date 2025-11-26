@@ -45,6 +45,10 @@ pub enum TypeError {
     ExpectedOneOfTypes {
         expected: Vec<VmType>,
     },
+    Mismatch {
+        expected: Type,
+        found: Type,
+    },
     InvalidDate(DateParseError),
     InvalidInterval(IntervalParseError),
     ExtractError(ExtractError),
@@ -452,6 +456,12 @@ impl Display for TypeError {
             }
             TypeError::ExpectedType { expected, found } => {
                 write!(f, "Expected {expected:#?} but found {found:?}")
+            }
+            TypeError::Mismatch { expected, found } => {
+                write!(
+                    f,
+                    "Type mismatch: expected {expected:#?} but found {found:#?}"
+                )
             }
             TypeError::ExpectedOneOfTypes { expected } => {
                 write!(f, "Expected one of ")?;

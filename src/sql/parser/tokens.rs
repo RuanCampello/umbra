@@ -125,6 +125,8 @@ pub enum Keyword {
     On,
     Limit,
     Offset,
+    Foreign,
+    References,
     Start,
     Transaction,
     Rollback,
@@ -296,6 +298,8 @@ impl Borrow<str> for Keyword {
             Self::Trunc => "TRUNC",
             Self::Sign => "SIGN",
             Self::Position => "POSITION",
+            Self::Foreign => "FOREIGN",
+            Self::References => "REFERENCES",
             Self::None => "_",
         }
     }
@@ -382,6 +386,8 @@ impl FromStr for Keyword {
             "RIGHT" => Keyword::Right,
             "LIMIT" => Keyword::Limit,
             "OFFSET" => Keyword::Offset,
+            "REFERENCES" => Keyword::References,
+            "FOREIGN" => Keyword::Foreign,
             "BEGIN" => Keyword::Start,
             "TRANSACTION" => Keyword::Transaction,
             "ROLLBACK" => Keyword::Rollback,
