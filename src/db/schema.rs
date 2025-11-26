@@ -3,7 +3,7 @@ use crate::sql::statement::{Column, Constraint, JoinType, Type};
 use std::collections::HashMap;
 
 /// The representation of the table schema during runtime.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct Schema {
     pub columns: Vec<Column>,
     /// Index of columns definitions based on their name

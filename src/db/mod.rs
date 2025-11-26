@@ -52,7 +52,7 @@ struct PreparedStatement<'db, File: FileOperations> {
     autocommit: bool,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub struct QuerySet {
     pub tuples: Vec<Vec<Value>>,
     pub schema: Schema,
@@ -640,6 +640,7 @@ impl QuerySet {
         self.tuples.iter().all(|tuple| tuple.is_empty())
     }
 }
+
 impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     fn from(columns: Col) -> Self {
         Self::new(Vec::from_iter(columns.into_iter().cloned()))

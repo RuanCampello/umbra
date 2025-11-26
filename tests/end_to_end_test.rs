@@ -5,7 +5,10 @@ use std::{
     thread,
     time::Duration,
 };
-use umbra::tcp::{self, Response};
+use umbra::{
+    db::QuerySet,
+    tcp::{self, Response},
+};
 
 struct State {
     path: PathBuf,
@@ -42,12 +45,7 @@ impl State {
         let full_path = std::fs::canonicalize(full_path)
             .unwrap_or_else(|_| panic!("Script file not found: {:#?}", path));
 
-        let response = client.exec(&format!("SOURCE '{}';", full_path.display()));
-
-        if let Response::Err(e) = response {
-            panic!("Failed to source script '{}': {}", path, e);
-        }
-
+        client.exec(&format!("SOURCE '{}';", full_path.display()));
         server
     }
 
@@ -72,7 +70,7 @@ impl State {
 }
 
 impl Client {
-    fn exec(&mut self, query: &str) -> Response {
+    fn exec(&mut self, query: &str) -> umbra::db::QuerySet {
         self.stream
             .write_all(&(query.len() as u32).to_le_bytes())
             .unwrap();
@@ -86,7 +84,10 @@ impl Client {
         let mut content = vec![0u8; len];
         self.stream.read_exact(&mut content).unwrap();
 
-        tcp::deserialize(&content).unwrap()
+        match tcp::deserialize(&content).unwrap() {
+            Response::QuerySet(tuples) => tuples,
+            _ => QuerySet::default(),
+        }
     }
 }
 
@@ -101,19 +102,40 @@ fn join_over_tcp() {
     let server = State::new("sql/employees-and-departments.sql");
     let mut db = server.client();
 
-    let response = db.exec(
+    let query = db.exec(
         r#"
         SELECT 
-            e.employee_id,
-            e.first_name,
-            e.last_name,
+            CONCAT(e.first_name, ' ', e.last_name) as name,
             e.salary,
             d.department_name,
             d.location
         FROM employees AS e
         JOIN departments AS d ON e.department_id = d.department_id
-        ORDER BY e.employee_id;"#,
+        ORDER BY e.employee_id
+        LIMIT 3;"#,
     );
 
-    assert!(matches!(response, Response::QuerySet(_)));
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![
+                "John Doe".into(),
+                75000.into(),
+                "Engineering".into(),
+                "New York".into()
+            ],
+            vec![
+                "Jane Smith".into(),
+                65000.into(),
+                "Sales".into(),
+                "Chicago".into()
+            ],
+            vec![
+                "Bob Johnson".into(),
+                80000.into(),
+                "Engineering".into(),
+                "New York".into()
+            ]
+        ]
+    )
 }
