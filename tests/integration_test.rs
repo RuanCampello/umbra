@@ -48,17 +48,6 @@ impl Drop for State {
     }
 }
 
-fn assert_values(left: &[Vec<Value>], right: &[Vec<Value>]) {
-    for (left_row, right_row) in left.iter().zip(right.iter()) {
-        for (left_val, right_val) in left_row.iter().zip(right_row.iter()) {
-            match (left_val, right_val) {
-                (Value::Null, Value::Null) => {}
-                _ => assert_eq!(left_val, right_val),
-            }
-        }
-    }
-}
-
 #[test]
 fn serialisation_and_deserialisation() -> Result<()> {
     let mut db = State::new("test.db");
@@ -1288,7 +1277,7 @@ fn nullable_column() -> Result<()> {
     )?;
 
     let query = db.exec("SELECT name, phone, age FROM users;")?;
-    assert_values(
+    assert_eq!(
         &query.tuples,
         &vec![
             vec!["Alice Smith".into(), "+15551234567".into(), 33.into()],
@@ -1328,7 +1317,7 @@ fn nullable_conditions() -> Result<()> {
 
     let query =
         db.exec("SELECT customer_name, priority FROM orders WHERE shipping_notes IS NOT NULL;")?;
-    assert_values(
+    assert_eq!(
         &query.tuples,
         &vec![
             vec!["Alice".into(), 1.into()],
@@ -1340,7 +1329,7 @@ fn nullable_conditions() -> Result<()> {
     let query = db.exec(
         "SELECT priority FROM orders WHERE priority IS NOT NULL AND shipping_notes IS NOT NULL;",
     )?;
-    assert_values(&query.tuples, &vec![vec![1.into()], vec![2.into()]]);
+    assert_eq!(&query.tuples, &vec![vec![1.into()], vec![2.into()]]);
 
     Ok(())
 }
@@ -1371,7 +1360,7 @@ fn coalesce_function() -> Result<()> {
     )?;
 
     let query = db.exec("SELECT product, (price - discount) AS net_price FROM items;")?;
-    assert_values(
+    assert_eq!(
         &query.tuples,
         &vec![
             vec!["A".into(), 990.into()],
@@ -2466,6 +2455,142 @@ fn index_nested_loop_join() -> Result<()> {
         WHERE orders.id = 103;"#,
     )?;
     assert_eq!(query.tuples, vec![vec![Value::Number(200), Value::Null],]);
+
+    Ok(())
+}
+
+#[test]
+fn aggregate_with_coalesce() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE salaries (id INT PRIMARY KEY, name VARCHAR(50), base REAL, bonus REAL NULLABLE);")?;
+    db.exec(
+        r#"
+        INSERT INTO salaries (id, name, base, bonus) VALUES
+            (1, 'Alice', 50000, 5000),
+            (2, 'Bob', 60000, NULL),
+            (3, 'Carol', 55000, 3000),
+            (4, 'Dave', 70000, NULL);
+        "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT SUM(base + COALESCE(bonus, 0)) AS total_compensation
+        FROM salaries;
+        "#,
+    )?;
+    assert_eq!(query.tuples, vec![vec![243000.0.into()]]);
+
+    let query = db.exec(
+        r#"
+        SELECT TRUNC(AVG(base + COALESCE(bonus, 0)), 2) AS avg_compensation
+        FROM salaries;
+        "#,
+    )?;
+
+    assert_eq!(query.tuples, vec![vec![60750.0.into()]]);
+
+    Ok(())
+}
+
+#[test]
+fn complex_where_with_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT, amount REAL, status VARCHAR(20));")?;
+    db.exec("CREATE TABLE customers (id INT PRIMARY KEY, name VARCHAR(50), tier VARCHAR(20));")?;
+
+    db.exec(
+        r#"
+        INSERT INTO customers (id, name, tier) VALUES
+            (1, 'Alice', 'Gold'),
+            (2, 'Bob', 'Silver'),
+            (3, 'Carol', 'Gold');
+        "#,
+    )?;
+    db.exec(
+        r#"
+        INSERT INTO orders (id, customer_id, amount, status) VALUES
+            (100, 1, 500.0, 'completed'),
+            (101, 1, 200.0, 'pending'),
+            (102, 2, 150.0, 'completed'),
+            (103, 2, 300.0, 'cancelled'),
+            (104, 3, 1000.0, 'completed');
+        "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT c.name, o.amount
+        FROM customers AS c
+        JOIN orders AS o ON c.id = o.customer_id
+        WHERE c.tier = 'Gold' AND o.status = 'completed' AND o.amount > 300
+        ORDER BY o.amount DESC;
+        "#,
+    )?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Carol".into(), 1000.into()],
+            vec!["Alice".into(), 500.into()],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn interval_with_null() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE nullable_dates (id INT PRIMARY KEY, d DATE NULLABLE);")?;
+    db.exec(
+        r#"
+        INSERT INTO nullable_dates (id, d) VALUES
+            (1, '2024-06-15'),
+            (2, NULL),
+            (3, '2024-12-25');
+        "#,
+    )?;
+
+    let query =
+        db.exec("SELECT id, d + INTERVAL '1 day' AS next_day FROM nullable_dates ORDER BY id;")?;
+    assert_eq!(
+        &query.tuples,
+        &vec![
+            vec![Value::Number(1), temporal!("2024-06-16")?],
+            vec![Value::Number(2), Value::Null],
+            vec![Value::Number(3), temporal!("2024-12-26")?],
+        ],
+    );
+
+    Ok(())
+}
+
+#[test]
+fn boundary_date_operations() -> Result<()> {
+    let mut db = State::default();
+    db.exec("CREATE TABLE boundary_dates (id INT PRIMARY KEY, d DATE);")?;
+    db.exec(
+        r#"
+        INSERT INTO boundary_dates (id, d) VALUES
+            (1, '2024-01-01'),
+            (2, '2024-02-29'),
+            (3, '2024-12-31');
+        "#,
+    )?;
+
+    let query = db.exec("SELECT id, d + INTERVAL '1 month' FROM boundary_dates ORDER BY id;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![Value::Number(1), temporal!("2024-02-01")?],
+            vec![Value::Number(2), temporal!("2024-03-29")?],
+            vec![Value::Number(3), temporal!("2025-01-31")?],
+        ]
+    );
+
+    let query = db.exec("SELECT d - INTERVAL '1 month' FROM boundary_dates WHERE id = 2;")?;
+    assert_eq!(query.tuples, vec![vec![temporal!("2024-01-29")?]]);
 
     Ok(())
 }
