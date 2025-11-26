@@ -391,6 +391,7 @@ impl<'input> Parser<'input> {
             Keyword::Time => Ok(Type::Time),
             Keyword::Interval => Ok(Type::Interval),
             Keyword::Text => Ok(Type::Text),
+            Keyword::Numeric => Ok(Type::Numeric),
             keyword => unreachable!("unexpected column token: {keyword}"),
         }
     }
@@ -797,7 +798,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 16] {
+    const fn supported_types() -> [Keyword; 17] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -815,6 +816,7 @@ impl<'input> Parser<'input> {
             Keyword::Date,
             Keyword::Timestamp,
             Keyword::Interval,
+            Keyword::Numeric,
         ]
     }
 
@@ -2250,5 +2252,23 @@ mod tests {
                     .into()
             )
         )
+    }
+
+    #[test]
+    fn test_numeric_type_parsing() {
+        let sql = "CREATE TABLE accounts (id INT PRIMARY KEY, balance NUMERIC, rate DECIMAL);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Table {
+                name: "accounts".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("balance", Type::Numeric),
+                    Column::new("rate", Type::Numeric)
+                ]
+            }))
+        );
     }
 }
