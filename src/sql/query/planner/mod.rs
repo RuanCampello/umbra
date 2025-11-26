@@ -4,7 +4,7 @@ use crate::{
     sql::{
         analyzer::{self, contains_aggregate},
         query::{optimiser, planner::select::SelectBuilder},
-        statement::{Column, Delete, Expression, Insert, Select, Type, Update},
+        statement::{Column, Delete, Expression, Insert, Select, Type, Update, NUMERIC_ANY},
         Statement,
     },
     vm::{
@@ -179,7 +179,7 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             VmType::String => Type::Text,
             VmType::Date => Type::Date,
             VmType::Interval => Type::Interval,
-            VmType::Numeric => Type::Numeric,
+            VmType::Numeric => Type::Numeric(NUMERIC_ANY, NUMERIC_ANY),
         },
     })
 }

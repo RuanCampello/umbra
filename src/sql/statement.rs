@@ -328,7 +328,7 @@ pub enum Type {
     Uuid,
     /// Arbitrary-precision numeric type (like PostgreSQL `NUMERIC`/`DECIMAL`).
     /// Uses optimised bit-packing for small values and Base-10000 for arbitrary precision.
-    Numeric,
+    Numeric(usize, usize),
     Date,
     Time,
     DateTime,
@@ -388,6 +388,7 @@ pub(crate) enum ArithmeticPair<'p> {
 }
 
 const NULL_HASH: u32 = 0x4E554C4C;
+pub const NUMERIC_ANY: usize = usize::MAX;
 
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
@@ -995,7 +996,11 @@ impl Display for Type {
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
             Type::Text => write!(f, "TEXT"),
             Type::Interval => f.write_str("INTERVAL"),
-            Type::Numeric => f.write_str("NUMERIC"),
+            Type::Numeric(precision, scale) => match (precision, scale) {
+                (&NUMERIC_ANY, _) => write!(f, "NUMERIC"),
+                (precision, 0) => write!(f, "NUMERIC({precision})"),
+                (precision, scale) => write!(f, "NUMERIC({precision}, {scale})"),
+            },
         }
     }
 }

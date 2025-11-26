@@ -9,7 +9,7 @@ use std::{
 };
 
 /// SQL tokens.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::sql) enum Token {
     Whitespace(Whitespace),
     Identifier(String),
@@ -35,7 +35,7 @@ pub(in crate::sql) enum Token {
     Eof,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::sql) enum Whitespace {
     Tab,
     Space,

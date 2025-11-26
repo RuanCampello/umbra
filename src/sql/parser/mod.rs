@@ -18,7 +18,7 @@ use crate::core::date::{
 };
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, JoinClause,
-    JoinType, Statement, TableRef, Type, UnaryOperator, Value,
+    JoinType, Statement, TableRef, Type, UnaryOperator, Value, NUMERIC_ANY,
 };
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -384,6 +384,7 @@ impl<'input> Parser<'input> {
                 self.expect_keyword(Keyword::Precision)?;
                 Ok(Type::DoublePrecision)
             }
+            Keyword::Numeric => self.parse_numeric(),
             Keyword::Real => Ok(Type::Real),
             Keyword::Bool => Ok(Type::Boolean),
             Keyword::Timestamp => Ok(Type::DateTime),
@@ -391,7 +392,6 @@ impl<'input> Parser<'input> {
             Keyword::Time => Ok(Type::Time),
             Keyword::Interval => Ok(Type::Interval),
             Keyword::Text => Ok(Type::Text),
-            Keyword::Numeric => Ok(Type::Numeric),
             keyword => unreachable!("unexpected column token: {keyword}"),
         }
     }
@@ -413,6 +413,32 @@ impl<'input> Parser<'input> {
             .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
 
         Ok(Expression::Value(Value::Interval(interval)))
+    }
+
+    fn parse_numeric(&mut self) -> ParserResult<Type> {
+        Ok(match self.consume_optional(Token::LeftParen) {
+            true => {
+                let Some(precision) = self.parse_usize()? else {
+                    let found = self.peek_token().and_then(|res| res.ok()).cloned();
+                    return Err(self.error(ErrorKind::Expected {
+                        expected: Token::Number(String::new()),
+                        found: found.unwrap(),
+                    }));
+                };
+
+                let scale = self
+                    .consume_optional(Token::Comma)
+                    .then(|| self.parse_usize())
+                    .and_then(|result| result.ok())
+                    .flatten()
+                    .unwrap_or(0);
+
+                self.expect_token(Token::RightParen)?;
+                Type::Numeric(precision, scale)
+            }
+
+            _ => Type::Numeric(NUMERIC_ANY, NUMERIC_ANY),
+        })
     }
 
     fn parse_assign(&mut self) -> ParserResult<Assignment> {
@@ -447,33 +473,34 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_usize_by_keyword(&mut self, keyword: Keyword) -> ParserResult<Option<usize>> {
-        match self.consume_optional(Token::Keyword(keyword)) {
-            true => match self.next_token()? {
-                Token::Number(num) => {
-                    let value = num.parse::<usize>().map_err(|_| ParserError {
-                        kind: ErrorKind::InvalidValue {
-                            clause: keyword,
-                            found: Token::String(num),
-                        },
-                        input: self.input.into(),
-                        location: self.location,
-                    })?;
-
-                    Ok(Some(value))
-                }
-                token => {
-                    return Err(ParserError {
-                        kind: ErrorKind::Expected {
-                            expected: Token::Number(String::new()),
-                            found: token,
-                        },
-                        location: self.location,
-                        input: self.input.into(),
-                    })
-                }
-            },
-            _ => Ok(None),
+        if !self.consume_optional(Token::Keyword(keyword)) {
+            return Ok(None);
         }
+
+        self.parse_usize()?
+            .ok_or(ParserError {
+                kind: ErrorKind::Expected {
+                    expected: Token::Number(String::new()),
+                    found: self.peek_token().and_then(|res| res.ok()).cloned().unwrap(),
+                },
+                location: self.location,
+                input: self.input.into(),
+            })
+            .map(Some)
+    }
+
+    fn parse_usize(&mut self) -> ParserResult<Option<usize>> {
+        if let Some(Ok(Token::Number(_))) = self.peek_token() {
+            let token = self.next_token()?;
+            if let Token::Number(s) = token {
+                let n = s.parse::<usize>().map_err(|_| {
+                    self.error(ErrorKind::FormatError(format!("Invalid number: {s}")))
+                })?;
+                return Ok(Some(n));
+            }
+        }
+
+        Ok(None)
     }
 
     fn parse_alias(&mut self) -> ParserResult<Option<String>> {
@@ -2265,8 +2292,8 @@ mod tests {
                 name: "accounts".into(),
                 columns: vec![
                     Column::primary_key("id", Type::Integer),
-                    Column::new("balance", Type::Numeric),
-                    Column::new("rate", Type::Numeric)
+                    Column::new("balance", Type::Numeric(NUMERIC_ANY, NUMERIC_ANY)),
+                    Column::new("rate", Type::Numeric(NUMERIC_ANY, NUMERIC_ANY))
                 ]
             }))
         );

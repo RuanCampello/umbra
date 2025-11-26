@@ -6,6 +6,7 @@ use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
     ArithmeticPair, BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+    NUMERIC_ANY,
 };
 use std::fmt::{Display, Formatter};
 use std::mem;
@@ -427,7 +428,7 @@ impl From<VmType> for Type {
             VmType::Float => Self::DoublePrecision,
             VmType::Date => Self::DateTime,
             VmType::Interval => Self::Interval,
-            VmType::Numeric => Self::Numeric,
+            VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
         }
     }
 }

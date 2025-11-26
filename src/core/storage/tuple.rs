@@ -233,7 +233,7 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             ))
         }
 
-        Type::Numeric => {
+        Type::Numeric(_, _) => {
             let mut header = [0; 8];
             reader.read_exact(&mut header)?;
 
