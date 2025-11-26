@@ -94,6 +94,25 @@ impl Numeric {
         }
     }
 
+    #[inline]
+    #[rustfmt::skip]
+    pub fn precision(&self) -> usize {
+        if self.is_zero() { return 1; };
+        if self.is_nan() { return 0; };
+
+        let (weight, digits, _, scale) = self.as_long_view();
+        let int_groups = (weight + 1).max(0) as usize;
+        let mut int_digits = int_groups * 4;
+
+        if let Some(first) = digits.first() {
+            if *first < 10 { int_digits -= 3; }
+            else if *first < 100 { int_digits -= 2; }
+            else if *first < 1000 { int_digits -= 1; }
+        }
+
+        int_digits + scale as usize
+    }
+
     fn from_long_i64(value: i64) -> Self {
         if value == 0 {
             return Self::zero();

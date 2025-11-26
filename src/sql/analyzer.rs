@@ -349,6 +349,22 @@ fn analyze_assignment<'exp, 'id>(
         }
     }
 
+    if let Type::Numeric(precision, scale) = data_type {
+        if let Expression::Value(Value::Numeric(numeric)) = value {
+            let (num_precision, num_scale) = (numeric.precision(), numeric.scale() as usize);
+            if num_scale > scale {
+                return Err(AnalyzerError::Overflow(data_type, scale).into());
+            }
+
+            let max_int_digits = precision - scale;
+            let actual_int_digits = num_precision.saturating_sub(num_scale);
+
+            if actual_int_digits > max_int_digits {
+                return Err(AnalyzerError::Overflow(data_type, actual_int_digits).into());
+            }
+        }
+    };
+
     Ok(())
 }
 
