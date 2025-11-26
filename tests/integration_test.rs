@@ -2521,17 +2521,6 @@ fn complex_where_with_join() -> Result<()> {
 
     let query = db.exec(
         r#"
-        EXPLAIN SELECT c.name, o.amount
-        FROM customers AS c
-        JOIN orders AS o ON c.id = o.customer_id
-        WHERE c.tier = 'Gold' AND o.status = 'completed' AND o.amount > 300
-        ORDER BY o.amount DESC;
-        "#,
-    )?;
-    println!("{query}");
-
-    let query = db.exec(
-        r#"
         SELECT c.name, o.amount
         FROM customers AS c
         JOIN orders AS o ON c.id = o.customer_id

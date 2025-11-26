@@ -486,7 +486,6 @@ impl<File: FileOperations> Planner<File> {
                 | Planner::ExactMatch(_)
                 | Planner::RangeScan(_)
                 | Planner::Filter(_)
-                | Planner::IndexNestedLoopJoin(_)
         )
     }
 }

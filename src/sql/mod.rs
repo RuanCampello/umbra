@@ -13,8 +13,14 @@ mod prepare;
 pub mod statement;
 
 pub(crate) fn pipeline(input: &str, db: &mut impl Ctx) -> Result<Statement, DatabaseError> {
-    let mut statement = Parser::new(input).parse_statement()?;
+    let statement = Parser::new(input).parse_statement()?;
+    process_statement(statement, db)
+}
 
+pub(crate) fn process_statement(
+    mut statement: Statement,
+    db: &mut impl Ctx,
+) -> Result<Statement, DatabaseError> {
     analyzer::analyze(&statement, db)?;
     optimiser::optimise(&mut statement)?;
     prepare::prepare(&mut statement, db)?;

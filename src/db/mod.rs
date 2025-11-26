@@ -108,6 +108,7 @@ pub enum SqlError {
 }
 
 pub(crate) type RowId = u64;
+type Result<T> = std::result::Result<T, DatabaseError>;
 
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
@@ -115,7 +116,7 @@ pub(crate) const DB_METADATA: &str = "umbra_db_meta";
 const DEFAULT_CACHE_SIZE: usize = 512;
 
 pub(crate) trait Ctx {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata>;
 }
 
 #[macro_export]
@@ -136,7 +137,7 @@ macro_rules! interval {
 }
 
 impl Database<File> {
-    pub fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
+    pub fn init(path: impl AsRef<Path>) -> Result<Self> {
         let file = os::Fs::options()
             .create(true)
             .truncate(false)
@@ -174,7 +175,7 @@ impl Database<File> {
 }
 
 impl<File: Seek + Read + Write + FileOperations> Database<File> {
-    pub fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
+    pub fn exec(&mut self, input: &str) -> Result<QuerySet> {
         let (schema, mut prepared) = self.prepare(input)?;
         let mut query_set = QuerySet::new(schema, vec![]);
         let mut total_size = 0;
@@ -193,7 +194,26 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(query_set)
     }
 
-    fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
+    pub fn load(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let content = std::fs::read_to_string(path).map_err(DatabaseError::Io)?;
+        let statements = Parser::new(&content).try_parse()?;
+
+        for statement in statements {
+            let statement = crate::sql::process_statement(statement, self)?;
+            let (_, exec) = self.generate_exec(statement)?;
+            let mut prepared = PreparedStatement {
+                db: self,
+                exec: Some(exec),
+                autocommit: false,
+            };
+
+            while let Some(_) = prepared.try_next()? {}
+        }
+
+        Ok(())
+    }
+
+    fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata> {
         let query = self.exec(&format!(
             "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index';"
         ))?;
@@ -221,15 +241,20 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             .clone())
     }
 
-    fn sequence_metadata(&mut self, sequence: &str) -> Result<SequenceMetadata, DatabaseError> {
-        todo!()
+    fn prepare(&mut self, sql: &str) -> Result<(Schema, PreparedStatement<'_, File>)> {
+        let statement = crate::sql::pipeline(sql, self)?;
+        let (schema, exec) = self.generate_exec(statement)?;
+
+        let prepared_statement = PreparedStatement {
+            db: self,
+            autocommit: false,
+            exec: Some(exec),
+        };
+
+        Ok((schema, prepared_statement))
     }
 
-    fn prepare(
-        &mut self,
-        sql: &str,
-    ) -> Result<(Schema, PreparedStatement<'_, File>), DatabaseError> {
-        let statement = crate::sql::pipeline(sql, self)?;
+    fn generate_exec(&mut self, statement: Statement) -> Result<(Schema, Exec<File>)> {
         let mut schema = Schema::empty();
 
         let exec = match statement {
@@ -265,13 +290,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             }
         };
 
-        let prepared_statement = PreparedStatement {
-            db: self,
-            autocommit: false,
-            exec: Some(exec),
-        };
-
-        Ok((schema, prepared_statement))
+        Ok((schema, exec))
     }
 
     fn commit(&mut self) -> io::Result<()> {
@@ -279,12 +298,12 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         self.pager.borrow_mut().commit()
     }
 
-    pub(crate) fn rollback(&mut self) -> Result<usize, DatabaseError> {
+    pub(crate) fn rollback(&mut self) -> Result<usize> {
         self.transaction_state = TransactionState::Terminated;
         self.pager.borrow_mut().rollback()
     }
 
-    fn load_metadata(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
+    fn load_metadata(&mut self, table: &str) -> Result<TableMetadata> {
         if table == DB_METADATA {
             let mut schema = umbra_schema();
             schema.prepend_id();
@@ -435,7 +454,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(metadata)
     }
 
-    fn load_next_row_id(&mut self, root: PageNumber) -> Result<RowId, DatabaseError> {
+    fn load_next_row_id(&mut self, root: PageNumber) -> Result<RowId> {
         let mut pager = self.pager.borrow_mut();
         let mut btree = BTree::new(&mut pager, root, FixedSizeCmp::new::<RowId>());
 
@@ -449,7 +468,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 }
 
 impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata> {
         if !self.context.contains(table) {
             let metadata = self.load_metadata(table)?;
             self.context.insert(metadata);
@@ -488,7 +507,7 @@ impl<File> Database<File> {
 unsafe impl Send for Database<File> {}
 
 impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, File> {
-    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+    fn try_next(&mut self) -> Result<Option<Tuple>> {
         let Some(exec) = self.exec.as_mut() else {
             return Ok(None);
         };
@@ -581,7 +600,7 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
         Ok(tuple)
     }
 
-    fn abort_transaction(&mut self) -> Result<(), DatabaseError> {
+    fn abort_transaction(&mut self) -> Result<()> {
         match self.autocommit {
             true => {
                 self.db.rollback()?;
@@ -828,7 +847,7 @@ mod tests {
         cache_size: usize,
     }
 
-    type DatabaseResult = Result<(), DatabaseError>;
+    type DatabaseResult = Result<()>;
     impl Default for Database<MemoryBuffer> {
         fn default() -> Self {
             new_db(Configuration {
