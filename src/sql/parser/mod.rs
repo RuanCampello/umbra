@@ -100,7 +100,19 @@ impl<'input> Parser<'input> {
             Keyword::Commit => Statement::Commit,
             Keyword::Rollback => Statement::Rollback,
             Keyword::Explain => return Ok(Statement::Explain(Box::new(self.parse_statement()?))),
+            Keyword::Source => {
+                let path = match self.next_token()? {
+                    Token::String(s) => s,
+                    token => {
+                        return Err(self.error(ErrorKind::Expected {
+                            expected: Token::String(String::new()),
+                            found: token,
+                        }))
+                    }
+                };
 
+                Statement::Source(path)
+            }
             _ => unreachable!(),
         };
 
@@ -769,7 +781,7 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_statements() -> [Keyword; 10] {
+    const fn supported_statements() -> [Keyword; 11] {
         [
             Keyword::Select,
             Keyword::Create,
@@ -781,6 +793,7 @@ impl<'input> Parser<'input> {
             Keyword::Rollback,
             Keyword::Commit,
             Keyword::Explain,
+            Keyword::Source,
         ]
     }
 

@@ -195,6 +195,12 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
     }
 
     pub fn load(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        if path.as_ref().extension().and_then(|s| s.to_str()) != Some("sql") {
+            return Err(DatabaseError::Other(
+                "File must have a .sql extension".to_string(),
+            ));
+        }
+
         let content = std::fs::read_to_string(path).map_err(DatabaseError::Io)?;
         let statements = Parser::new(&content).try_parse()?;
 
@@ -262,7 +268,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             | Statement::Drop(_)
             | Statement::StartTransaction
             | Statement::Commit
-            | Statement::Rollback => Exec::Statement(statement),
+            | Statement::Rollback
+            | Statement::Source(_) => Exec::Statement(statement),
 
             Statement::Explain(inner) => match &*inner {
                 Statement::Select { .. }
@@ -557,6 +564,7 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                     Statement::Rollback => {
                         self.db.rollback()?;
                     }
+                    Statement::Source(path) => self.db.load(path)?,
                     Statement::Drop(_) | Statement::Create(_) => {
                         match vm::statement::exec(statement, self.db) {
                             Ok(rows) => affected_rows = rows,

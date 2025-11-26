@@ -29,6 +29,7 @@ pub(crate) enum Statement {
     Insert(Insert),
     Delete(Delete),
     Drop(Drop),
+    Source(String),
     Commit,
     StartTransaction,
     Rollback,
@@ -620,6 +621,7 @@ impl Display for Statement {
             Statement::StartTransaction => f.write_str("BEGIN TRANSACTION")?,
             Statement::Commit => f.write_str("COMMIT")?,
             Statement::Rollback => f.write_str("ROLLBACK")?,
+            Statement::Source(source) => write!(f, "SOURCE '{source}'")?,
             Statement::Explain(statement) => write!(f, "EXPLAIN {statement}")?,
         };
 
