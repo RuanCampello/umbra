@@ -1,3 +1,18 @@
+//! # Umbra Wire Protocol
+//!
+//! Defines the binary format for client-server communication.
+//!
+//! ## Message Format
+//! `[ Length (u32) ] [ Type (u8) ] [ Payload (...) ]`
+//!
+//! ## Message Types
+//! - **`+` (0x2B) - QuerySet**: Successful result with data.
+//!   - Payload: Schema definition followed by serialized rows.
+//! - **`!` (0x21) - Empty**: Successful execution with no data (e.g., `INSERT` success).
+//!   - Payload: Affected row count.
+//! - **`-` (0x2D) - Error**: Something went wrong.
+//!   - Payload: Error message string.
+
 use std::{array::TryFromSliceError, fmt::Display, num::TryFromIntError};
 
 use crate::{
