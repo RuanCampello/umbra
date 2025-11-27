@@ -6,7 +6,7 @@
 use crate::core::Serialize;
 use std::borrow::Cow;
 use std::cmp::{max, min};
-use std::ops::Sub;
+use std::ops::{Neg, Sub};
 use std::{cmp::Ordering, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
@@ -410,17 +410,30 @@ impl Numeric {
             Self::Short(_) => {
                 let (v, s) = self.unpack_short();
 
-                if let Numeric::Long {
-                    weight,
-                    sign_dscale,
-                    digits,
-                } = Numeric::from_scaled_i128(v, s).unwrap()
-                {
-                    let is_neg = (sign_dscale & NUMERIC_NEG) != 0;
-                    (weight, Cow::Owned(digits), is_neg, s)
-                } else {
-                    unreachable!()
+                if v == 0 {
+                    return (0, Cow::Owned(vec![]), false, s);
                 }
+
+                let mut abs = v.unsigned_abs();
+                let align_pad = s % 4;
+                if align_pad > 0 {
+                    let multiplier = 10u128.pow((4 - align_pad) as u32);
+                    abs *= multiplier;
+                }
+
+                let mut digits = Vec::new();
+                let mut remaining = abs;
+
+                while remaining > 0 {
+                    digits.push((remaining % N_BASE as u128) as i16);
+                    remaining /= N_BASE as u128;
+                }
+                digits.reverse();
+
+                let fract_groups = (s + 3) / 4;
+                let weight = (digits.len() as i16) - (fract_groups as i16) - 1;
+
+                (weight, Cow::Owned(digits), v.is_negative(), s)
             }
 
             Self::Long {
@@ -572,6 +585,16 @@ impl Eq for Numeric {}
 impl Default for Numeric {
     fn default() -> Self {
         Self::zero()
+    }
+}
+
+impl Neg for Numeric {
+    type Output = Self;
+
+    #[inline]
+    fn neg(mut self) -> Self::Output {
+        self.set_sign(!self.is_negative());
+        self
     }
 }
 
@@ -895,6 +918,22 @@ impl From<i128> for Numeric {
     }
 }
 
+impl TryFrom<f64> for Numeric {
+    type Error = NumericError;
+
+    #[inline]
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        if value.is_nan() {
+            return Ok(Self::NaN);
+        }
+        if value.is_infinite() {
+            return Err(NumericError::Overflow);
+        }
+
+        Self::from_str(&value.to_string())
+    }
+}
+
 impl From<&Numeric> for Option<f64> {
     fn from(value: &Numeric) -> Self {
         match value {
@@ -1144,6 +1183,7 @@ impl Display for Numeric {
         }
     }
 }
+
 impl Display for NumericError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

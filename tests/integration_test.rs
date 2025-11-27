@@ -2902,3 +2902,16 @@ fn limit_with_aggregate_functions() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn numeric_storage() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE account (id SERIAL PRIMARY KEY, balance NUMERIC);")?;
+    db.exec("INSERT INTO account (balance) VALUES (100), (100.50), (0), (-50.25);")?;
+
+    let query = db.exec("SELECT balance FROM account ORDER BY id;")?;
+    println!("{query}");
+
+    Ok(())
+}

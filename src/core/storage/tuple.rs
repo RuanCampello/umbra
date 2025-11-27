@@ -423,6 +423,9 @@ impl ValueSerialize for f64 {
                 let value = *self as i128;
                 value.serialize(buff, typ);
             }
+            Type::Numeric(_, _) => Numeric::try_from(*self)
+                .expect("Invalid float for numeric conversion")
+                .serialize(buff),
             _ => unreachable!("Unsupported type {to} for f64 value"),
         }
     }

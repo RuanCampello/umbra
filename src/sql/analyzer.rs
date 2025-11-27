@@ -7,11 +7,12 @@
 use super::statement::{Delete, Insert, Select, Update};
 use crate::core::date::interval::Interval;
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{
     BinaryOperator, Constraint, Create, Drop, Expression, Function, Statement, Type, UnaryOperator,
-    Value,
+    Value, NUMERIC_ANY,
 };
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::{HashMap, HashSet};
@@ -349,22 +350,6 @@ fn analyze_assignment<'exp, 'id>(
         }
     }
 
-    if let Type::Numeric(precision, scale) = data_type {
-        if let Expression::Value(Value::Numeric(numeric)) = value {
-            let (num_precision, num_scale) = (numeric.precision(), numeric.scale() as usize);
-            if num_scale > scale {
-                return Err(AnalyzerError::Overflow(data_type, scale).into());
-            }
-
-            let max_int_digits = precision - scale;
-            let actual_int_digits = num_precision.saturating_sub(num_scale);
-
-            if actual_int_digits > max_int_digits {
-                return Err(AnalyzerError::Overflow(data_type, actual_int_digits).into());
-            }
-        }
-    };
-
     Ok(())
 }
 
@@ -556,17 +541,26 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
                 (data_type, operator, &**expr)
             {
-                match value {
-                    Value::Number(n) => {
-                        analyze_number(&-n, data_type)?;
-                        return Ok(VmType::Number);
-                    }
-                    Value::Float(f) => {
-                        analyze_float(&-f, data_type)?;
-                        return Ok(VmType::Float);
-                    }
-                    _ => unreachable!(),
+                if let Type::Numeric(_, _) = data_type {
+                    let numeric = match value {
+                        Value::Numeric(n) => -n.clone(),
+                        Value::Number(n) => Numeric::from(-n),
+                        _ => {
+                            return Err(SqlError::Type(TypeError::ExpectedType {
+                                expected: VmType::Numeric,
+                                found: *expr.clone(),
+                            }))
+                        }
+                    };
+
+                    analyze_numeric(&numeric, data_type)?;
                 }
+
+                match value {
+                    Value::Number(n) => analyze_number(&-n, data_type)?,
+                    Value::Float(f) => analyze_float(&-f, data_type)?,
+                    _ => unreachable!(),
+                };
             }
 
             match analyze_expression(ctx, data_type, expr)? {
@@ -672,38 +666,33 @@ fn analyze_expression_with_aliases<'exp>(
 }
 
 fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
-    let result: Result<VmType, SqlError> = match value {
-        Value::Boolean(_) => Ok(VmType::Bool),
-        Value::Number(n) => {
-            if let Some(col_type) = col_type {
-                analyze_number(n, col_type)?;
-            }
-            Ok(VmType::Number)
-        }
-        Value::Float(f) => {
-            if let Some(col_type) = col_type {
-                analyze_float(f, col_type)?;
-            }
-            Ok(VmType::Float)
-        }
-        Value::String(s) => match col_type {
-            // if the column has a type, delegate to analyze_string,
-            // which will return VmType::Date for valid dates,
-            // or VmType::String otherwise.
-            Some(ty) => analyze_string(s, ty),
+    Ok(match (value, col_type) {
+        (Value::Boolean(_), _) => VmType::Bool,
+        (Value::Null, Some(t)) => t.into(),
+        (Value::Null, _) => unreachable!("NULL must be type aware"),
 
-            // if we don’t know the target type, we can only
-            // treat it as a plain string.
-            None => Ok(VmType::String),
+        (Value::Numeric(n), Some(t @ Type::Numeric(_, _))) => analyze_numeric(n, t)?,
+        (Value::Number(n), Some(t @ Type::Numeric(_, _))) => {
+            analyze_numeric(&Numeric::from(*n), t)?
+        }
+        (Value::Float(f), Some(t @ Type::Numeric(_, _))) => match Numeric::try_from(*f) {
+            Ok(n) => analyze_numeric(&n, t)?,
+            _ => VmType::Float,
         },
-        Value::Null => match col_type {
-            Some(ty) => Ok(ty.into()),
-            None => unreachable!("NULL should always be type aware"),
-        },
-        _ => Ok(VmType::Date),
-    };
 
-    result
+        (Value::Float(_), None) => VmType::Float,
+        (Value::Float(float), Some(t)) => analyze_float(float, t)?,
+        (Value::Number(_), None) => VmType::Number,
+        (Value::Number(num), Some(t)) => analyze_number(num, t)?,
+
+        (Value::String(s), Some(t)) => analyze_string(s, t)?,
+        (Value::String(_), None) => VmType::String,
+
+        (Value::Temporal(_), _) => VmType::Date,
+        (Value::Interval(_), _) => VmType::Interval,
+        (Value::Numeric(_), _) => VmType::Numeric,
+        (Value::Uuid(_), _) => VmType::Number,
+    })
 }
 
 fn analyze_where<'exp>(
@@ -749,20 +738,42 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
     }
 }
 
-fn analyze_number(integer: &i128, data_type: &Type) -> Result<(), AnalyzerError> {
+fn analyze_number(integer: &i128, data_type: &Type) -> Result<VmType, AnalyzerError> {
     if data_type.is_integer() && !data_type.is_integer_in_bounds(integer) {
         return Err(AnalyzerError::Overflow(*data_type, *integer as usize));
     }
 
-    Ok(())
+    Ok(VmType::Number)
 }
 
-fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
+fn analyze_float(float: &f64, data_type: &Type) -> Result<VmType, AnalyzerError> {
     if data_type.is_float() && !data_type.is_float_in_bounds(float) {
         return Err(AnalyzerError::Overflow(*data_type, *float as usize));
     }
 
-    Ok(())
+    Ok(VmType::Float)
+}
+
+fn analyze_numeric(numeric: &Numeric, data_type: &Type) -> Result<VmType, AnalyzerError> {
+    if let Type::Numeric(precision, scale) = data_type {
+        if *precision == NUMERIC_ANY {
+            return Ok(VmType::Numeric);
+        }
+
+        let (num_precision, num_scale) = (numeric.precision(), numeric.scale() as usize);
+        if num_scale > *scale {
+            return Err(AnalyzerError::Overflow(*data_type, *scale));
+        }
+
+        let max_int_digits = precision - scale;
+        let actual_int_digits = num_precision.saturating_sub(num_scale);
+
+        if actual_int_digits > max_int_digits {
+            return Err(AnalyzerError::Overflow(*data_type, actual_int_digits));
+        }
+    }
+
+    Ok(VmType::Numeric)
 }
 
 // TODO: this is very uhhhhhhhhhmmmmmmm

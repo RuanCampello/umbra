@@ -870,6 +870,7 @@ impl Neg for Value {
         match self {
             Value::Number(num) => Ok(Value::Number(-num)),
             Value::Float(float) => Ok(Value::Float(-float)),
+            Value::Numeric(num) => Ok(Value::Numeric(-num)),
             Value::Null => Ok(Value::Null),
             v => Err(TypeError::CannotApplyUnary {
                 operator: UnaryOperator::Minus,
