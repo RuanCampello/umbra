@@ -779,22 +779,30 @@ impl Temporal {
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
+        use self::Value::{Numeric as Arbitrary, *};
+        use crate::core::numeric::Numeric;
+
         match (self, other) {
-            (Value::Number(a), Value::Number(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a == b,
+            (Number(a), Number(b)) => a == b,
+            (Float(a), Float(b)) => a == b,
             // we do this because we can coerce them later to do a comparison between floats and
             // integers
-            (Value::Number(a), Value::Float(b)) => (*a as f64) == *b,
-            (Value::Float(a), Value::Number(b)) => *a == (*b as f64),
-            (Value::String(a), Value::String(b)) => a == b,
-            (Value::Boolean(a), Value::Boolean(b)) => a == b,
-            (Value::Temporal(a), Value::Temporal(b)) => a == b,
-            (Value::Interval(a), Value::Interval(b)) => a == b,
-            (Value::Uuid(a), Value::Uuid(b)) => a == b,
+            (Number(a), Float(b)) => (*a as f64) == *b,
+            (Float(a), Number(b)) => *a == (*b as f64),
+            (Arbitrary(a), Arbitrary(b)) => a == b,
+            (Arbitrary(a), Number(n)) | (Number(n), Arbitrary(a)) => a == &Numeric::from(*n),
+            (Arbitrary(a), Float(f)) | (Float(f), Arbitrary(a)) => {
+                Numeric::try_from(*f).map(|f| &f == a).unwrap_or(false)
+            }
+            (String(a), String(b)) => a == b,
+            (Boolean(a), Boolean(b)) => a == b,
+            (Temporal(a), Temporal(b)) => a == b,
+            (Interval(a), Interval(b)) => a == b,
+            (Uuid(a), Uuid(b)) => a == b,
             // For grouping and hashing, NULL values should be equal.
             // SQL semantics (NULL = NULL returns NULL) is handled separetly.
-            (Value::Null, Value::Null) => true,
-            (Value::Null, _) | (_, Value::Null) => false,
+            (Null, Null) => true,
+            (Null, _) | (_, Null) => false,
             _ => false,
         }
     }

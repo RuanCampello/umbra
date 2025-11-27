@@ -161,6 +161,10 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                             }
                             _ => unreachable!(),
                         }
+                        Value::Numeric(num) => match num {
+                            Numeric::Short(_) | Numeric::NaN => 8,
+                            Numeric::Long { digits, .. } => 14 + digits.len() * 2,
+                        }
                         _ => byte_len_of_type(&col.data_type)
                     })
                 }
@@ -406,6 +410,7 @@ impl ValueSerialize for i128 {
                 Type::DoublePrecision => buff.extend_from_slice(&(*self as f64).to_be_bytes()),
                 _ => unreachable!("What kind of float is this?"),
             },
+            Type::Numeric(_, _) => Numeric::from(*self).serialize(buff),
             _ => unreachable!("Unsupported type {to} for i128 value"),
         }
     }

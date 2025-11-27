@@ -545,6 +545,12 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                     let numeric = match value {
                         Value::Numeric(n) => -n.clone(),
                         Value::Number(n) => Numeric::from(-n),
+                        Value::Float(f) => Numeric::try_from(-f).map_err(|_| {
+                            SqlError::Type(TypeError::ExpectedType {
+                                expected: VmType::Numeric,
+                                found: *expr.clone(),
+                            })
+                        })?,
                         _ => {
                             return Err(SqlError::Type(TypeError::ExpectedType {
                                 expected: VmType::Numeric,
@@ -565,6 +571,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
             match analyze_expression(ctx, data_type, expr)? {
                 VmType::Number | VmType::Float => VmType::Number,
+                VmType::Numeric => VmType::Numeric,
                 _ => Err(SqlError::Type(TypeError::ExpectedType {
                     expected: VmType::Number,
                     found: *expr.clone(),

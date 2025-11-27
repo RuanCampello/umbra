@@ -2910,8 +2910,12 @@ fn numeric_storage() -> Result<()> {
     db.exec("CREATE TABLE account (id SERIAL PRIMARY KEY, balance NUMERIC);")?;
     db.exec("INSERT INTO account (balance) VALUES (100), (100.50), (0), (-50.25);")?;
 
-    let query = db.exec("SELECT balance FROM account ORDER BY id;")?;
-    println!("{query}");
+    let query = db.exec("SELECT balance FROM account ORDER BY id LIMIT 3;")?;
+
+    assert_eq!(
+        query.tuples,
+        vec![vec![100.into()], vec![100.5.into()], vec![0.into()]]
+    );
 
     Ok(())
 }
