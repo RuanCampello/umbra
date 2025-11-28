@@ -514,6 +514,8 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }));
             }
 
+            println!("{operator} {left_type:#?}");
+
             match operator {
                 BinaryOperator::Eq
                 | BinaryOperator::Neq
@@ -529,7 +531,10 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
                 | BinaryOperator::Mul
-                    if matches!(left_type, VmType::Number | VmType::Float | VmType::Date) =>
+                    if matches!(
+                        left_type,
+                        VmType::Numeric | VmType::Number | VmType::Float | VmType::Date
+                    ) =>
                 {
                     left_type
                 }

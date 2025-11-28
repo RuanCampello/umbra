@@ -211,6 +211,7 @@ pub(crate) fn resolve_expression<'exp>(
                         ArithmeticPair::Arbitrary(left_value, right_value) => match arithmetic {
                             BinaryOperator::Plus => Value::Numeric(&*left_value + &*right_value),
                             BinaryOperator::Minus => Value::Numeric(&*left_value - &*right_value),
+                            BinaryOperator::Mul => Value::Numeric(&*left_value * &*right_value),
                             _ => unreachable!("not implemented this operation: {arithmetic}"),
                         },
                     }
