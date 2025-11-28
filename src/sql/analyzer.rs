@@ -514,8 +514,6 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }));
             }
 
-            println!("{operator} {left_type:#?}");
-
             match operator {
                 BinaryOperator::Eq
                 | BinaryOperator::Neq

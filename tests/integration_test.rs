@@ -2921,29 +2921,11 @@ fn numeric_storage() -> Result<()> {
 }
 
 #[test]
-#[ignore]
 fn numeric_ordering_and_join() -> Result<()> {
     let mut db = State::default();
 
-    db.exec(
-        r#"
-        CREATE TABLE products (
-            id SERIAL PRIMARY KEY,
-            name TEXT,
-            price NUMERIC
-        ); 
-    "#,
-    )?;
-    db.exec(
-        r#"
-        CREATE TABLE orders (
-            id SERIAL PRIMARY KEY,
-            product_id INT,
-            quantity INT
-        );
-    "#,
-    )?;
-
+    db.exec("CREATE TABLE products ( id SERIAL PRIMARY KEY, name TEXT, price NUMERIC);")?;
+    db.exec("CREATE TABLE orders ( id SERIAL PRIMARY KEY, product_id INT, quantity INT);")?;
     db.exec("INSERT INTO products (name, price) VALUES ('apple', 1.20), ('banana', 2.50);")?;
     db.exec("INSERT INTO orders (product_id, quantity) VALUES (1, 10), (2, 3);")?;
 
@@ -2988,6 +2970,45 @@ fn numeric_precision_scale() -> Result<()> {
         vec![
             vec![(1000.00 * 0.0575).try_into().unwrap()],
             vec![(25000.50 * 0.0342).try_into().unwrap()]
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn complex_numeric_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE invoices ( id SERIAL PRIMARY KEY, customer TEXT); ")?;
+    db.exec("CREATE TABLE products ( id SERIAL PRIMARY KEY, name TEXT, price NUMERIC);")?;
+    db.exec( "CREATE TABLE invoice_items( id SERIAL PRIMARY KEY, invoice_id INT, product_id INT, qty INT);")?;
+
+    db.exec("INSERT INTO invoices (customer) VALUES ('jon'), ('mary');")?;
+    db.exec("INSERT INTO products (name, price) VALUES ('keyboard', 120), ('mouse', 40.5);")?;
+    db.exec(
+        r#"
+        INSERT INTO invoice_items (invoice_id, product_id, qty) VALUES
+        (1, 1, 1), (1, 2, 2), (2, 2, 3);
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT i.customer, SUM(p.price * it.qty) AS total
+        FROM invoices AS i
+        JOIN invoice_items AS it ON i.id = it.invoice_id
+        JOIN products AS p ON it.product_id = p.id
+        GROUP BY i.id
+        ORDER BY i.id;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["jon".into(), (120.0 + 40.5 * 2.0).try_into().unwrap()],
+            vec!["mary".into(), (40.5 * 3.0).try_into().unwrap()]
         ]
     );
 
