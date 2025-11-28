@@ -6,7 +6,7 @@
 use crate::core::Serialize;
 use std::borrow::Cow;
 use std::cmp::{max, min};
-use std::ops::{Neg, Sub};
+use std::ops::{Mul, Neg, Sub};
 use std::{cmp::Ordering, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
@@ -101,7 +101,7 @@ impl Numeric {
         if self.is_nan() { return 0; };
 
         let (weight, digits, _, scale) = self.as_long_view();
-        let int_groups = (weight + 1).max(0) as usize;
+        let int_groups = (weight + 1).max(0) as isize;
         let mut int_digits = int_groups * 4;
 
         if let Some(first) = digits.first() {
@@ -110,7 +110,7 @@ impl Numeric {
             else if *first < 1000 { int_digits -= 1; }
         }
 
-        int_digits + scale as usize
+        (int_digits + scale as isize) as usize
     }
 
     fn from_long_i64(value: i64) -> Self {
@@ -819,6 +819,111 @@ impl<'n> Sub<Numeric> for &'n Numeric {
     #[inline]
     fn sub(self, rhs: Numeric) -> Self::Output {
         self + &rhs
+    }
+}
+
+impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    fn mul(self, rhs: &'b Numeric) -> Self::Output {
+        let (w1, dig1, neg1, d1) = self.as_long_view();
+        let (w2, dig2, neg2, d2) = rhs.as_long_view();
+
+        if dig1.is_empty() || dig2.is_empty() {
+            return Numeric::Long {
+                weight: 0,
+                sign_dscale: d1 + d2,
+                digits: vec![],
+            };
+        }
+
+        let (len1, len2) = (dig1.len(), dig2.len());
+        let mut weight = w1 + w2;
+        let dscale = d1 + d2;
+        let neg = neg1 ^ neg2;
+
+        let mut digits = vec![0i16; len1 + len2 + 1];
+
+        for i in 0..len1 {
+            let lhs_d = dig1[i] as i32;
+            if lhs_d == 0 {
+                continue;
+            }
+
+            let mut carry = 0i32;
+            for j in 0..len2 {
+                let prod = lhs_d * (dig2[j] as i32) + (digits[i + j] as i32) + carry;
+                carry = prod / N_BASE;
+                digits[i + j] = (prod % N_BASE) as i16;
+            }
+
+            if carry > 0 {
+                digits[i + len2] += carry as i16;
+            }
+        }
+
+        let mut start = 0;
+        while start < digits.len() && digits[start] == 0 {
+            start += 1;
+            weight -= 1;
+        }
+
+        let mut end = digits.len();
+        while end > start && digits[end - 1] == 0 {
+            end -= 1;
+        }
+
+        let digits = match start >= end {
+            true => Vec::new(),
+            _ => digits[start..end].to_vec(),
+        };
+
+        if digits.is_empty() {
+            return Numeric::Long {
+                weight: 0,
+                sign_dscale: dscale & DSCALE_MASK,
+                digits: Vec::new(),
+            };
+        }
+
+        let mut sign_dscale = dscale & DSCALE_MASK;
+        if neg {
+            sign_dscale |= SIGN_MASK as u16;
+        }
+
+        Numeric::Long {
+            weight,
+            sign_dscale,
+            digits,
+        }
+    }
+}
+
+impl Mul<Numeric> for Numeric {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: Numeric) -> Self::Output {
+        &self * &rhs
+    }
+}
+
+impl<'n> Mul<&'n Numeric> for Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    fn mul(self, rhs: &'n Numeric) -> Self::Output {
+        &self * rhs
+    }
+}
+
+impl<'n> Mul<Numeric> for &'n Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    fn mul(self, rhs: Numeric) -> Self::Output {
+        self * &rhs
     }
 }
 

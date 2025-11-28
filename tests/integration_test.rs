@@ -2919,3 +2919,77 @@ fn numeric_storage() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+#[ignore]
+fn numeric_ordering_and_join() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+        CREATE TABLE products (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            price NUMERIC
+        ); 
+    "#,
+    )?;
+    db.exec(
+        r#"
+        CREATE TABLE orders (
+            id SERIAL PRIMARY KEY,
+            product_id INT,
+            quantity INT
+        );
+    "#,
+    )?;
+
+    db.exec("INSERT INTO products (name, price) VALUES ('apple', 1.20), ('banana', 2.50);")?;
+    db.exec("INSERT INTO orders (product_id, quantity) VALUES (1, 10), (2, 3);")?;
+
+    let query = db.exec(
+        r#"
+        SELECT o.id, p.price * o.quantity AS total
+        FROM orders AS o
+        JOIN products AS p ON o.product_id = p.id
+        ORDER BY o.id;
+    "#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![1.into(), (1.20 * 10.0).into()],
+            vec![2.into(), (2.50 * 3.0).into()]
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn numeric_precision_scale() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+        CREATE TABLE loans (
+            id SERIAL PRIMARY KEY,
+            principal NUMERIC(10,2),
+            rate NUMERIC(5,4)
+        );
+    "#,
+    )?;
+    db.exec("INSERT INTO loans (principal, rate) VALUES (1000.00, 0.0575), (25000.50, 0.0342);")?;
+
+    let query = db.exec("SELECT id, principal * rate AS interest FROM loans ORDER BY id;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![1.into(), (1000.00 * 0.0575).into()],
+            vec![2.into(), (25000.50 * 0.0342).into()]
+        ]
+    );
+
+    Ok(())
+}
