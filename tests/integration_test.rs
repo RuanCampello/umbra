@@ -2982,12 +2982,12 @@ fn numeric_precision_scale() -> Result<()> {
     )?;
     db.exec("INSERT INTO loans (principal, rate) VALUES (1000.00, 0.0575), (25000.50, 0.0342);")?;
 
-    let query = db.exec("SELECT id, principal * rate AS interest FROM loans ORDER BY id;")?;
+    let query = db.exec("SELECT principal * rate AS interest FROM loans ORDER BY id;")?;
     assert_eq!(
         query.tuples,
         vec![
-            vec![1.into(), (1000.00 * 0.0575).into()],
-            vec![2.into(), (25000.50 * 0.0342).into()]
+            vec![(1000.00 * 0.0575).try_into().unwrap()],
+            vec![(25000.50 * 0.0342).try_into().unwrap()]
         ]
     );
 

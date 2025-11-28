@@ -7,7 +7,7 @@ use crate::core::Serialize;
 use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::ops::{Mul, Neg, Sub};
-use std::{cmp::Ordering, fmt::Display, ops::Add, str::FromStr};
+use std::{cmp::Ordering, convert::TryFrom, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
@@ -838,60 +838,55 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
             };
         }
 
-        let (len1, len2) = (dig1.len(), dig2.len());
-        let mut weight = w1 + w2;
-        let dscale = d1 + d2;
-        let neg = neg1 ^ neg2;
+        let mut acc = vec![0i32; dig1.len() + dig2.len()];
 
-        let mut digits = vec![0i16; len1 + len2 + 1];
-
-        for i in 0..len1 {
-            let lhs_d = dig1[i] as i32;
-            if lhs_d == 0 {
+        for (idx, &lhs) in dig1.iter().enumerate() {
+            if lhs == 0 {
                 continue;
             }
 
-            let mut carry = 0i32;
-            for j in 0..len2 {
-                let prod = lhs_d * (dig2[j] as i32) + (digits[i + j] as i32) + carry;
-                carry = prod / N_BASE;
-                digits[i + j] = (prod % N_BASE) as i16;
+            for (sec, &rhs) in dig2.iter().enumerate() {
+                acc[idx + sec + 1] += (lhs as i32) * (rhs as i32);
             }
+        }
 
-            if carry > 0 {
-                digits[i + len2] += carry as i16;
-            }
+        for i in (1..acc.len()).rev() {
+            let val = acc[i];
+            let carry = val / N_BASE;
+            acc[i - 1] += carry;
+            acc[i] = val % N_BASE;
         }
 
         let mut start = 0;
-        while start < digits.len() && digits[start] == 0 {
+        while start < acc.len() && acc[start] == 0 {
             start += 1;
-            weight -= 1;
         }
 
-        let mut end = digits.len();
-        while end > start && digits[end - 1] == 0 {
+        let mut end = acc.len();
+        while end > start && acc[end - 1] == 0 {
             end -= 1;
         }
 
-        let digits = match start >= end {
-            true => Vec::new(),
-            _ => digits[start..end].to_vec(),
-        };
-
-        if digits.is_empty() {
-            return Numeric::Long {
-                weight: 0,
-                sign_dscale: dscale & DSCALE_MASK,
-                digits: Vec::new(),
-            };
-        }
-
+        let dscale = d1 + d2;
         let mut sign_dscale = dscale & DSCALE_MASK;
-        if neg {
+        if neg1 ^ neg2 {
             sign_dscale |= SIGN_MASK as u16;
         }
 
+        if start >= end {
+            return Numeric::Long {
+                weight: 0,
+                sign_dscale,
+                digits: vec![],
+            };
+        };
+
+        let digits = acc[start..end]
+            .iter()
+            .map(|&x| x as i16)
+            .collect::<Vec<i16>>();
+
+        let weight = (w1 + w2 + 1) - (start as i16);
         Numeric::Long {
             weight,
             sign_dscale,
