@@ -4,6 +4,8 @@
 
 # history of the usql client
 *.usql
+# temporary files for sorting
+/umbra.temp
 # db files for testing
 *.db
 

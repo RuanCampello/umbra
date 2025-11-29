@@ -15,9 +15,13 @@ use crate::{
             Column, Constraint, Expression, JoinClause, JoinType, OrderBy, OrderDirection, TableRef,
         },
     },
-    vm::planner::{
-        AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, IndexNestedLoopJoin, Limit,
-        Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
+    vm::{
+        expression::VmType,
+        planner::{
+            AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, IndexNestedLoopJoin,
+            Limit, Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator,
+            DEFAULT_SORT_BUFFER_SIZE,
+        },
     },
 };
 
@@ -258,10 +262,23 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
 
                     let right_tables = HashSet::from([right_key.to_string()]);
 
-                    self.source = Some(Planner::HashJoin(
-                        HashJoin::new(left, right, join.join_type, join.on.clone())
-                            .with_table_names(left_tables.clone(), right_tables),
-                    ));
+                    let (left_expr, right_expr, key_type) = resolve_join_keys(
+                        &join.on,
+                        &left.schema().unwrap(),
+                        &right_table.schema,
+                        &left_tables,
+                        &right_tables,
+                    )?;
+
+                    self.source = Some(Planner::HashJoin(HashJoin::new(
+                        left,
+                        right,
+                        join.join_type,
+                        self.schema.clone(),
+                        left_expr,
+                        right_expr,
+                        key_type,
+                    )));
                 }
             };
 
@@ -548,4 +565,68 @@ fn extract_order_indexes_and_directions(
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|p| p.into_iter().unzip())
+}
+
+fn resolve_join_keys(
+    condition: &Expression,
+    left_schema: &Schema,
+    right_schema: &Schema,
+    left_tables: &HashSet<String>,
+    right_tables: &HashSet<String>,
+) -> Result<(Expression, Expression, VmType), DatabaseError> {
+    use crate::sql::analyzer::analyze_expression;
+    use crate::sql::statement::BinaryOperator;
+
+    let Expression::BinaryOperation {
+        operator,
+        ref left,
+        ref right,
+    } = condition
+    else {
+        return Err(DatabaseError::Other(
+            "HashJoin requires a binary operation condition".into(),
+        ));
+    };
+
+    if *operator != BinaryOperator::Eq {
+        return Err(DatabaseError::Other(
+            "HashJoin requires an equal operator".into(),
+        ));
+    }
+
+    let left_expr = &**left;
+    let right_expr = &**right;
+
+    let check_side = |expr: &Expression, tables: &HashSet<String>, schema: &Schema| -> bool {
+        match expr {
+            Expression::QualifiedIdentifier { table, column } => {
+                if !tables.is_empty() && !tables.contains(table) {
+                    return false;
+                }
+                schema.last_index_of(column).is_some()
+            }
+            _ => analyze_expression(schema, None, expr).is_ok(),
+        }
+    };
+
+    let left_is_left = check_side(left_expr, left_tables, left_schema);
+    let right_is_right = check_side(right_expr, right_tables, right_schema);
+
+    if left_is_left && right_is_right {
+        let r#type = analyze_expression(left_schema, None, left_expr)?;
+        return Ok((left_expr.clone(), right_expr.clone(), r#type));
+    }
+
+    let left_is_right = check_side(left_expr, right_tables, right_schema);
+    let right_is_left = check_side(right_expr, left_tables, left_schema);
+
+    if left_is_right && right_is_left {
+        let r#type = analyze_expression(left_schema, None, right_expr)?;
+        return Ok((right_expr.clone(), left_expr.clone(), r#type));
+    }
+
+    Err(DatabaseError::Other(format!(
+        "Ambiguous or invalid JOIN condition for HashJoin: {}",
+        condition
+    )))
 }

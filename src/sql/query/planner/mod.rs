@@ -1068,26 +1068,23 @@ mod tests {
                     Expression::Identifier("name".into()),
                     Expression::Identifier("order_id".into()),
                 ],
-                source: Box::new(Planner::HashJoin(
-                    HashJoin::new(
-                        Planner::SeqScan(SeqScan {
-                            table: users_table.clone(),
-                            pager: db.pager(),
-                            cursor: Cursor::new(users_table.root, 0),
-                        }),
-                        Planner::SeqScan(SeqScan {
-                            table: orders_table.clone(),
-                            pager: db.pager(),
-                            cursor: Cursor::new(orders_table.root, 0),
-                        }),
-                        JoinType::Inner,
-                        parse_expr("id = user_id"),
-                    )
-                    .with_table_names(
-                        HashSet::from(["users".to_string()]),
-                        HashSet::from(["orders".to_string()])
-                    )
-                )),
+                source: Box::new(Planner::HashJoin(HashJoin::new(
+                    Planner::SeqScan(SeqScan {
+                        table: users_table.clone(),
+                        pager: db.pager(),
+                        cursor: Cursor::new(users_table.root, 0),
+                    }),
+                    Planner::SeqScan(SeqScan {
+                        table: orders_table.clone(),
+                        pager: db.pager(),
+                        cursor: Cursor::new(orders_table.root, 0),
+                    }),
+                    JoinType::Inner,
+                    schema.clone(),
+                    Expression::Identifier("id".into()),
+                    Expression::Identifier("user_id".into()),
+                    VmType::Number,
+                ))),
             })
         );
 
@@ -1114,7 +1111,7 @@ mod tests {
         assert_eq!(
             plan,
             Planner::Project(Project {
-                input: joined_schema,
+                input: joined_schema.clone(),
                 output: Schema::new(vec![
                     Column::new("name", Type::Varchar(100)),
                     Column::primary_key("order_id", Type::Serial),
@@ -1135,26 +1132,29 @@ mod tests {
                         alias: "order_id".into(),
                     },
                 ],
-                source: Box::new(Planner::HashJoin(
-                    HashJoin::new(
-                        Planner::SeqScan(SeqScan {
-                            table: users_table.clone(),
-                            pager: db.pager(),
-                            cursor: Cursor::new(users_table.root, 0),
-                        }),
-                        Planner::SeqScan(SeqScan {
-                            table: orders_table.clone(),
-                            pager: db.pager(),
-                            cursor: Cursor::new(orders_table.root, 0),
-                        }),
-                        JoinType::Inner,
-                        parse_expr("users.id = orders.user_id"),
-                    )
-                    .with_table_names(
-                        HashSet::from(["users".to_string()]),
-                        HashSet::from(["orders".to_string()])
-                    )
-                )),
+                source: Box::new(Planner::HashJoin(HashJoin::new(
+                    Planner::SeqScan(SeqScan {
+                        table: users_table.clone(),
+                        pager: db.pager(),
+                        cursor: Cursor::new(users_table.root, 0),
+                    }),
+                    Planner::SeqScan(SeqScan {
+                        table: orders_table.clone(),
+                        pager: db.pager(),
+                        cursor: Cursor::new(orders_table.root, 0),
+                    }),
+                    JoinType::Inner,
+                    joined_schema,
+                    Expression::QualifiedIdentifier {
+                        table: "users".into(),
+                        column: "id".into(),
+                    },
+                    Expression::QualifiedIdentifier {
+                        table: "orders".into(),
+                        column: "user_id".into(),
+                    },
+                    VmType::Number,
+                ))),
             })
         );
 

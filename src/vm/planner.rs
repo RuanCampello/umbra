@@ -14,7 +14,7 @@ use crate::sql::statement::{
     join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
 };
 use crate::vm;
-use crate::vm::expression::evaluate_where;
+use crate::vm::expression::{evaluate_where, VmType};
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::hash_map::IntoIter;
@@ -199,25 +199,22 @@ pub(crate) struct Aggregate<File: FileOperations> {
 pub(crate) struct HashJoin<File: FileOperations> {
     pub left: Box<Planner<File>>,
     pub right: Box<Planner<File>>,
-    pub condition: Expression,
     pub join_type: JoinType,
+    pub schema: Schema,
 
+    left_key: Expression,
+    right_key: Expression,
+    key_type: VmType,
+
+    // run-time state
     table: HashMap<Vec<u8>, Vec<Tuple>>,
     hash_built: bool,
 
-    left_key: Option<Expression>,
-    right_key: Option<Expression>,
-    key_type: Option<super::expression::VmType>,
-
     current_left: Option<Tuple>,
     current_matches: Option<Vec<Tuple>>,
-
     matched_right_keys: HashSet<Vec<u8>>,
     unmatched_right: Option<IntoIter<Vec<u8>, Vec<Tuple>>>,
     unmatched_right_index: usize,
-
-    left_tables: HashSet<String>,
-    right_tables: HashSet<String>,
 
     index: usize,
 }
@@ -449,20 +446,7 @@ impl<File: FileOperations> Planner<File> {
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
             Self::Limit(limit) => return limit.source.schema(),
-            Self::HashJoin(hash) => {
-                let mut schema = hash.left_schema();
-                let left_len = schema.len();
-                schema.extend_with_join(hash.right_schema().columns, &hash.join_type);
-
-                hash.left_tables
-                    .iter()
-                    .for_each(|table| schema.add_qualified_name(table, 0, left_len));
-                hash.right_tables
-                    .iter()
-                    .for_each(|table| schema.add_qualified_name(table, left_len, schema.len()));
-
-                return Some(schema);
-            }
+            Self::HashJoin(hash) => &hash.schema,
             Self::IndexNestedLoopJoin(inl) => {
                 let mut schema = inl.left_schema();
                 let left_len = schema.len();
@@ -1334,19 +1318,16 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 impl<File: PlanExecutor> Execute for HashJoin<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         if !self.hash_built {
-            let (left_key, right_key, r#type) = self.extract_join_keys()?;
-
-            self.left_key = Some(left_key);
-            self.right_key = Some(right_key.clone());
-            self.key_type = Some(r#type);
-
             // iterate over the right side and build the hash table
             while let Some(right) = self.right.try_next()? {
-                let key =
-                    vm::expression::resolve_expression(&right, &self.right_schema(), &right_key)?;
+                let key = vm::expression::resolve_expression(
+                    &right,
+                    &self.right_schema(),
+                    &self.right_key,
+                )?;
 
                 if !key.is_null() {
-                    let key = tuple::serialize(&r#type.into(), &key);
+                    let key = tuple::serialize(&self.key_type.into(), &key);
                     self.table.entry(key).or_default().push(right);
                 }
             }
@@ -1393,17 +1374,15 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             };
 
             // d: probe hash table with the new tuple
-            let left_key = self.left_key.as_ref().unwrap();
-            let r#type = self.key_type.as_ref().unwrap();
             let key_value =
-                vm::expression::resolve_expression(&left, &self.left_schema(), left_key)?;
+                vm::expression::resolve_expression(&left, &self.left_schema(), &self.left_key)?;
 
             self.current_left = Some(left);
 
             match key_value.is_null() {
                 true => self.current_matches = None,
                 _ => {
-                    let key = tuple::serialize(&r#type.into(), &key_value);
+                    let key = tuple::serialize(&self.key_type.into(), &key_value);
                     match self.table.get(&key) {
                         Some(matches) => {
                             if self.right_matters() {
@@ -1498,11 +1477,17 @@ impl<File: FileOperations> HashJoin<File> {
         left: Planner<File>,
         right: Planner<File>,
         join_type: JoinType,
-        condition: Expression,
+        schema: Schema,
+        left_key: Expression,
+        right_key: Expression,
+        key_type: VmType,
     ) -> Self {
         Self {
             join_type,
-            condition,
+            key_type,
+            left_key,
+            right_key,
+            schema,
             left: Box::new(left),
             right: Box::new(right),
 
@@ -1513,97 +1498,7 @@ impl<File: FileOperations> HashJoin<File> {
             matched_right_keys: HashSet::new(),
             unmatched_right: None,
             unmatched_right_index: 0,
-
-            left_key: None,
-            right_key: None,
-            key_type: None,
-
-            left_tables: HashSet::new(),
-            right_tables: HashSet::new(),
-
             index: 0,
-        }
-    }
-
-    fn extract_join_keys(
-        &self,
-    ) -> Result<(Expression, Expression, crate::vm::expression::VmType), DatabaseError> {
-        use crate::sql::analyzer::analyze_expression;
-        use crate::sql::statement::BinaryOperator;
-
-        // TODO: those errors will need to be transformed into panics because they mean something
-        // went wrong during the building phase
-
-        let Expression::BinaryOperation {
-            operator,
-            ref left,
-            ref right,
-        } = self.condition
-        else {
-            panic!("HashJoin requires a binary operation condition");
-        };
-
-        if operator != BinaryOperator::Eq {
-            panic!("HashJoin requires a equal operator");
-        }
-
-        let left = &**left;
-        let right = &**right;
-
-        let left_is_left = self.expr_belongs_to_side(left, true);
-        let right_is_right = self.expr_belongs_to_side(right, false);
-
-        // 1: the left and right expressions are in their respective schemas
-        if left_is_left && right_is_right {
-            let r#type = analyze_expression(&self.left_schema(), None, left)?;
-            return Ok((left.clone(), right.clone(), r#type));
-        }
-
-        // 2: if `left` expression belongs to right schema and `right` to left_schema (swapped)
-        let left_is_right = self.expr_belongs_to_side(left, false);
-        let right_is_left = self.expr_belongs_to_side(right, true);
-
-        if left_is_right && right_is_left {
-            let r#type = analyze_expression(&self.left_schema(), None, right)?;
-            return Ok((right.clone(), left.clone(), r#type));
-        }
-
-        Err(DatabaseError::Other(format!(
-            "Ambiguos or invalid JOIN condition for HashJoin: {}",
-            self.condition
-        )))
-    }
-
-    pub fn with_table_names(
-        mut self,
-        left_tables: HashSet<String>,
-        right_tables: HashSet<String>,
-    ) -> Self {
-        self.left_tables = left_tables;
-        self.right_tables = right_tables;
-
-        self
-    }
-
-    fn expr_belongs_to_side(&self, expr: &Expression, is_left: bool) -> bool {
-        use crate::sql::analyzer::analyze_expression;
-        use crate::sql::statement::Expression;
-
-        if let Expression::QualifiedIdentifier { table, column } = expr {
-            #[rustfmt::skip]
-            let tables = if is_left { &self.left_tables } else { &self.right_tables };
-            #[rustfmt::skip]
-            let schema = if is_left { &self.left_schema() } else { &self.right_schema() };
-
-            if !tables.is_empty() && !tables.contains(table) {
-                return false;
-            }
-
-            schema.last_index_of(column).is_some()
-        } else {
-            #[rustfmt::skip]
-            let schema = if is_left { &self.left_schema() } else { &self.right_schema() };
-            analyze_expression(schema, None, expr).is_ok()
         }
     }
 
@@ -2159,10 +2054,11 @@ impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
     fn eq(&self, other: &Self) -> bool {
         self.left == other.left
             && self.right == other.right
-            && self.condition == other.condition
             && self.join_type == other.join_type
-            && self.left_tables == other.left_tables
-            && self.right_tables == other.right_tables
+            && self.schema == other.schema
+            && self.left_key == other.left_key
+            && self.right_key == other.right_key
+            && self.key_type == other.key_type
     }
 }
 
@@ -2302,7 +2198,7 @@ impl<File: FileOperations> Display for Aggregate<File> {
 
 impl<File: FileOperations> Display for HashJoin<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Hash {:?} Join on {}", self.join_type, self.condition)
+        write!(f, "Hash {:?} Join", self.join_type)
     }
 }
 
