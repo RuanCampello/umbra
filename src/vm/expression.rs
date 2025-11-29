@@ -421,8 +421,8 @@ impl From<&Type> for VmType {
     }
 }
 
-impl From<VmType> for Type {
-    fn from(value: VmType) -> Self {
+impl From<&VmType> for Type {
+    fn from(value: &VmType) -> Self {
         match value {
             VmType::Bool => Self::Boolean,
             VmType::String => Self::Text,
@@ -432,6 +432,12 @@ impl From<VmType> for Type {
             VmType::Interval => Self::Interval,
             VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
         }
+    }
+}
+
+impl From<VmType> for Type {
+    fn from(value: VmType) -> Self {
+        Self::from(&value)
     }
 }
 

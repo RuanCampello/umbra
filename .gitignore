@@ -6,3 +6,7 @@
 *.usql
 # db files for testing
 *.db
+
+# benchmarking
+perf.data*
+*.svg

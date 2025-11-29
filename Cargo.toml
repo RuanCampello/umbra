@@ -22,3 +22,7 @@ harness = false
 [[bench]]
 name = "select_benchmark"
 harness = false
+
+[[bench]]
+name = "stress_benchmark"
+harness = false

@@ -205,6 +205,10 @@ pub(crate) struct HashJoin<File: FileOperations> {
     table: HashMap<Vec<u8>, Vec<Tuple>>,
     hash_built: bool,
 
+    left_key: Option<Expression>,
+    right_key: Option<Expression>,
+    key_type: Option<super::expression::VmType>,
+
     current_left: Option<Tuple>,
     current_matches: Option<Vec<Tuple>>,
 
@@ -1330,7 +1334,11 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 impl<File: PlanExecutor> Execute for HashJoin<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         if !self.hash_built {
-            let (_, right_key, r#type) = self.extract_join_keys()?;
+            let (left_key, right_key, r#type) = self.extract_join_keys()?;
+
+            self.left_key = Some(left_key);
+            self.right_key = Some(right_key.clone());
+            self.key_type = Some(r#type);
 
             // iterate over the right side and build the hash table
             while let Some(right) = self.right.try_next()? {
@@ -1385,9 +1393,10 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             };
 
             // d: probe hash table with the new tuple
-            let (left_key, _, r#type) = self.extract_join_keys()?;
+            let left_key = self.left_key.as_ref().unwrap();
+            let r#type = self.key_type.as_ref().unwrap();
             let key_value =
-                vm::expression::resolve_expression(&left, &self.left.schema().unwrap(), &left_key)?;
+                vm::expression::resolve_expression(&left, &self.left_schema(), left_key)?;
 
             self.current_left = Some(left);
 
@@ -1504,6 +1513,10 @@ impl<File: FileOperations> HashJoin<File> {
             matched_right_keys: HashSet::new(),
             unmatched_right: None,
             unmatched_right_index: 0,
+
+            left_key: None,
+            right_key: None,
+            key_type: None,
 
             left_tables: HashSet::new(),
             right_tables: HashSet::new(),
