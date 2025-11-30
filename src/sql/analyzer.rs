@@ -189,7 +189,6 @@ pub(in crate::sql) fn analyze<'s>(
             limit: _,
             offset: _,
         }) => {
-            // TODO: analyze correcly the join clauses
             let metadata = ctx.metadata(&from.name)?;
             let mut schema = metadata.schema.clone();
 
@@ -589,14 +588,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 BinaryOperator::Plus
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
-                | BinaryOperator::Mul
-                    if matches!(
-                        left_type,
-                        VmType::Numeric | VmType::Number | VmType::Float | VmType::Date
-                    ) =>
-                {
-                    left_type
-                }
+                | BinaryOperator::Mul => result_type(left_type, right_type),
                 _ => unreachable!("unexpected operation state"),
             }
         }
@@ -854,22 +846,34 @@ fn are_types_compatible(
     left_type: &VmType,
     right_type: &VmType,
 ) -> bool {
+    use crate::sql::statement::BinaryOperator as Op;
+
     if left_type == right_type {
         return true;
     }
 
-    matches!(
-        (operator, left_type, right_type),
-        (
-            BinaryOperator::Plus | BinaryOperator::Minus,
-            VmType::Date,
-            VmType::Interval
-        ) | (
-            BinaryOperator::Plus | BinaryOperator::Minus,
-            VmType::Interval,
-            VmType::Date
-        )
-    )
+    match operator {
+        Op::Plus | Op::Minus => match (left_type, right_type) {
+            (VmType::Date, VmType::Interval) | (VmType::Interval, VmType::Date) => true,
+            (left, right) => is_numeric(left) && is_numeric(right),
+        },
+        Op::Mul | Op::Div => is_numeric(left_type) && is_numeric(right_type),
+        _ => false,
+    }
+}
+
+const fn is_numeric(typ: &VmType) -> bool {
+    matches!(typ, VmType::Float | VmType::Numeric | VmType::Number)
+}
+
+const fn result_type(left: VmType, right: VmType) -> VmType {
+    match (left, right) {
+        (VmType::Date, _) | (_, VmType::Date) => VmType::Date,
+        (VmType::Numeric, _) | (_, VmType::Numeric) => VmType::Numeric,
+        (VmType::Float, _) | (_, VmType::Float) => VmType::Float,
+
+        _ => VmType::Number,
+    }
 }
 
 impl Display for AnalyzerError {
@@ -896,6 +900,7 @@ impl Display for AnalyzerError {
         }
     }
 }
+
 impl Display for AlreadyExists {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
