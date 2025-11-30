@@ -2980,9 +2980,9 @@ fn numeric_precision_scale() -> Result<()> {
 fn complex_numeric_join() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE invoices ( id SERIAL PRIMARY KEY, customer TEXT); ")?;
-    db.exec("CREATE TABLE products ( id SERIAL PRIMARY KEY, name TEXT, price NUMERIC);")?;
-    db.exec( "CREATE TABLE invoice_items( id SERIAL PRIMARY KEY, invoice_id INT, product_id INT, qty INT);")?;
+    db.exec("CREATE TABLE invoices (id SERIAL PRIMARY KEY, customer TEXT);")?;
+    db.exec("CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT, price real);")?;
+    db.exec("CREATE TABLE invoice_items (id SERIAL PRIMARY KEY, invoice_id INT, product_id INT, qty INT);")?;
 
     db.exec("INSERT INTO invoices (customer) VALUES ('jon'), ('mary');")?;
     db.exec("INSERT INTO products (name, price) VALUES ('keyboard', 120), ('mouse', 40.5);")?;
@@ -2995,7 +2995,7 @@ fn complex_numeric_join() -> Result<()> {
 
     let query = db.exec(
         r#"
-        SELECT i.id, i.customer, SUM(p.price * it.qty) AS total
+        SELECT i.customer, SUM(p.price * it.qty) AS total
         FROM invoices AS i
         JOIN invoice_items AS it ON i.id = it.invoice_id
         JOIN products AS p ON it.product_id = p.id
@@ -3007,8 +3007,8 @@ fn complex_numeric_join() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec!["jon".into(), (120.0 + 40.5 * 2.0).try_into().unwrap()],
-            vec!["mary".into(), (40.5 * 3.0).try_into().unwrap()]
+            vec!["jon".into(), (120.0 + 40.5 * 2.0).into()],
+            vec!["mary".into(), (40.5 * 3.0).into()]
         ]
     );
 

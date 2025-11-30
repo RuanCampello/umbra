@@ -333,6 +333,16 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             }
         }
 
+        let implicit_groups: Vec<_> =
+            find_implicit_group_columns(self.columns, &group_by).collect();
+        for col_expr in &implicit_groups {
+            let col = col_expr.unwrap_name();
+            if aggr_schema.index_of(&col).is_none() {
+                let col_type = resolve_type(&self.schema, col_expr)?;
+                aggr_schema.push(Column::new(&col, col_type));
+            }
+        }
+
         for (fun, name) in &aggr_exprs {
             aggr_schema.push(Column::new(&name, resolve_type(&self.schema, fun)?));
         }
@@ -360,7 +370,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             })));
         }
 
-        let resolved_group_by: Vec<Expression> = group_by
+        let mut resolved_group_by: Vec<Expression> = group_by
             .iter()
             .map(|expr| {
                 if let Expression::Identifier(ident) = expr {
@@ -373,6 +383,15 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 expr.clone()
             })
             .collect();
+
+        for col_expr in implicit_groups {
+            if !resolved_group_by
+                .iter()
+                .any(|g| g.unwrap_name() == col_expr.unwrap_name())
+            {
+                resolved_group_by.push(col_expr.clone())
+            }
+        }
 
         let source = self.source.take().unwrap();
         self.source = Some(Planner::Aggregate(
@@ -629,4 +648,28 @@ fn resolve_join_keys(
         "Ambiguous or invalid JOIN condition for HashJoin: {}",
         condition
     )))
+}
+
+/// Finds non-aggregate columns in SELECT that are not explicitly in GROUP BY.
+/// These columns are allowed by MySQL-style GROUP BY extension when they are
+/// functionally dependent on the GROUP BY columns (e.g., other columns from
+/// a table whose primary key is in GROUP BY).
+///
+/// Note: The semantic validation is performed by the analyzer, which checks
+/// [functional dependency](crate::sql::analyzer::is_functionally_dependent) via primary key relationships. This function simply
+/// identifies which columns need to be implicitly added to the aggregate output.
+fn find_implicit_group_columns<'e>(
+    columns: &'e [Expression],
+    group_by: &'e [Expression],
+) -> impl Iterator<Item = &'e Expression> {
+    columns.iter().filter(|c| {
+        if contains_aggregate(c) {
+            return false;
+        }
+
+        let col = c.unwrap_name();
+        let in_group_by = group_by.iter().any(|g| g.unwrap_name() == col || g.eq(c));
+
+        !in_group_by
+    })
 }
