@@ -2995,7 +2995,7 @@ fn complex_numeric_join() -> Result<()> {
 
     let query = db.exec(
         r#"
-        SELECT i.customer, SUM(p.price * it.qty) AS total
+        SELECT i.id, i.customer, SUM(p.price * it.qty) AS total
         FROM invoices AS i
         JOIN invoice_items AS it ON i.id = it.invoice_id
         JOIN products AS p ON it.product_id = p.id

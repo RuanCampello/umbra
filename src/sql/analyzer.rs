@@ -230,7 +230,8 @@ pub(in crate::sql) fn analyze<'s>(
                         .map_or(false, |alias| alias.eq(&expr))
                 });
 
-                if !group_by.is_empty() && !is_aggr && !in_group_by {
+                let is_dependent = is_functionally_dependent(expr, group_by, &tables);
+                if !group_by.is_empty() && !is_aggr && !in_group_by && !is_dependent {
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
                 }
 
@@ -371,6 +372,66 @@ pub(in crate::sql) fn contains_aggregate(expr: &Expression) -> bool {
         | Expression::Alias { expr, .. } => contains_aggregate(expr),
         _ => false,
     }
+}
+
+/// Checks if an expression is functionally dependent on a GROUP BY clause.
+/// This typically happens when we group by table's primary key:
+/// ```sql
+/// SELECT t.name FROM users AS t GROUP BY t.id;
+/// ```
+fn is_functionally_dependent(
+    expr: &Expression,
+    group_by: &[Expression],
+    tables: &HashMap<&str, Schema>,
+) -> bool {
+    let (table, _column) = match expr {
+        Expression::QualifiedIdentifier { table, column } => (table.as_str(), column.as_str()),
+        Expression::Identifier(name) => {
+            let mut owner = None;
+
+            for (table, schema) in tables {
+                if schema.index_of(name).is_some() {
+                    if owner.is_some() {
+                        return false;
+                    }
+
+                    owner = Some(*table);
+                }
+            }
+            match owner {
+                Some(table) => (table, name.as_str()),
+                _ => return false,
+            }
+        }
+        _ => return false,
+    };
+
+    let Some(schema) = tables.get(table) else {
+        return false;
+    };
+
+    let keys = schema
+        .columns
+        .iter()
+        .filter(|c| c.constraints.contains(&Constraint::PrimaryKey))
+        .map(|c| c.name.as_str());
+
+    for key in keys {
+        let key_in_group = group_by.iter().any(|g| match g {
+            Expression::QualifiedIdentifier {
+                table: t,
+                column: c,
+            } => table == t && key == c,
+            Expression::Identifier(col) => col == key,
+            _ => false,
+        });
+
+        if !key_in_group {
+            return false;
+        }
+    }
+
+    true
 }
 
 impl AnalyzeCtx for Schema {
