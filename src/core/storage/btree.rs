@@ -285,7 +285,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
                 false => &cell.content,
                 true => match reassemble_content(self.pager, page_number, mid as _)? {
                     Content::Reassembled(buffer) => {
-                        overflow = buffer.clone();
+                        overflow = buffer;
                         &overflow
                     }
                     _ => panic!("Couldn't complete reassemble content"),

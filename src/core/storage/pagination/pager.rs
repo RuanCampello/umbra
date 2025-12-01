@@ -423,9 +423,8 @@ impl<File: Seek + FileOperations> Pager<File> {
     ) -> io::Result<()> {
         self.dirty_pages.insert(page_number);
 
-        if !self.journal_pages.contains(&page_number) {
+        if self.journal_pages.insert(page_number) {
             self.journal.push(page_number, content)?;
-            self.journal_pages.insert(page_number);
         }
 
         Ok(())
