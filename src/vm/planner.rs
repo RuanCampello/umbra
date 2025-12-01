@@ -1628,6 +1628,10 @@ impl<File: PlanExecutor> Aggregate<File> {
                 let (sum, count) = values.iter().fold((0.0, 0), |(acc, cnt), v| match v {
                     Value::Float(f) => (acc + *f, cnt + 1),
                     Value::Number(n) => (acc + *n as f64, cnt + 1),
+                    Value::Numeric(n) => {
+                        // TODO: this ain't the best way of both getting the value nor adding
+                        (acc + Option::<f64>::try_from(n).unwrap().unwrap(), cnt + 1)
+                    }
                     _ => (acc, cnt),
                 });
 

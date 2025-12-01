@@ -1066,10 +1066,6 @@ impl From<&Numeric> for Option<f64> {
                     value += digit as f64 * mul;
                 });
 
-                let scale = (sign_dscale & DSCALE_MASK) as u32;
-                let divisor = 10_f64.powi(scale as i32);
-                value /= divisor;
-
                 let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
                 Some(if is_negative { -value } else { value })
             }
