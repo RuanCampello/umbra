@@ -1608,4 +1608,52 @@ mod tests {
             Err(NumericError::InvalidFormat)
         );
     }
+
+    #[test]
+    fn arithmetic_mul_scale_explosion() {
+        let a = Numeric::from_str("0.01").unwrap();
+        let b = Numeric::from_str("0.01").unwrap();
+        let res = a * b;
+
+        assert_eq!(res.scale(), 4);
+        assert_eq!(res.to_string(), "0.0001");
+
+        let a = Numeric::from_str("1.1").unwrap();
+        let b = Numeric::from_str("0.00001").unwrap();
+        assert_eq!((a * b).to_string(), "0.000011");
+    }
+
+    #[test]
+    fn boundary_short_to_long_promotion() {
+        // "short" format fits in u64. let's force a calculation that exceeds it.
+        // i64::max is ~9e18.
+        let a = Numeric::from(i64::MAX);
+        let res = &a * &a;
+
+        match &res {
+            Numeric::Long { digits, weight, .. } => {
+                // 8e37 requires about 10 groups of base-10000 digits
+                assert!(digits.len() >= 9);
+                assert!(*weight >= 8);
+            }
+            _ => panic!("Result should have been promoted to Long format"),
+        }
+
+        assert!(!res.is_negative());
+        assert!(!res.is_zero());
+    }
+
+    #[test]
+    fn test_nan_poisoning() {
+        // any operation with NaN should result in NaN
+        let n = Numeric::from(1u64);
+        let nan = Numeric::NaN;
+
+        assert!((&n + &nan).is_nan());
+        assert!((&n - &nan).is_nan());
+        assert!((&n * &nan).is_nan());
+
+        let zero = Numeric::zero();
+        assert!((&zero * &nan).is_nan());
+    }
 }
