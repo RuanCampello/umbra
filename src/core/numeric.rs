@@ -1564,4 +1564,47 @@ mod tests {
         assert!(s.starts_with("-0."));
         assert!(s.ends_with("1"));
     }
+
+    #[test]
+    fn arithmetic_mul_basic() {
+        let a = Numeric::from(10u64);
+        let b = Numeric::from(20u64);
+        assert_eq!((a * b).to_string(), "200");
+
+        let a = Numeric::from_str("0.5").unwrap();
+        let b = Numeric::from_str("0.5").unwrap();
+        assert_eq!((a * b).to_string(), "0.25");
+
+        let a = Numeric::from_str("1.2").unwrap();
+        let b = Numeric::from_str("1.2").unwrap();
+        assert_eq!((a * b).to_string(), "1.44");
+    }
+
+    #[test]
+    fn arithmetic_mul_mixed_signs() {
+        let a = Numeric::from(10i64);
+        let b = Numeric::from(-5i64);
+        assert_eq!((&a * &b).to_string(), "-50");
+
+        let a = Numeric::from(-10i64);
+        let b = Numeric::from(-5i64);
+        assert_eq!((a * b).to_string(), "50");
+    }
+
+    #[test]
+    fn invalid_input_handling() {
+        assert_eq!(Numeric::from_str("abc"), Err(NumericError::InvalidFormat));
+        assert_eq!(
+            Numeric::from_str("12.34.56"),
+            Err(NumericError::InvalidFormat)
+        );
+        assert_eq!(Numeric::from_str(""), Err(NumericError::InvalidFormat));
+        assert_eq!(Numeric::try_from(&[][..]), Err(NumericError::InvalidFormat));
+
+        let bytes = vec![0u8; 4];
+        assert_eq!(
+            Numeric::try_from(bytes.as_slice()),
+            Err(NumericError::InvalidFormat)
+        );
+    }
 }
