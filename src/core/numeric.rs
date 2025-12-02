@@ -870,7 +870,7 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
         let dscale = d1 + d2;
         let mut sign_dscale = dscale & DSCALE_MASK;
         if neg1 ^ neg2 {
-            sign_dscale |= SIGN_MASK as u16;
+            sign_dscale |= NUMERIC_NEG;
         }
 
         if start >= end {
@@ -1598,6 +1598,7 @@ mod tests {
             Numeric::from_str("12.34.56"),
             Err(NumericError::InvalidFormat)
         );
+
         assert_eq!(Numeric::from_str(""), Err(NumericError::InvalidFormat));
         assert_eq!(Numeric::try_from(&[][..]), Err(NumericError::InvalidFormat));
 
