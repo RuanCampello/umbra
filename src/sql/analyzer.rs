@@ -121,6 +121,7 @@ pub(in crate::sql) fn analyze<'s>(
             into,
             values: rows,
             columns,
+            returning,
         }) => {
             let metadata = ctx.metadata(into)?;
             if into.eq(DB_METADATA) {
@@ -175,6 +176,10 @@ pub(in crate::sql) fn analyze<'s>(
 
                 for (expr, col) in row.iter().zip(&columns) {
                     analyze_assignment(metadata, col, expr, false)?;
+                }
+
+                for expr in returning {
+                    analyze_expression(&metadata.schema, None, expr)?;
                 }
             }
         }
@@ -282,6 +287,7 @@ pub(in crate::sql) fn analyze<'s>(
             r#where,
             table,
             columns,
+            returning,
         }) => {
             let metadata = ctx.metadata(table)?;
             if table.eq(DB_METADATA) {
@@ -292,6 +298,10 @@ pub(in crate::sql) fn analyze<'s>(
                 analyze_assignment(metadata, &col.identifier, &col.value, true)?;
             }
             analyze_where(&metadata.schema, r#where)?;
+
+            for expr in returning {
+                analyze_expression(&metadata.schema, None, expr)?;
+            }
         }
 
         Statement::Drop(Drop::Table(name)) => {

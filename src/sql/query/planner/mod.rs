@@ -27,13 +27,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
     db: &mut Database<File>,
 ) -> Result<Planner<File>, DatabaseError> {
     Ok(match statement {
-        Statement::Insert(Insert { into, values, .. }) => {
+        Statement::Insert(Insert {
+            into,
+            values,
+            returning,
+            ..
+        }) => {
             let values = VecDeque::from(values);
             let source = Box::new(Planner::Values(Values { values }));
             let table = db.metadata(&into)?;
 
             Planner::Insert(InsertPlan {
                 source,
+                returning,
                 comparator: table.comp()?,
                 table: db.metadata(&into)?.clone(),
                 pager: Rc::clone(&db.pager),
@@ -107,6 +113,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             table,
             columns,
             r#where,
+            returning,
         }) => {
             let mut source = optimiser::generate_seq_plan(&table, r#where, db)?;
             let work_dir = db.work_dir.clone();
@@ -123,6 +130,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             }
 
             Planner::Update(UpdatePlan {
+                returning,
                 comparator: metadata.comp()?,
                 table: metadata.clone(),
                 assigments: columns,

@@ -78,6 +78,7 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             values,
             columns,
             into,
+            returning: _,
         }) => {
             let metadata = ctx.metadata(into)?;
 

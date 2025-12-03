@@ -138,6 +138,8 @@ pub(crate) struct Insert<File: FileOperations> {
     pub source: Box<Planner<File>>,
     pub table: TableMetadata,
     pub comparator: BTreeKeyCmp,
+
+    pub returning: Vec<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -147,6 +149,8 @@ pub(crate) struct Update<File: FileOperations> {
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
     pub comparator: BTreeKeyCmp,
+
+    pub returning: Vec<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1033,6 +1037,15 @@ impl<File: PlanExecutor> Execute for Insert<File> {
                 Ok(())
             })?;
 
+        if !self.returning.is_empty() {
+            return Ok(Some(
+                self.returning
+                    .iter()
+                    .map(|expr| resolve_expression(&tuple, &self.table.schema, expr))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ));
+        }
+
         Ok(Some(vec![]))
     }
 }
@@ -1105,6 +1118,15 @@ impl<File: PlanExecutor> Execute for Update<File> {
                     [&tuple[index_col], &tuple[0]],
                 ))?;
             }
+        }
+
+        if !self.returning.is_empty() {
+            return Ok(Some(
+                self.returning
+                    .iter()
+                    .map(|expr| resolve_expression(&tuple, &self.table.schema, expr))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ));
         }
 
         Ok(Some(vec![]))
