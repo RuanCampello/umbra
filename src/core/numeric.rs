@@ -6,7 +6,7 @@
 use crate::core::Serialize;
 use std::borrow::Cow;
 use std::cmp::{max, min};
-use std::ops::{Div, Mul, Neg, Sub};
+use std::ops::{Mul, Neg, Sub};
 use std::{cmp::Ordering, convert::TryFrom, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
@@ -59,6 +59,12 @@ const SIGN_DSCALE_MASK: u16 = 0xC000;
 const DSCALE_MASK: u16 = 0x3FFF;
 
 impl Numeric {
+    /// For inherently inexact calculations such as division and square root,
+    /// we try to get at least this many significant digits; the idea is to
+    /// deliver a result no worse than float8 would.
+    const MIN_SIG_DIGITS: i16 = 16;
+    const DEC_DIGITS: i16 = 4;
+
     /// Returns a numeric representing zero.
     pub const fn zero() -> Self {
         Self::Short(TAG_SHORT << TAG_SHIFT)
@@ -1099,13 +1105,11 @@ impl<'n> Mul<Numeric> for &'n Numeric {
     }
 }
 
-impl<'a, 'b> Div<&'b Numeric> for &'a Numeric {
+impl<'a, 'b> std::ops::Div<&'b Numeric> for &'a Numeric {
     type Output = Numeric;
 
     #[inline]
     fn div(self, rhs: &'b Numeric) -> Self::Output {
-        use std::cmp::max;
-
         if self.is_nan() || rhs.is_nan() {
             return Numeric::NaN;
         }
@@ -1118,13 +1122,56 @@ impl<'a, 'b> Div<&'b Numeric> for &'a Numeric {
             return Numeric::zero();
         }
 
-        let (w1, d1, neg1, s1) = self.as_long_view();
-        let (w2, d2, neg2, s2) = rhs.as_long_view();
-        let is_neg = neg1 ^ neg2;
+        let (w1, d1, neg1, _) = self.as_long_view();
+        let (w2, d2, neg2, _) = rhs.as_long_view();
 
-        match Numeric::div_abs(w1, &d1, w2, &d2, max(s1, s2) + 4) {
+        // 1. estimate the weight of the quotient.
+        //    qweight = w1 - w2
+        //    if the mantissa of dividend < mantissa of divisor, the result will be smaller,
+        //    shifting the weight down by 1 (e.g., 1 / 3 = 0.33...).
+        let mut qweight = w1 - w2;
+
+        let len = std::cmp::min(d1.len(), d2.len());
+        let mut dividend_smaller = false;
+        let mut checked = false;
+
+        for i in 0..len {
+            if d1[i] < d2[i] {
+                dividend_smaller = true;
+                checked = true;
+                break;
+            } else if d1[i] > d2[i] {
+                dividend_smaller = false;
+                checked = true;
+                break;
+            }
+        }
+
+        if !checked {
+            if d1.len() < d2.len() {
+                dividend_smaller = true;
+            }
+        }
+
+        if dividend_smaller {
+            qweight -= 1;
+        }
+
+        // 2. calculate scale to ensure at least 16 significant digits.
+        //    formula: rscale = NUMERIC_MIN_SIG_DIGITS - (qweight * DEC_DIGITS)
+        //    DEC_DIGITS is 4 (since we use base 10000).
+        let sig_scale = Numeric::MIN_SIG_DIGITS - (qweight * Numeric::DEC_DIGITS);
+
+        // 3. final scale rule: max(s1, s2, required_sig_scale)
+        let s1 = self.scale();
+        let s2 = rhs.scale();
+        let rscale = max(max(s1, s2), max(0, sig_scale) as u16);
+
+        let res_is_neg = neg1 ^ neg2;
+
+        match Numeric::div_abs(w1, &d1, w2, &d2, rscale) {
             Ok(mut res) => {
-                res.set_sign(is_neg);
+                res.set_sign(res_is_neg);
                 res
             }
             Err(_) => Numeric::NaN,
@@ -1907,6 +1954,41 @@ mod tests {
     }
 
     #[test]
+    fn arithmetic_div_integer_edges() {
+        assert_eq!(
+            Numeric::from(1u64) / Numeric::from(1u64),
+            Numeric::from(1u64)
+        );
+        assert_eq!(
+            Numeric::from(0u64) / Numeric::from(1u64),
+            Numeric::from(0u64)
+        );
+        assert_eq!(
+            Numeric::from(9u64) / Numeric::from(3u64),
+            Numeric::from(3u64)
+        );
+    }
+
+    #[test]
+    fn arithmetic_div_rounding() {
+        let result = num(1, 0) / num(3, 0);
+        assert_eq!(result.to_string(), "0.33333333333333333333");
+
+        let result = num(1, 0) / num(2, 0);
+        assert_eq!(result.to_string(), "0.50000000000000000000");
+    }
+
+    #[test]
+    fn arithmetic_div_rounding_high_precision() {
+        let n1 = Numeric::from_str("1.00000000000000000000").unwrap();
+        let n2 = Numeric::from(3i64);
+        let result = n1 / n2;
+
+        assert_eq!(result.scale(), 20);
+        assert_eq!(result.to_string(), "0.33333333333333333333");
+    }
+
+    #[test]
     fn arithmetic_div_signs() {
         let a = Numeric::from(10i64);
         let b = Numeric::from(-2i64);
@@ -1919,23 +2001,5 @@ mod tests {
         let a = Numeric::from(-10i64);
         let b = Numeric::from(-2i64);
         assert_eq!(a / b, Numeric::from(5i64));
-    }
-
-    #[test]
-    fn arithmetic_div_decimals_exact() {
-        let a = Numeric::from(1u64);
-        let b = Numeric::from(2u64);
-        let res = a / b;
-
-        assert_eq!(res.to_string(), "0.5000");
-    }
-
-    #[test]
-    fn arithmetic_div_repeating() {
-        let a = Numeric::from(1u64);
-        let b = Numeric::from(3u64);
-        let res = a / b;
-
-        assert_eq!(res.to_string(), "0.3333");
     }
 }
