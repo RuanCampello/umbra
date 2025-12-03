@@ -6,7 +6,7 @@
 use crate::core::Serialize;
 use std::borrow::Cow;
 use std::cmp::{max, min};
-use std::ops::{Mul, Neg, Sub};
+use std::ops::{Div, Mul, Neg, Sub};
 use std::{cmp::Ordering, convert::TryFrom, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
@@ -32,6 +32,7 @@ pub enum Numeric {
 pub enum NumericError {
     InvalidFormat,
     Overflow,
+    DivisionByZero,
 }
 
 /// Base for internal digit representation. Each digit represents a value from 0 to 9999.
@@ -203,6 +204,178 @@ impl Numeric {
                 }
             }
         }
+    }
+
+    #[inline]
+    /// Performs an arbitrary divsion: |dividend| / |divisor|.
+    /// Adapted from Postgres `div_var` (src/backend/utils/adt/numeric.c), which implements
+    /// Knuth's Algorithm D (The Art of Computer Programming, Vol 2, 4.3.1) for base-N_BASE.
+    fn div_abs(
+        w1: i16,
+        d1: &[i16],
+        w2: i16,
+        d2: &[i16],
+        rscale: u16,
+    ) -> Result<Self, NumericError> {
+        if d2.iter().all(|&d| d == 0) {
+            return Err(NumericError::DivisionByZero);
+        }
+
+        if d1.iter().all(|&d| d == 0) {
+            return Ok(Self::zero());
+        }
+
+        let weight = w1 - w2;
+        let fract_groups = (rscale + 3) / 4;
+        let digit_count = (weight + 1 + (fract_groups as i16)) as usize;
+
+        if digit_count == 0 {
+            return Ok(Self::zero());
+        }
+
+        let mut digits = Vec::with_capacity(digit_count);
+
+        if d2.len() == 1 {
+            let divisor = d2[0] as i32;
+            let mut remainder = 0i32;
+
+            for i in 0..digit_count {
+                let val = match i < d1.len() {
+                    true => d1[i] as i32,
+                    false => 0,
+                };
+
+                let current_val = remainder * N_BASE + val;
+                let q = current_val / divisor;
+                remainder = current_val % divisor;
+
+                digits.push(q as i16);
+            }
+
+            let mut offset = 0;
+            while offset < digits.len() && digits[offset] == 0 {
+                offset += 1;
+            }
+
+            if offset > 0 {
+                digits.drain(0..offset);
+            }
+
+            let weight = weight - (offset as i16);
+
+            return Ok(Self::Long {
+                weight: weight,
+                sign_dscale: rscale & DSCALE_MASK,
+                digits: digits,
+            });
+        }
+
+        let norm_factor = N_BASE / (d2[0] as i32 + 1);
+
+        let mut d1_norm: Vec<i32> = d1.iter().map(|&d| d as i32 * norm_factor).collect();
+        let mut d2_norm: Vec<i32> = d2.iter().map(|&d| d as i32 * norm_factor).collect();
+
+        for i in (1..d1_norm.len()).rev() {
+            let val = d1_norm[i];
+            let carry = val / N_BASE;
+            if carry > 0 {
+                d1_norm[i] %= N_BASE;
+                d1_norm[i - 1] += carry;
+            }
+        }
+        for i in (1..d2_norm.len()).rev() {
+            let val = d2_norm[i];
+            let carry = val / N_BASE;
+            if carry > 0 {
+                d2_norm[i] %= N_BASE;
+                d2_norm[i - 1] += carry;
+            }
+        }
+
+        let mut dividend = d1_norm;
+        let padding = digit_count.saturating_sub(dividend.len()) + d2.len() + 2;
+        dividend.resize(dividend.len() + padding, 0);
+
+        let divisor_0 = d2_norm[0];
+        let divisor_1 = if d2_norm.len() > 1 { d2_norm[1] } else { 0 };
+
+        for j in 0..digit_count {
+            let div_top = dividend[j] * N_BASE + dividend[j + 1];
+            let mut q_hat = div_top / divisor_0;
+            let mut r_hat = div_top % divisor_0;
+
+            loop {
+                if q_hat >= N_BASE || (q_hat * divisor_1 > N_BASE * r_hat + dividend[j + 2]) {
+                    q_hat -= 1;
+                    r_hat += divisor_0;
+                    if r_hat < N_BASE {
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            let mut borrow = 0;
+            for (i, &div_digit) in d2_norm.iter().rev().enumerate() {
+                let div_idx = j + d2_norm.len() - i;
+
+                let p = q_hat * div_digit;
+                let sub = dividend[div_idx] - (p % N_BASE) - borrow;
+
+                let p_carry = p / N_BASE;
+
+                if sub < 0 {
+                    dividend[div_idx] = sub + N_BASE;
+                    borrow = p_carry + 1;
+                } else {
+                    dividend[div_idx] = sub;
+                    borrow = p_carry;
+                }
+            }
+
+            let sub = dividend[j] - borrow;
+            dividend[j] = sub;
+
+            if dividend[j] < 0 {
+                q_hat -= 1;
+                let mut carry = 0;
+                for (i, &div_digit) in d2_norm.iter().rev().enumerate() {
+                    let div_idx = j + d2_norm.len() - i;
+                    let sum = dividend[div_idx] + div_digit + carry;
+                    if sum >= N_BASE {
+                        dividend[div_idx] = sum - N_BASE;
+                        carry = 1;
+                    } else {
+                        dividend[div_idx] = sum;
+                        carry = 0;
+                    }
+                }
+                dividend[j] += carry;
+            }
+
+            digits.push(q_hat as i16);
+        }
+
+        let mut offset = 0;
+        while offset < digits.len() && digits[offset] == 0 {
+            offset += 1;
+        }
+
+        if offset > 0 {
+            digits.drain(0..offset);
+        }
+
+        let weight = weight - (offset as i16);
+
+        if digits.is_empty() {
+            return Ok(Self::zero());
+        }
+
+        Ok(Self::Long {
+            weight,
+            sign_dscale: rscale & DSCALE_MASK,
+            digits,
+        })
     }
 
     #[inline]
@@ -926,6 +1099,66 @@ impl<'n> Mul<Numeric> for &'n Numeric {
     }
 }
 
+impl<'a, 'b> Div<&'b Numeric> for &'a Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    fn div(self, rhs: &'b Numeric) -> Self::Output {
+        use std::cmp::max;
+
+        if self.is_nan() || rhs.is_nan() {
+            return Numeric::NaN;
+        }
+
+        if rhs.is_zero() {
+            return Numeric::NaN;
+        }
+
+        if self.is_zero() {
+            return Numeric::zero();
+        }
+
+        let (w1, d1, neg1, s1) = self.as_long_view();
+        let (w2, d2, neg2, s2) = rhs.as_long_view();
+        let is_neg = neg1 ^ neg2;
+
+        match Numeric::div_abs(w1, &d1, w2, &d2, max(s1, s2) + 4) {
+            Ok(mut res) => {
+                res.set_sign(is_neg);
+                res
+            }
+            Err(_) => Numeric::NaN,
+        }
+    }
+}
+
+impl<'n> std::ops::Div<&'n Numeric> for Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    fn div(self, rhs: &'n Numeric) -> Self::Output {
+        &self / rhs
+    }
+}
+
+impl<'n> std::ops::Div<Numeric> for &'n Numeric {
+    type Output = Numeric;
+
+    #[inline]
+    fn div(self, rhs: Numeric) -> Self::Output {
+        self / &rhs
+    }
+}
+
+impl std::ops::Div for Numeric {
+    type Output = Self;
+
+    #[inline]
+    fn div(self, rhs: Self) -> Self::Output {
+        &self / &rhs
+    }
+}
+
 impl From<[u8; 8]> for Numeric {
     fn from(value: [u8; 8]) -> Self {
         let packed = u64::from_le_bytes(value);
@@ -1289,6 +1522,7 @@ impl Display for NumericError {
         match self {
             Self::InvalidFormat => write!(f, "Invalid numeric format"),
             Self::Overflow => write!(f, "Numeric overflow"),
+            Self::DivisionByZero => write!(f, "Numeric division by zero"),
         }
     }
 }
