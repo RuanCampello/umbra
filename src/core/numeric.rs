@@ -827,6 +827,10 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
 
     #[inline]
     fn mul(self, rhs: &'b Numeric) -> Self::Output {
+        if self.is_nan() || rhs.is_nan() {
+            return Numeric::NaN;
+        }
+
         let (w1, dig1, neg1, d1) = self.as_long_view();
         let (w2, dig2, neg2, d2) = rhs.as_long_view();
 
