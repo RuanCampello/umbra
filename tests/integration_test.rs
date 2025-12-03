@@ -3014,3 +3014,75 @@ fn complex_numeric_join() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn returning() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+    CREATE TABLE inventory (
+        product_id SERIAL PRIMARY KEY,
+        product_name VARCHAR(100),
+        category VARCHAR(50),
+        quantity INTEGER,
+        unit_price DECIMAL(10,2)
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO inventory (product_name, category, quantity, unit_price)
+    VALUES
+        ('Laptop Computer', 'Electronics', 50, 999.99),
+        ('Office Chair', 'Furniture', 75, 249.50),
+        ('Wireless Mouse', 'Electronics', 120, 29.95),
+        ('Standing Desk', 'Furniture', 30, 399.00),
+        ('USB Cable', 'Electronics', 200, 12.99),
+        ('Gaming Chair', 'Furniture', 0, 89.99);"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    UPDATE inventory
+    SET unit_price = unit_price * 1.05
+    WHERE category = 'Electronics'
+    RETURNING
+        product_name,
+        old.unit_price AS before_price,
+        new.unit_price AS after_price,
+        TRUNC(new.unit_price - old.unit_price, 2) AS price_increase;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![
+                "Wireless Mouse".into(),
+                29.95.try_into().unwrap(),
+                31.45.try_into().unwrap(),
+                1.50.into()
+            ],
+            vec![
+                "USB Cable".into(),
+                12.95.try_into().unwrap(),
+                13.64.try_into().unwrap(),
+                0.65.into()
+            ],
+            vec![
+                "Gaming Keyboard".into(),
+                89.99.try_into().unwrap(),
+                94.49.try_into().unwrap(),
+                4.50.into()
+            ],
+            vec![
+                "Laptop Computer".into(),
+                1099.99.try_into().unwrap(),
+                1154.99.try_into().unwrap(),
+                55.50.into()
+            ]
+        ],
+    );
+
+    Ok(())
+}
