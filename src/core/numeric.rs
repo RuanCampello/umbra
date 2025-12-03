@@ -1894,4 +1894,48 @@ mod tests {
         let zero = Numeric::zero();
         assert!((&zero * &nan).is_nan());
     }
+
+    #[test]
+    fn arithmetic_div_basic() {
+        let a = Numeric::from(10u64);
+        let b = Numeric::from(2u64);
+        assert_eq!(a / b, Numeric::from(5u64));
+
+        let a = Numeric::from(100u64);
+        let b = Numeric::from(4u64);
+        assert_eq!(a / b, Numeric::from(25u64));
+    }
+
+    #[test]
+    fn arithmetic_div_signs() {
+        let a = Numeric::from(10i64);
+        let b = Numeric::from(-2i64);
+        assert_eq!(a / b, Numeric::from(-5i64));
+
+        let a = Numeric::from(-10i64);
+        let b = Numeric::from(2i64);
+        assert_eq!(a / b, Numeric::from(-5i64));
+
+        let a = Numeric::from(-10i64);
+        let b = Numeric::from(-2i64);
+        assert_eq!(a / b, Numeric::from(5i64));
+    }
+
+    #[test]
+    fn arithmetic_div_decimals_exact() {
+        let a = Numeric::from(1u64);
+        let b = Numeric::from(2u64);
+        let res = a / b;
+
+        assert_eq!(res.to_string(), "0.5000");
+    }
+
+    #[test]
+    fn arithmetic_div_repeating() {
+        let a = Numeric::from(1u64);
+        let b = Numeric::from(3u64);
+        let res = a / b;
+
+        assert_eq!(res.to_string(), "0.3333");
+    }
 }
