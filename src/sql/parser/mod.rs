@@ -510,6 +510,25 @@ impl<'input> Parser<'input> {
         })
     }
 
+    fn parse_returning(&mut self) -> ParserResult<Vec<Expression>> {
+        match self.consume_optional(Token::Keyword(Keyword::Returning)) {
+            false => Ok(vec![]),
+            _ => self.parse_separated_tokens(
+                |p| {
+                    let expr = p.parse_expr(None)?;
+                    match p.consume_optional(Token::Keyword(Keyword::As)) {
+                        false => Ok(expr),
+                        _ => Ok(Expression::Alias {
+                            alias: p.parse_ident()?,
+                            expr: Box::new(expr),
+                        }),
+                    }
+                },
+                false,
+            ),
+        }
+    }
+
     /// Operator's precedence from the [PostgreSQL documentation](https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-PRECEDENCE)
     fn get_precedence(&mut self) -> u8 {
         let Some(Ok(token)) = self.peek_token() else {
@@ -1147,6 +1166,7 @@ mod tests {
                         }),
                     })))
                 }),
+                returning: vec![],
             }))
         );
     }
@@ -1181,7 +1201,8 @@ mod tests {
                     // outer vec = rows, inner vec = expressions in that row
                     Expression::Value(Value::Number(1)),
                     Expression::Value(Value::String("HR".to_string()))
-                ],],
+                ]],
+                returning: vec![],
             }))
         )
     }
@@ -1505,6 +1526,7 @@ mod tests {
                         Expression::Value(Value::String("2024-02-03 12:00:00".into()))
                     ]
                 ],
+                returning: vec![],
             }))
         )
     }

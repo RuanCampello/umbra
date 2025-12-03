@@ -146,9 +146,12 @@ impl<'sql> Sql<'sql> for Insert {
             }
         }
 
+        let returning = parser.parse_returning()?;
+
         Ok(Self {
             into,
             columns,
+            returning,
             values: rows,
         })
     }
@@ -165,10 +168,13 @@ impl<'sql> Sql<'sql> for Update {
             false => None,
         };
 
+        let returning = parser.parse_returning()?;
+
         Ok(Update {
             columns,
             r#where,
             table,
+            returning,
         })
     }
 }

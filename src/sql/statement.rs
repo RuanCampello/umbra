@@ -105,6 +105,7 @@ pub(crate) struct Update {
     pub table: String,
     pub columns: Vec<Assignment>,
     pub r#where: Option<Expression>,
+    pub returning: Vec<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -112,6 +113,7 @@ pub(crate) struct Insert {
     pub into: String,
     pub columns: Vec<String>,
     pub values: Vec<Vec<Expression>>,
+    pub returning: Vec<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -585,10 +587,15 @@ impl Display for Statement {
                 table,
                 columns,
                 r#where,
+                returning,
             }) => {
                 write!(f, "UPDATE {table} SET {}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
+                }
+
+                if !returning.is_empty() {
+                    write!(f, "RETURNING {}", join(returning, ", "))?;
                 }
             }
 
@@ -596,6 +603,7 @@ impl Display for Statement {
                 into,
                 columns,
                 values,
+                returning,
             }) => {
                 let columns = match columns.is_empty() {
                     true => String::from(" "),
@@ -611,6 +619,9 @@ impl Display for Statement {
                 );
 
                 write!(f, "INSERT INTO {into}{columns}VALUES ({})", values)?;
+                if !returning.is_empty() {
+                    write!(f, "RETURNING {}", join(returning, ", "))?;
+                }
             }
 
             Statement::Drop(drop) => {
