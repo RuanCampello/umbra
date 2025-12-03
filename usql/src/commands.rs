@@ -38,45 +38,7 @@ fn describe_table(stream: &mut TcpStream, table_name: &str) {
     match result {
         Ok(Response::QuerySet(query_set)) => {
             println!("Table \"{table_name}\"");
-
-            let col_width = query_set
-                .schema
-                .columns
-                .iter()
-                .map(|c| c.name.len())
-                .max()
-                .unwrap_or(0)
-                .max(6);
-            let type_width = query_set
-                .schema
-                .columns
-                .iter()
-                .map(|c| c.data_type.to_string().len())
-                .max()
-                .unwrap_or(0)
-                .max(4);
-
-            println!(
-                " {0:<col_width$} | {1:<type_width$} | Nullable",
-                "Column", "Type"
-            );
-            println!("-{0:-<col_width$}-+-{0:-<type_width$}-+----------", "");
-            for col in &query_set.schema.columns {
-                let nullable = match col.is_nullable() {
-                    false => "not null",
-                    _ => "",
-                };
-
-                println!(
-                    " {name:<cw$} | {kind:<tw$} | {null}",
-                    name = col.name,
-                    kind = col.data_type.to_string(),
-                    null = nullable,
-                    cw = col_width,
-                    tw = type_width
-                );
-            }
-            println!();
+            println!("{}", query_set.schema);
         }
         Ok(Response::Err(msg)) => println!("Error: {msg}"),
         Ok(_) => println!("Unexpected response type."),

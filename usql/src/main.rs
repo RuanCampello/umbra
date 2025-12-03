@@ -13,11 +13,7 @@ use std::{
     net::TcpStream,
     time::Instant,
 };
-use umbra::{
-    db::QuerySet,
-    sql::statement::Value,
-    tcp::{self, Response},
-};
+use umbra::tcp::{self, Response};
 
 const EXIT: &str = "quit";
 const PROMPT: &str = "umbra > ";
@@ -180,7 +176,7 @@ fn process_query(stream: &mut TcpStream, statement: &str) {
             Response::QuerySet(query_set) => {
                 println!(
                     "{}\n{} {} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
-                    table(&query_set),
+                    &query_set.to_string(),
                     query_set.tuples.len(),
                     plural("row", query_set.tuples.len()),
                     packet_transmission.elapsed()
@@ -189,84 +185,6 @@ fn process_query(stream: &mut TcpStream, statement: &str) {
         },
         Err(err) => println!("Error: {err}"),
     }
-}
-
-fn table(query: &QuerySet) -> String {
-    let mut width: Vec<usize> = query
-        .schema
-        .columns
-        .iter()
-        .map(|col| col.name.chars().count())
-        .collect();
-
-    let rows: Vec<Vec<String>> = query
-        .tuples
-        .iter()
-        .map(|row| {
-            row.iter()
-                .map(|col| match col {
-                    Value::String(string) => string.replace('\n', "\\n"),
-                    other => other.to_string(),
-                })
-                .collect()
-        })
-        .collect();
-
-    (rows).iter().for_each(|row| {
-        row.iter().enumerate().for_each(|(idx, col)| {
-            let chars_count = col.chars().count();
-            if chars_count > width[idx] {
-                width[idx] = chars_count;
-            }
-        })
-    });
-
-    width.iter_mut().for_each(|w| *w += 2);
-
-    let mut border = String::from('+');
-    width.iter().for_each(|w| {
-        (0..*w).for_each(|_| border.push('-'));
-        border.push('+');
-    });
-
-    let draw_row = |row: &Vec<String>| -> String {
-        let mut row_string = String::from('|');
-
-        row.iter().enumerate().for_each(|(idx, col)| {
-            row_string.push(' ');
-            row_string.push_str(col);
-            let char_count = col.chars().count();
-            (0..width[idx] - char_count - 1).for_each(|_| row_string.push(' '));
-            row_string.push('|');
-        });
-
-        row_string
-    };
-
-    let mut table = String::from(&border);
-    table.push('\n');
-    table.push_str(&draw_row(
-        &query
-            .schema
-            .columns
-            .iter()
-            .map(|col| col.name.to_string())
-            .collect(),
-    ));
-    table.push('\n');
-    table.push_str(&border);
-    table.push('\n');
-
-    rows.iter().for_each(|row| {
-        table.push_str(&draw_row(row));
-        table.push('\n');
-    });
-
-    if !rows.is_empty() {
-        table.push_str(&border);
-    }
-
-    table
 }
 
 fn plural(word: &str, length: usize) -> String {

@@ -166,8 +166,8 @@ impl Display for Schema {
                     col.name.clone(),
                     col.data_type.to_string(),
                     match col.is_nullable() {
-                        true => "YES".to_string(),
-                        _ => "NO".to_string(),
+                        false => "not null".to_string(),
+                        _ => "".to_string(),
                     },
                 ]
             })

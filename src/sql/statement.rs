@@ -771,6 +771,13 @@ impl Value {
             (Numeric(a), Number(b)) => Some(Pair::Arbitrary(Borrowed(a), Owned(Num::from(*b)))),
             (Number(a), Numeric(b)) => Some(Pair::Arbitrary(Owned(Num::from(*a)), Borrowed(b))),
 
+            (Numeric(a), Float(b)) => Num::try_from(*b)
+                .ok()
+                .map(|nb| Pair::Arbitrary(Borrowed(a), Owned(nb))),
+            (Float(a), Numeric(b)) => Num::try_from(*a)
+                .ok()
+                .map(|na| Pair::Arbitrary(Owned(na), Borrowed(b))),
+
             _ => None,
         }
     }
