@@ -1039,7 +1039,7 @@ mod tests {
                     }],
                     output: Schema::new(vec![
                         Column::new("region", Type::Varchar(2)),
-                        Column::new("SUM", Type::DoublePrecision)
+                        Column::new("SUM", Type::Numeric(NUMERIC_ANY, NUMERIC_ANY))
                     ]),
                     page_size: db.db.pager.borrow().page_size,
                 }

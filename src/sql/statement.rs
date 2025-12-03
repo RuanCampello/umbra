@@ -1067,18 +1067,22 @@ impl Function {
     }
 
     /// Returns the `VmType` that this function returns.
-    pub const fn return_type(&self) -> VmType {
+    pub const fn return_type(&self, input: &VmType) -> VmType {
         match self {
             Self::Substring | Self::Concat | Self::TypeOf => VmType::String,
-            Self::Avg | Self::Min | Self::Max | Self::Sum => VmType::Float,
-            Self::Abs | Self::Sqrt | Self::Trunc | Self::Power => VmType::Float,
-            Self::Substring | Self::Concat => VmType::String,
-            Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => {
+
+            Self::Count | Self::UuidV4 | Self::Ascii | Self::Position | Self::Extract => {
                 VmType::Number
             }
-            Self::Extract => VmType::Number,
 
-            Self::Coalesce => panic!("This must be overridden by the analyzer"),
+            Self::Sqrt | Self::Power => VmType::Float,
+
+            Self::Avg | Self::Sum => match input {
+                VmType::Number | VmType::Numeric => VmType::Numeric,
+                _ => *input,
+            },
+
+            Self::Abs | Self::Sign | Self::Trunc | Self::Min | Self::Max | Self::Coalesce => *input,
         }
     }
 

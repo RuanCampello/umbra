@@ -11,8 +11,8 @@ use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{
-    BinaryOperator, Constraint, Create, Drop, Expression, Function, Statement, Type, UnaryOperator,
-    Value, NUMERIC_ANY,
+    BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
+    NUMERIC_ANY,
 };
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::{HashMap, HashSet};
@@ -660,14 +660,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             }
 
-            match func {
-                // TODO: make a variant check function for variadic return types
-                Function::Min | Function::Max | Function::Coalesce => match arg_types.first() {
-                    Some(first) => return Ok(*first),
-                    None => func.return_type(),
-                },
-                _ => func.return_type(),
-            }
+            return Ok(func.return_type(&arg_types.first().unwrap_or(&VmType::Float)));
         }
 
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {

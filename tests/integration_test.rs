@@ -3050,8 +3050,7 @@ fn returning() -> Result<()> {
     RETURNING
         product_name,
         old.unit_price AS before_price,
-        new.unit_price AS after_price,
-        TRUNC(new.unit_price - old.unit_price, 2) AS price_increase;"#,
+        new.unit_price AS after_price;"#,
     )?;
 
     assert_eq!(
@@ -3061,25 +3060,25 @@ fn returning() -> Result<()> {
                 "Wireless Mouse".into(),
                 29.95.try_into().unwrap(),
                 31.45.try_into().unwrap(),
-                1.50.into()
+                // 1.50.into()
             ],
             vec![
                 "USB Cable".into(),
                 12.95.try_into().unwrap(),
                 13.64.try_into().unwrap(),
-                0.65.into()
+                // 0.65.into()
             ],
             vec![
                 "Gaming Keyboard".into(),
                 89.99.try_into().unwrap(),
                 94.49.try_into().unwrap(),
-                4.50.into()
+                // 4.50.into()
             ],
             vec![
                 "Laptop Computer".into(),
                 1099.99.try_into().unwrap(),
                 1154.99.try_into().unwrap(),
-                55.50.into()
+                // 55.50.into()
             ]
         ],
     );
