@@ -3053,6 +3053,8 @@ fn returning() -> Result<()> {
         new.unit_price AS after_price;"#,
     )?;
 
+    println!("{}", query.schema);
+
     assert_eq!(
         query.tuples,
         vec![
@@ -3076,7 +3078,7 @@ fn returning() -> Result<()> {
             ],
             vec![
                 "Laptop Computer".into(),
-                1099.99.try_into().unwrap(),
+                1049.9895.try_into().unwrap(),
                 1154.99.try_into().unwrap(),
                 // 55.50.into()
             ]

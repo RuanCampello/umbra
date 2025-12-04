@@ -151,6 +151,7 @@ pub(crate) struct Update<File: FileOperations> {
     pub comparator: BTreeKeyCmp,
 
     pub returning: Vec<Expression>,
+    pub returning_schema: Option<Schema>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1070,7 +1071,10 @@ impl<File: PlanExecutor> Execute for Update<File> {
 
             if new_value.ne(&tuple[col]) {
                 let old_value = std::mem::replace(&mut tuple[col], new_value);
-                updated_cols.insert(assignment.identifier.clone(), (old_value, col));
+
+                updated_cols
+                    .entry(assignment.identifier.clone())
+                    .or_insert((old_value, col));
             }
         }
 
@@ -1120,11 +1124,19 @@ impl<File: PlanExecutor> Execute for Update<File> {
             }
         }
 
-        if !self.returning.is_empty() {
+        if let Some(schema) = &self.returning_schema {
+            let mut old_tuple = tuple.clone();
+
+            for (_, (old_value, column_idx)) in &updated_cols {
+                old_tuple[*column_idx] = old_value.clone();
+            }
+
+            old_tuple.extend(tuple);
+
             return Ok(Some(
                 self.returning
                     .iter()
-                    .map(|expr| resolve_expression(&tuple, &self.table.schema, expr))
+                    .map(|expr| resolve_expression(&old_tuple, schema, expr))
                     .collect::<Result<Vec<_>, _>>()?,
             ));
         }

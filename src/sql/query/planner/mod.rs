@@ -129,8 +129,23 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }));
             }
 
+            let returning_schema = match returning.is_empty() {
+                true => None,
+                _ => {
+                    let len = metadata.schema.len();
+                    let mut columns = metadata.schema.columns.clone();
+                    columns.extend(metadata.schema.columns.clone());
+
+                    let mut schema = Schema::new(columns);
+                    schema.add_qualified_name("old", 0, len);
+                    schema.add_qualified_name("new", len, 2 * len);
+                    Some(schema)
+                }
+            };
+
             Planner::Update(UpdatePlan {
                 returning,
+                returning_schema,
                 comparator: metadata.comp()?,
                 table: metadata.clone(),
                 assigments: columns,
