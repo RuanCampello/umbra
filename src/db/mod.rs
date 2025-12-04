@@ -7,6 +7,7 @@ mod context;
 mod metadata;
 mod schema;
 
+pub use crate::core::numeric::Numeric;
 pub(crate) use context::Context;
 use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};

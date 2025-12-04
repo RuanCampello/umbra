@@ -1,4 +1,5 @@
 use std::path::Path;
+use umbra::db::Numeric;
 use umbra::db::{Database, DatabaseError, QuerySet};
 use umbra::sql::statement::{Type, Value};
 use umbra::{interval, temporal};
@@ -46,6 +47,10 @@ impl Drop for State {
     fn drop(&mut self) {
         std::fs::remove_file(&self.path).expect("Failed to drop State")
     }
+}
+
+fn numeric(val: i128, scale: u16) -> Value {
+    Value::Numeric(Numeric::from_scaled_i128(val, scale).unwrap())
 }
 
 #[test]
@@ -3067,21 +3072,21 @@ fn returning() -> Result<()> {
         vec![
             vec![
                 "Laptop Computer".into(),
-                999.99.try_into().unwrap(),
-                1049.9895.try_into().unwrap(),
-                49.99.try_into().unwrap(),
+                numeric(99999, 2),
+                numeric(10499895, 4),
+                numeric(4999, 2),
             ],
             vec![
                 "Wireless Mouse".into(),
-                29.95.try_into().unwrap(),
-                31.4475.try_into().unwrap(),
-                1.49.try_into().unwrap(),
+                numeric(2995, 2),
+                numeric(314475, 4),
+                numeric(149, 2),
             ],
             vec![
                 "USB Cable".into(),
-                12.99.try_into().unwrap(),
-                13.6395.try_into().unwrap(),
-                0.64.try_into().unwrap(),
+                numeric(1299, 2),
+                numeric(136395, 4),
+                numeric(064, 2),
             ],
         ]
     );

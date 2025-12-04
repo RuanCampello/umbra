@@ -82,6 +82,7 @@ impl Numeric {
         matches!(self, Self::NaN)
     }
 
+    #[inline]
     pub const fn is_negative(&self) -> bool {
         match self {
             Self::Short(packed) => {
@@ -93,6 +94,7 @@ impl Numeric {
         }
     }
 
+    #[inline]
     pub const fn scale(&self) -> u16 {
         match self {
             Self::Short(packed) => ((*packed & SCALE_MASK) >> SCALE_SHIFT) as u16,
@@ -191,22 +193,16 @@ impl Numeric {
                     return Self::zero();
                 }
 
-                if len >= digits.len() {
-                    return Self::Long {
-                        weight: *weight,
-                        sign_dscale: (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK),
-                        digits: digits.clone(),
-                    };
-                }
-
                 let mut digits = digits[0..len].to_vec();
                 let remainder = scale % 4;
 
                 if remainder != 0 {
-                    if let Some(last) = digits.last_mut() {
-                        let mask = 4 - remainder;
-                        let divisor = 10i16.pow(mask as u32);
-                        *last = (*last / divisor) * divisor;
+                    if digits.len() == len {
+                        if let Some(last) = digits.last_mut() {
+                            let mask = 4 - remainder;
+                            let divisor = 10i16.pow(mask as u32);
+                            *last = (*last / divisor) * divisor;
+                        }
                     }
                 };
 
@@ -494,7 +490,7 @@ impl Numeric {
     }
 
     #[inline]
-    fn from_scaled_i128(value: i128, scale: u16) -> Result<Self, NumericError> {
+    pub fn from_scaled_i128(value: i128, scale: u16) -> Result<Self, NumericError> {
         if value == 0 {
             return Ok(Self::zero());
         }
