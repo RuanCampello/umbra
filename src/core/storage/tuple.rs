@@ -157,7 +157,7 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 
                             header_len + len
                         }
-                        _ => unreachable!(),
+                        _ => byte_len_of_type(&col.data_type),
                     },
                     Value::Numeric(num) => match num {
                         Numeric::Short(_) | Numeric::NaN => 8,

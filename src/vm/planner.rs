@@ -140,6 +140,7 @@ pub(crate) struct Insert<File: FileOperations> {
     pub comparator: BTreeKeyCmp,
 
     pub returning: Vec<Expression>,
+    pub returning_schema: Option<Schema>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -452,6 +453,8 @@ impl<File: FileOperations> Planner<File> {
             Self::Filter(filter) => return filter.source.schema(),
             Self::Limit(limit) => return limit.source.schema(),
             Self::HashJoin(hash) => &hash.schema,
+            Self::Update(update) => return update.returning_schema.clone(),
+            Self::Insert(insert) => return insert.returning_schema.clone(),
             Self::IndexNestedLoopJoin(inl) => {
                 let mut schema = inl.left_schema();
                 let left_len = schema.len();
@@ -1124,7 +1127,8 @@ impl<File: PlanExecutor> Execute for Update<File> {
             }
         }
 
-        if let Some(schema) = &self.returning_schema {
+        if !self.returning.is_empty() {
+            let input_schema = self.table.schema.update_returning_input();
             let mut old_tuple = tuple.clone();
 
             for (_, (old_value, column_idx)) in &updated_cols {
@@ -1136,7 +1140,7 @@ impl<File: PlanExecutor> Execute for Update<File> {
             return Ok(Some(
                 self.returning
                     .iter()
-                    .map(|expr| resolve_expression(&old_tuple, schema, expr))
+                    .map(|expr| resolve_expression(&old_tuple, &input_schema, expr))
                     .collect::<Result<Vec<_>, _>>()?,
             ));
         }

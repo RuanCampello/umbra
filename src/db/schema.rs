@@ -137,6 +137,18 @@ impl Schema {
     pub fn len(&self) -> usize {
         self.columns.len()
     }
+
+    pub fn update_returning_input(&self) -> Self {
+        let len = self.len();
+        let mut columns = self.columns.clone();
+        columns.extend(self.columns.clone());
+
+        let mut input_schema = Self::new(columns);
+        input_schema.add_qualified_name("old", 0, len);
+        input_schema.add_qualified_name("new", len, 2 * len);
+
+        input_schema
+    }
 }
 
 pub(crate) fn has_btree_key(columns: &[Column]) -> bool {

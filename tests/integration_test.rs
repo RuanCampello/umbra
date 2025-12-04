@@ -3054,6 +3054,7 @@ fn returning() -> Result<()> {
     )?;
 
     println!("{}", query.schema);
+    println!("{:#?}", query.tuples);
 
     assert_eq!(
         query.tuples,

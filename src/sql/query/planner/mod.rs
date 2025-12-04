@@ -37,9 +37,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let source = Box::new(Planner::Values(Values { values }));
             let table = db.metadata(&into)?;
 
+            let returning_schema = returning_schema(&returning, &table.schema)?;
+
             Planner::Insert(InsertPlan {
                 source,
                 returning,
+                returning_schema,
                 comparator: table.comp()?,
                 table: db.metadata(&into)?.clone(),
                 pager: Rc::clone(&db.pager),
@@ -132,14 +135,8 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let returning_schema = match returning.is_empty() {
                 true => None,
                 _ => {
-                    let len = metadata.schema.len();
-                    let mut columns = metadata.schema.columns.clone();
-                    columns.extend(metadata.schema.columns.clone());
-
-                    let mut schema = Schema::new(columns);
-                    schema.add_qualified_name("old", 0, len);
-                    schema.add_qualified_name("new", len, 2 * len);
-                    Some(schema)
+                    let input = metadata.schema.update_returning_input();
+                    returning_schema(&returning, &input)?
                 }
             };
 
@@ -192,7 +189,9 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
 fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
     Ok(match expr {
         Expression::Identifier(col) => {
-            let index = schema.index_of(col).unwrap();
+            let index = schema
+                .index_of(col)
+                .ok_or(SqlError::InvalidColumn(col.into()))?;
             schema.columns[index].data_type.clone()
         }
         _ => match analyzer::analyze_expression(schema, None, expr)? {
@@ -259,6 +258,43 @@ fn split_where<'expr>(
         true => (None, Some(r#where)),
         _ => (Some(r#where), None),
     }
+}
+
+fn returning_schema(returning: &[Expression], schema: &Schema) -> Result<Option<Schema>, SqlError> {
+    if returning.is_empty() {
+        return Ok(None);
+    }
+
+    let cols = returning
+        .iter()
+        .map(|expr| match expr {
+            Expression::Alias { expr, alias } => {
+                Ok(Column::new(alias, resolve_type(schema, expr)?))
+            }
+            Expression::Identifier(ident) => {
+                let idx = schema
+                    .index_of(ident)
+                    .ok_or(SqlError::InvalidColumn(ident.into()))?;
+
+                Ok(schema.columns[idx].clone())
+            }
+            Expression::QualifiedIdentifier { table, column } => {
+                let qualified = format!("{table}.{column}");
+                let idx = schema
+                    .index_of(&qualified)
+                    .ok_or(SqlError::InvalidQualifiedColumn {
+                        table: table.into(),
+                        column: column.into(),
+                    })?;
+
+                Ok(schema.columns[idx].clone())
+            }
+
+            _ => Ok(Column::new(&expr.to_string(), resolve_type(schema, expr)?)),
+        })
+        .collect::<Result<Vec<_>, SqlError>>()?;
+
+    Ok(Some(Schema::new(cols)))
 }
 
 #[cfg(test)]
