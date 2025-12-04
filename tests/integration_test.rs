@@ -3053,8 +3053,10 @@ fn returning() -> Result<()> {
         new.unit_price AS after_price;"#,
     )?;
 
-    println!("{}", query.schema);
-    println!("{:#?}", query.tuples);
+    assert_eq!(query.schema.len(), 3);
+    assert_eq!(query.schema.columns[0].name, "product_name");
+    assert_eq!(query.schema.columns[1].name, "before_price");
+    assert_eq!(query.schema.columns[2].name, "after_price");
 
     assert_eq!(
         query.tuples,
