@@ -1075,7 +1075,10 @@ impl Function {
                 VmType::Number
             }
 
-            Self::Sqrt | Self::Power => VmType::Float,
+            Self::Sqrt | Self::Power => match input {
+                VmType::Numeric => VmType::Numeric,
+                _ => VmType::Float,
+            },
 
             Self::Avg | Self::Sum => match input {
                 VmType::Number | VmType::Numeric => VmType::Numeric,

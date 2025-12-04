@@ -3,10 +3,13 @@
 
 #![allow(dead_code)]
 
-use std::ops::Div;
-
 use super::expression::{TypeError, VmError, VmType};
-use crate::{db::SqlError, sql::statement::Value};
+use crate::{
+    core::numeric::{Numeric, NumericError},
+    db::SqlError,
+    sql::statement::Value,
+};
+use std::{ops::Div, str::FromStr, sync::OnceLock};
 
 #[repr(i8)]
 #[derive(Debug, PartialEq)]
@@ -24,6 +27,9 @@ trait SquaredRoot: Sized + PartialEq + PartialOrd + std::ops::Add<Self> {
     const EPSILON: f64 = f64::EPSILON;
     fn sqrt(&self) -> Result<Self, SqlError>;
 }
+
+static NUMERIC_TWO: OnceLock<Numeric> = OnceLock::new();
+static NUMERIC_HALF: OnceLock<Numeric> = OnceLock::new();
 
 impl Signed for i128 {
     #[inline(always)]
@@ -112,13 +118,46 @@ impl SquaredRoot for f64 {
     }
 }
 
+impl SquaredRoot for Numeric {
+    #[inline(always)]
+    fn sqrt(&self) -> Result<Self, SqlError> {
+        if self.is_negative() {
+            return Err(TypeError::NumericError(NumericError::InvalidFormat).into());
+        }
+
+        if self.is_zero() {
+            return Ok(Self::zero());
+        }
+
+        if self.is_nan() {
+            return Ok(Self::NaN);
+        }
+
+        let two = NUMERIC_TWO.get_or_init(|| Numeric::from(2u64));
+        let half = NUMERIC_HALF.get_or_init(|| Numeric::from_str("0.5").unwrap());
+        let mut x = self / two;
+
+        for _ in 0..20 {
+            let next = half * &(&x + (self / &x));
+            if x == next {
+                break;
+            }
+
+            x = next;
+        }
+
+        Ok(x)
+    }
+}
+
 #[inline(always)]
 pub(super) fn abs(value: &Value) -> Result<Value, SqlError> {
     match value {
         Value::Float(f) => Ok(Value::Float(f.abs())),
         Value::Number(n) => Ok(Value::Number(n.abs())),
+        Value::Numeric(n) => Ok(Value::Numeric(n.abs())),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
-            expected: vec![VmType::Number, VmType::Float],
+            expected: vec![VmType::Number, VmType::Numeric, VmType::Float],
         })),
     }
 }
@@ -129,8 +168,12 @@ pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError> {
         (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(*e))),
         (Value::Float(b), Value::Number(e)) => Ok(Value::Float(b.powi(*e as _))),
         (Value::Number(b), Value::Number(e)) => Ok(Value::Number(b.pow(*e as _))),
+        (Value::Numeric(b), Value::Numeric(e)) => {
+            Ok(Value::Numeric(b.pow(e).expect("Negative numeric sqrt")))
+        }
+
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
-            expected: vec![VmType::Number, VmType::Float],
+            expected: vec![VmType::Number, VmType::Numeric, VmType::Float],
         })),
     }
 }
@@ -181,6 +224,7 @@ pub(super) fn sqrt(value: &Value) -> Result<Value, SqlError> {
             Ok(Value::Number(sqrt as i128))
         }
         Value::Float(f) => Ok(Value::Float(f.sqrt()?)),
+        Value::Numeric(n) => Ok(Value::Numeric(n.sqrt().expect("Negative num sqrt"))),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
             expected: vec![VmType::Float, VmType::Number],
         })),

@@ -1,7 +1,7 @@
 use super::{functions, math};
 use crate::core::date::interval::IntervalParseError;
 use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
-use crate::core::numeric::Numeric;
+use crate::core::numeric::{Numeric, NumericError};
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
@@ -52,6 +52,7 @@ pub enum TypeError {
     InvalidInterval(IntervalParseError),
     ExtractError(ExtractError),
     UuidError(UuidError),
+    NumericError(NumericError),
 }
 
 trait ValueExtractor<T> {
@@ -212,6 +213,7 @@ pub(crate) fn resolve_expression<'exp>(
                             BinaryOperator::Plus => Value::Numeric(&*left_value + &*right_value),
                             BinaryOperator::Minus => Value::Numeric(&*left_value - &*right_value),
                             BinaryOperator::Mul => Value::Numeric(&*left_value * &*right_value),
+                            BinaryOperator::Div => Value::Numeric(&*left_value / &*right_value),
                             _ => unreachable!("not implemented this operation: {arithmetic}"),
                         },
                     }
@@ -489,6 +491,7 @@ impl Display for TypeError {
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
             TypeError::InvalidInterval(err) => err.fmt(f),
+            TypeError::NumericError(err) => err.fmt(f),
         }
     }
 }

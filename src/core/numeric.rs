@@ -120,6 +120,44 @@ impl Numeric {
         (int_digits + scale as isize) as usize
     }
 
+    pub fn abs(&self) -> Self {
+        let mut result = self.clone();
+        result.set_sign(false);
+        result
+    }
+
+    pub fn pow(&self, expoent: &Self) -> Result<Self, NumericError> {
+        if self.is_nan() || expoent.is_nan() {
+            return Ok(Self::NaN);
+        }
+
+        if expoent.is_zero() {
+            return Ok(Self::from(1u64));
+        }
+
+        let mut exp = i64::from(expoent).abs();
+        let mut base = self.clone();
+        let mut result = Numeric::from(1u64);
+
+        while exp > 0 {
+            if exp % 2 == 1 {
+                result = &result * &base;
+            }
+
+            base = &base * &base;
+            exp /= 2;
+        }
+
+        Ok(match exp < 0 {
+            true => Numeric::from(1u64) / result,
+            _ => result,
+        })
+    }
+
+    pub fn trunc(&self, _scale: i32) -> Self {
+        unimplemented!()
+    }
+
     fn from_long_i64(value: i64) -> Self {
         if value == 0 {
             return Self::zero();
@@ -1582,7 +1620,13 @@ impl From<Numeric> for f64 {
 
 impl From<Numeric> for i64 {
     fn from(value: Numeric) -> Self {
-        Option::<i64>::from(&value).expect("Invalid numeric conversion for i64")
+        i64::from(&value)
+    }
+}
+
+impl<'n> From<&'n Numeric> for i64 {
+    fn from(value: &Numeric) -> Self {
+        Option::<i64>::from(value).expect("Invalid numeric conversion for i64")
     }
 }
 
