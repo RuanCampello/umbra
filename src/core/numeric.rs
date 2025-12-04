@@ -154,8 +154,79 @@ impl Numeric {
         })
     }
 
-    pub fn trunc(&self, _scale: i32) -> Self {
-        unimplemented!()
+    pub fn trunc(&self, scale: i32) -> Self {
+        if scale < 0 {
+            return self.clone();
+        }
+
+        let scale = scale as u16;
+
+        match self {
+            Self::Short(_) => {
+                let (value, current_scale) = self.unpack_short();
+                if current_scale <= scale {
+                    return self.clone();
+                }
+
+                let diff = (current_scale - scale) as u32;
+                let divisor = 10i128.pow(diff);
+                let value = value / divisor;
+
+                Self::from_scaled_i128(value, scale).unwrap_or(Self::NaN)
+            }
+
+            Self::Long {
+                weight,
+                sign_dscale,
+                digits,
+            } => {
+                let current_scale = *sign_dscale & DSCALE_MASK;
+                if current_scale <= scale {
+                    return self.clone();
+                }
+
+                let num_fract_groups = (scale + 3) / 4;
+                let len = (*weight + 1 + num_fract_groups as i16).max(0) as usize;
+                if len == 0 {
+                    return Self::zero();
+                }
+
+                if len >= digits.len() {
+                    return Self::Long {
+                        weight: *weight,
+                        sign_dscale: (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK),
+                        digits: digits.clone(),
+                    };
+                }
+
+                let mut digits = digits[0..len].to_vec();
+                let remainder = scale % 4;
+
+                if remainder != 0 {
+                    if let Some(last) = digits.last_mut() {
+                        let mask = 4 - remainder;
+                        let divisor = 10i16.pow(mask as u32);
+                        *last = (*last / divisor) * divisor;
+                    }
+                };
+
+                while digits.last() == Some(&0) {
+                    digits.pop();
+                }
+
+                if digits.is_empty() {
+                    return Self::zero();
+                }
+
+                Self::Long {
+                    weight: *weight,
+                    sign_dscale: (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK),
+                    digits,
+                }
+            }
+
+            Self::NaN => Self::NaN,
+        }
     }
 
     fn from_long_i64(value: i64) -> Self {

@@ -196,6 +196,20 @@ pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, Sql
                 }));
             }
         },
+        (Value::Numeric(value), decimals) => {
+            let decimals = match decimals {
+                Some(Value::Number(d)) => d as i32,
+                None => 0,
+                Some(v) => {
+                    return Err(SqlError::Type(TypeError::ExpectedType {
+                        expected: VmType::Number,
+                        found: Expression::Value(v),
+                    }));
+                }
+            };
+
+            Ok(Value::Numeric(value.trunc(decimals)))
+        }
         _ => Err(TypeError::ExpectedType {
             expected: VmType::Float,
             found: Expression::Value(value.clone()),

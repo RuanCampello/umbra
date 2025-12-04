@@ -3050,42 +3050,40 @@ fn returning() -> Result<()> {
     RETURNING
         product_name,
         old.unit_price AS before_price,
-        new.unit_price AS after_price;"#,
+        new.unit_price AS after_price,
+        TRUNC(new.unit_price - old.unit_price, 2) AS price_increase;"#,
     )?;
 
-    assert_eq!(query.schema.len(), 3);
+    assert_eq!(query.schema.len(), 4);
     assert_eq!(query.schema.columns[0].name, "product_name");
     assert_eq!(query.schema.columns[1].name, "before_price");
     assert_eq!(query.schema.columns[2].name, "after_price");
+    assert_eq!(query.schema.columns[3].name, "price_increase");
+
+    println!("{query}");
 
     assert_eq!(
         query.tuples,
         vec![
             vec![
+                "Laptop Computer".into(),
+                999.99.try_into().unwrap(),
+                1049.9895.try_into().unwrap(),
+                49.99.try_into().unwrap(),
+            ],
+            vec![
                 "Wireless Mouse".into(),
                 29.95.try_into().unwrap(),
-                31.45.try_into().unwrap(),
-                // 1.50.into()
+                31.4475.try_into().unwrap(),
+                1.49.try_into().unwrap(),
             ],
             vec![
                 "USB Cable".into(),
-                12.95.try_into().unwrap(),
-                13.64.try_into().unwrap(),
-                // 0.65.into()
+                12.99.try_into().unwrap(),
+                13.6395.try_into().unwrap(),
+                0.64.try_into().unwrap(),
             ],
-            vec![
-                "Gaming Keyboard".into(),
-                89.99.try_into().unwrap(),
-                94.49.try_into().unwrap(),
-                // 4.50.into()
-            ],
-            vec![
-                "Laptop Computer".into(),
-                1049.9895.try_into().unwrap(),
-                1154.99.try_into().unwrap(),
-                // 55.50.into()
-            ]
-        ],
+        ]
     );
 
     Ok(())
