@@ -90,7 +90,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 from.key(),
             );
 
-            builder.apply_joins(&from, &joins, db)?;
+            builder.apply_joins(&from, &joins, join_where, db)?;
             if let Some(filter) = join_where {
                 builder.apply_filter(filter.to_owned());
             }

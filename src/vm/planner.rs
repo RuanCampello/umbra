@@ -213,13 +213,13 @@ pub(crate) struct HashJoin<File: FileOperations> {
     key_type: VmType,
 
     // run-time state
-    table: HashMap<Vec<u8>, Vec<Tuple>>,
+    table: HashMap<Vec<u8>, Rc<Vec<Tuple>>>,
     hash_built: bool,
 
     current_left: Option<Tuple>,
-    current_matches: Option<Vec<Tuple>>,
+    current_matches: Option<Rc<Vec<Tuple>>>,
     matched_right_keys: HashSet<Vec<u8>>,
-    unmatched_right: Option<IntoIter<Vec<u8>, Vec<Tuple>>>,
+    unmatched_right: Option<IntoIter<Vec<u8>, Rc<Vec<Tuple>>>>,
     unmatched_right_index: usize,
 
     index: usize,
@@ -1366,7 +1366,9 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 
                 if !key.is_null() {
                     let key = tuple::serialize(&self.key_type.into(), &key);
-                    self.table.entry(key).or_default().push(right);
+
+                    let matches = self.table.entry(key).or_insert(Rc::new(Vec::new()));
+                    Rc::get_mut(matches).unwrap().push(right)
                 }
             }
 
@@ -1421,15 +1423,10 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
                 true => self.current_matches = None,
                 _ => {
                     let key = tuple::serialize(&self.key_type.into(), &key_value);
-                    match self.table.get(&key) {
-                        Some(matches) => {
-                            if self.right_matters() {
-                                self.matched_right_keys.insert(key);
-                            }
+                    self.current_matches = self.table.get(&key).cloned();
 
-                            self.current_matches = Some(matches.clone())
-                        }
-                        _ => self.current_matches = None,
+                    if self.current_matches.is_some() && self.right_matters() {
+                        self.matched_right_keys.insert(key);
                     }
                 }
             }

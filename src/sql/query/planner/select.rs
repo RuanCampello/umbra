@@ -171,6 +171,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
         &mut self,
         from: &TableRef,
         joins: &'s [JoinClause],
+        where_clause: Option<&Expression>,
         db: &mut Database<File>,
     ) -> Result<(), DatabaseError> {
         if joins.is_empty() {
@@ -238,7 +239,9 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 }
 
                 _ => {
-                    let right = query::optimiser::generate_seq_plan(&join.table.name, None, db)?;
+                    let filter =
+                        where_clause.and_then(|expr| extract_table_filter(expr, join.table.key()));
+                    let right = query::optimiser::generate_seq_plan(&join.table.name, filter, db)?;
                     let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
 
                     right_table
@@ -672,4 +675,50 @@ fn find_implicit_group_columns<'e>(
 
         !in_group_by
     })
+}
+
+fn extract_table_filter(expr: &Expression, table_key: &str) -> Option<Expression> {
+    use crate::sql::statement::BinaryOperator;
+
+    match expr {
+        Expression::BinaryOperation {
+            left,
+            operator: BinaryOperator::And,
+            right,
+        } => {
+            let left_filter = extract_table_filter(left, table_key);
+            let right_filter = extract_table_filter(right, table_key);
+
+            match (left_filter, right_filter) {
+                (Some(l), Some(r)) => Some(Expression::BinaryOperation {
+                    left: Box::new(l),
+                    operator: BinaryOperator::And,
+                    right: Box::new(r),
+                }),
+                (Some(f), None) | (None, Some(f)) => Some(f),
+                (None, None) => None,
+            }
+        }
+        Expression::Nested(inner) => extract_table_filter(inner, table_key),
+        _ => match is_bound_to_table(expr, table_key) {
+            true => Some(expr.clone()),
+            _ => None,
+        },
+    }
+}
+
+fn is_bound_to_table(expr: &Expression, table_key: &str) -> bool {
+    match expr {
+        Expression::QualifiedIdentifier { table, .. } => table == table_key,
+        Expression::BinaryOperation { left, right, .. } => {
+            is_bound_to_table(left, table_key) && is_bound_to_table(right, table_key)
+        }
+        Expression::UnaryOperation { expr, .. } => is_bound_to_table(expr, table_key),
+        Expression::Nested(expr) => is_bound_to_table(expr, table_key),
+        Expression::Function { args, .. } => {
+            args.iter().all(|arg| is_bound_to_table(arg, table_key))
+        }
+        Expression::Value(_) => true,
+        _ => false,
+    }
 }
