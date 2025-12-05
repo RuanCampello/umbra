@@ -9,7 +9,7 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, IndexMetadata, Relation, Schema, SqlError, TableMetadata};
+use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{
     join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
 };
@@ -1662,22 +1662,80 @@ impl<File: PlanExecutor> Aggregate<File> {
             Function::Count => Ok(Value::Number(
                 values.iter().filter(|v| !v.is_null()).count() as i128,
             )),
-            Function::Sum | Function::Avg => {
-                let (sum, count) = values.iter().fold((0.0, 0), |(acc, cnt), v| match v {
-                    Value::Float(f) => (acc + *f, cnt + 1),
-                    Value::Number(n) => (acc + *n as f64, cnt + 1),
-                    Value::Numeric(n) => {
-                        // TODO: this ain't the best way of both getting the value nor adding
-                        (acc + Option::<f64>::try_from(n).unwrap().unwrap(), cnt + 1)
-                    }
-                    _ => (acc, cnt),
-                });
 
-                match func.eq(&Function::Sum) {
-                    true => Ok(Value::Float(sum)),
-                    _ => Ok(Value::Float(sum / count as f64)),
+            Function::Sum | Function::Avg => {
+                let non_null_iter = values.iter().filter(|v| !v.is_null());
+
+                let first_val = match non_null_iter.clone().next() {
+                    Some(v) => v,
+                    None => return Ok(Value::Null),
+                };
+
+                match first_val {
+                    Value::Numeric(_) => {
+                        // avg(numeric) -> numeric
+                        let (sum, count) =
+                            non_null_iter.fold((Numeric::zero(), 0), |(acc_s, acc_c), v| match v {
+                                Value::Numeric(n) => (acc_s + n, acc_c + 1),
+                                Value::Number(n) => (acc_s + Numeric::from(*n), acc_c + 1),
+                                Value::Float(f) => (
+                                    acc_s + Numeric::try_from(*f).unwrap_or(Numeric::zero()),
+                                    acc_c + 1,
+                                ),
+                                _ => (acc_s, acc_c),
+                            });
+
+                        match func {
+                            Function::Sum => Ok(Value::Numeric(sum)),
+                            Function::Avg => {
+                                let count_numeric = Numeric::from(count as i64);
+                                Ok(Value::Numeric(sum / count_numeric))
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    Value::Number(_) => match func {
+                        // avg(integer) -> numeric
+                        Function::Avg => {
+                            let (sum, count) = non_null_iter.fold(
+                                (Numeric::zero(), 0),
+                                |(acc_s, acc_c), v| match v {
+                                    Value::Number(n) => (acc_s + Numeric::from(*n), acc_c + 1),
+                                    _ => (acc_s, acc_c),
+                                },
+                            );
+                            let count_numeric = Numeric::from(count as i64);
+                            Ok(Value::Numeric(sum / count_numeric))
+                        }
+                        // sum(integer) -> bigint (kept as Number i128)
+                        Function::Sum => {
+                            let sum = non_null_iter.fold(0i128, |acc, v| match v {
+                                Value::Number(n) => acc + n,
+                                _ => acc,
+                            });
+                            Ok(Value::Number(sum))
+                        }
+                        _ => unreachable!(),
+                    },
+
+                    _ => {
+                        let (sum, count) =
+                            non_null_iter.fold((0.0, 0), |(acc_s, acc_c), v| match v {
+                                Value::Float(f) => (acc_s + f, acc_c + 1),
+                                Value::Number(n) => (acc_s + *n as f64, acc_c + 1),
+                                _ => (acc_s, acc_c),
+                            });
+
+                        match func {
+                            Function::Sum => Ok(Value::Float(sum)),
+                            Function::Avg => Ok(Value::Float(sum / count as f64)),
+                            _ => unreachable!(),
+                        }
+                    }
                 }
             }
+
             Function::Min => Ok(values
                 .iter()
                 .filter(|v| !v.is_null())

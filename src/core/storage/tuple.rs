@@ -255,7 +255,29 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             let tag = (u64::from_le_bytes(header) >> 62) & 0b11;
             match tag {
                 0b00 | 0b10 => Ok(Value::Numeric(Numeric::try_from(header).unwrap())),
-                _ => todo!(),
+                0b01 => {
+                    let mut meta = [0; 6];
+                    reader.read_exact(&mut meta)?;
+
+                    let len = u16::from_le_bytes(meta[0..2].try_into().unwrap()) as usize;
+                    let weight = i16::from_le_bytes(meta[2..4].try_into().unwrap());
+                    let sign_dscale = u16::from_le_bytes(meta[4..6].try_into().unwrap());
+
+                    let mut digits_bytes = vec![0; len * 2];
+                    reader.read_exact(&mut digits_bytes)?;
+
+                    let mut digits = Vec::with_capacity(len);
+                    for chunk in digits_bytes.chunks_exact(2) {
+                        digits.push(i16::from_le_bytes(chunk.try_into().unwrap()));
+                    }
+
+                    Ok(Value::Numeric(Numeric::Long {
+                        weight,
+                        digits,
+                        sign_dscale,
+                    }))
+                }
+                _ => unreachable!("Invalid numeric tag: {tag}"),
             }
         }
 
