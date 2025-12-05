@@ -88,14 +88,15 @@ CREATE TABLE cursed_items (
 );
 ```
 
-#### :1234: **Floating-Point Types**
+#### :1234: **Floating-Point & Numeric Types**
 
-When integers just won’t cut it and you need *approximate truths*, floating-point types step in—like unreliable narrators in a numerical novel.
+When integers just won’t cut it and you need *approximate truths*, floating-point types step in—like unreliable narrators in a numerical novel. For precision, we offer `NUMERIC`.
 
 | Type             | Precision              | Notes                                                                 |
 |------------------|-------------------------|-----------------------------------------------------------------------|
 | `REAL`             | ~7 decimal digits       | Single-precision daydreams. Fast, vague, and prone to making things up. |
 | `DOUBLE PRECISION` | ~15 decimal digits      | Double the bits, double the confidence. For those who still don’t trust `REAL`. |
+| `NUMERIC(p, s)`    | Arbitrary               | Base-1000 implementation. For when you need to count atoms or debt.
 
 > [!WARNING]  
 > **Floating-Point Lies**  
@@ -107,7 +108,7 @@ CREATE TABLE entropy_watch (
     event_id SERIAL PRIMARY KEY,
     time TIMESTAMP,
     shadow_density REAL,
-    void_pressure DOUBLE PRECISION
+    void_pressure NUMERIC(10, 4) 
 );
 ```
 
@@ -138,12 +139,13 @@ CREATE TABLE shadow_agents (
 
 - [x] `VARCHAR`
 - [x] `BOOLEAN`
-- [ ] `DECIMAL`
+- [x] `DECIMAL`
 - [x] `TEXT` (the loquacious one)
 - [x] Temporal types (because time flies when... I ran out of jokes)
     - [x] `DATE`
     - [x] `TIME`
     - [x] `TIMESTAMP` (precision: "ish")
+    - [x] `INTERVAL`
 
 ### 🔗 Constraints
 - [x] `PRIMARY KEY`
@@ -177,7 +179,7 @@ CREATE TABLE users (
 - [x] `WHERE` (basic filtering, no existential crises)
 - [x] `ORDER BY` (implemented after herding literal bats)
 - [x] `BETWEEN` (for when life exists within bounds)
-- [ ] `LIMIT`/`OFFSET` (self-restraint coming soon™)
+- [x] `LIMIT`/`OFFSET` (self-restraint is here)
 - [x] Column aliases (SELECT tomb AS grave - identity is fluid)
 - [x] Table aliases (`FROM crypts AS c` - naming things is hard)
 - [x] `JOIN` (relationships require couples therapy)
@@ -193,6 +195,9 @@ CREATE TABLE users (
 - [x] Unique indexes *(exclusivity is key)*
 - [ ] Non-unique indexes *(for the masses)*
 - [ ] Partial indexes *(discrimination coming soon)*
+
+#### 🔧 Utilities
+- [x] `EXPLAIN` (peeking behind the curtain)
 
 ### 🧮 Aggregate Functions
 
@@ -251,6 +256,17 @@ SELECT SUBSTRING(name FROM 4) FROM customers;
 -- or only the first 3 characters, starting from the beginning
 SELECT SUBSTRING(name FOR 3) FROM customers;
 ```
+
+
+### 🔮 System functions
+
+Tools for introspection and survival.
+
+| Function | Description |
+| ------------- | -------------- |
+| `COALESCE(v1, v2, ...)` | Returns the first non-null argument |
+| `TYPEOF(value)` | Returns the data type of the value |
+| `EXTRACT(field FROM source)` | Retrieves sub-fields such as year or date from date/time |
 
 
 ### *✨ Just So You Know*
