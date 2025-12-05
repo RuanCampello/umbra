@@ -3065,8 +3065,6 @@ fn returning() -> Result<()> {
     assert_eq!(query.schema.columns[2].name, "after_price");
     assert_eq!(query.schema.columns[3].name, "price_increase");
 
-    println!("{query}");
-
     assert_eq!(
         query.tuples,
         vec![

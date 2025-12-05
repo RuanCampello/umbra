@@ -6,7 +6,8 @@ use std::{
     time::Duration,
 };
 use umbra::{
-    db::QuerySet,
+    db::{Numeric, QuerySet},
+    sql::statement::Value,
     tcp::{self, Response},
 };
 
@@ -102,6 +103,10 @@ impl Drop for State {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+fn numeric(val: i128, scale: u16) -> Value {
+    Value::Numeric(Numeric::from_scaled_i128(val, scale).unwrap())
 }
 
 #[test]
@@ -216,4 +221,33 @@ fn concurrent_inserts_are_atomic() {
     sorted_tuples.sort_unstable();
 
     assert_eq!(original_tuples, sorted_tuples)
+}
+
+#[test]
+fn numeric_joins_aggregation() {
+    let server = State::new("sql/orders-and-users.sql");
+    let mut db = server.client();
+
+    let query = db.exec(
+        r#"
+        SELECT 
+            p.category, 
+            SUM(o.total_price) as category_total 
+        FROM orders AS o 
+        JOIN products AS p ON o.product_id = p.id 
+        GROUP BY p.category 
+        ORDER BY category_total DESC;
+        "#,
+    );
+
+    println!("{query:#?}");
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Electronics".into(), numeric(229846, 2)],
+            vec!["Home".into(), numeric(167812, 2)],
+            vec!["Clothing".into(), numeric(131980, 2)],
+        ]
+    );
 }
