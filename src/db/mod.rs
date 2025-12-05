@@ -3,9 +3,12 @@
 
 #![allow(unused)]
 
+mod context;
 mod metadata;
 mod schema;
 
+pub use crate::core::numeric::Numeric;
+pub(crate) use context::Context;
 use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
@@ -44,19 +47,13 @@ pub struct Database<File> {
 }
 
 #[derive(Debug)]
-pub(crate) struct Context {
-    tables: HashMap<String, TableMetadata>,
-    max_size: Option<usize>,
-}
-
-#[derive(Debug)]
 struct PreparedStatement<'db, File: FileOperations> {
     db: &'db mut Database<File>,
     exec: Option<Exec<File>>,
     autocommit: bool,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub struct QuerySet {
     pub tuples: Vec<Vec<Value>>,
     pub schema: Schema,
@@ -112,6 +109,7 @@ pub enum SqlError {
 }
 
 pub(crate) type RowId = u64;
+type Result<T> = std::result::Result<T, DatabaseError>;
 
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column.
 pub(crate) const ROW_COL_ID: &str = "row_id";
@@ -119,7 +117,7 @@ pub(crate) const DB_METADATA: &str = "umbra_db_meta";
 const DEFAULT_CACHE_SIZE: usize = 512;
 
 pub(crate) trait Ctx {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError>;
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata>;
 }
 
 #[macro_export]
@@ -140,7 +138,7 @@ macro_rules! interval {
 }
 
 impl Database<File> {
-    pub fn init(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
+    pub fn init(path: impl AsRef<Path>) -> Result<Self> {
         let file = os::Fs::options()
             .create(true)
             .truncate(false)
@@ -178,7 +176,7 @@ impl Database<File> {
 }
 
 impl<File: Seek + Read + Write + FileOperations> Database<File> {
-    pub fn exec(&mut self, input: &str) -> Result<QuerySet, DatabaseError> {
+    pub fn exec(&mut self, input: &str) -> Result<QuerySet> {
         let (schema, mut prepared) = self.prepare(input)?;
         let mut query_set = QuerySet::new(schema, vec![]);
         let mut total_size = 0;
@@ -197,7 +195,32 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(query_set)
     }
 
-    fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata, DatabaseError> {
+    pub fn load(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        if path.as_ref().extension().and_then(|s| s.to_str()) != Some("sql") {
+            return Err(DatabaseError::Other(
+                "File must have a .sql extension".to_string(),
+            ));
+        }
+
+        let content = std::fs::read_to_string(path).map_err(DatabaseError::Io)?;
+        let statements = Parser::new(&content).try_parse()?;
+
+        for statement in statements {
+            let statement = crate::sql::process_statement(statement, self)?;
+            let (_, exec) = self.generate_exec(statement)?;
+            let mut prepared = PreparedStatement {
+                db: self,
+                exec: Some(exec),
+                autocommit: false,
+            };
+
+            while let Some(_) = prepared.try_next()? {}
+        }
+
+        Ok(())
+    }
+
+    fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata> {
         let query = self.exec(&format!(
             "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index';"
         ))?;
@@ -225,15 +248,20 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             .clone())
     }
 
-    fn sequence_metadata(&mut self, sequence: &str) -> Result<SequenceMetadata, DatabaseError> {
-        todo!()
+    fn prepare(&mut self, sql: &str) -> Result<(Schema, PreparedStatement<'_, File>)> {
+        let statement = crate::sql::pipeline(sql, self)?;
+        let (schema, exec) = self.generate_exec(statement)?;
+
+        let prepared_statement = PreparedStatement {
+            db: self,
+            autocommit: false,
+            exec: Some(exec),
+        };
+
+        Ok((schema, prepared_statement))
     }
 
-    fn prepare(
-        &mut self,
-        sql: &str,
-    ) -> Result<(Schema, PreparedStatement<'_, File>), DatabaseError> {
-        let statement = crate::sql::pipeline(sql, self)?;
+    fn generate_exec(&mut self, statement: Statement) -> Result<(Schema, Exec<File>)> {
         let mut schema = Schema::empty();
 
         let exec = match statement {
@@ -241,7 +269,8 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             | Statement::Drop(_)
             | Statement::StartTransaction
             | Statement::Commit
-            | Statement::Rollback => Exec::Statement(statement),
+            | Statement::Rollback
+            | Statement::Source(_) => Exec::Statement(statement),
 
             Statement::Explain(inner) => match &*inner {
                 Statement::Select { .. }
@@ -269,13 +298,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             }
         };
 
-        let prepared_statement = PreparedStatement {
-            db: self,
-            autocommit: false,
-            exec: Some(exec),
-        };
-
-        Ok((schema, prepared_statement))
+        Ok((schema, exec))
     }
 
     fn commit(&mut self) -> io::Result<()> {
@@ -283,12 +306,12 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         self.pager.borrow_mut().commit()
     }
 
-    pub(crate) fn rollback(&mut self) -> Result<usize, DatabaseError> {
+    pub(crate) fn rollback(&mut self) -> Result<usize> {
         self.transaction_state = TransactionState::Terminated;
         self.pager.borrow_mut().rollback()
     }
 
-    fn load_metadata(&mut self, table: &str) -> Result<TableMetadata, DatabaseError> {
+    fn load_metadata(&mut self, table: &str) -> Result<TableMetadata> {
         if table == DB_METADATA {
             let mut schema = umbra_schema();
             schema.prepend_id();
@@ -439,7 +462,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(metadata)
     }
 
-    fn load_next_row_id(&mut self, root: PageNumber) -> Result<RowId, DatabaseError> {
+    fn load_next_row_id(&mut self, root: PageNumber) -> Result<RowId> {
         let mut pager = self.pager.borrow_mut();
         let mut btree = BTree::new(&mut pager, root, FixedSizeCmp::new::<RowId>());
 
@@ -453,7 +476,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 }
 
 impl<File: Seek + Read + Write + FileOperations> Ctx for Database<File> {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
+    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata> {
         if !self.context.contains(table) {
             let metadata = self.load_metadata(table)?;
             self.context.insert(metadata);
@@ -491,128 +514,8 @@ impl<File> Database<File> {
 
 unsafe impl Send for Database<File> {}
 
-impl Context {
-    pub fn new() -> Self {
-        Self {
-            tables: HashMap::new(),
-            max_size: None,
-        }
-    }
-
-    pub fn with_size(size: usize) -> Self {
-        Self {
-            tables: HashMap::with_capacity(size),
-            max_size: Some(size),
-        }
-    }
-
-    pub fn insert(&mut self, metadata: TableMetadata) {
-        if self.max_size.is_some_and(|size| self.tables.len() >= size) {
-            let evict = self.tables.keys().next().unwrap().clone();
-            self.tables.remove(&evict);
-        }
-
-        self.tables.insert(metadata.name.to_string(), metadata);
-    }
-
-    fn contains(&self, table: &str) -> bool {
-        self.tables.contains_key(table)
-    }
-
-    pub fn invalidate(&mut self, table: &str) {
-        self.tables.remove(table);
-    }
-}
-
-/// Test-only implementation: clones everything for simplicity
-#[cfg(test)]
-impl TryFrom<&[&str]> for Context {
-    type Error = DatabaseError;
-
-    fn try_from(statements: &[&str]) -> Result<Self, Self::Error> {
-        let mut context = Self::new();
-        let mut root = 1;
-
-        for sql in statements {
-            let statement = Parser::new(sql).parse_statement()?;
-            match statement {
-                Statement::Create(Create::Table { name, columns }) => {
-                    let mut schema = Schema::from(&columns);
-                    schema.prepend_id();
-
-                    let mut metadata = TableMetadata {
-                        root,
-                        name: name.clone(),
-                        row_id: 1,
-                        schema,
-                        indexes: vec![],
-                        serials: HashMap::new(),
-                    };
-                    root += 1;
-
-                    columns.iter().for_each(|col| {
-                        col.constraints.iter().for_each(|constraint| {
-                            let index = match constraint {
-                                Constraint::Unique => index!(unique on name (col.name)),
-                                Constraint::PrimaryKey => index!(primary on (name)),
-                                _ => unreachable!("This ain't a index")
-                            };
-
-                            let mut index_col = col.clone();
-                            let mut pk_col = columns[0].clone();
-
-                            index_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
-                            pk_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
-
-                            metadata.indexes.push(IndexMetadata {
-                                column: col.clone(),
-                                schema: Schema::new(vec![index_col, pk_col]),
-                                name: index,
-                                root,
-                                unique: true,
-                            });
-
-                            root += 1;
-                        })
-                    });
-
-                    context.insert(metadata);
-                }
-                Statement::Create(Create::Index { name, column, unique, .. }) if unique => {
-                    let table = context.metadata(&name)?;
-                    let index_col = &table.schema.columns[table.schema.index_of(&column).unwrap()];
-
-                    table.indexes.push(IndexMetadata {
-                        column: index_col.clone(),
-                        schema: Schema::new(vec![index_col.clone(), table.schema.columns[0].clone()]),
-                        name,
-                        root,
-                        unique,
-                    });
-
-                    root += 1;
-                }
-
-                statement => {
-                    return Err(SqlError::Other(format!("Only create unique index and create table should be called by test context, but found {statement:#?}")).into())
-                }
-            }
-        }
-
-        Ok(context)
-    }
-}
-
-impl Ctx for Context {
-    fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
-        self.tables
-            .get_mut(table)
-            .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
-    }
-}
-
 impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, File> {
-    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+    fn try_next(&mut self) -> Result<Option<Tuple>> {
         let Some(exec) = self.exec.as_mut() else {
             return Ok(None);
         };
@@ -662,6 +565,12 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                     Statement::Rollback => {
                         self.db.rollback()?;
                     }
+                    Statement::Source(path) => {
+                        if let Err(e) = self.db.load(path) {
+                            self.abort_transaction()?;
+                            return Err(e);
+                        }
+                    }
                     Statement::Drop(_) | Statement::Create(_) => {
                         match vm::statement::exec(statement, self.db) {
                             Ok(rows) => affected_rows = rows,
@@ -705,7 +614,7 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
         Ok(tuple)
     }
 
-    fn abort_transaction(&mut self) -> Result<(), DatabaseError> {
+    fn abort_transaction(&mut self) -> Result<()> {
         match self.autocommit {
             true => {
                 self.db.rollback()?;
@@ -737,6 +646,7 @@ impl QuerySet {
         self.tuples.iter().all(|tuple| tuple.is_empty())
     }
 }
+
 impl<'c, Col: IntoIterator<Item = &'c Column>> From<Col> for Schema {
     fn from(columns: Col) -> Self {
         Self::new(Vec::from_iter(columns.into_iter().cloned()))
@@ -952,7 +862,7 @@ mod tests {
         cache_size: usize,
     }
 
-    type DatabaseResult = Result<(), DatabaseError>;
+    type DatabaseResult = Result<()>;
     impl Default for Database<MemoryBuffer> {
         fn default() -> Self {
             new_db(Configuration {

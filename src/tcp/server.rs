@@ -29,7 +29,10 @@ pub fn start<File: AsRef<Path>>(address: SocketAddr, file: File) -> Result<(), D
 
     listener.incoming().for_each(|stream| {
         pool.execute(|| {
-            if let Err(err) = handle(&mut stream.unwrap(), db) {
+            let stream = &mut stream.unwrap();
+            stream.set_nodelay(true).unwrap();
+
+            if let Err(err) = handle(stream, db) {
                 eprintln!(
                     "Error on thread {:?} while processing connection: {err:#?}",
                     thread::current().id()

@@ -1,11 +1,10 @@
 //! Here we do the final step preparation before [plan](crate::vm::planner::Planner) generation.
 
+use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 use crate::{
     core::uuid::Uuid,
     db::{Ctx, DatabaseError, ROW_COL_ID},
 };
-
-use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 
 /// Takes a given [statement](crate::sql::statement::Statement) and prepares it to the plan
 /// generation.
@@ -79,6 +78,7 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             values,
             columns,
             into,
+            returning: _,
         }) => {
             let metadata = ctx.metadata(into)?;
 

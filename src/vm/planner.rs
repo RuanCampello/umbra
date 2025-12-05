@@ -9,12 +9,12 @@ use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, Relation, Schema, SqlError, TableMetadata};
+use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{
     join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
 };
 use crate::vm;
-use crate::vm::expression::evaluate_where;
+use crate::vm::expression::{evaluate_where, VmType};
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::hash_map::IntoIter;
@@ -53,6 +53,11 @@ pub(crate) enum Planner<File: FileOperations> {
     Aggregate(Aggregate<File>),
     /// Used for `JOIN`s with an equal `ON` condition.
     HashJoin(HashJoin<File>),
+    /// Used for `JOIN`s when the inner table has an index on the join key.
+    IndexNestedLoopJoin(IndexNestedLoopJoin<File>),
+    // Limits the number of rows returned by the query.
+    // Wraps another planner and stops yielding after the specified number of rows.
+    Limit(Limit<File>),
     Project(Project<File>),
     Collect(Collect<File>),
     /// Handles literal values from INSERT statements.
@@ -133,6 +138,9 @@ pub(crate) struct Insert<File: FileOperations> {
     pub source: Box<Planner<File>>,
     pub table: TableMetadata,
     pub comparator: BTreeKeyCmp,
+
+    pub returning: Vec<Expression>,
+    pub returning_schema: Option<Schema>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -142,6 +150,9 @@ pub(crate) struct Update<File: FileOperations> {
     pub pager: Rc<RefCell<Pager<File>>>,
     pub source: Box<Planner<File>>,
     pub comparator: BTreeKeyCmp,
+
+    pub returning: Vec<Expression>,
+    pub returning_schema: Option<Schema>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -194,23 +205,53 @@ pub(crate) struct Aggregate<File: FileOperations> {
 pub(crate) struct HashJoin<File: FileOperations> {
     pub left: Box<Planner<File>>,
     pub right: Box<Planner<File>>,
-    pub condition: Expression,
     pub join_type: JoinType,
+    pub schema: Schema,
 
+    left_key: Expression,
+    right_key: Expression,
+    key_type: VmType,
+
+    // run-time state
     table: HashMap<Vec<u8>, Vec<Tuple>>,
     hash_built: bool,
 
     current_left: Option<Tuple>,
     current_matches: Option<Vec<Tuple>>,
-
     matched_right_keys: HashSet<Vec<u8>>,
     unmatched_right: Option<IntoIter<Vec<u8>, Vec<Tuple>>>,
     unmatched_right_index: usize,
 
-    left_tables: HashSet<String>,
-    right_tables: HashSet<String>,
-
     index: usize,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct IndexNestedLoopJoin<File: FileOperations> {
+    pub left: Box<Planner<File>>,
+    pub right_table: TableMetadata,
+    pub index: IndexMetadata,
+
+    /// the equality expression used for the join (e.g., `u.id = o.user_id`)
+    pub condition: Expression,
+    pub join_type: JoinType,
+
+    /// expression to extract the key from the left tuple
+    pub left_key_expr: Expression,
+
+    pub pager: Rc<RefCell<Pager<File>>>,
+
+    pub left_tables: HashSet<String>,
+    pub right_tables: HashSet<String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Limit<File: FileOperations> {
+    pub source: Box<Planner<File>>,
+    // maximum amount of rows to yield
+    pub limit: usize,
+    /// number of rows yield so far
+    pub count: usize,
+    pub offset: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -312,6 +353,8 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Project(projection) => projection.try_next(),
             Self::Aggregate(aggr) => aggr.try_next(),
             Self::HashJoin(hash) => hash.try_next(),
+            Self::IndexNestedLoopJoin(idx) => idx.try_next(),
+            Self::Limit(limit) => limit.try_next(),
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
@@ -331,6 +374,8 @@ impl<File: FileOperations> Planner<File> {
             Self::Collect(collection) => &collection.source,
             Self::Aggregate(aggr) => &aggr.source,
             Self::Project(project) => &project.source,
+            Self::Limit(limit) => &limit.source,
+            Self::IndexNestedLoopJoin(idx) => &idx.left,
             _ => return None,
         })
     }
@@ -353,6 +398,8 @@ impl<File: FileOperations> Planner<File> {
             Self::Values(values) => format!("{values}"),
             Self::Aggregate(aggr) => format!("{aggr}"),
             Self::HashJoin(hash) => format!("{hash}"),
+            Self::IndexNestedLoopJoin(idx) => format!("{idx}"),
+            Self::Limit(limit) => format!("{limit}"),
         }
     }
 
@@ -381,6 +428,7 @@ impl<File: FileOperations> Planner<File> {
                 hash.left.fmt_tree(f, false, false, &child_str)?;
                 hash.right.fmt_tree(f, false, true, &child_str)?;
             }
+            Self::IndexNestedLoopJoin(inl) => inl.left.fmt_tree(f, false, true, &child_str)?,
             _ => {
                 if let Some(child) = self.child() {
                     child.fmt_tree(f, false, true, &child_str)?;
@@ -403,15 +451,19 @@ impl<File: FileOperations> Planner<File> {
             Self::Aggregate(aggr) => &aggr.output,
             Self::LogicalScan(logical) => return logical.scans[0].schema().to_owned(),
             Self::Filter(filter) => return filter.source.schema(),
-            Self::HashJoin(hash) => {
-                let mut schema = hash.left_schema();
+            Self::Limit(limit) => return limit.source.schema(),
+            Self::HashJoin(hash) => &hash.schema,
+            Self::Update(update) => return update.returning_schema.clone(),
+            Self::Insert(insert) => return insert.returning_schema.clone(),
+            Self::IndexNestedLoopJoin(inl) => {
+                let mut schema = inl.left_schema();
                 let left_len = schema.len();
-                schema.extend_with_join(hash.right_schema().columns, &hash.join_type);
+                schema.extend_with_join(inl.right_table.schema.columns.clone(), &inl.join_type);
 
-                hash.left_tables
+                inl.left_tables
                     .iter()
                     .for_each(|table| schema.add_qualified_name(table, 0, left_len));
-                hash.right_tables
+                inl.right_tables
                     .iter()
                     .for_each(|table| schema.add_qualified_name(table, left_len, schema.len()));
 
@@ -421,6 +473,16 @@ impl<File: FileOperations> Planner<File> {
         };
 
         Some(schema.to_owned())
+    }
+
+    pub(crate) const fn is_selective(&self) -> bool {
+        matches!(
+            self,
+            Planner::KeyScan(_)
+                | Planner::ExactMatch(_)
+                | Planner::RangeScan(_)
+                | Planner::Filter(_)
+        )
     }
 }
 
@@ -831,8 +893,8 @@ impl<File: PlanExecutor> Sort<File> {
 
         input_file.truncate()?;
 
-        self.input_file = Some(input_file);
-        self.output_file = Some(output_file);
+        self.input_file = Some(output_file);
+        self.output_file = Some(input_file);
 
         Ok(())
     }
@@ -979,6 +1041,15 @@ impl<File: PlanExecutor> Execute for Insert<File> {
                 Ok(())
             })?;
 
+        if !self.returning.is_empty() {
+            return Ok(Some(
+                self.returning
+                    .iter()
+                    .map(|expr| resolve_expression(&tuple, &self.table.schema, expr))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ));
+        }
+
         Ok(Some(vec![]))
     }
 }
@@ -1003,7 +1074,10 @@ impl<File: PlanExecutor> Execute for Update<File> {
 
             if new_value.ne(&tuple[col]) {
                 let old_value = std::mem::replace(&mut tuple[col], new_value);
-                updated_cols.insert(assignment.identifier.clone(), (old_value, col));
+
+                updated_cols
+                    .entry(assignment.identifier.clone())
+                    .or_insert((old_value, col));
             }
         }
 
@@ -1051,6 +1125,24 @@ impl<File: PlanExecutor> Execute for Update<File> {
                     [&tuple[index_col], &tuple[0]],
                 ))?;
             }
+        }
+
+        if !self.returning.is_empty() {
+            let input_schema = self.table.schema.update_returning_input();
+            let mut old_tuple = tuple.clone();
+
+            for (_, (old_value, column_idx)) in &updated_cols {
+                old_tuple[*column_idx] = old_value.clone();
+            }
+
+            old_tuple.extend(tuple);
+
+            return Ok(Some(
+                self.returning
+                    .iter()
+                    .map(|expr| resolve_expression(&old_tuple, &input_schema, expr))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ));
         }
 
         Ok(Some(vec![]))
@@ -1264,15 +1356,16 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
 impl<File: PlanExecutor> Execute for HashJoin<File> {
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         if !self.hash_built {
-            let (_, right_key, r#type) = self.extract_join_keys()?;
-
             // iterate over the right side and build the hash table
             while let Some(right) = self.right.try_next()? {
-                let key =
-                    vm::expression::resolve_expression(&right, &self.right_schema(), &right_key)?;
+                let key = vm::expression::resolve_expression(
+                    &right,
+                    &self.right_schema(),
+                    &self.right_key,
+                )?;
 
                 if !key.is_null() {
-                    let key = tuple::serialize(&r#type.into(), &key);
+                    let key = tuple::serialize(&self.key_type.into(), &key);
                     self.table.entry(key).or_default().push(right);
                 }
             }
@@ -1319,16 +1412,15 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             };
 
             // d: probe hash table with the new tuple
-            let (left_key, _, r#type) = self.extract_join_keys()?;
             let key_value =
-                vm::expression::resolve_expression(&left, &self.left.schema().unwrap(), &left_key)?;
+                vm::expression::resolve_expression(&left, &self.left_schema(), &self.left_key)?;
 
             self.current_left = Some(left);
 
             match key_value.is_null() {
                 true => self.current_matches = None,
                 _ => {
-                    let key = tuple::serialize(&r#type.into(), &key_value);
+                    let key = tuple::serialize(&self.key_type.into(), &key_value);
                     match self.table.get(&key) {
                         Some(matches) => {
                             if self.right_matters() {
@@ -1347,16 +1439,93 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
     }
 }
 
+impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        loop {
+            let left_tuple = match self.left.try_next()? {
+                Some(tuple) => tuple,
+                None => return Ok(None),
+            };
+
+            let key = resolve_expression(&left_tuple, &self.left_schema(), &self.left_key_expr)?;
+
+            if key.is_null() {
+                if matches!(self.join_type, JoinType::Left) {
+                    let mut result = left_tuple.clone();
+                    result.extend(vec![Value::Null; self.right_table.schema.len()]);
+                    return Ok(Some(result));
+                }
+                continue;
+            }
+
+            let mut pager = self.pager.borrow_mut();
+            if self.index.root == self.right_table.root {
+                let comparator = Relation::Table(self.right_table.clone()).comp();
+                let mut table_btree = BTree::new(&mut pager, self.right_table.root, comparator);
+
+                let key_bytes =
+                    tuple::serialize(&self.right_table.schema.columns[0].data_type, &key);
+
+                if let Some(row_bytes) = table_btree.get(&key_bytes)? {
+                    let right_tuple =
+                        tuple::deserialize(row_bytes.as_ref(), &self.right_table.schema);
+
+                    let mut result = left_tuple;
+                    result.extend(right_tuple);
+                    return Ok(Some(result));
+                }
+            } else {
+                let comparator = Relation::Index(self.index.clone()).comp();
+                let mut index_btree = BTree::new(&mut pager, self.index.root, comparator);
+
+                let key_bytes = tuple::serialize(&self.index.schema.columns[0].data_type, &key);
+                if let Some(entry) = index_btree.get(&key_bytes)? {
+                    let index_entry = tuple::deserialize(entry.as_ref(), &self.index.schema);
+                    let pk_val = &index_entry[1];
+
+                    let table_comparator = Relation::Table(self.right_table.clone()).comp();
+                    let mut table_btree =
+                        BTree::new(&mut pager, self.right_table.root, table_comparator);
+
+                    let pk_bytes =
+                        tuple::serialize(&self.right_table.schema.columns[0].data_type, pk_val);
+
+                    if let Some(row_bytes) = table_btree.get(&pk_bytes)? {
+                        let right_tuple =
+                            tuple::deserialize(row_bytes.as_ref(), &self.right_table.schema);
+
+                        let mut result = left_tuple;
+                        result.extend(right_tuple);
+                        return Ok(Some(result));
+                    }
+                }
+            }
+
+            if matches!(self.join_type, JoinType::Left) {
+                let mut result = left_tuple;
+                result.extend(vec![Value::Null; self.right_table.schema.len()]);
+                return Ok(Some(result));
+            }
+        }
+    }
+}
+
 impl<File: FileOperations> HashJoin<File> {
     pub fn new(
         left: Planner<File>,
         right: Planner<File>,
         join_type: JoinType,
-        condition: Expression,
+        schema: Schema,
+        left_key: Expression,
+        right_key: Expression,
+        key_type: VmType,
     ) -> Self {
         Self {
             join_type,
-            condition,
+            key_type,
+            left_key,
+            right_key,
+            schema,
             left: Box::new(left),
             right: Box::new(right),
 
@@ -1367,93 +1536,7 @@ impl<File: FileOperations> HashJoin<File> {
             matched_right_keys: HashSet::new(),
             unmatched_right: None,
             unmatched_right_index: 0,
-
-            left_tables: HashSet::new(),
-            right_tables: HashSet::new(),
-
             index: 0,
-        }
-    }
-
-    fn extract_join_keys(
-        &self,
-    ) -> Result<(Expression, Expression, crate::vm::expression::VmType), DatabaseError> {
-        use crate::sql::analyzer::analyze_expression;
-        use crate::sql::statement::BinaryOperator;
-
-        // TODO: those errors will need to be transformed into panics because they mean something
-        // went wrong during the building phase
-
-        let Expression::BinaryOperation {
-            operator,
-            ref left,
-            ref right,
-        } = self.condition
-        else {
-            panic!("HashJoin requires a binary operation condition");
-        };
-
-        if operator != BinaryOperator::Eq {
-            panic!("HashJoin requires a equal operator");
-        }
-
-        let left = &**left;
-        let right = &**right;
-
-        let left_is_left = self.expr_belongs_to_side(left, true);
-        let right_is_right = self.expr_belongs_to_side(right, false);
-
-        // 1: the left and right expressions are in their respective schemas
-        if left_is_left && right_is_right {
-            let r#type = analyze_expression(&self.left_schema(), None, left)?;
-            return Ok((left.clone(), right.clone(), r#type));
-        }
-
-        // 2: if `left` expression belongs to right schema and `right` to left_schema (swapped)
-        let left_is_right = self.expr_belongs_to_side(left, false);
-        let right_is_left = self.expr_belongs_to_side(right, true);
-
-        if left_is_right && right_is_left {
-            let r#type = analyze_expression(&self.left_schema(), None, right)?;
-            return Ok((right.clone(), left.clone(), r#type));
-        }
-
-        Err(DatabaseError::Other(format!(
-            "Ambiguos or invalid JOIN condition for HashJoin: {}",
-            self.condition
-        )))
-    }
-
-    pub fn with_table_names(
-        mut self,
-        left_tables: HashSet<String>,
-        right_tables: HashSet<String>,
-    ) -> Self {
-        self.left_tables = left_tables;
-        self.right_tables = right_tables;
-
-        self
-    }
-
-    fn expr_belongs_to_side(&self, expr: &Expression, is_left: bool) -> bool {
-        use crate::sql::analyzer::analyze_expression;
-        use crate::sql::statement::Expression;
-
-        if let Expression::QualifiedIdentifier { table, column } = expr {
-            #[rustfmt::skip]
-            let tables = if is_left { &self.left_tables } else { &self.right_tables };
-            #[rustfmt::skip]
-            let schema = if is_left { &self.left_schema() } else { &self.right_schema() };
-
-            if !tables.is_empty() && !tables.contains(table) {
-                return false;
-            }
-
-            schema.last_index_of(column).is_some()
-        } else {
-            #[rustfmt::skip]
-            let schema = if is_left { &self.left_schema() } else { &self.right_schema() };
-            analyze_expression(schema, None, expr).is_ok()
         }
     }
 
@@ -1517,6 +1600,47 @@ impl<File: FileOperations> HashJoin<File> {
     }
 }
 
+impl<File: FileOperations> IndexNestedLoopJoin<File> {
+    pub fn with_table_names(
+        mut self,
+        left_tables: HashSet<String>,
+        right_tables: HashSet<String>,
+    ) -> Self {
+        self.left_tables = left_tables;
+        self.right_tables = right_tables;
+
+        self
+    }
+
+    fn left_schema(&self) -> Schema {
+        self.left
+            .schema()
+            .expect("IndexNestedLoopJoin must have a left node schema")
+    }
+}
+
+impl<File: PlanExecutor> Execute for Limit<File> {
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        while self.count < self.offset {
+            match self.source.try_next()? {
+                Some(_) => self.count += 1,
+                None => return Ok(None),
+            }
+        }
+
+        match self.limit == usize::MAX || self.count - self.offset < self.limit {
+            true => match self.source.try_next()? {
+                Some(tuple) => {
+                    self.count += 1;
+                    return Ok(Some(tuple));
+                }
+                _ => Ok(None),
+            },
+            _ => Ok(None),
+        }
+    }
+}
+
 impl<File: PlanExecutor> Aggregate<File> {
     fn apply_aggr(
         &self,
@@ -1538,18 +1662,80 @@ impl<File: PlanExecutor> Aggregate<File> {
             Function::Count => Ok(Value::Number(
                 values.iter().filter(|v| !v.is_null()).count() as i128,
             )),
-            Function::Sum | Function::Avg => {
-                let (sum, count) = values.iter().fold((0.0, 0), |(acc, cnt), v| match v {
-                    Value::Float(f) => (acc + *f, cnt + 1),
-                    Value::Number(n) => (acc + *n as f64, cnt + 1),
-                    _ => (acc, cnt),
-                });
 
-                match func.eq(&Function::Sum) {
-                    true => Ok(Value::Float(sum)),
-                    _ => Ok(Value::Float(sum / count as f64)),
+            Function::Sum | Function::Avg => {
+                let non_null_iter = values.iter().filter(|v| !v.is_null());
+
+                let first_val = match non_null_iter.clone().next() {
+                    Some(v) => v,
+                    None => return Ok(Value::Null),
+                };
+
+                match first_val {
+                    Value::Numeric(_) => {
+                        // avg(numeric) -> numeric
+                        let (sum, count) =
+                            non_null_iter.fold((Numeric::zero(), 0), |(acc_s, acc_c), v| match v {
+                                Value::Numeric(n) => (acc_s + n, acc_c + 1),
+                                Value::Number(n) => (acc_s + Numeric::from(*n), acc_c + 1),
+                                Value::Float(f) => (
+                                    acc_s + Numeric::try_from(*f).unwrap_or(Numeric::zero()),
+                                    acc_c + 1,
+                                ),
+                                _ => (acc_s, acc_c),
+                            });
+
+                        match func {
+                            Function::Sum => Ok(Value::Numeric(sum)),
+                            Function::Avg => {
+                                let count_numeric = Numeric::from(count as i64);
+                                Ok(Value::Numeric(sum / count_numeric))
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    Value::Number(_) => match func {
+                        // avg(integer) -> numeric
+                        Function::Avg => {
+                            let (sum, count) = non_null_iter.fold(
+                                (Numeric::zero(), 0),
+                                |(acc_s, acc_c), v| match v {
+                                    Value::Number(n) => (acc_s + Numeric::from(*n), acc_c + 1),
+                                    _ => (acc_s, acc_c),
+                                },
+                            );
+                            let count_numeric = Numeric::from(count as i64);
+                            Ok(Value::Numeric(sum / count_numeric))
+                        }
+                        // sum(integer) -> bigint (kept as Number i128)
+                        Function::Sum => {
+                            let sum = non_null_iter.fold(0i128, |acc, v| match v {
+                                Value::Number(n) => acc + n,
+                                _ => acc,
+                            });
+                            Ok(Value::Number(sum))
+                        }
+                        _ => unreachable!(),
+                    },
+
+                    _ => {
+                        let (sum, count) =
+                            non_null_iter.fold((0.0, 0), |(acc_s, acc_c), v| match v {
+                                Value::Float(f) => (acc_s + f, acc_c + 1),
+                                Value::Number(n) => (acc_s + *n as f64, acc_c + 1),
+                                _ => (acc_s, acc_c),
+                            });
+
+                        match func {
+                            Function::Sum => Ok(Value::Float(sum)),
+                            Function::Avg => Ok(Value::Float(sum / count as f64)),
+                            _ => unreachable!(),
+                        }
+                    }
                 }
             }
+
             Function::Min => Ok(values
                 .iter()
                 .filter(|v| !v.is_null())
@@ -1968,10 +2154,11 @@ impl<File: FileOperations + PartialEq> PartialEq for HashJoin<File> {
     fn eq(&self, other: &Self) -> bool {
         self.left == other.left
             && self.right == other.right
-            && self.condition == other.condition
             && self.join_type == other.join_type
-            && self.left_tables == other.left_tables
-            && self.right_tables == other.right_tables
+            && self.schema == other.schema
+            && self.left_key == other.left_key
+            && self.right_key == other.right_key
+            && self.key_type == other.key_type
     }
 }
 
@@ -2111,7 +2298,19 @@ impl<File: FileOperations> Display for Aggregate<File> {
 
 impl<File: FileOperations> Display for HashJoin<File> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Hash {:?} Join on {}", self.join_type, self.condition)
+        write!(f, "Hash {:?} Join", self.join_type)
+    }
+}
+
+impl<File: FileOperations> Display for IndexNestedLoopJoin<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Index {:?} Join on {}", self.join_type, self.condition)
+    }
+}
+
+impl<File: FileOperations> Display for Limit<File> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Limit {}", self.limit)
     }
 }
 

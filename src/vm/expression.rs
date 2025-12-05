@@ -1,10 +1,12 @@
 use super::{functions, math};
 use crate::core::date::interval::IntervalParseError;
 use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
+use crate::core::numeric::{Numeric, NumericError};
 use crate::core::uuid::{Uuid, UuidError};
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
     ArithmeticPair, BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
+    NUMERIC_ANY,
 };
 use std::fmt::{Display, Formatter};
 use std::mem;
@@ -19,6 +21,7 @@ pub enum VmType {
     Float,
     Date,
     Interval,
+    Numeric,
 }
 
 #[derive(Debug, PartialEq)]
@@ -49,6 +52,7 @@ pub enum TypeError {
     InvalidInterval(IntervalParseError),
     ExtractError(ExtractError),
     UuidError(UuidError),
+    NumericError(NumericError),
 }
 
 trait ValueExtractor<T> {
@@ -204,6 +208,14 @@ pub(crate) fn resolve_expression<'exp>(
                             BinaryOperator::Minus => Value::Temporal(temporal - interval),
                             _ => unreachable!("not implemented this operation: {arithmetic}"),
                         },
+
+                        ArithmeticPair::Arbitrary(left_value, right_value) => match arithmetic {
+                            BinaryOperator::Plus => Value::Numeric(&*left_value + &*right_value),
+                            BinaryOperator::Minus => Value::Numeric(&*left_value - &*right_value),
+                            BinaryOperator::Mul => Value::Numeric(&*left_value * &*right_value),
+                            BinaryOperator::Div => Value::Numeric(&*left_value / &*right_value),
+                            _ => unreachable!("not implemented this operation: {arithmetic}"),
+                        },
                     }
                 }
             })
@@ -331,7 +343,8 @@ impl_value_extractor! {
     Number => (i128, Number),
     Float => (f64, Float),
     Boolean => (bool, Bool),
-    Temporal => (Temporal, Date)
+    Temporal => (Temporal, Date),
+    Numeric => (Numeric, Numeric)
 }
 
 fn get_value<T>(val: &[Value], schema: &Schema, argument: &Expression) -> Result<T, SqlError>
@@ -400,6 +413,7 @@ impl From<&Type> for VmType {
             Type::Varchar(_) | Type::Text => VmType::String,
             Type::Date | Type::DateTime | Type::Time => VmType::Date,
             Type::Interval => VmType::Interval,
+            Type::Numeric(_, _) => VmType::Numeric,
             float if float.is_float() => VmType::Float,
             number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
                 VmType::Number
@@ -409,8 +423,8 @@ impl From<&Type> for VmType {
     }
 }
 
-impl From<VmType> for Type {
-    fn from(value: VmType) -> Self {
+impl From<&VmType> for Type {
+    fn from(value: &VmType) -> Self {
         match value {
             VmType::Bool => Self::Boolean,
             VmType::String => Self::Text,
@@ -418,7 +432,14 @@ impl From<VmType> for Type {
             VmType::Float => Self::DoublePrecision,
             VmType::Date => Self::DateTime,
             VmType::Interval => Self::Interval,
+            VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
         }
+    }
+}
+
+impl From<VmType> for Type {
+    fn from(value: VmType) -> Self {
+        Self::from(&value)
     }
 }
 
@@ -470,6 +491,7 @@ impl Display for TypeError {
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
             TypeError::InvalidInterval(err) => err.fmt(f),
+            TypeError::NumericError(err) => err.fmt(f),
         }
     }
 }

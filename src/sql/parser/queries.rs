@@ -48,6 +48,8 @@ impl<'sql> Sql<'sql> for Select {
 
             Ok(OrderBy { expr, direction })
         })?;
+        let limit = parser.parse_usize_by_keyword(Keyword::Limit)?;
+        let offset = parser.parse_usize_by_keyword(Keyword::Offset)?;
 
         Ok(Select {
             columns,
@@ -56,6 +58,8 @@ impl<'sql> Sql<'sql> for Select {
             r#where,
             order_by,
             group_by,
+            limit,
+            offset,
         })
     }
 }
@@ -142,9 +146,12 @@ impl<'sql> Sql<'sql> for Insert {
             }
         }
 
+        let returning = parser.parse_returning()?;
+
         Ok(Self {
             into,
             columns,
+            returning,
             values: rows,
         })
     }
@@ -161,10 +168,13 @@ impl<'sql> Sql<'sql> for Update {
             false => None,
         };
 
+        let returning = parser.parse_returning()?;
+
         Ok(Update {
             columns,
             r#where,
             table,
+            returning,
         })
     }
 }

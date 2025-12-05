@@ -9,7 +9,7 @@ use std::{
 };
 
 /// SQL tokens.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::sql) enum Token {
     Whitespace(Whitespace),
     Identifier(String),
@@ -35,7 +35,7 @@ pub(in crate::sql) enum Token {
     Eof,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::sql) enum Whitespace {
     Tab,
     Space,
@@ -52,6 +52,7 @@ pub enum Keyword {
     Update,
     Delete,
     Insert,
+    Source,
     Into,
     Values,
     Set,
@@ -109,6 +110,7 @@ pub enum Keyword {
     Text,
     Bool,
     Interval,
+    Numeric,
     True,
     False,
     Index,
@@ -123,11 +125,14 @@ pub enum Keyword {
     Group,
     By,
     On,
+    Limit,
+    Offset,
     Start,
     Transaction,
     Rollback,
     Commit,
     Explain,
+    Returning,
     Timestamp,
     Date,
     Time,
@@ -213,6 +218,7 @@ impl Borrow<str> for Keyword {
             Self::Update => "UPDATE",
             Self::Delete => "DELETE",
             Self::Insert => "INSERT",
+            Self::Source => "SOURCE",
             Self::Into => "INTO",
             Self::Values => "VALUES",
             Self::Set => "SET",
@@ -259,6 +265,7 @@ impl Borrow<str> for Keyword {
             Self::Varchar => "VARCHAR",
             Self::Text => "TEXT",
             Self::Bool => "BOOLEAN",
+            Self::Numeric => "NUMERIC",
             Self::True => "TRUE",
             Self::False => "FALSE",
             Self::Index => "INDEX",
@@ -273,10 +280,13 @@ impl Borrow<str> for Keyword {
             Self::Join => "JOIN",
             Self::By => "BY",
             Self::On => "ON",
+            Self::Limit => "LIMIT",
+            Self::Offset => "OFFSET",
             Self::Start => "BEGIN",
             Self::Transaction => "TRANSACTION",
             Self::Rollback => "ROLLBACK",
             Self::Commit => "COMMIT",
+            Self::Returning => "RETURNING",
             Self::Explain => "EXPLAIN",
             Self::Date => "DATE",
             Self::Time => "TIME",
@@ -312,6 +322,7 @@ impl FromStr for Keyword {
             "UPDATE" => Keyword::Update,
             "DELETE" => Keyword::Delete,
             "INSERT" => Keyword::Insert,
+            "SOURCE" => Keyword::Source,
             "VALUES" => Keyword::Values,
             "INTO" => Keyword::Into,
             "SET" => Keyword::Set,
@@ -376,13 +387,17 @@ impl FromStr for Keyword {
             "INNER" => Keyword::Inner,
             "LEFT" => Keyword::Left,
             "RIGHT" => Keyword::Right,
+            "LIMIT" => Keyword::Limit,
+            "OFFSET" => Keyword::Offset,
             "BEGIN" => Keyword::Start,
             "TRANSACTION" => Keyword::Transaction,
             "ROLLBACK" => Keyword::Rollback,
             "COMMIT" => Keyword::Commit,
             "EXPLAIN" => Keyword::Explain,
+            "RETURNING" => Keyword::Returning,
             "TIMESTAMP" => Keyword::Timestamp,
             "INTERVAL" => Keyword::Interval,
+            "NUMERIC" | "DECIMAL" => Keyword::Numeric,
             "DATE" => Keyword::Date,
             "TIME" => Keyword::Time,
             _ => Keyword::None,

@@ -18,7 +18,7 @@ use crate::core::date::{
 };
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, JoinClause,
-    JoinType, Statement, TableRef, Type, UnaryOperator, Value,
+    JoinType, Statement, TableRef, Type, UnaryOperator, Value, NUMERIC_ANY,
 };
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -53,6 +53,7 @@ enum ErrorKind {
     Unsupported(Token),
     UnexpectedEof,
     FormatError(String),
+    InvalidValue { clause: Keyword, found: Token },
 }
 
 pub(in crate::sql) type ParserResult<T> = Result<T, ParserError>;
@@ -99,7 +100,19 @@ impl<'input> Parser<'input> {
             Keyword::Commit => Statement::Commit,
             Keyword::Rollback => Statement::Rollback,
             Keyword::Explain => return Ok(Statement::Explain(Box::new(self.parse_statement()?))),
+            Keyword::Source => {
+                let path = match self.next_token()? {
+                    Token::String(s) => s,
+                    token => {
+                        return Err(self.error(ErrorKind::Expected {
+                            expected: Token::String(String::new()),
+                            found: token,
+                        }))
+                    }
+                };
 
+                Statement::Source(path)
+            }
             _ => unreachable!(),
         };
 
@@ -371,6 +384,7 @@ impl<'input> Parser<'input> {
                 self.expect_keyword(Keyword::Precision)?;
                 Ok(Type::DoublePrecision)
             }
+            Keyword::Numeric => self.parse_numeric(),
             Keyword::Real => Ok(Type::Real),
             Keyword::Bool => Ok(Type::Boolean),
             Keyword::Timestamp => Ok(Type::DateTime),
@@ -399,6 +413,32 @@ impl<'input> Parser<'input> {
             .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
 
         Ok(Expression::Value(Value::Interval(interval)))
+    }
+
+    fn parse_numeric(&mut self) -> ParserResult<Type> {
+        Ok(match self.consume_optional(Token::LeftParen) {
+            true => {
+                let Some(precision) = self.parse_usize()? else {
+                    let found = self.peek_token().and_then(|res| res.ok()).cloned();
+                    return Err(self.error(ErrorKind::Expected {
+                        expected: Token::Number(String::new()),
+                        found: found.unwrap(),
+                    }));
+                };
+
+                let scale = self
+                    .consume_optional(Token::Comma)
+                    .then(|| self.parse_usize())
+                    .and_then(|result| result.ok())
+                    .flatten()
+                    .unwrap_or(0);
+
+                self.expect_token(Token::RightParen)?;
+                Type::Numeric(precision, scale)
+            }
+
+            _ => Type::Numeric(NUMERIC_ANY, NUMERIC_ANY),
+        })
     }
 
     fn parse_assign(&mut self) -> ParserResult<Assignment> {
@@ -432,11 +472,61 @@ impl<'input> Parser<'input> {
         }))
     }
 
+    fn parse_usize_by_keyword(&mut self, keyword: Keyword) -> ParserResult<Option<usize>> {
+        if !self.consume_optional(Token::Keyword(keyword)) {
+            return Ok(None);
+        }
+
+        self.parse_usize()?
+            .ok_or(ParserError {
+                kind: ErrorKind::Expected {
+                    expected: Token::Number(String::new()),
+                    found: self.peek_token().and_then(|res| res.ok()).cloned().unwrap(),
+                },
+                location: self.location,
+                input: self.input.into(),
+            })
+            .map(Some)
+    }
+
+    fn parse_usize(&mut self) -> ParserResult<Option<usize>> {
+        if let Some(Ok(Token::Number(_))) = self.peek_token() {
+            let token = self.next_token()?;
+            if let Token::Number(s) = token {
+                let n = s.parse::<usize>().map_err(|_| {
+                    self.error(ErrorKind::FormatError(format!("Invalid number: {s}")))
+                })?;
+                return Ok(Some(n));
+            }
+        }
+
+        Ok(None)
+    }
+
     fn parse_alias(&mut self) -> ParserResult<Option<String>> {
         Ok(match self.consume_optional(Token::Keyword(Keyword::As)) {
             true => Some(self.parse_ident()?),
             _ => None,
         })
+    }
+
+    fn parse_returning(&mut self) -> ParserResult<Vec<Expression>> {
+        match self.consume_optional(Token::Keyword(Keyword::Returning)) {
+            false => Ok(vec![]),
+            _ => self.parse_separated_tokens(
+                |p| {
+                    let expr = p.parse_expr(None)?;
+                    match p.consume_optional(Token::Keyword(Keyword::As)) {
+                        false => Ok(expr),
+                        _ => Ok(Expression::Alias {
+                            alias: p.parse_ident()?,
+                            expr: Box::new(expr),
+                        }),
+                    }
+                },
+                false,
+            ),
+        }
     }
 
     /// Operator's precedence from the [PostgreSQL documentation](https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-PRECEDENCE)
@@ -738,7 +828,7 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_statements() -> [Keyword; 10] {
+    const fn supported_statements() -> [Keyword; 11] {
         [
             Keyword::Select,
             Keyword::Create,
@@ -750,10 +840,11 @@ impl<'input> Parser<'input> {
             Keyword::Rollback,
             Keyword::Commit,
             Keyword::Explain,
+            Keyword::Source,
         ]
     }
 
-    const fn supported_types() -> [Keyword; 16] {
+    const fn supported_types() -> [Keyword; 17] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -771,6 +862,7 @@ impl<'input> Parser<'input> {
             Keyword::Date,
             Keyword::Timestamp,
             Keyword::Interval,
+            Keyword::Numeric,
         ]
     }
 
@@ -853,6 +945,9 @@ impl Display for ErrorKind {
 
                 write!(f, "Expected {one_of} but found '{found}' instead")
             }
+            ErrorKind::InvalidValue { clause, found } => {
+                write!(f, "{clause} received an invalid value: {found}")
+            }
         }
     }
 }
@@ -876,7 +971,7 @@ impl From<TokenizerError> for ParserError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement::{Expression, OrderBy, OrderDirection};
+    use crate::sql::statement::{Expression, OrderBy, OrderDirection, SelectBuilder};
 
     #[test]
     fn test_parse_select() {
@@ -904,23 +999,22 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select(Select {
-                columns: vec![
-                    Expression::Identifier("title".to_string()),
-                    Expression::Identifier("author".to_string())
-                ],
-                from: "books".into(),
-                r#where: Some(Expression::BinaryOperation {
-                    operator: BinaryOperator::Eq,
-                    left: Box::new(Expression::Identifier("author".to_string())),
-                    right: Box::new(Expression::Value(Value::String(
-                        "Agatha Christie".to_string()
-                    ))),
-                }),
-                joins: vec![],
-                order_by: vec![],
-                group_by: vec![],
-            }))
+            Ok(Statement::Select(
+                SelectBuilder::default()
+                    .from("books")
+                    .columns(vec![
+                        Expression::Identifier("title".to_string()),
+                        Expression::Identifier("author".to_string())
+                    ])
+                    .r#where(Expression::BinaryOperation {
+                        operator: BinaryOperator::Eq,
+                        left: Box::new(Expression::Identifier("author".to_string())),
+                        right: Box::new(Expression::Value(Value::String(
+                            "Agatha Christie".to_string()
+                        ))),
+                    })
+                    .into()
+            )),
         );
     }
 
@@ -931,14 +1025,12 @@ mod tests {
 
         assert_eq!(
             statement,
-            Ok(Statement::Select(Select {
-                columns: vec![Expression::Wildcard],
-                from: "users".into(),
-                r#where: None,
-                joins: vec![],
-                order_by: vec![],
-                group_by: vec![],
-            }))
+            Ok(Statement::Select(
+                SelectBuilder::default()
+                    .from("users")
+                    .select(Expression::Wildcard)
+                    .into()
+            ))
         );
     }
 
@@ -1074,6 +1166,7 @@ mod tests {
                         }),
                     })))
                 }),
+                returning: vec![],
             }))
         );
     }
@@ -1108,7 +1201,8 @@ mod tests {
                     // outer vec = rows, inner vec = expressions in that row
                     Expression::Value(Value::Number(1)),
                     Expression::Value(Value::String("HR".to_string()))
-                ],],
+                ]],
+                returning: vec![],
             }))
         )
     }
@@ -1432,6 +1526,7 @@ mod tests {
                         Expression::Value(Value::String("2024-02-03 12:00:00".into()))
                     ]
                 ],
+                returning: vec![],
             }))
         )
     }
@@ -2148,5 +2243,81 @@ mod tests {
                     .into()
             )
         )
+    }
+
+    #[test]
+    fn test_parse_limit() {
+        let sql = "SELECT name FROM users LIMIT 5;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .select(Expression::Identifier("name".into()))
+                    .from("users")
+                    .limit(5)
+                    .into()
+            )
+        )
+    }
+
+    #[test]
+    fn test_parse_offset() {
+        let sql = "SELECT name FROM users OFFSET 10;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .select(Expression::Identifier("name".into()))
+                    .from("users")
+                    .offset(10)
+                    .into()
+            )
+        )
+    }
+
+    #[test]
+    fn test_parse_limit_with_order() {
+        let sql = "SELECT id, name FROM products ORDER BY name DESC LIMIT 10;";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement.unwrap(),
+            Statement::Select(
+                Select::builder()
+                    .columns(vec![
+                        Expression::Identifier("id".into()),
+                        Expression::Identifier("name".into())
+                    ])
+                    .order_by(OrderBy {
+                        direction: OrderDirection::Desc,
+                        expr: Expression::Identifier("name".into())
+                    })
+                    .from("products")
+                    .limit(10)
+                    .into()
+            )
+        )
+    }
+
+    #[test]
+    fn test_numeric_type_parsing() {
+        let sql = "CREATE TABLE accounts (id INT PRIMARY KEY, balance NUMERIC, rate DECIMAL);";
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Table {
+                name: "accounts".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("balance", Type::Numeric(NUMERIC_ANY, NUMERIC_ANY)),
+                    Column::new("rate", Type::Numeric(NUMERIC_ANY, NUMERIC_ANY))
+                ]
+            }))
+        );
     }
 }

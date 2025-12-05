@@ -5,8 +5,10 @@ use std::{
 };
 
 use crate::{
+    core::Serialize,
     core::{
-        date::{interval::Interval, NaiveDate, NaiveDateTime, NaiveTime, Parse, Serialize},
+        date::{interval::Interval, NaiveDate, NaiveDateTime, NaiveTime, Parse},
+        numeric::Numeric,
         uuid::Uuid,
     },
     db::{RowId, Schema},
@@ -90,6 +92,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
         Value::Interval(i) => i.serialize(buff, r#type),
+        Value::Numeric(n) => n.serialize(buff),
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
@@ -132,38 +135,53 @@ pub(crate) fn serialize_tuple<'value>(
 }
 
 // FIXME: use of sorting with different type from schema
-#[rustfmt::skip]
 pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
     let bitmap_size = match schema.has_nullable() {
         true => (schema.columns.len() + 7) / 8,
         _ => 0,
     };
 
-     bitmap_size + schema
-        .columns
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, col)| {
-            match tuple[idx].is_null() {
+    bitmap_size
+        + schema
+            .columns
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, col)| match tuple[idx].is_null() {
                 true => None,
-                _ => {
-                    Some(match &tuple[idx] {
-                        Value::String(str) => match col.data_type {
-                            Type::Varchar(max) => utf_8_length_bytes(max) + str.as_bytes().len(),
-                            Type::Text => {
-                                let len = str.as_bytes().len();
-                                let header_len = varlena_header_len(len as _);
+                _ => Some(match &tuple[idx] {
+                    Value::String(str) => match col.data_type {
+                        Type::Varchar(max) => utf_8_length_bytes(max) + str.as_bytes().len(),
+                        Type::Text => {
+                            let len = str.as_bytes().len();
+                            let header_len = if len < 127 { 1 } else { 4 };
 
-                                header_len + len
-                            }
-                            _ => unreachable!(),
+                            header_len + len
                         }
-                        _ => byte_len_of_type(&col.data_type)
-                    })
-                }
-            }
-        })
-                .sum::<usize>()
+                        _ => byte_len_of_type(&col.data_type),
+                    },
+                    Value::Numeric(num) => match num {
+                        Numeric::Short(_) | Numeric::NaN => 8,
+                        Numeric::Long { digits, .. } => 14 + digits.len() * 2,
+                    },
+
+                    Value::Float(_) | Value::Number(_)
+                        if matches!(col.data_type, Type::Numeric(_, _)) =>
+                    {
+                        let num = match &tuple[idx] {
+                            Value::Float(f) => Numeric::try_from(*f).unwrap(),
+                            Value::Number(n) => Numeric::from(*n),
+                            _ => unreachable!(),
+                        };
+
+                        match num {
+                            Numeric::Short(_) | Numeric::NaN => 8,
+                            Numeric::Long { digits, .. } => 14 + digits.len() * 2,
+                        }
+                    }
+                    _ => byte_len_of_type(&col.data_type),
+                }),
+            })
+            .sum::<usize>()
 }
 
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
@@ -228,6 +246,39 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             Ok(Value::String(
                 String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
             ))
+        }
+
+        Type::Numeric(_, _) => {
+            let mut header = [0; 8];
+            reader.read_exact(&mut header)?;
+
+            let tag = (u64::from_le_bytes(header) >> 62) & 0b11;
+            match tag {
+                0b00 | 0b10 => Ok(Value::Numeric(Numeric::try_from(header).unwrap())),
+                0b01 => {
+                    let mut meta = [0; 6];
+                    reader.read_exact(&mut meta)?;
+
+                    let len = u16::from_le_bytes(meta[0..2].try_into().unwrap()) as usize;
+                    let weight = i16::from_le_bytes(meta[2..4].try_into().unwrap());
+                    let sign_dscale = u16::from_le_bytes(meta[4..6].try_into().unwrap());
+
+                    let mut digits_bytes = vec![0; len * 2];
+                    reader.read_exact(&mut digits_bytes)?;
+
+                    let mut digits = Vec::with_capacity(len);
+                    for chunk in digits_bytes.chunks_exact(2) {
+                        digits.push(i16::from_le_bytes(chunk.try_into().unwrap()));
+                    }
+
+                    Ok(Value::Numeric(Numeric::Long {
+                        weight,
+                        digits,
+                        sign_dscale,
+                    }))
+                }
+                _ => unreachable!("Invalid numeric tag: {tag}"),
+            }
         }
 
         Type::Boolean => {
@@ -392,6 +443,7 @@ impl ValueSerialize for i128 {
                 Type::DoublePrecision => buff.extend_from_slice(&(*self as f64).to_be_bytes()),
                 _ => unreachable!("What kind of float is this?"),
             },
+            Type::Numeric(_, _) => Numeric::from(*self).serialize(buff),
             _ => unreachable!("Unsupported type {to} for i128 value"),
         }
     }
@@ -409,6 +461,9 @@ impl ValueSerialize for f64 {
                 let value = *self as i128;
                 value.serialize(buff, typ);
             }
+            Type::Numeric(_, _) => Numeric::try_from(*self)
+                .expect("Invalid float for numeric conversion")
+                .serialize(buff),
             _ => unreachable!("Unsupported type {to} for f64 value"),
         }
     }

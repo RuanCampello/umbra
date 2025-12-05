@@ -13,6 +13,8 @@ mod functions;
 pub mod interval;
 pub use functions::{Extract, ExtractError, ExtractKind};
 
+use crate::core::Serialize;
+
 /// A combined date and time representation without timezone information.
 ///
 /// This struct combines [`NaiveDate`] (4 bytes)
@@ -64,7 +66,7 @@ pub struct NaiveTime {
 
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone, Copy)]
 struct u24([u8; 3]);
 
 #[allow(clippy::enum_variant_names, dead_code)]
@@ -103,11 +105,6 @@ const SECS_IN_DAY: i64 = 86400;
 pub trait Parse: Sized {
     fn parse_str(date: &str) -> DateError<Self>;
     fn timestamp(&self) -> i64;
-}
-
-/// This serializes the date types into a compact binary format.
-pub trait Serialize {
-    fn serialize(&self, buff: &mut Vec<u8>);
 }
 
 pub trait Current {
@@ -576,6 +573,12 @@ impl u24 {
     const fn get(&self) -> u32 {
         let [low, mid, high] = self.0;
         (low as u32) | ((mid as u32) << 8) | ((high as u32) << 16)
+    }
+}
+
+impl Ord for u24 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.get().cmp(&other.get())
     }
 }
 

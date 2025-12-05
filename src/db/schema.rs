@@ -1,9 +1,11 @@
 use crate::db::ROW_COL_ID;
 use crate::sql::statement::{Column, Constraint, JoinType, Type};
+use core::fmt;
 use std::collections::HashMap;
+use std::fmt::Display;
 
 /// The representation of the table schema during runtime.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct Schema {
     pub columns: Vec<Column>,
     /// Index of columns definitions based on their name
@@ -135,6 +137,18 @@ impl Schema {
     pub fn len(&self) -> usize {
         self.columns.len()
     }
+
+    pub fn update_returning_input(&self) -> Self {
+        let len = self.len();
+        let mut columns = self.columns.clone();
+        columns.extend(self.columns.clone());
+
+        let mut input_schema = Self::new(columns);
+        input_schema.add_qualified_name("old", 0, len);
+        input_schema.add_qualified_name("new", len, 2 * len);
+
+        input_schema
+    }
 }
 
 pub(crate) fn has_btree_key(columns: &[Column]) -> bool {
@@ -150,4 +164,79 @@ pub(crate) fn umbra_schema() -> Schema {
         Column::new("table_name", Type::Varchar(255)),
         Column::new("sql", Type::Varchar(65535)),
     ])
+}
+
+impl Display for Schema {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let headers = vec!["Column", "Type", "Nullable"];
+
+        let rows: Vec<Vec<String>> = self
+            .columns
+            .iter()
+            .map(|col| {
+                vec![
+                    col.name.clone(),
+                    col.data_type.to_string(),
+                    match col.is_nullable() {
+                        false => "not null".to_string(),
+                        _ => "".to_string(),
+                    },
+                ]
+            })
+            .collect();
+
+        let widths: Vec<usize> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, header)| {
+                let max_data_len = rows.iter().map(|row| row[i].len()).max().unwrap_or(0);
+                header.len().max(max_data_len)
+            })
+            .collect();
+
+        let border: String = widths
+            .iter()
+            .map(|&w| "-".repeat(w + 2))
+            .collect::<Vec<_>>()
+            .join("+");
+        let full_border = format!("+{}+", border);
+
+        let header_str = headers
+            .iter()
+            .zip(&widths)
+            .map(|(h, &w)| format!(" {:<width$} ", h, width = w))
+            .collect::<Vec<_>>()
+            .join("|");
+
+        writeln!(f, "{}", full_border)?;
+        writeln!(f, "|{}|", header_str)?;
+        writeln!(f, "{}", full_border)?;
+
+        if self.columns.is_empty() {
+            let total_width = widths.iter().sum::<usize>() + (widths.len() * 3) - 1;
+            writeln!(
+                f,
+                "| {:<width$} |",
+                "(No columns defined)",
+                width = total_width
+            )?;
+        } else {
+            for row in rows {
+                let row_str = row
+                    .iter()
+                    .zip(&widths)
+                    .enumerate()
+                    .map(|(i, (val, &width))| match i == 2 {
+                        true => format!(" {:^width$} ", val, width = width),
+                        _ => format!(" {:<width$} ", val, width = width),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|");
+                writeln!(f, "|{}|", row_str)?;
+            }
+        }
+
+        writeln!(f, "{}", full_border)?;
+        Ok(())
+    }
 }

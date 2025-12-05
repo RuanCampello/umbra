@@ -7,7 +7,10 @@
 use super::Keyword;
 use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
+use crate::db::{IndexMetadata, TableMetadata};
+use crate::index;
 use crate::vm::expression::{TypeError, VmType};
 use std::borrow::Borrow;
 use std::borrow::Cow;
@@ -26,6 +29,7 @@ pub(crate) enum Statement {
     Insert(Insert),
     Delete(Delete),
     Drop(Drop),
+    Source(String),
     Commit,
     StartTransaction,
     Rollback,
@@ -74,7 +78,8 @@ pub(crate) struct Select {
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
-    // TODO: limit
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -85,6 +90,8 @@ pub struct SelectBuilder {
     r#where: Option<Expression>,
     order_by: Vec<OrderBy>,
     group_by: Vec<Expression>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Hash)]
@@ -98,6 +105,7 @@ pub(crate) struct Update {
     pub table: String,
     pub columns: Vec<Assignment>,
     pub r#where: Option<Expression>,
+    pub returning: Vec<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -105,6 +113,7 @@ pub(crate) struct Insert {
     pub into: String,
     pub columns: Vec<String>,
     pub values: Vec<Vec<Expression>>,
+    pub returning: Vec<Expression>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -235,6 +244,7 @@ pub enum Value {
     Temporal(Temporal),
     Uuid(Uuid),
     Interval(Interval),
+    Numeric(Numeric),
     Null,
 }
 
@@ -318,6 +328,9 @@ pub enum Type {
     DoublePrecision,
     /// 8-byte Universal Unique Identifier defined by [RFC 4122](https://datatracker.ietf.org/doc/html/rfc4122).
     Uuid,
+    /// Arbitrary-precision numeric type (like PostgreSQL `NUMERIC`/`DECIMAL`).
+    /// Uses optimised bit-packing for small values and Base-10000 for arbitrary precision.
+    Numeric(usize, usize),
     Date,
     Time,
     DateTime,
@@ -370,12 +383,14 @@ pub enum Function {
 }
 
 #[derive(Debug)]
-pub(crate) enum ArithmeticPair {
+pub(crate) enum ArithmeticPair<'p> {
     Numeric(f64, f64),
     Temporal(Temporal, Interval),
+    Arbitrary(Cow<'p, Numeric>, Cow<'p, Numeric>),
 }
 
 const NULL_HASH: u32 = 0x4E554C4C;
+pub const NUMERIC_ANY: usize = usize::MAX;
 
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
@@ -522,6 +537,8 @@ impl Display for Statement {
                 joins,
                 order_by,
                 group_by,
+                limit,
+                offset,
             }) => {
                 write!(f, "SELECT {} FROM {}", join(columns, ", "), from.name)?;
                 if let Some(alias) = &from.alias {
@@ -549,6 +566,14 @@ impl Display for Statement {
                 if !group_by.is_empty() {
                     write!(f, " GROUP BY {}", join(group_by, ", "))?;
                 }
+
+                if let Some(limit) = limit {
+                    write!(f, " LIMIT {limit}")?;
+                }
+
+                if let Some(offset) = offset {
+                    write!(f, " OFFSET {offset}")?;
+                }
             }
 
             Statement::Delete(Delete { from, r#where }) => {
@@ -562,10 +587,15 @@ impl Display for Statement {
                 table,
                 columns,
                 r#where,
+                returning,
             }) => {
                 write!(f, "UPDATE {table} SET {}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
+                }
+
+                if !returning.is_empty() {
+                    write!(f, "RETURNING {}", join(returning, ", "))?;
                 }
             }
 
@@ -573,6 +603,7 @@ impl Display for Statement {
                 into,
                 columns,
                 values,
+                returning,
             }) => {
                 let columns = match columns.is_empty() {
                     true => String::from(" "),
@@ -588,6 +619,9 @@ impl Display for Statement {
                 );
 
                 write!(f, "INSERT INTO {into}{columns}VALUES ({})", values)?;
+                if !returning.is_empty() {
+                    write!(f, "RETURNING {}", join(returning, ", "))?;
+                }
             }
 
             Statement::Drop(drop) => {
@@ -600,6 +634,7 @@ impl Display for Statement {
             Statement::StartTransaction => f.write_str("BEGIN TRANSACTION")?,
             Statement::Commit => f.write_str("COMMIT")?,
             Statement::Rollback => f.write_str("ROLLBACK")?,
+            Statement::Source(source) => write!(f, "SOURCE '{source}'")?,
             Statement::Explain(statement) => write!(f, "EXPLAIN {statement}")?,
         };
 
@@ -642,22 +677,107 @@ impl Default for Expression {
     }
 }
 
+impl JoinClause {
+    pub(in crate::sql) fn index_cadidate(
+        &self,
+        right_table: &TableMetadata,
+    ) -> Option<(IndexMetadata, Expression)> {
+        match &self.on {
+            Expression::BinaryOperation {
+                left: l,
+                operator: BinaryOperator::Eq,
+                right: r,
+            } => {
+                let (right_key_expr, left_key_expr) = match (
+                    Self::is_col_of_table(l, &self.table.key()),
+                    Self::is_col_of_table(r, &self.table.key()),
+                ) {
+                    (true, _) => (Some(l.as_ref()), r.as_ref()),
+                    (_, true) => (Some(r.as_ref()), l.as_ref()),
+                    _ => (None, l.as_ref()), // left_key_expr value here doesn't matter since right_key_expr is None
+                };
+
+                match right_key_expr {
+                    Some(right_key) => match right_key {
+                        Expression::Identifier(col_name)
+                        | Expression::QualifiedIdentifier {
+                            column: col_name, ..
+                        } => {
+                            // find if there is an index on this column in the right table
+                            if let Some(idx) = right_table
+                                .indexes
+                                .iter()
+                                .find(|idx| idx.column.name == *col_name)
+                            {
+                                return Some((idx.clone(), left_key_expr.clone()));
+                            }
+
+                            // check if the column is the primary key of the right table
+                            // if so, we can treat the table itself as an index
+                            if right_table.schema.columns[0].name == *col_name {
+                                let pk_index = IndexMetadata {
+                                    name: index!(primary on (right_table.name)),
+                                    root: right_table.root,
+                                    column: right_table.schema.columns[0].clone(),
+                                    schema: right_table.schema.clone(),
+                                    unique: true,
+                                };
+                                return Some((pk_index, left_key_expr.clone()));
+                            }
+
+                            None
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn is_col_of_table(expr: &Expression, table: &str) -> bool {
+        match expr {
+            Expression::QualifiedIdentifier { table: t, .. } => t == table,
+            // TODO: maybe we need to verify better this
+            Expression::Identifier(_) => true,
+            _ => false,
+        }
+    }
+}
+
 impl Value {
     pub(crate) fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 
     /// Tries to convert a pair of `Value`s into a representation suitable for arithmetic.
-    pub(crate) fn as_arithmetic_pair(&self, other: &Self) -> Option<ArithmeticPair> {
+    pub(crate) fn as_arithmetic_pair<'p>(&'p self, other: &'p Self) -> Option<ArithmeticPair<'p>> {
+        use crate::core::numeric::Numeric as Num;
+        use std::borrow::Cow::*;
+        use ArithmeticPair as Pair;
+        use Value::*;
+
         match (self, other) {
-            (Value::Number(a), Value::Number(b)) => {
-                Some(ArithmeticPair::Numeric(*a as f64, *b as f64))
-            }
-            (Value::Float(a), Value::Float(b)) => Some(ArithmeticPair::Numeric(*a, *b)),
-            (Value::Number(a), Value::Float(b)) => Some(ArithmeticPair::Numeric(*a as f64, *b)),
-            (Value::Float(a), Value::Number(b)) => Some(ArithmeticPair::Numeric(*a, *b as f64)),
-            (Value::Temporal(t), Value::Interval(i)) => Some(ArithmeticPair::Temporal(*t, *i)),
-            (Value::Interval(i), Value::Temporal(t)) => Some(ArithmeticPair::Temporal(*t, *i)),
+            (Float(a), Float(b)) => Some(Pair::Numeric(*a, *b)),
+            (Number(a), Float(b)) => Some(Pair::Numeric(*a as f64, *b)),
+            (Float(a), Number(b)) => Some(Pair::Numeric(*a, *b as f64)),
+            (Number(a), Number(b)) => Some(Pair::Numeric(*a as f64, *b as f64)),
+
+            (Temporal(t), Interval(i)) => Some(Pair::Temporal(*t, *i)),
+            (Interval(i), Temporal(t)) => Some(Pair::Temporal(*t, *i)),
+
+            (Numeric(a), Numeric(b)) => Some(Pair::Arbitrary(Borrowed(a), Borrowed(b))),
+            (Numeric(a), Number(b)) => Some(Pair::Arbitrary(Borrowed(a), Owned(Num::from(*b)))),
+            (Number(a), Numeric(b)) => Some(Pair::Arbitrary(Owned(Num::from(*a)), Borrowed(b))),
+
+            (Numeric(a), Float(b)) => Num::try_from(*b)
+                .ok()
+                .map(|nb| Pair::Arbitrary(Borrowed(a), Owned(nb))),
+            (Float(a), Numeric(b)) => Num::try_from(*a)
+                .ok()
+                .map(|na| Pair::Arbitrary(Owned(na), Borrowed(b))),
+
             _ => None,
         }
     }
@@ -677,22 +797,30 @@ impl Temporal {
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
+        use self::Value::{Numeric as Arbitrary, *};
+        use crate::core::numeric::Numeric;
+
         match (self, other) {
-            (Value::Number(a), Value::Number(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a == b,
+            (Number(a), Number(b)) => a == b,
+            (Float(a), Float(b)) => a == b,
             // we do this because we can coerce them later to do a comparison between floats and
             // integers
-            (Value::Number(a), Value::Float(b)) => (*a as f64) == *b,
-            (Value::Float(a), Value::Number(b)) => *a == (*b as f64),
-            (Value::String(a), Value::String(b)) => a == b,
-            (Value::Boolean(a), Value::Boolean(b)) => a == b,
-            (Value::Temporal(a), Value::Temporal(b)) => a == b,
-            (Value::Interval(a), Value::Interval(b)) => a == b,
-            (Value::Uuid(a), Value::Uuid(b)) => a == b,
+            (Number(a), Float(b)) => (*a as f64) == *b,
+            (Float(a), Number(b)) => *a == (*b as f64),
+            (Arbitrary(a), Arbitrary(b)) => a == b,
+            (Arbitrary(a), Number(n)) | (Number(n), Arbitrary(a)) => a == &Numeric::from(*n),
+            (Arbitrary(a), Float(f)) | (Float(f), Arbitrary(a)) => {
+                Numeric::try_from(*f).map(|f| &f == a).unwrap_or(false)
+            }
+            (String(a), String(b)) => a == b,
+            (Boolean(a), Boolean(b)) => a == b,
+            (Temporal(a), Temporal(b)) => a == b,
+            (Interval(a), Interval(b)) => a == b,
+            (Uuid(a), Uuid(b)) => a == b,
             // For grouping and hashing, NULL values should be equal.
             // SQL semantics (NULL = NULL returns NULL) is handled separetly.
-            (Value::Null, Value::Null) => true,
-            (Value::Null, _) | (_, Value::Null) => false,
+            (Null, Null) => true,
+            (Null, _) | (_, Null) => false,
             _ => false,
         }
     }
@@ -700,22 +828,30 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
-impl PartialOrd for Value {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
-            (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
-            (Value::String(a), Value::String(b)) => a.partial_cmp(b),
-            (Value::Boolean(a), Value::Boolean(b)) => a.partial_cmp(b),
-            (Value::Temporal(a), Value::Temporal(b)) => Some(a.cmp(b)),
-            (Value::Uuid(a), Value::Uuid(b)) => Some(a.cmp(b)),
+            (Value::Float(a), Value::Float(b)) => a.total_cmp(b),
+            (Value::Number(a), Value::Number(b)) => a.cmp(b),
+            (Value::String(a), Value::String(b)) => a.cmp(b),
+            (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
+            (Value::Temporal(a), Value::Temporal(b)) => a.cmp(b),
+            (Value::Uuid(a), Value::Uuid(b)) => a.cmp(b),
+            (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
+            (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
             // For sorting, NULL values are considered equal to each other
             // and sort after all non-NULL values.
-            (Value::Null, Value::Null) => Some(Ordering::Equal),
-            (Value::Null, _) => Some(Ordering::Greater),
-            (_, Value::Null) => Some(Ordering::Less),
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Null, _) => Ordering::Greater,
+            (_, Value::Null) => Ordering::Less,
             _ => panic!("these values are not comparable"),
         }
+    }
+}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -747,6 +883,9 @@ impl Hash for Value {
             Value::Uuid(u) => u.hash(state),
             Value::Interval(i) => i.hash(state),
             Value::Null => NULL_HASH.hash(state),
+            Value::Numeric(n) => {
+                todo!()
+            }
         }
     }
 }
@@ -757,6 +896,7 @@ impl Neg for Value {
         match self {
             Value::Number(num) => Ok(Value::Number(-num)),
             Value::Float(float) => Ok(Value::Float(-float)),
+            Value::Numeric(num) => Ok(Value::Numeric(-num)),
             Value::Null => Ok(Value::Null),
             v => Err(TypeError::CannotApplyUnary {
                 operator: UnaryOperator::Minus,
@@ -883,6 +1023,11 @@ impl Display for Type {
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
             Type::Text => write!(f, "TEXT"),
             Type::Interval => f.write_str("INTERVAL"),
+            Type::Numeric(precision, scale) => match (precision, scale) {
+                (&NUMERIC_ANY, _) => write!(f, "NUMERIC"),
+                (precision, 0) => write!(f, "NUMERIC({precision})"),
+                (precision, scale) => write!(f, "NUMERIC({precision}, {scale})"),
+            },
         }
     }
 }
@@ -897,6 +1042,7 @@ impl Display for Value {
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
             Value::Interval(interval) => write!(f, "{interval}"),
+            Value::Numeric(numeric) => write!(f, "{numeric}"),
             Value::Null => write!(f, "NULL"),
         }
     }
@@ -921,18 +1067,25 @@ impl Function {
     }
 
     /// Returns the `VmType` that this function returns.
-    pub const fn return_type(&self) -> VmType {
+    pub const fn return_type(&self, input: &VmType) -> VmType {
         match self {
             Self::Substring | Self::Concat | Self::TypeOf => VmType::String,
-            Self::Avg | Self::Min | Self::Max | Self::Sum => VmType::Float,
-            Self::Abs | Self::Sqrt | Self::Trunc | Self::Power => VmType::Float,
-            Self::Substring | Self::Concat => VmType::String,
-            Self::UuidV4 | Self::Ascii | Self::Position | Self::Sign | Self::Count => {
+
+            Self::Count | Self::UuidV4 | Self::Ascii | Self::Position | Self::Extract => {
                 VmType::Number
             }
-            Self::Extract => VmType::Number,
 
-            Self::Coalesce => panic!("This must be overridden by the analyzer"),
+            Self::Sqrt | Self::Power => match input {
+                VmType::Numeric => VmType::Numeric,
+                _ => VmType::Float,
+            },
+
+            Self::Avg | Self::Sum => match input {
+                VmType::Number | VmType::Numeric => VmType::Numeric,
+                _ => *input,
+            },
+
+            Self::Abs | Self::Sign | Self::Trunc | Self::Min | Self::Max | Self::Coalesce => *input,
         }
     }
 
@@ -1041,6 +1194,16 @@ impl SelectBuilder {
         self.order_by.push(order_expr);
         self
     }
+
+    pub fn limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    pub fn offset(mut self, offset: usize) -> Self {
+        self.offset = Some(offset);
+        self
+    }
 }
 
 impl From<SelectBuilder> for Select {
@@ -1052,6 +1215,8 @@ impl From<SelectBuilder> for Select {
             r#where: value.r#where,
             order_by: value.order_by,
             group_by: value.group_by,
+            limit: value.limit,
+            offset: value.offset,
         }
     }
 }

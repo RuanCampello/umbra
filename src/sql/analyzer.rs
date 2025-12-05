@@ -7,11 +7,12 @@
 use super::statement::{Delete, Insert, Select, Update};
 use crate::core::date::interval::Interval;
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
 use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
 use crate::sql::statement::{
-    BinaryOperator, Constraint, Create, Drop, Expression, Function, Statement, Type, UnaryOperator,
-    Value,
+    BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
+    NUMERIC_ANY,
 };
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::{HashMap, HashSet};
@@ -120,6 +121,7 @@ pub(in crate::sql) fn analyze<'s>(
             into,
             values: rows,
             columns,
+            returning,
         }) => {
             let metadata = ctx.metadata(into)?;
             if into.eq(DB_METADATA) {
@@ -175,6 +177,10 @@ pub(in crate::sql) fn analyze<'s>(
                 for (expr, col) in row.iter().zip(&columns) {
                     analyze_assignment(metadata, col, expr, false)?;
                 }
+
+                for expr in returning {
+                    analyze_expression(&metadata.schema, None, expr)?;
+                }
             }
         }
 
@@ -185,8 +191,9 @@ pub(in crate::sql) fn analyze<'s>(
             order_by,
             group_by,
             r#where,
+            limit: _,
+            offset: _,
         }) => {
-            // TODO: analyze correcly the join clauses
             let metadata = ctx.metadata(&from.name)?;
             let mut schema = metadata.schema.clone();
 
@@ -227,7 +234,8 @@ pub(in crate::sql) fn analyze<'s>(
                         .map_or(false, |alias| alias.eq(&expr))
                 });
 
-                if !group_by.is_empty() && !is_aggr && !in_group_by {
+                let is_dependent = is_functionally_dependent(expr, group_by, &tables);
+                if !group_by.is_empty() && !is_aggr && !in_group_by && !is_dependent {
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
                 }
 
@@ -279,6 +287,7 @@ pub(in crate::sql) fn analyze<'s>(
             r#where,
             table,
             columns,
+            returning,
         }) => {
             let metadata = ctx.metadata(table)?;
             if table.eq(DB_METADATA) {
@@ -289,6 +298,10 @@ pub(in crate::sql) fn analyze<'s>(
                 analyze_assignment(metadata, &col.identifier, &col.value, true)?;
             }
             analyze_where(&metadata.schema, r#where)?;
+
+            for expr in returning {
+                analyze_expression(&metadata.schema, None, expr)?;
+            }
         }
 
         Statement::Drop(Drop::Table(name)) => {
@@ -368,6 +381,66 @@ pub(in crate::sql) fn contains_aggregate(expr: &Expression) -> bool {
         | Expression::Alias { expr, .. } => contains_aggregate(expr),
         _ => false,
     }
+}
+
+/// Checks if an expression is functionally dependent on a GROUP BY clause.
+/// This typically happens when we group by table's primary key:
+/// ```sql
+/// SELECT t.name FROM users AS t GROUP BY t.id;
+/// ```
+fn is_functionally_dependent(
+    expr: &Expression,
+    group_by: &[Expression],
+    tables: &HashMap<&str, Schema>,
+) -> bool {
+    let (table, _column) = match expr {
+        Expression::QualifiedIdentifier { table, column } => (table.as_str(), column.as_str()),
+        Expression::Identifier(name) => {
+            let mut owner = None;
+
+            for (table, schema) in tables {
+                if schema.index_of(name).is_some() {
+                    if owner.is_some() {
+                        return false;
+                    }
+
+                    owner = Some(*table);
+                }
+            }
+            match owner {
+                Some(table) => (table, name.as_str()),
+                _ => return false,
+            }
+        }
+        _ => return false,
+    };
+
+    let Some(schema) = tables.get(table) else {
+        return false;
+    };
+
+    let keys = schema
+        .columns
+        .iter()
+        .filter(|c| c.constraints.contains(&Constraint::PrimaryKey))
+        .map(|c| c.name.as_str());
+
+    for key in keys {
+        let key_in_group = group_by.iter().any(|g| match g {
+            Expression::QualifiedIdentifier {
+                table: t,
+                column: c,
+            } => table == t && key == c,
+            Expression::Identifier(col) => col == key,
+            _ => false,
+        });
+
+        if !key_in_group {
+            return false;
+        }
+    }
+
+    true
 }
 
 impl AnalyzeCtx for Schema {
@@ -525,11 +598,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 BinaryOperator::Plus
                 | BinaryOperator::Minus
                 | BinaryOperator::Div
-                | BinaryOperator::Mul
-                    if matches!(left_type, VmType::Number | VmType::Float | VmType::Date) =>
-                {
-                    left_type
-                }
+                | BinaryOperator::Mul => result_type(left_type, right_type),
                 _ => unreachable!("unexpected operation state"),
             }
         }
@@ -538,21 +607,37 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
                 (data_type, operator, &**expr)
             {
-                match value {
-                    Value::Number(n) => {
-                        analyze_number(&-n, data_type)?;
-                        return Ok(VmType::Number);
-                    }
-                    Value::Float(f) => {
-                        analyze_float(&-f, data_type)?;
-                        return Ok(VmType::Float);
-                    }
-                    _ => unreachable!(),
+                if let Type::Numeric(_, _) = data_type {
+                    let numeric = match value {
+                        Value::Numeric(n) => -n.clone(),
+                        Value::Number(n) => Numeric::from(-n),
+                        Value::Float(f) => Numeric::try_from(-f).map_err(|_| {
+                            SqlError::Type(TypeError::ExpectedType {
+                                expected: VmType::Numeric,
+                                found: *expr.clone(),
+                            })
+                        })?,
+                        _ => {
+                            return Err(SqlError::Type(TypeError::ExpectedType {
+                                expected: VmType::Numeric,
+                                found: *expr.clone(),
+                            }))
+                        }
+                    };
+
+                    analyze_numeric(&numeric, data_type)?;
                 }
+
+                match value {
+                    Value::Number(n) => analyze_number(&-n, data_type)?,
+                    Value::Float(f) => analyze_float(&-f, data_type)?,
+                    _ => unreachable!(),
+                };
             }
 
             match analyze_expression(ctx, data_type, expr)? {
                 VmType::Number | VmType::Float => VmType::Number,
+                VmType::Numeric => VmType::Numeric,
                 _ => Err(SqlError::Type(TypeError::ExpectedType {
                     expected: VmType::Number,
                     found: *expr.clone(),
@@ -575,14 +660,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             }
 
-            match func {
-                // TODO: make a variant check function for variadic return types
-                Function::Min | Function::Max | Function::Coalesce => match arg_types.first() {
-                    Some(first) => return Ok(*first),
-                    None => func.return_type(),
-                },
-                _ => func.return_type(),
-            }
+            return Ok(func.return_type(&arg_types.first().unwrap_or(&VmType::Float)));
         }
 
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
@@ -654,38 +732,33 @@ fn analyze_expression_with_aliases<'exp>(
 }
 
 fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
-    let result: Result<VmType, SqlError> = match value {
-        Value::Boolean(_) => Ok(VmType::Bool),
-        Value::Number(n) => {
-            if let Some(col_type) = col_type {
-                analyze_number(n, col_type)?;
-            }
-            Ok(VmType::Number)
-        }
-        Value::Float(f) => {
-            if let Some(col_type) = col_type {
-                analyze_float(f, col_type)?;
-            }
-            Ok(VmType::Float)
-        }
-        Value::String(s) => match col_type {
-            // if the column has a type, delegate to analyze_string,
-            // which will return VmType::Date for valid dates,
-            // or VmType::String otherwise.
-            Some(ty) => analyze_string(s, ty),
+    Ok(match (value, col_type) {
+        (Value::Boolean(_), _) => VmType::Bool,
+        (Value::Null, Some(t)) => t.into(),
+        (Value::Null, _) => unreachable!("NULL must be type aware"),
 
-            // if we don’t know the target type, we can only
-            // treat it as a plain string.
-            None => Ok(VmType::String),
+        (Value::Numeric(n), Some(t @ Type::Numeric(_, _))) => analyze_numeric(n, t)?,
+        (Value::Number(n), Some(t @ Type::Numeric(_, _))) => {
+            analyze_numeric(&Numeric::from(*n), t)?
+        }
+        (Value::Float(f), Some(t @ Type::Numeric(_, _))) => match Numeric::try_from(*f) {
+            Ok(n) => analyze_numeric(&n, t)?,
+            _ => VmType::Float,
         },
-        Value::Null => match col_type {
-            Some(ty) => Ok(ty.into()),
-            None => unreachable!("NULL should always be type aware"),
-        },
-        _ => Ok(VmType::Date),
-    };
 
-    result
+        (Value::Float(_), None) => VmType::Float,
+        (Value::Float(float), Some(t)) => analyze_float(float, t)?,
+        (Value::Number(_), None) => VmType::Number,
+        (Value::Number(num), Some(t)) => analyze_number(num, t)?,
+
+        (Value::String(s), Some(t)) => analyze_string(s, t)?,
+        (Value::String(_), None) => VmType::String,
+
+        (Value::Temporal(_), _) => VmType::Date,
+        (Value::Interval(_), _) => VmType::Interval,
+        (Value::Numeric(_), _) => VmType::Numeric,
+        (Value::Uuid(_), _) => VmType::Number,
+    })
 }
 
 fn analyze_where<'exp>(
@@ -731,20 +804,42 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
     }
 }
 
-fn analyze_number(integer: &i128, data_type: &Type) -> Result<(), AnalyzerError> {
+fn analyze_number(integer: &i128, data_type: &Type) -> Result<VmType, AnalyzerError> {
     if data_type.is_integer() && !data_type.is_integer_in_bounds(integer) {
         return Err(AnalyzerError::Overflow(*data_type, *integer as usize));
     }
 
-    Ok(())
+    Ok(VmType::Number)
 }
 
-fn analyze_float(float: &f64, data_type: &Type) -> Result<(), AnalyzerError> {
+fn analyze_float(float: &f64, data_type: &Type) -> Result<VmType, AnalyzerError> {
     if data_type.is_float() && !data_type.is_float_in_bounds(float) {
         return Err(AnalyzerError::Overflow(*data_type, *float as usize));
     }
 
-    Ok(())
+    Ok(VmType::Float)
+}
+
+fn analyze_numeric(numeric: &Numeric, data_type: &Type) -> Result<VmType, AnalyzerError> {
+    if let Type::Numeric(precision, scale) = data_type {
+        if *precision == NUMERIC_ANY {
+            return Ok(VmType::Numeric);
+        }
+
+        let (num_precision, num_scale) = (numeric.precision(), numeric.scale() as usize);
+        if num_scale > *scale {
+            return Err(AnalyzerError::Overflow(*data_type, *scale));
+        }
+
+        let max_int_digits = precision - scale;
+        let actual_int_digits = num_precision.saturating_sub(num_scale);
+
+        if actual_int_digits > max_int_digits {
+            return Err(AnalyzerError::Overflow(*data_type, actual_int_digits));
+        }
+    }
+
+    Ok(VmType::Numeric)
 }
 
 // TODO: this is very uhhhhhhhhhmmmmmmm
@@ -754,22 +849,34 @@ fn are_types_compatible(
     left_type: &VmType,
     right_type: &VmType,
 ) -> bool {
+    use crate::sql::statement::BinaryOperator as Op;
+
     if left_type == right_type {
         return true;
     }
 
-    matches!(
-        (operator, left_type, right_type),
-        (
-            BinaryOperator::Plus | BinaryOperator::Minus,
-            VmType::Date,
-            VmType::Interval
-        ) | (
-            BinaryOperator::Plus | BinaryOperator::Minus,
-            VmType::Interval,
-            VmType::Date
-        )
-    )
+    match operator {
+        Op::Plus | Op::Minus => match (left_type, right_type) {
+            (VmType::Date, VmType::Interval) | (VmType::Interval, VmType::Date) => true,
+            (left, right) => is_numeric(left) && is_numeric(right),
+        },
+        Op::Mul | Op::Div => is_numeric(left_type) && is_numeric(right_type),
+        _ => false,
+    }
+}
+
+const fn is_numeric(typ: &VmType) -> bool {
+    matches!(typ, VmType::Float | VmType::Numeric | VmType::Number)
+}
+
+const fn result_type(left: VmType, right: VmType) -> VmType {
+    match (left, right) {
+        (VmType::Date, _) | (_, VmType::Date) => VmType::Date,
+        (VmType::Numeric, _) | (_, VmType::Numeric) => VmType::Numeric,
+        (VmType::Float, _) | (_, VmType::Float) => VmType::Float,
+
+        _ => VmType::Number,
+    }
 }
 
 impl Display for AnalyzerError {
@@ -796,6 +903,7 @@ impl Display for AnalyzerError {
         }
     }
 }
+
 impl Display for AlreadyExists {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

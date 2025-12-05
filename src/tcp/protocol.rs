@@ -1,9 +1,24 @@
+//! # Umbra Wire Protocol
+//!
+//! Defines the binary format for client-server communication.
+//!
+//! ## Message Format
+//! `[ Length (u32) ] [ Type (u8) ] [ Payload (...) ]`
+//!
+//! ## Message Types
+//! - **`+` (0x2B) - QuerySet**: Successful result with data.
+//!   - Payload: Schema definition followed by serialized rows.
+//! - **`!` (0x21) - Empty**: Successful execution with no data (e.g., `INSERT` success).
+//!   - Payload: Affected row count.
+//! - **`-` (0x2D) - Error**: Something went wrong.
+//!   - Payload: Error message string.
+
 use std::{array::TryFromSliceError, fmt::Display, num::TryFromIntError};
 
 use crate::{
     core::storage::tuple,
     db::{DatabaseError, QuerySet},
-    sql::statement::{Column, Type, Value},
+    sql::statement::{Column, Type, Value, NUMERIC_ANY},
 };
 
 #[derive(Debug, PartialEq)]
@@ -20,6 +35,8 @@ pub enum EncodingError {
     InvalidPrefix(u8),
     InvalidType(u8),
 }
+
+impl std::error::Error for EncodingError {}
 
 const BOOLEAN_CATEGORY: u8 = 0x00;
 const INTEGER_CATEGORY: u8 = 0x10;
@@ -162,6 +179,7 @@ impl From<&Type> for u8 {
 
             Type::Real => FLOAT_CATEGORY | 0x0,
             Type::DoublePrecision => FLOAT_CATEGORY | 0x1,
+            Type::Numeric(_, _) => FLOAT_CATEGORY | 0x2,
 
             Type::Varchar(_) => STRING_CATEGORY | 0x0,
             Type::Text => STRING_CATEGORY | 0x1,
@@ -197,6 +215,7 @@ impl TryFrom<&u8> for Type {
 
             (FLOAT_CATEGORY, 0x0) => Ok(Type::Real),
             (FLOAT_CATEGORY, 0x1) => Ok(Type::DoublePrecision),
+            (FLOAT_CATEGORY, 0x2) => Ok(Type::Numeric(NUMERIC_ANY, NUMERIC_ANY)),
 
             (TEMPORAL_CATEGORY, 0x0) => Ok(Type::Date),
             (TEMPORAL_CATEGORY, 0x1) => Ok(Type::Time),
