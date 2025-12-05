@@ -565,7 +565,12 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                     Statement::Rollback => {
                         self.db.rollback()?;
                     }
-                    Statement::Source(path) => self.db.load(path)?,
+                    Statement::Source(path) => {
+                        if let Err(e) = self.db.load(path) {
+                            self.abort_transaction()?;
+                            return Err(e);
+                        }
+                    }
                     Statement::Drop(_) | Statement::Create(_) => {
                         match vm::statement::exec(statement, self.db) {
                             Ok(rows) => affected_rows = rows,

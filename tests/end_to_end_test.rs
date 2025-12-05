@@ -240,14 +240,21 @@ fn numeric_joins_aggregation() {
         "#,
     );
 
-    println!("{query:#?}");
+    let categories: [(&str, i128); 8] = [
+        ("Automotive", 2350722),
+        ("Beauty", 2108030),
+        ("Sports", 2103120),
+        ("Garden", 2083935),
+        ("Clothing", 1931961),
+        ("Electronics", 1886387),
+        ("Home", 1808070),
+        ("Grocery", 1783215),
+    ];
 
-    assert_eq!(
-        query.tuples,
-        vec![
-            vec!["Electronics".into(), numeric(229846, 2)],
-            vec!["Home".into(), numeric(167812, 2)],
-            vec!["Clothing".into(), numeric(131980, 2)],
-        ]
-    );
+    for (idx, (category, total)) in categories.iter().enumerate() {
+        assert_eq!(
+            query.tuples[idx],
+            vec![Value::from(*category), numeric(*total, 2)]
+        )
+    }
 }
