@@ -258,3 +258,48 @@ fn numeric_joins_aggregation() {
         )
     }
 }
+
+#[test]
+fn analytics_reporting() {
+    let server = State::new("sql/orders-and-users.sql");
+    let mut db = server.client();
+
+    let query = db.exec(
+        r#"
+        SELECT 
+            p.category, 
+            SUM(o.total_price) as total_revenue,
+            AVG(o.quantity) as avg_quantity,
+            COUNT(o.id) as order_count
+        FROM orders AS o
+        JOIN users AS u ON o.user_id = u.id
+        JOIN products AS p ON o.product_id = p.id
+        WHERE u.country = 'USA' OR u.country = 'UK' AND o.order_date >= '2023-01-01'
+        GROUP BY p.category
+        ORDER BY total_revenue DESC;
+        "#,
+    );
+
+    let results: [(&str, i128, i128, i128); 8] = [
+        ("Beauty", 757640, 41666666666666667, 6),
+        ("Automotive", 730903, 31111111111111111, 9),
+        ("Sports", 729063, 42000000000000000, 5),
+        ("Grocery", 489123, 43333333333333333, 3),
+        ("Electronics", 309454, 30000000000000000, 4),
+        ("Home", 280108, 27500000000000000, 4),
+        ("Clothing", 173060, 23333333333333333, 3),
+        ("Garden", 130526, 20000000000000000, 2),
+    ];
+
+    for (idx, (category, revenue, avg, count)) in results.iter().enumerate() {
+        assert_eq!(
+            query.tuples[idx],
+            vec![
+                Value::from(*category),
+                numeric(*revenue, 2),
+                numeric(*avg, 16),
+                Value::from(*count)
+            ]
+        );
+    }
+}

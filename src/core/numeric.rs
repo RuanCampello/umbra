@@ -338,13 +338,38 @@ impl Numeric {
 
         let weight = w1 - w2;
         let fract_groups = (rscale + 3) / 4;
-        let digit_count = (weight + 1 + (fract_groups as i16)) as usize;
+        let effective_digit_count = (weight + 1 + (fract_groups as i16)) as usize;
+        let digit_count = effective_digit_count + 1;
 
         if digit_count == 0 {
             return Ok(Self::zero());
         }
 
         let mut digits = Vec::with_capacity(digit_count);
+
+        let rounding_logic = |digits: &mut Vec<i16>| {
+            if digits.len() > effective_digit_count {
+                let extra = digits.pop().unwrap();
+                if extra >= (N_BASE / 2) as i16 {
+                    let mut idx = digits.len();
+
+                    loop {
+                        if idx == 0 {
+                            digits.insert(0, 1);
+                            break;
+                        }
+
+                        idx -= 1;
+                        digits[idx] += 1;
+                        if digits[idx] < N_BASE as i16 {
+                            break;
+                        }
+
+                        digits[idx] = 0;
+                    }
+                }
+            }
+        };
 
         if d2.len() == 1 {
             let divisor = d2[0] as i32;
@@ -363,6 +388,8 @@ impl Numeric {
                 digits.push(q as i16);
             }
 
+            rounding_logic(&mut digits);
+
             let mut offset = 0;
             while offset < digits.len() && digits[offset] == 0 {
                 offset += 1;
@@ -372,7 +399,8 @@ impl Numeric {
                 digits.drain(0..offset);
             }
 
-            let weight = weight - (offset as i16);
+            #[rustfmt::skip]
+            let weight = weight - (offset as i16) + if digits.len() > effective_digit_count { 1 } else { 0 };
 
             return Ok(Self::Long {
                 weight: weight,
@@ -466,6 +494,8 @@ impl Numeric {
 
             digits.push(q_hat as i16);
         }
+
+        rounding_logic(&mut digits);
 
         let mut offset = 0;
         while offset < digits.len() && digits[offset] == 0 {
