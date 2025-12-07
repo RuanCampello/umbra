@@ -119,7 +119,7 @@ pub(crate) struct Filter<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Sort<File: FileOperations> {
-    pub collection: Collect<File>,
+    pub(in crate::vm) collection: Collect<File>,
     comparator: TupleComparator,
     sorted: bool,
     page_size: usize,
@@ -172,7 +172,7 @@ pub(crate) struct SortKeys<File: FileOperations> {
 
 #[derive(Debug)]
 pub(crate) struct Collect<File: FileOperations> {
-    pub source: Box<Planner<File>>,
+    pub(in crate::vm) source: Box<Planner<File>>,
     schema: Schema,
     mem_buff: TupleBuffer,
     file: Option<File>,
@@ -192,8 +192,8 @@ pub(crate) struct Project<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
-    pub source: Box<Planner<File>>,
-    pub group_by: Vec<Expression>,
+    pub(in crate::vm) source: Box<Planner<File>>,
+    pub(in crate::vm) group_by: Vec<Expression>,
     aggr_exprs: Vec<Expression>,
     output: Schema,
     output_buffer: TupleBuffer,

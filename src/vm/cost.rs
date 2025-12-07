@@ -8,14 +8,14 @@ use crate::{
 
 /// A wrapper to represent the estimated cost and cardinality of an operation.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::sql) struct Cost {
+pub(in crate::vm) struct Cost {
     /// Abstract cost unit (IO + CPU). Lower is better.
     pub value: f64,
     /// Estimated number of rows produced by this operation.
     pub rows: usize,
 }
 
-pub(in crate::sql) trait CostEstimator {
+pub(in crate::vm) trait CostEstimator {
     fn estimate(&self) -> Cost;
 }
 
