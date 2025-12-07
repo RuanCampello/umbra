@@ -28,7 +28,7 @@ pub(crate) struct TableMetadata {
     pub serials: HashMap<String, SequenceMetadata>,
     pub(in crate::db) row_id: RowId,
     /// Number of rows in this table. Used by the cost-based optimiser.
-    pub(in crate::db) count: usize,
+    pub count: usize,
 }
 
 /// The information we know about the table indexes during runtime.

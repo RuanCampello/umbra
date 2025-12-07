@@ -422,6 +422,13 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             return Err(DatabaseError::Sql(SqlError::InvalidTable(table.into())));
         }
 
+        let count = {
+            let mut pager = self.pager.borrow_mut();
+            let mut btree = BTree::new(&mut pager, metadata.root, metadata.comp()?);
+            btree.count()?
+        };
+        metadata.count = count;
+
         if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {
             metadata.row_id = self.load_next_row_id(metadata.root)?;
         }
