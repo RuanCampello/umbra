@@ -8,14 +8,14 @@ use crate::{
 
 /// A wrapper to represent the estimated cost and cardinality of an operation.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::vm) struct Cost {
+pub struct Cost {
     /// Abstract cost unit (IO + CPU). Lower is better.
     pub value: f64,
     /// Estimated number of rows produced by this operation.
     pub rows: usize,
 }
 
-pub(in crate::vm) trait CostEstimator {
+pub(crate) trait CostEstimator {
     fn estimate(&self) -> Cost;
 }
 
@@ -165,7 +165,7 @@ impl<File: FileOperations> CostEstimator for IndexNestedLoopJoin<File> {
         let right_rows_total = self.right_table.count.max(1);
 
         // cost of one lookup = log2(n) pages
-        let lookup = (right_rows_total as f64).log2().ceil();
+        let lookup = (right_rows_total as f64).log2().max(1.0);
 
         // total cost = scan left + (left rows * lookup cost)
         let total = left.value + (left.rows as f64 * lookup);

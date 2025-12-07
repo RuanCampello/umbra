@@ -16,6 +16,7 @@ use crate::{
         },
     },
     vm::{
+        cost::{Cost, CostEstimator},
         expression::VmType,
         planner::{
             AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, IndexNestedLoopJoin,
@@ -194,6 +195,14 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
 
             let index_cadidate = join.index_cadidate(&right_table);
             let left = self.source.take().unwrap();
+
+            let left_cost = left.estimate();
+
+            let right_table_stats = db.metadata(&join.table.name)?;
+            let right_rows = right_table_stats.count.max(1000);
+            let right_cost = Cost::estimate_scan(right_rows);
+
+            println!("left: {left_cost:#?}\nright: {right_cost:#?}");
 
             // heuristic: we only want to use index nested loop join if the left side is selective
             // if the left side is a sequential scan, we prefer hash join
