@@ -34,6 +34,7 @@ pub(crate) mod optimiser;
 pub(crate) mod parser;
 pub(crate) mod query;
 
+mod cost;
 mod prepare;
 pub mod statement;
 

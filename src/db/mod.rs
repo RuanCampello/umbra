@@ -319,6 +319,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             let row_id = self.load_next_row_id(0)?;
             return Ok(TableMetadata {
                 root: 0,
+                count: 0,
                 name: String::from(table),
                 row_id,
                 indexes: vec![],
@@ -330,6 +331,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         let mut metadata = TableMetadata {
             root: 1,
             row_id: 1,
+            count: 0,
             name: String::from(table),
             schema: Schema::empty(),
             indexes: Vec::new(),
