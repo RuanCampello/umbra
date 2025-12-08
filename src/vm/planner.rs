@@ -1460,8 +1460,19 @@ impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
                 let comparator = Relation::Table(self.right_table.clone()).comp();
                 let mut table_btree = BTree::new(&mut pager, self.right_table.root, comparator);
 
-                let key_bytes =
-                    tuple::serialize(&self.right_table.schema.columns[0].data_type, &key);
+                let key_bytes = match self.right_table.schema.has_nullable() {
+                    false => tuple::serialize(&self.right_table.schema.columns[0].data_type, &key),
+                    _ => {
+                        let bitmap_len = (self.right_table.schema.len() + 7) / 8;
+                        let mut bytes = vec![0u8; bitmap_len];
+
+                        bytes.extend(tuple::serialize(
+                            &self.right_table.schema.columns[0].data_type,
+                            &key,
+                        ));
+                        bytes
+                    }
+                };
 
                 if let Some(row_bytes) = table_btree.get(&key_bytes)? {
                     let right_tuple =

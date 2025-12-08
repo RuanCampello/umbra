@@ -196,19 +196,27 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             let index_cadidate = join.index_cadidate(&right_table);
             let left = self.source.take().unwrap();
 
-            let left_cost = left.estimate();
+            let filter = where_clause.and_then(|expr| extract_table_filter(expr, join.table.key()));
+            let right = query::optimiser::generate_seq_plan(&join.table.name, filter, db)?;
 
-            let right_table_stats = db.metadata(&join.table.name)?;
-            let right_rows = right_table_stats.count.max(1000);
-            let right_cost = Cost::estimate_scan(right_rows);
+            let use_inlj = {
+                let left_cost = left.estimate();
+                let right_cost = right.estimate();
 
-            println!("left: {left_cost:#?}\nright: {right_cost:#?}");
+                // TODO: we should do this in the cost module
+                let inlj_cost = {
+                    let right_rows_total = right_table.count.max(1);
+                    let lookup = (right_rows_total as f64).log2().max(1.0);
+                    left_cost.value + (left_cost.rows as f64 * lookup)
+                };
 
-            // heuristic: we only want to use index nested loop join if the left side is selective
-            // if the left side is a sequential scan, we prefer hash join
-            let use_inlj = match (&index_cadidate, &left.is_selective()) {
-                (Some(_), true) => true,
-                _ => false,
+                let hash_cost = {
+                    let io = left_cost.value + right_cost.value;
+                    let cpu_cost = (left_cost.rows + right_cost.rows) as f64 * Cost::CPU_TUPLE_COST;
+                    io + cpu_cost
+                };
+
+                inlj_cost <= hash_cost
             };
 
             match (use_inlj, index_cadidate) {
@@ -248,9 +256,6 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 }
 
                 _ => {
-                    let filter =
-                        where_clause.and_then(|expr| extract_table_filter(expr, join.table.key()));
-                    let right = query::optimiser::generate_seq_plan(&join.table.name, filter, db)?;
                     let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
 
                     right_table

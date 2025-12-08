@@ -29,7 +29,9 @@ impl Cost {
     }
 
     pub fn estimate_scan(row_count: usize) -> Self {
-        let pages = (row_count as f64 / Self::ESTIMATED_ROWS_PER_PAGE as f64).ceil();
+        let pages = (row_count as f64 / Self::ESTIMATED_ROWS_PER_PAGE as f64)
+            .ceil()
+            .max(1.0);
         Self::new(pages, row_count)
     }
 }
