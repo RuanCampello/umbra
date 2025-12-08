@@ -187,7 +187,7 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
     let bitmap = match schema.has_nullable() {
         true => {
-            let bitmap_size = (schema.len() + 7) / 8;
+            let bitmap_size = schema.null_bitmap_len();
             let mut bitmap = vec![0u8; bitmap_size];
             reader.read_exact(&mut bitmap)?;
             Some(bitmap)

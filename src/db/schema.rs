@@ -130,11 +130,15 @@ impl Schema {
         self.columns.iter().any(|col| col.is_nullable())
     }
 
+    pub const fn null_bitmap_len(&self) -> usize {
+        (self.len() + 7) / 8
+    }
+
     pub fn empty() -> Self {
         Self::new(Vec::new())
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.columns.len()
     }
 

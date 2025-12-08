@@ -135,7 +135,7 @@ impl TableMetadata {
         let pk = self.schema.columns[0].data_type;
         match self.schema.has_nullable() {
             true => {
-                let bitmap_len = (&self.schema.len() + 7) / 8;
+                let bitmap_len = self.schema.null_bitmap_len();
                 match pk {
                     Type::Varchar(max) => Ok(BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
                         bitmap_len,
@@ -191,7 +191,7 @@ impl Relation {
                         match idx.schema.has_nullable() {
                             false => BTreeKeyCmp::from(first),
                             true => {
-                                let bitmap_len = (idx.schema.len() + 7) / 8;
+                                let bitmap_len = idx.schema.null_bitmap_len();
                                 BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
                                     bitmap_len,
                                     prefix_len: utf_8_length_bytes(*max),
@@ -208,7 +208,7 @@ impl Relation {
                 match &table.schema.has_nullable() {
                     false => BTreeKeyCmp::from(pk),
                     _ => {
-                        let bitmap_len = (&table.schema.len() + 7) / 8;
+                        let bitmap_len = table.schema.null_bitmap_len();
 
                         match pk {
                             Type::Varchar(max) => BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
