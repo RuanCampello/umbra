@@ -252,6 +252,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                         pager: Rc::clone(&db.pager),
                         left_tables: left_tables.clone(),
                         right_tables,
+                        schema: self.schema.clone(),
                     }));
                 }
 

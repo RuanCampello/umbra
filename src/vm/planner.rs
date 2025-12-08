@@ -242,6 +242,8 @@ pub(crate) struct IndexNestedLoopJoin<File: FileOperations> {
 
     pub left_tables: HashSet<String>,
     pub right_tables: HashSet<String>,
+
+    pub schema: Schema,
 }
 
 #[derive(Debug, PartialEq)]
@@ -455,20 +457,7 @@ impl<File: FileOperations> Planner<File> {
             Self::HashJoin(hash) => &hash.schema,
             Self::Update(update) => return update.returning_schema.clone(),
             Self::Insert(insert) => return insert.returning_schema.clone(),
-            Self::IndexNestedLoopJoin(inl) => {
-                let mut schema = inl.left_schema();
-                let left_len = schema.len();
-                schema.extend_with_join(inl.right_table.schema.columns.clone(), &inl.join_type);
-
-                inl.left_tables
-                    .iter()
-                    .for_each(|table| schema.add_qualified_name(table, 0, left_len));
-                inl.right_tables
-                    .iter()
-                    .for_each(|table| schema.add_qualified_name(table, left_len, schema.len()));
-
-                return Some(schema);
-            }
+            Self::IndexNestedLoopJoin(inl) => &inl.schema,
             _ => return None,
         };
 

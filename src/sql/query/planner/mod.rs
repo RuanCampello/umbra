@@ -1270,7 +1270,7 @@ mod tests {
         assert_eq!(
             db.gen_plan(query)?,
             Planner::Project(Project {
-                input: joined_schema,
+                input: joined_schema.clone(),
                 output: Schema::new(vec![
                     Column::new("amount", Type::Integer),
                     Column::new("name", Type::Varchar(50)),
@@ -1298,6 +1298,7 @@ mod tests {
                     pager: db.pager(),
                     left_tables: HashSet::from(["orders".to_string()]),
                     right_tables: HashSet::from(["users".to_string()]),
+                    schema: joined_schema,
                 })),
             })
         );
@@ -1343,7 +1344,7 @@ mod tests {
         assert_eq!(
             db.gen_plan(query)?,
             Planner::Project(Project {
-                input: joined_schema,
+                input: joined_schema.clone(),
                 output: Schema::new(vec![
                     Column::new("name", Type::Varchar(50)),
                     Column::new("amount", Type::Integer),
@@ -1371,6 +1372,7 @@ mod tests {
                     pager: db.pager(),
                     left_tables: HashSet::from(["customers".to_string()]),
                     right_tables: HashSet::from(["orders".to_string()]),
+                    schema: joined_schema,
                 })),
             })
         );
