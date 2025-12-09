@@ -179,6 +179,9 @@ pub(in crate::sql) fn analyze<'s>(
                 }
 
                 for expr in returning {
+                    if matches!(expr, Expression::Wildcard) {
+                        continue;
+                    }
                     analyze_expression(&metadata.schema, None, expr)?;
                 }
             }
@@ -300,6 +303,9 @@ pub(in crate::sql) fn analyze<'s>(
             analyze_where(&metadata.schema, r#where)?;
 
             for expr in returning {
+                if matches!(expr, Expression::Wildcard) {
+                    continue;
+                };
                 analyze_expression(&metadata.schema, None, expr)?;
             }
         }

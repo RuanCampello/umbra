@@ -3091,3 +3091,38 @@ fn returning() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn basic_enum() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE requests(
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255),
+        priority "low" | "medium" | "high",
+        request_date DATE
+    );"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    INSERT INTO requests(title, priority, request_date)
+    VALUES
+    ('Create an enum tutorial in PostgreSQL', 'high', '2019-01-01'),
+    ('Review the enum tutorial', 'medium', '2019-01-01'),
+    ('Publish the PostgreSQL enum tutorial', 'low', '2019-01-01')
+    RETURNING *;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![1.into(), "Create an enum tutorial in PostgreSQL".into()],
+            vec![2.into(), "Review the enum tutorial".into()],
+            vec![3.into(), "Publish the PostgreSQL enum tutorial".into()]
+        ]
+    );
+
+    todo!()
+}

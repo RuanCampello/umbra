@@ -936,7 +936,19 @@ impl Neg for Interval {
 
 impl Display for Column {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.name, self.data_type)?;
+        match &self.type_def {
+            Some(variants) => {
+                write!(f, "{} ", self.name)?;
+                let def = variants
+                    .iter()
+                    .map(|v| format!("\"{v}\""))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+
+                write!(f, "{def}")?;
+            }
+            None => write!(f, "{} {}", self.name, self.data_type)?,
+        };
 
         for constraint in &self.constraints {
             f.write_char(' ')?;
