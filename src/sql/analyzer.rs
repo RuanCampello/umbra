@@ -338,6 +338,22 @@ fn analyze_assignment<'exp, 'id>(
         false => analyze_expression(&Schema::empty(), Some(&data_type), value)?,
     };
 
+    if let Type::Enum(id) = data_type {
+        if let Expression::Value(Value::String(str)) = value {
+            let from = table.schema.get_enum(id);
+            if let Some(variants) = from.or(column.type_def.as_ref()) {
+                if !variants.contains(str) {
+                    return Err(SqlError::Type(TypeError::InvalidEnumVariant {
+                        allowed: variants.clone(),
+                        found: str.into(),
+                    }));
+                }
+
+                return Ok(());
+            }
+        }
+    }
+
     if let Expression::Value(Value::Null) = value {
         if !column.is_nullable() {
             return Err(SqlError::Type(TypeError::ExpectedType {
@@ -1498,6 +1514,28 @@ mod tests {
             sql: "SELECT EXTRACT(YEAR FROM birth_date) FROM users;",
             ctx,
             expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_insert_enum() -> AnalyzerResult {
+        let ctx = &["CREATE TABLE items (status 'open' | 'closed');"];
+        Analyze {
+            sql: "INSERT INTO items (status) VALUES ('open');",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "INSERT INTO items (status) VALUES ('wrong');",
+            ctx,
+            expected: Err(TypeError::InvalidEnumVariant {
+                allowed: vec!["open".to_string(), "closed".to_string()],
+                found: "wrong".to_string(),
+            }
+            .into()),
         }
         .assert()
     }

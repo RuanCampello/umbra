@@ -49,6 +49,10 @@ pub enum TypeError {
     ExpectedOneOfTypes {
         expected: Vec<VmType>,
     },
+    InvalidEnumVariant {
+        allowed: Vec<String>,
+        found: String,
+    },
     InvalidDate(DateParseError),
     InvalidInterval(IntervalParseError),
     ExtractError(ExtractError),
@@ -415,6 +419,7 @@ impl From<&Type> for VmType {
             Type::Date | Type::DateTime | Type::Time => VmType::Date,
             Type::Interval => VmType::Interval,
             Type::Numeric(_, _) => VmType::Numeric,
+            Type::Enum(_) => VmType::Enum,
             float if float.is_float() => VmType::Float,
             number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
                 VmType::Number
@@ -489,6 +494,10 @@ impl Display for TypeError {
 
                 Ok(())
             }
+            TypeError::InvalidEnumVariant { allowed, found } => write!(
+                f,
+                "Invalid input value '{found}' for enum. Allowed: {allowed:?}"
+            ),
             TypeError::ExtractError(err) => err.fmt(f),
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
