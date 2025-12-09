@@ -436,6 +436,15 @@ impl Column {
     pub fn is_nullable(&self) -> bool {
         self.constraints.contains(&Constraint::Nullable)
     }
+
+    pub fn with_enum(name: &str, data_type: Type, variants: Vec<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            data_type,
+            constraints: vec![],
+            type_def: Some(variants),
+        }
+    }
 }
 
 impl Type {

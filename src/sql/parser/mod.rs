@@ -2299,4 +2299,26 @@ mod tests {
             }))
         );
     }
+
+    #[test]
+    fn test_create_table_with_enum() {
+        let sql =
+            r#"CREATE TABLE tasks (id INT PRIMARY KEY, status "todo" | "in_progress" | "done");"#;
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Table {
+                name: "tasks".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::with_enum(
+                        "status",
+                        Type::Enum(0),
+                        vec!["todo".into(), "in_progress".into(), "done".into()]
+                    )
+                ],
+            }))
+        )
+    }
 }
