@@ -10,6 +10,8 @@ pub struct Schema {
     pub columns: Vec<Column>,
     /// Index of columns definitions based on their name
     index: HashMap<String, usize>,
+
+    enums: Vec<Vec<String>>,
 }
 
 impl Schema {
@@ -20,7 +22,11 @@ impl Schema {
             .map(|(i, col)| (col.name.clone(), i))
             .collect();
 
-        Self { columns, index }
+        Self {
+            columns,
+            index,
+            enums: vec![],
+        }
     }
 
     pub fn prepend_id(&mut self) {
@@ -152,6 +158,15 @@ impl Schema {
         input_schema.add_qualified_name("new", len, 2 * len);
 
         input_schema
+    }
+
+    pub fn add_enum(&mut self, variants: Vec<String>) -> u32 {
+        self.enums.push(variants);
+        (self.enums.len() - 1) as u32
+    }
+
+    pub fn get_enum(&self, id: u32) -> Option<&Vec<String>> {
+        self.enums.get(id as usize)
     }
 }
 

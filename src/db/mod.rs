@@ -364,6 +364,14 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                         metadata.root = *root as PageNumber;
                         metadata.schema = Schema::new(columns);
 
+                        (0..metadata.schema.columns.len()).for_each(|idx| {
+                            let variants = metadata.schema.columns[idx].type_def.clone();
+                            if let Some(variants) = variants {
+                                let id = metadata.schema.add_enum(variants);
+                                metadata.schema.columns[idx].data_type = Type::Enum(id);
+                            }
+                        });
+
                         if !metadata.schema.has_btree_key() {
                             metadata.schema.prepend_id();
                         }

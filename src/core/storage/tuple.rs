@@ -31,7 +31,7 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
         Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date | Type::Real => 4,
         Type::Time => 3,
         Type::SmallInt | Type::SmallSerial | Type::UnsignedSmallInt => 2,
-        Type::Boolean => 1,
+        Type::Boolean | Type::Enum(_) => 1,
         _ => panic!("This must be used only for types with length defined at compile time"),
     }
 }
@@ -93,7 +93,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Uuid(u) => u.serialize(buff, r#type),
         Value::Interval(i) => i.serialize(buff, r#type),
         Value::Numeric(n) => n.serialize(buff),
-        Value::Enum(_) => unimplemented!(),
+        Value::Enum(idx) => buff.push(*idx),
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
@@ -382,7 +382,11 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
         }
 
-        Type::Enum(_) => unimplemented!(),
+        Type::Enum(_) => {
+            let mut byte = [0; 1];
+            reader.read_exact(&mut byte)?;
+            Ok(Value::Enum(byte[0]))
+        }
     }
 }
 
