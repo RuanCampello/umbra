@@ -22,6 +22,7 @@ pub enum VmType {
     Date,
     Interval,
     Numeric,
+    Enum,
 }
 
 #[derive(Debug, PartialEq)]
@@ -432,6 +433,7 @@ impl From<&VmType> for Type {
             VmType::Float => Self::DoublePrecision,
             VmType::Date => Self::DateTime,
             VmType::Interval => Self::Interval,
+            VmType::Enum => Self::Enum(0),
             VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
         }
     }

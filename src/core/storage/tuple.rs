@@ -93,6 +93,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Uuid(u) => u.serialize(buff, r#type),
         Value::Interval(i) => i.serialize(buff, r#type),
         Value::Numeric(n) => n.serialize(buff),
+        Value::Enum(_) => unimplemented!(),
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
@@ -380,6 +381,8 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
 
             Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
         }
+
+        Type::Enum(_) => unimplemented!(),
     }
 }
 

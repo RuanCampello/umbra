@@ -758,6 +758,8 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         (Value::Interval(_), _) => VmType::Interval,
         (Value::Numeric(_), _) => VmType::Numeric,
         (Value::Uuid(_), _) => VmType::Number,
+
+        (Value::Enum(_), _) => VmType::Enum,
     })
 }
 
