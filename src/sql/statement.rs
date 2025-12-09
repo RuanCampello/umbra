@@ -48,6 +48,8 @@ pub struct Column {
     pub name: String,
     pub data_type: Type,
     pub constraints: Vec<Constraint>,
+
+    pub type_def: Option<Vec<String>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -400,6 +402,7 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![],
+            type_def: None,
         }
     }
 
@@ -408,6 +411,7 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::PrimaryKey],
+            type_def: None,
         }
     }
 
@@ -416,6 +420,7 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::Unique],
+            type_def: None,
         }
     }
 
@@ -424,6 +429,7 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::Nullable],
+            type_def: None,
         }
     }
 

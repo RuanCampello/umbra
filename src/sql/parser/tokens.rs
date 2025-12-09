@@ -31,6 +31,7 @@ pub(in crate::sql) enum Token {
     LeftParen,
     RightParen,
     Dot,
+    Pipe,
     /// That's not an actual SQL Token, but helps mark the end of token's stream.
     Eof,
 }
