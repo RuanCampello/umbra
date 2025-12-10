@@ -295,7 +295,24 @@ fn returning_schema(returning: &[Expression], schema: &Schema) -> Result<Option<
         })
         .collect::<Result<Vec<_>, SqlError>>()?;
 
-    Ok(Some(Schema::new(cols)))
+    let mut schema = Schema::new(cols);
+    (0..schema.columns.len()).for_each(|idx| {
+        let variants =
+            schema.columns[idx]
+                .type_def
+                .clone()
+                .or(match schema.columns[idx].data_type {
+                    Type::Enum(id) => schema.get_enum(id).cloned(),
+                    _ => None,
+                });
+
+        if let Some(variants) = variants {
+            let id = schema.add_enum(variants);
+            schema.columns[idx].data_type = Type::Enum(id);
+        }
+    });
+
+    Ok(Some(schema))
 }
 
 #[cfg(test)]

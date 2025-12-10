@@ -3118,11 +3118,26 @@ fn basic_enum() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![1.into(), "Create an enum tutorial in PostgreSQL".into()],
-            vec![2.into(), "Review the enum tutorial".into()],
-            vec![3.into(), "Publish the PostgreSQL enum tutorial".into()]
+            vec![
+                1.into(),
+                "Create an enum tutorial in PostgreSQL".into(),
+                "high".into(),
+                "2019-01-01".into()
+            ],
+            vec![
+                2.into(),
+                "Review the enum tutorial".into(),
+                "medium".into(),
+                "2019-01-01".into()
+            ],
+            vec![
+                3.into(),
+                "Publish the PostgreSQL enum tutorial".into(),
+                "low".into(),
+                "2019-01-01".into()
+            ]
         ]
     );
 
-    todo!()
+    Ok(())
 }

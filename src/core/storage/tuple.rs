@@ -131,16 +131,17 @@ pub(crate) fn serialize_tuple<'value>(
         .zip(values)
         .filter(filter)
         .for_each(|(col, val)| match (col.data_type, val) {
-            #[allow(unused_variables, unreachable_code)]
             (Type::Enum(id), Value::String(s)) => {
                 let variants = schema
                     .get_enum(id)
                     .or(col.type_def.as_ref())
-                    .unwrap_or(panic!("Enum variants not found in schema for id: {id}"));
-                let idx = variants.iter().position(|v| v == s).unwrap_or(panic!(
-                    "Invalid enum variant: '{s}'. Expected one of: {:?}",
-                    variants.join(", ")
-                )) as u8;
+                    .unwrap_or_else(|| panic!("Enum variants not found in schema for id: {id}"));
+                let idx = variants.iter().position(|v| v == s).unwrap_or_else(|| {
+                    panic!(
+                        "Invalid enum variant: '{s}'. Expected one of: {:?}",
+                        variants.join(", ")
+                    )
+                }) as u8;
 
                 buff.push(idx)
             }
