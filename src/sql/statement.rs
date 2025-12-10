@@ -856,6 +856,7 @@ impl Ord for Value {
             (Value::Uuid(a), Value::Uuid(b)) => a.cmp(b),
             (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
             (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
+            (Value::Enum(a), Value::Enum(b)) => a.cmp(b),
             // For sorting, NULL values are considered equal to each other
             // and sort after all non-NULL values.
             (Value::Null, Value::Null) => Ordering::Equal,
