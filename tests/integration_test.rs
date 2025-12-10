@@ -3141,3 +3141,31 @@ fn basic_enum() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn enum_ordering() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE tasks (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        urgency 'low' | 'medium' | 'high'
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO tasks (name, urgency)
+    VALUES ('a', 'high'), ('b', 'low'), ('c', 'medium');
+    "#,
+    )?;
+
+    let query = db.exec("SELECT name FROM tasks ORDER BY urgency;")?;
+    assert_eq!(
+        query.tuples,
+        vec![vec!["b".into()], vec!["c".into()], vec!["a".into()]]
+    );
+
+    Ok(())
+}
