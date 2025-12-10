@@ -3139,6 +3139,32 @@ fn basic_enum() -> Result<()> {
         ]
     );
 
+    let query = db.exec(
+        r#"
+    SELECT priority, request_date
+    FROM requests
+    WHERE priority > 'low'
+    ORDER BY priority;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["medium".into(), temporal!("2019-01-01")?],
+            vec!["high".into(), temporal!("2019-01-01")?],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT *
+    FROM requests
+    WHERE priority = 'HIGH'
+    ORDER BY priority;
+    "#,
+    );
+    assert!(query.is_err());
+
     Ok(())
 }
 
