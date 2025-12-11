@@ -449,7 +449,7 @@ impl ValueSerialize for String {
                 .unwrap()
                 .serialize(buff, &Type::Interval),
             Type::Uuid => buff.extend_from_slice(Uuid::from_str(self).unwrap().as_ref()),
-            Type::Enum(idx) => unimplemented!(),
+            Type::Enum(_) => unimplemented!(),
             _ => unreachable!("Unsupported type {to} for String value"),
         }
     }

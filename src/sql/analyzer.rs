@@ -885,6 +885,13 @@ fn are_types_compatible(
             (left, right) => is_numeric(left) && is_numeric(right),
         },
         Op::Mul | Op::Div => is_numeric(left_type) && is_numeric(right_type),
+        // allow enum-string comparisons for comparison operators
+        Op::Eq | Op::Neq | Op::Lt | Op::LtEq | Op::Gt | Op::GtEq => {
+            matches!(
+                (left_type, right_type),
+                (VmType::Enum, VmType::String) | (VmType::String, VmType::Enum)
+            )
+        }
         _ => false,
     }
 }
