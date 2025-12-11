@@ -3165,6 +3165,15 @@ fn basic_enum() -> Result<()> {
     );
     assert!(query.is_err());
 
+    let query = db.exec(
+        r#"
+    INSERT INTO requests(title, priority, request_date)
+    VALUES ('Revise the enum tutorial', 'urgent', '2019-01-02')
+    RETURNING *;
+    "#,
+    );
+    assert!(query.is_err());
+
     Ok(())
 }
 
