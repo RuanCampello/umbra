@@ -303,3 +303,12 @@ fn analytics_reporting() {
         );
     }
 }
+
+#[test]
+fn project_requests() {
+    let server = State::new("sql/user-requests.sql");
+    let mut db = server.client();
+
+    let query = db.exec("SELECT * FROM requests WHERE priority < 'critical';");
+    println!("{query}")
+}

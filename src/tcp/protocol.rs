@@ -111,6 +111,7 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                         Type::Varchar(max_chars)
                     }
                     byte if byte == STRING_CATEGORY | 0x1 => Type::Text,
+                    byte if byte == STRING_CATEGORY | 0x2 => Type::Enum(0),
 
                     content => {
                         Type::try_from(&content).map_err(|_| EncodingError::InvalidType(content))?
@@ -183,13 +184,12 @@ impl From<&Type> for u8 {
 
             Type::Varchar(_) => STRING_CATEGORY | 0x0,
             Type::Text => STRING_CATEGORY | 0x1,
+            Type::Enum(_) => STRING_CATEGORY | 0x2,
 
             Type::Date => TEMPORAL_CATEGORY | 0x0,
             Type::Time => TEMPORAL_CATEGORY | 0x1,
             Type::DateTime => TEMPORAL_CATEGORY | 0x2,
             Type::Interval => TEMPORAL_CATEGORY | 0x3,
-
-            Type::Enum(_) => unimplemented!(),
         }
     }
 }

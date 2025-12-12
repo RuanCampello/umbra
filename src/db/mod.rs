@@ -193,6 +193,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         query_set.display_enums();
+        println!("{query_set}");
         Ok(query_set)
     }
 
