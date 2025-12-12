@@ -344,19 +344,17 @@ fn analyze_assignment<'exp, 'id>(
         false => analyze_expression(&Schema::empty(), Some(&data_type), value)?,
     };
 
-    if let Type::Enum(id) = data_type {
-        if let Expression::Value(Value::String(str)) = value {
-            let from = table.schema.get_enum(id);
-            if let Some(variants) = from.or(column.type_def.as_ref()) {
-                if !variants.contains(str) {
-                    return Err(SqlError::Type(TypeError::InvalidEnumVariant {
-                        allowed: variants.clone(),
-                        found: str.into(),
-                    }));
-                }
+    if let (Type::Enum(id), Expression::Value(Value::String(str))) = (data_type, value) {
+        let variants = column.type_def.as_ref().or(table.schema.get_enum(id));
 
-                return Ok(());
+        if let Some(variants) = variants {
+            if !variants.contains(str) {
+                return Err(SqlError::Type(TypeError::InvalidEnumVariant {
+                    allowed: variants.clone(),
+                    found: str.to_string(),
+                }));
             }
+            return Ok(());
         }
     }
 

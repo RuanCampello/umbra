@@ -687,12 +687,6 @@ impl QuerySet {
                 }
             }
         }
-
-        for col in &mut self.schema.columns {
-            if matches!(col.data_type, Type::Enum(_)) {
-                col.data_type = Type::Text;
-            }
-        }
     }
 }
 

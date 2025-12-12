@@ -3169,8 +3169,7 @@ fn basic_enum() -> Result<()> {
         r#"
     INSERT INTO requests(title, priority, request_date)
     VALUES ('Revise the enum tutorial', 'urgent', '2019-01-02')
-    RETURNING *;
-    "#,
+    RETURNING *;"#,
     );
     assert!(query.is_err());
 
