@@ -192,8 +192,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             query_set.tuples.push(tuple)
         }
 
-        query_set.display_enums();
-        println!("{query_set}");
         Ok(query_set)
     }
 
@@ -665,7 +663,7 @@ impl QuerySet {
         self.tuples.iter().all(|tuple| tuple.is_empty())
     }
 
-    fn display_enums(&mut self) {
+    pub fn display_enums(&mut self) {
         for tuple in &mut self.tuples {
             for (idx, value) in tuple.iter_mut().enumerate() {
                 let Value::Enum(enum_idx) = *value else {
@@ -687,6 +685,12 @@ impl QuerySet {
                 if let Some(s) = variant_str {
                     *value = Value::String(s);
                 }
+            }
+        }
+
+        for col in &mut self.schema.columns {
+            if matches!(col.data_type, Type::Enum(_)) {
+                col.data_type = Type::Text;
             }
         }
     }
