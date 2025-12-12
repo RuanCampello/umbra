@@ -192,6 +192,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             query_set.tuples.push(tuple)
         }
 
+        query_set.display_enums();
         Ok(query_set)
     }
 
