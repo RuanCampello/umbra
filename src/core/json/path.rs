@@ -339,4 +339,30 @@ mod tests {
             PathElement::Key(Cow::Borrowed("description"), false)
         )
     }
+
+    #[test]
+    fn nested_path() {
+        let path = json_path("$[0][1][2].key[3].other").unwrap();
+
+        assert!(path.elements.len() == 7);
+        assert_eq!(path.elements[0], PathElement::Root);
+        assert_eq!(path.elements[1], PathElement::ArrayLocator(Some(0)));
+        assert_eq!(path.elements[2], PathElement::ArrayLocator(Some(1)));
+        assert_eq!(path.elements[3], PathElement::ArrayLocator(Some(2)));
+        assert_eq!(
+            path.elements[4],
+            PathElement::Key(Cow::Borrowed("key"), false)
+        );
+        assert_eq!(path.elements[5], PathElement::ArrayLocator(Some(3)));
+    }
+
+    #[test]
+    fn error_cases() {
+        assert!(json_path("$.").is_err());
+        assert!(json_path("$..key").is_err());
+
+        assert!(json_path("$[0").is_err());
+        assert!(json_path("$[").is_err());
+        assert!(json_path("$[-1]").is_err());
+    }
 }
