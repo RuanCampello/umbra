@@ -96,6 +96,9 @@ impl Jsonb {
         mut position: usize,
         depth: usize,
     ) -> super::Result<usize> {
+        const TRUE: &[u8; 4] = b"true";
+        const FALSE: &[u8; 5] = b"false";
+
         if depth > MAX_DEPTH {
             parse_error!("Too deep");
         }
@@ -110,17 +113,68 @@ impl Jsonb {
                 position += 1;
                 position = self.deserialize_obj(input, position, depth + 1)?;
             }
-
             b'[' => {
                 position += 1;
                 position = self.deserialize_array(input, position, depth + 1)?;
             }
-
+            #[rustfmt::skip]
+            b't' => position = self.deserialize_literal(input, position, TRUE, ElementType::TRUE)?,
+            #[rustfmt::skip]
+            b'f' => position = self.deserialize_literal(input, position, FALSE, ElementType::FALSE)?,
+            b'n' | b'N' => position = self.deserialize_null_or_nan(input, position)?,
             b'"' | b'\"' => position = self.deserialize_string(input, position)?,
             _ => parse_error!("Unexpected character at {position}"),
         };
 
         Ok(position)
+    }
+
+    fn deserialize_literal<const N: usize>(
+        &mut self,
+        input: &[u8],
+        mut pos: usize,
+        literal: &[u8; N],
+        elem: ElementType,
+    ) -> super::Result<usize> {
+        if input.len().saturating_sub(pos) < N || input[pos..pos + N] != literal[..] {
+            return Err(parse_error("Invalid literal", Some(pos)));
+        }
+
+        pos += N;
+        self.data.push(elem as u8);
+
+        Ok(pos)
+    }
+
+    fn deserialize_null_or_nan(&mut self, input: &[u8], mut pos: usize) -> super::Result<usize> {
+        if pos + 3 >= input.len() {
+            return Err(parse_error("Unexpected end of input", Some(pos)));
+        }
+
+        if pos + 4 <= input.len()
+            && input[pos] == b'n'
+            && input[pos + 1] == b'u'
+            && input[pos + 2] == b'l'
+            && input[pos + 3] == b'l'
+        {
+            pos += 4;
+            self.data.push(ElementType::NULL as u8);
+
+            return Ok(pos);
+        }
+
+        if pos + 3 <= input.len()
+            && (input[pos] == b'n' || input[pos] == b'N')
+            && (input[pos + 1] == b'a' || input[pos + 1] == b'A')
+            && (input[pos + 2] == b'n' || input[pos + 2] == b'N')
+        {
+            pos += 3;
+            self.data.push(ElementType::NULL as u8);
+
+            return Ok(pos);
+        }
+
+        Err(parse_error("Expected null or nan", Some(pos)))
     }
 
     fn deserialize_obj(
