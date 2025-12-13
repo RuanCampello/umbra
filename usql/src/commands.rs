@@ -12,14 +12,14 @@ pub fn handle_command(command: &str, stream: &mut TcpStream) -> bool {
             println!("  {STRING_COLOUR}/q, /quit{RESET_COLOUR}    Exit usql");
             println!("  {STRING_COLOUR}/h, /help{RESET_COLOUR}    Show this help message");
             println!("  {STRING_COLOUR}/clear, /c{RESET_COLOUR}   Clear the terminal screen");
-            println!("  {STRING_COLOUR}/dt{RESET_COLOUR}      List all tables");
-            println!("  {STRING_COLOUR}/d [table]{RESET_COLOUR}    Describe a specific table");
+            println!("  {STRING_COLOUR}/dt{RESET_COLOUR}          List all tables");
+            println!("  {STRING_COLOUR}/d [table]{RESET_COLOUR}   Describe a specific table");
         }
         ["/clear"] | ["/c"] => {
             print!("\x1b[2J\x1b[1;1H");
             std::io::stdout().flush().ok();
         }
-        ["/d"] | ["/dt"] => {
+        ["/dt"] => {
             process_query(
                 stream,
                 "SELECT name FROM umbra_db_meta WHERE type = 'table';",

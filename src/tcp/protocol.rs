@@ -61,6 +61,25 @@ pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
                     packed.extend_from_slice(&(length as u32).to_le_bytes());
                 }
 
+                if let Type::Enum(id) = column.data_type {
+                    column
+                        .type_def
+                        .as_ref()
+                        .or(query_set.schema.get_enum(id))
+                        .map(|vars| {
+                            let count = vars.len().min(255) as u8;
+                            packed.push(count);
+
+                            vars.iter().take(255).for_each(|var| {
+                                let bytes = var.as_bytes();
+                                let len = bytes.len().min(255) as u8;
+                                packed.push(len);
+                                packed.extend_from_slice(&bytes[..len as usize]);
+                            });
+                        })
+                        .unwrap_or_else(|| packed.push(0));
+                }
+
                 packed.push(if column.is_nullable() { 1 } else { 0 })
             }
 
@@ -111,6 +130,7 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                         Type::Varchar(max_chars)
                     }
                     byte if byte == STRING_CATEGORY | 0x1 => Type::Text,
+                    byte if byte == STRING_CATEGORY | 0x2 => Type::Enum(0),
 
                     content => {
                         Type::try_from(&content).map_err(|_| EncodingError::InvalidType(content))?
@@ -118,14 +138,49 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                 };
                 cursor += 1;
 
+                let type_def = (matches!(data_type, Type::Enum(_)))
+                    .then::<Result<Option<Vec<String>>, EncodingError>, _>(|| {
+                        let var_count = content[cursor] as usize;
+                        cursor += 1;
+
+                        (var_count > 1)
+                            .then_some(())
+                            .map(|_| {
+                                let mut variants = Vec::with_capacity(var_count);
+
+                                for _ in 0..var_count {
+                                    let var_len = content[cursor] as usize;
+                                    cursor += 1;
+
+                                    let bytes = &content[cursor..cursor + var_len];
+                                    cursor += var_len;
+
+                                    let variant =
+                                        String::from_utf8(bytes.to_vec()).map_err(|e| {
+                                            EncodingError::SliceConversion(format!(
+                                                "Invalid UTF-8 in enum variant: {e}"
+                                            ))
+                                        })?;
+
+                                    variants.push(variant);
+                                }
+
+                                Ok(variants)
+                            })
+                            .transpose()
+                    })
+                    .transpose()?
+                    .flatten();
+
                 let nullable = content[cursor] != 0;
                 cursor += 1;
 
-                let column = match nullable {
+                let mut column = match nullable {
                     true => Column::nullable(&name, data_type),
                     _ => Column::new(&name, data_type),
                 };
 
+                column.type_def = type_def;
                 query_set.schema.push(column);
             }
 
@@ -138,6 +193,7 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                 query_set.tuples.push(tuple);
             });
 
+            query_set.display_enums();
             Response::QuerySet(query_set)
         }
         b'!' => {
@@ -183,6 +239,7 @@ impl From<&Type> for u8 {
 
             Type::Varchar(_) => STRING_CATEGORY | 0x0,
             Type::Text => STRING_CATEGORY | 0x1,
+            Type::Enum(_) => STRING_CATEGORY | 0x2,
 
             Type::Date => TEMPORAL_CATEGORY | 0x0,
             Type::Time => TEMPORAL_CATEGORY | 0x1,

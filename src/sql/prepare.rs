@@ -4,6 +4,7 @@ use super::statement::{Expression, Insert, Select, Statement, Type, Value};
 use crate::{
     core::uuid::Uuid,
     db::{Ctx, DatabaseError, ROW_COL_ID},
+    sql::statement::Update,
 };
 
 /// Takes a given [statement](crate::sql::statement::Statement) and prepares it to the plan
@@ -63,22 +64,13 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 )
             }
 
-            let mut wildcards = Vec::new();
-
-            for expr in columns.drain(..) {
-                match expr.eq(&Expression::Wildcard) {
-                    true => wildcards.extend(identifiers.iter().cloned()),
-                    false => wildcards.push(expr),
-                }
-            }
-
-            *columns = wildcards
+            expand_wildcard_with_identifier(columns, identifiers);
         }
         Statement::Insert(Insert {
             values,
             columns,
             into,
-            returning: _,
+            returning,
         }) => {
             let metadata = ctx.metadata(into)?;
 
@@ -139,11 +131,50 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                         .iter_mut()
                         .for_each(|values| values.swap(idx, sorted_idx));
                 }
-            })
+            });
+
+            let identifiers: Vec<Expression> = metadata
+                .schema
+                .columns
+                .iter()
+                .map(|col| Expression::Identifier(col.name.clone()))
+                .collect();
+
+            expand_wildcard_with_identifier(returning, identifiers);
+        }
+        Statement::Update(Update {
+            table, returning, ..
+        }) => {
+            let metadata = ctx.metadata(table)?;
+
+            let identifiers: Vec<Expression> = metadata
+                .schema
+                .columns
+                .iter()
+                .map(|col| Expression::Identifier(col.name.clone()))
+                .collect();
+
+            expand_wildcard_with_identifier(returning, identifiers);
         }
         Statement::Explain(inner) => prepare(&mut *inner, ctx)?,
         _ => {}
     };
 
     Ok(())
+}
+
+fn expand_wildcard_with_identifier(
+    expressions: &mut Vec<Expression>,
+    identifiers: Vec<Expression>,
+) {
+    let mut expanded = Vec::new();
+
+    for expr in expressions.drain(..) {
+        match expr.eq(&Expression::Wildcard) {
+            true => expanded.extend(identifiers.iter().cloned()),
+            false => expanded.push(expr),
+        }
+    }
+
+    *expressions = expanded
 }

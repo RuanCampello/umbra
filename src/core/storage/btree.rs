@@ -200,6 +200,17 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         Ok(Some(cell))
     }
 
+    pub fn count(&mut self) -> IOResult<usize> {
+        let mut cursor = Cursor::new(self.root, 0);
+        let mut count = 0;
+
+        while cursor.next(self.pager).is_some() {
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
     fn remove_entry(
         &mut self,
         entry: &[u8],

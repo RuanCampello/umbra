@@ -48,6 +48,8 @@ pub struct Column {
     pub name: String,
     pub data_type: Type,
     pub constraints: Vec<Constraint>,
+
+    pub type_def: Option<Vec<String>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -245,6 +247,7 @@ pub enum Value {
     Uuid(Uuid),
     Interval(Interval),
     Numeric(Numeric),
+    Enum(u8),
     Null,
 }
 
@@ -287,7 +290,7 @@ pub enum BinaryOperator {
 /// For example:
 /// - A column defined as `VARCHAR(255)` will be represented as `Type::Varchar(255)`.
 /// - A column of `DATE` will be represented as `Type::Date`.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum Type {
     /// 2-byte signed integer
     SmallInt,
@@ -335,6 +338,7 @@ pub enum Type {
     Time,
     DateTime,
     Interval,
+    Enum(u32),
 }
 
 /// Subset of `SQL` functions.
@@ -398,6 +402,7 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![],
+            type_def: None,
         }
     }
 
@@ -406,6 +411,7 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::PrimaryKey],
+            type_def: None,
         }
     }
 
@@ -414,6 +420,7 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::Unique],
+            type_def: None,
         }
     }
 
@@ -422,11 +429,21 @@ impl Column {
             name: name.to_string(),
             data_type,
             constraints: vec![Constraint::Nullable],
+            type_def: None,
         }
     }
 
     pub fn is_nullable(&self) -> bool {
         self.constraints.contains(&Constraint::Nullable)
+    }
+
+    pub fn with_enum(name: &str, data_type: Type, variants: Vec<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            data_type,
+            constraints: vec![],
+            type_def: Some(variants),
+        }
     }
 }
 
@@ -839,6 +856,7 @@ impl Ord for Value {
             (Value::Uuid(a), Value::Uuid(b)) => a.cmp(b),
             (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
             (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
+            (Value::Enum(a), Value::Enum(b)) => a.cmp(b),
             // For sorting, NULL values are considered equal to each other
             // and sort after all non-NULL values.
             (Value::Null, Value::Null) => Ordering::Equal,
@@ -882,10 +900,9 @@ impl Hash for Value {
             Value::Temporal(t) => t.hash(state),
             Value::Uuid(u) => u.hash(state),
             Value::Interval(i) => i.hash(state),
+            Value::Enum(e) => e.hash(state),
             Value::Null => NULL_HASH.hash(state),
-            Value::Numeric(n) => {
-                todo!()
-            }
+            Value::Numeric(n) => todo!(),
         }
     }
 }
@@ -920,7 +937,19 @@ impl Neg for Interval {
 
 impl Display for Column {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.name, self.data_type)?;
+        match &self.type_def {
+            Some(variants) => {
+                write!(f, "{} ", self.name)?;
+                let def = variants
+                    .iter()
+                    .map(|v| format!("\"{v}\""))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+
+                write!(f, "{def}")?;
+            }
+            None => write!(f, "{} {}", self.name, self.data_type)?,
+        };
 
         for constraint in &self.constraints {
             f.write_char(' ')?;
@@ -1022,6 +1051,7 @@ impl Display for Type {
             Type::Date => f.write_str("DATE"),
             Type::Varchar(max) => write!(f, "VARCHAR({max})"),
             Type::Text => write!(f, "TEXT"),
+            Type::Enum(_) => write!(f, "ENUM"),
             Type::Interval => f.write_str("INTERVAL"),
             Type::Numeric(precision, scale) => match (precision, scale) {
                 (&NUMERIC_ANY, _) => write!(f, "NUMERIC"),
@@ -1043,6 +1073,7 @@ impl Display for Value {
             Value::Uuid(uuid) => write!(f, "{uuid}"),
             Value::Interval(interval) => write!(f, "{interval}"),
             Value::Numeric(numeric) => write!(f, "{numeric}"),
+            Value::Enum(index) => write!(f, "{index}"),
             Value::Null => write!(f, "NULL"),
         }
     }

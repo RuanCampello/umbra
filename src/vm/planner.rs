@@ -119,7 +119,7 @@ pub(crate) struct Filter<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Sort<File: FileOperations> {
-    collection: Collect<File>,
+    pub(in crate::vm) collection: Collect<File>,
     comparator: TupleComparator,
     sorted: bool,
     page_size: usize,
@@ -172,7 +172,7 @@ pub(crate) struct SortKeys<File: FileOperations> {
 
 #[derive(Debug)]
 pub(crate) struct Collect<File: FileOperations> {
-    source: Box<Planner<File>>,
+    pub(in crate::vm) source: Box<Planner<File>>,
     schema: Schema,
     mem_buff: TupleBuffer,
     file: Option<File>,
@@ -192,8 +192,8 @@ pub(crate) struct Project<File: FileOperations> {
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Aggregate<File: FileOperations> {
-    source: Box<Planner<File>>,
-    group_by: Vec<Expression>,
+    pub(in crate::vm) source: Box<Planner<File>>,
+    pub(in crate::vm) group_by: Vec<Expression>,
     aggr_exprs: Vec<Expression>,
     output: Schema,
     output_buffer: TupleBuffer,
@@ -213,13 +213,13 @@ pub(crate) struct HashJoin<File: FileOperations> {
     key_type: VmType,
 
     // run-time state
-    table: HashMap<Vec<u8>, Vec<Tuple>>,
+    table: HashMap<Vec<u8>, Rc<Vec<Tuple>>>,
     hash_built: bool,
 
     current_left: Option<Tuple>,
-    current_matches: Option<Vec<Tuple>>,
+    current_matches: Option<Rc<Vec<Tuple>>>,
     matched_right_keys: HashSet<Vec<u8>>,
-    unmatched_right: Option<IntoIter<Vec<u8>, Vec<Tuple>>>,
+    unmatched_right: Option<IntoIter<Vec<u8>, Rc<Vec<Tuple>>>>,
     unmatched_right_index: usize,
 
     index: usize,
@@ -242,6 +242,8 @@ pub(crate) struct IndexNestedLoopJoin<File: FileOperations> {
 
     pub left_tables: HashSet<String>,
     pub right_tables: HashSet<String>,
+
+    pub schema: Schema,
 }
 
 #[derive(Debug, PartialEq)]
@@ -455,20 +457,7 @@ impl<File: FileOperations> Planner<File> {
             Self::HashJoin(hash) => &hash.schema,
             Self::Update(update) => return update.returning_schema.clone(),
             Self::Insert(insert) => return insert.returning_schema.clone(),
-            Self::IndexNestedLoopJoin(inl) => {
-                let mut schema = inl.left_schema();
-                let left_len = schema.len();
-                schema.extend_with_join(inl.right_table.schema.columns.clone(), &inl.join_type);
-
-                inl.left_tables
-                    .iter()
-                    .for_each(|table| schema.add_qualified_name(table, 0, left_len));
-                inl.right_tables
-                    .iter()
-                    .for_each(|table| schema.add_qualified_name(table, left_len, schema.len()));
-
-                return Some(schema);
-            }
+            Self::IndexNestedLoopJoin(inl) => &inl.schema,
             _ => return None,
         };
 
@@ -1366,7 +1355,9 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 
                 if !key.is_null() {
                     let key = tuple::serialize(&self.key_type.into(), &key);
-                    self.table.entry(key).or_default().push(right);
+
+                    let matches = self.table.entry(key).or_insert(Rc::new(Vec::new()));
+                    Rc::get_mut(matches).unwrap().push(right)
                 }
             }
 
@@ -1421,15 +1412,10 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
                 true => self.current_matches = None,
                 _ => {
                     let key = tuple::serialize(&self.key_type.into(), &key_value);
-                    match self.table.get(&key) {
-                        Some(matches) => {
-                            if self.right_matters() {
-                                self.matched_right_keys.insert(key);
-                            }
+                    self.current_matches = self.table.get(&key).cloned();
 
-                            self.current_matches = Some(matches.clone())
-                        }
-                        _ => self.current_matches = None,
+                    if self.current_matches.is_some() && self.right_matters() {
+                        self.matched_right_keys.insert(key);
                     }
                 }
             }
@@ -1463,8 +1449,19 @@ impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
                 let comparator = Relation::Table(self.right_table.clone()).comp();
                 let mut table_btree = BTree::new(&mut pager, self.right_table.root, comparator);
 
-                let key_bytes =
-                    tuple::serialize(&self.right_table.schema.columns[0].data_type, &key);
+                let key_bytes = match self.right_table.schema.has_nullable() {
+                    false => tuple::serialize(&self.right_table.schema.columns[0].data_type, &key),
+                    _ => {
+                        let bitmap_len = self.right_table.schema.null_bitmap_len();
+                        let mut bytes = vec![0u8; bitmap_len];
+
+                        bytes.extend(tuple::serialize(
+                            &self.right_table.schema.columns[0].data_type,
+                            &key,
+                        ));
+                        bytes
+                    }
+                };
 
                 if let Some(row_bytes) = table_btree.get(&key_bytes)? {
                     let right_tuple =

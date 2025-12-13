@@ -192,6 +192,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             query_set.tuples.push(tuple)
         }
 
+        query_set.display_enums();
         Ok(query_set)
     }
 
@@ -319,6 +320,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             let row_id = self.load_next_row_id(0)?;
             return Ok(TableMetadata {
                 root: 0,
+                count: 0,
                 name: String::from(table),
                 row_id,
                 indexes: vec![],
@@ -330,6 +332,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         let mut metadata = TableMetadata {
             root: 1,
             row_id: 1,
+            count: 0,
             name: String::from(table),
             schema: Schema::empty(),
             indexes: Vec::new(),
@@ -361,6 +364,14 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
 
                         metadata.root = *root as PageNumber;
                         metadata.schema = Schema::new(columns);
+
+                        (0..metadata.schema.columns.len()).for_each(|idx| {
+                            let variants = metadata.schema.columns[idx].type_def.clone();
+                            if let Some(variants) = variants {
+                                let id = metadata.schema.add_enum(variants);
+                                metadata.schema.columns[idx].data_type = Type::Enum(id);
+                            }
+                        });
 
                         if !metadata.schema.has_btree_key() {
                             metadata.schema.prepend_id();
@@ -419,6 +430,13 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         if !found_table_def {
             return Err(DatabaseError::Sql(SqlError::InvalidTable(table.into())));
         }
+
+        let count = {
+            let mut pager = self.pager.borrow_mut();
+            let mut btree = BTree::new(&mut pager, metadata.root, metadata.comp()?);
+            btree.count()?
+        };
+        metadata.count = count;
 
         if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {
             metadata.row_id = self.load_next_row_id(metadata.root)?;
@@ -644,6 +662,32 @@ impl QuerySet {
 
     fn is_empty(&self) -> bool {
         self.tuples.iter().all(|tuple| tuple.is_empty())
+    }
+
+    pub fn display_enums(&mut self) {
+        for tuple in &mut self.tuples {
+            for (idx, value) in tuple.iter_mut().enumerate() {
+                let Value::Enum(enum_idx) = *value else {
+                    continue;
+                };
+
+                let variant_str = self
+                    .schema
+                    .columns
+                    .get(idx)
+                    .and_then(|col| match col.data_type {
+                        Type::Enum(id) => Some((id, col)),
+                        _ => None,
+                    })
+                    .and_then(|(id, col)| self.schema.get_enum(id).or(col.type_def.as_ref()))
+                    .and_then(|variants| variants.get(enum_idx as usize))
+                    .map(|v| v.to_string());
+
+                if let Some(s) = variant_str {
+                    *value = Value::String(s);
+                }
+            }
+        }
     }
 }
 

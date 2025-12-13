@@ -22,6 +22,7 @@ pub enum VmType {
     Date,
     Interval,
     Numeric,
+    Enum,
 }
 
 #[derive(Debug, PartialEq)]
@@ -47,6 +48,10 @@ pub enum TypeError {
     },
     ExpectedOneOfTypes {
         expected: Vec<VmType>,
+    },
+    InvalidEnumVariant {
+        allowed: Vec<String>,
+        found: String,
     },
     InvalidDate(DateParseError),
     InvalidInterval(IntervalParseError),
@@ -113,9 +118,10 @@ pub(crate) fn resolve_expression<'exp>(
             operator,
             right,
         } => {
-            let left = resolve_expression(val, schema, left)?;
-            let right = resolve_expression(val, schema, right)?;
+            let left_val = resolve_expression(val, schema, left)?;
+            let right_val = resolve_expression(val, schema, right)?;
 
+            let (left, right) = try_coerce_enum(left, left_val, right, right_val, schema)?;
             let (left, right) = try_coerce(left, right);
             if matches!(left, Value::Null) || matches!(right, Value::Null) {
                 return Ok(Value::Null);
@@ -406,6 +412,62 @@ fn try_coerce(left: Value, right: Value) -> (Value, Value) {
     }
 }
 
+fn try_coerce_enum(
+    left_expr: &Expression,
+    left: Value,
+    right_expr: &Expression,
+    right: Value,
+    schema: &Schema,
+) -> Result<(Value, Value), SqlError> {
+    let get_variants = |expr: &Expression| {
+        let idx = match expr {
+            Expression::Identifier(column) => schema.index_of(&column),
+            Expression::QualifiedIdentifier { table, column } => schema
+                .index_of(&format!("{table}.{column}"))
+                .or(schema.last_index_of(column)),
+            _ => None,
+        }?;
+
+        let col = schema.columns.get(idx)?;
+        match col.data_type {
+            Type::Enum(id) => schema.get_enum(id).or(col.type_def.as_ref()),
+            _ => None,
+        }
+    };
+
+    let string_to_enum = |s: &str, variants: &Vec<String>| -> Result<Value, SqlError> {
+        let idx = variants.iter().position(|v| v == s).ok_or_else(|| {
+            SqlError::Type(TypeError::InvalidEnumVariant {
+                allowed: variants.clone(),
+                found: s.to_string(),
+            })
+        })?;
+
+        if idx > u8::MAX as usize {
+            return Err(SqlError::Other(format!(
+                "Enum has too many variants ({}). Maximum is 256.",
+                variants.len()
+            )));
+        }
+
+        Ok(Value::Enum(idx as u8))
+    };
+
+    match (&left, &right) {
+        (Value::Enum(_), Value::String(s)) => match get_variants(left_expr) {
+            Some(variants) => Ok((left, string_to_enum(s, variants)?)),
+            None => Ok((left, right)),
+        },
+
+        (Value::String(s), Value::Enum(_)) => match get_variants(right_expr) {
+            Some(variants) => Ok((string_to_enum(s, variants)?, right)),
+            None => Ok((left, right)),
+        },
+
+        _ => Ok((left, right)),
+    }
+}
+
 impl From<&Type> for VmType {
     fn from(value: &Type) -> Self {
         match value {
@@ -414,6 +476,7 @@ impl From<&Type> for VmType {
             Type::Date | Type::DateTime | Type::Time => VmType::Date,
             Type::Interval => VmType::Interval,
             Type::Numeric(_, _) => VmType::Numeric,
+            Type::Enum(_) => VmType::Enum,
             float if float.is_float() => VmType::Float,
             number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
                 VmType::Number
@@ -432,6 +495,7 @@ impl From<&VmType> for Type {
             VmType::Float => Self::DoublePrecision,
             VmType::Date => Self::DateTime,
             VmType::Interval => Self::Interval,
+            VmType::Enum => Self::Enum(0),
             VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
         }
     }
@@ -487,6 +551,10 @@ impl Display for TypeError {
 
                 Ok(())
             }
+            TypeError::InvalidEnumVariant { allowed, found } => write!(
+                f,
+                "Invalid input value '{found}' for enum. Allowed: {allowed:?}"
+            ),
             TypeError::ExtractError(err) => err.fmt(f),
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),

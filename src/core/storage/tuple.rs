@@ -31,7 +31,7 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
         Type::Integer | Type::Serial | Type::UnsignedInteger | Type::Date | Type::Real => 4,
         Type::Time => 3,
         Type::SmallInt | Type::SmallSerial | Type::UnsignedSmallInt => 2,
-        Type::Boolean => 1,
+        Type::Boolean | Type::Enum(_) => 1,
         _ => panic!("This must be used only for types with length defined at compile time"),
     }
 }
@@ -93,6 +93,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Uuid(u) => u.serialize(buff, r#type),
         Value::Interval(i) => i.serialize(buff, r#type),
         Value::Numeric(n) => n.serialize(buff),
+        Value::Enum(idx) => buff.push(*idx),
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
@@ -129,7 +130,24 @@ pub(crate) fn serialize_tuple<'value>(
         .iter()
         .zip(values)
         .filter(filter)
-        .for_each(|(col, val)| serialize_into(&mut buff, &col.data_type, val));
+        .for_each(|(col, val)| match (col.data_type, val) {
+            (Type::Enum(id), Value::String(s)) => {
+                let variants = schema
+                    .get_enum(id)
+                    .or(col.type_def.as_ref())
+                    .unwrap_or_else(|| panic!("Enum variants not found in schema for id: {id}"));
+                let idx = variants.iter().position(|v| v == s).unwrap_or_else(|| {
+                    panic!(
+                        "Invalid enum variant: '{s}'. Expected one of: {:?}",
+                        variants.join(", ")
+                    )
+                }) as u8;
+
+                buff.push(idx)
+            }
+
+            _ => serialize_into(&mut buff, &col.data_type, val),
+        });
 
     buff
 }
@@ -187,7 +205,7 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<Vec<Value>> {
     let bitmap = match schema.has_nullable() {
         true => {
-            let bitmap_size = (schema.len() + 7) / 8;
+            let bitmap_size = schema.null_bitmap_len();
             let mut bitmap = vec![0u8; bitmap_size];
             reader.read_exact(&mut bitmap)?;
             Some(bitmap)
@@ -380,6 +398,12 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
 
             Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
         }
+
+        Type::Enum(_) => {
+            let mut byte = [0; 1];
+            reader.read_exact(&mut byte)?;
+            Ok(Value::Enum(byte[0]))
+        }
     }
 }
 
@@ -425,6 +449,7 @@ impl ValueSerialize for String {
                 .unwrap()
                 .serialize(buff, &Type::Interval),
             Type::Uuid => buff.extend_from_slice(Uuid::from_str(self).unwrap().as_ref()),
+            Type::Enum(_) => unimplemented!(),
             _ => unreachable!("Unsupported type {to} for String value"),
         }
     }

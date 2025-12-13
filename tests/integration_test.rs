@@ -3091,3 +3091,115 @@ fn returning() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn basic_enum() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE requests(
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255),
+        priority "low" | "medium" | "high",
+        request_date DATE
+    );"#,
+    )?;
+
+    let query = db.exec(
+        r#"
+    INSERT INTO requests(title, priority, request_date)
+    VALUES
+    ('Create an enum tutorial in PostgreSQL', 'high', '2019-01-01'),
+    ('Review the enum tutorial', 'medium', '2019-01-01'),
+    ('Publish the PostgreSQL enum tutorial', 'low', '2019-01-01')
+    RETURNING *;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![
+                1.into(),
+                "Create an enum tutorial in PostgreSQL".into(),
+                "high".into(),
+                "2019-01-01".into()
+            ],
+            vec![
+                2.into(),
+                "Review the enum tutorial".into(),
+                "medium".into(),
+                "2019-01-01".into()
+            ],
+            vec![
+                3.into(),
+                "Publish the PostgreSQL enum tutorial".into(),
+                "low".into(),
+                "2019-01-01".into()
+            ]
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT priority, request_date
+    FROM requests
+    WHERE priority > 'low'
+    ORDER BY priority;"#,
+    )?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["medium".into(), temporal!("2019-01-01")?],
+            vec!["high".into(), temporal!("2019-01-01")?],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT *
+    FROM requests
+    WHERE priority = 'HIGH'
+    ORDER BY priority;
+    "#,
+    );
+    assert!(query.is_err());
+
+    let query = db.exec(
+        r#"
+    INSERT INTO requests(title, priority, request_date)
+    VALUES ('Revise the enum tutorial', 'urgent', '2019-01-02')
+    RETURNING *;"#,
+    );
+    assert!(query.is_err());
+
+    Ok(())
+}
+
+#[test]
+fn enum_ordering() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        r#"
+    CREATE TABLE tasks (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        urgency 'low' | 'medium' | 'high'
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO tasks (name, urgency)
+    VALUES ('a', 'high'), ('b', 'low'), ('c', 'medium');
+    "#,
+    )?;
+
+    let query = db.exec("SELECT name FROM tasks ORDER BY urgency;")?;
+    assert_eq!(
+        query.tuples,
+        vec![vec!["b".into()], vec!["c".into()], vec!["a".into()]]
+    );
+
+    Ok(())
+}

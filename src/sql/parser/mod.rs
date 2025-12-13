@@ -317,7 +317,7 @@ impl<'input> Parser<'input> {
 
     fn parse_col(&mut self) -> ParserResult<Column> {
         let name = self.parse_ident()?;
-        let data_type = self.parse_type()?;
+        let (data_type, type_def) = self.parse_type_and_def()?;
 
         let mut constraints = Vec::new();
         while let Some(constraint) = self
@@ -339,6 +339,7 @@ impl<'input> Parser<'input> {
             name,
             data_type,
             constraints,
+            type_def,
         })
     }
 
@@ -394,6 +395,32 @@ impl<'input> Parser<'input> {
             Keyword::Text => Ok(Type::Text),
             keyword => unreachable!("unexpected column token: {keyword}"),
         }
+    }
+
+    fn parse_type_and_def(&mut self) -> ParserResult<(Type, Option<Vec<String>>)> {
+        if let Some(Ok(Token::String(_))) = self.peek_token() {
+            let mut variants = Vec::new();
+            if let Token::String(str) = self.next_token()? {
+                variants.push(str);
+            }
+
+            while self.consume_optional(Token::Pipe) {
+                match self.next_token()? {
+                    Token::String(str) => variants.push(str),
+                    t => {
+                        return Err(self.error(ErrorKind::Expected {
+                            expected: Token::String(String::new()),
+                            found: t,
+                        }))
+                    }
+                }
+            }
+
+            return Ok((Type::Enum(0), Some(variants)));
+        }
+
+        let typ = self.parse_type()?;
+        Ok((typ, None))
     }
 
     fn parse_interval(&mut self) -> ParserResult<Expression> {
@@ -1052,26 +1079,10 @@ mod tests {
             Ok(Statement::Create(Create::Table {
                 name: "employees".to_string(),
                 columns: vec![
-                    Column {
-                        name: "id".to_string(),
-                        data_type: Type::Integer,
-                        constraints: vec![Constraint::PrimaryKey],
-                    },
-                    Column {
-                        name: "name".to_string(),
-                        data_type: Type::Varchar(255),
-                        constraints: vec![],
-                    },
-                    Column {
-                        name: "age".to_string(),
-                        data_type: Type::Integer,
-                        constraints: vec![],
-                    },
-                    Column {
-                        name: "is_manager".to_string(),
-                        data_type: Type::Boolean,
-                        constraints: vec![],
-                    },
+                    Column::primary_key("id", Type::Integer),
+                    Column::new("name", Type::Varchar(255)),
+                    Column::new("age", Type::Integer),
+                    Column::new("is_manager", Type::Boolean),
                 ],
             }))
         );
@@ -1227,16 +1238,8 @@ mod tests {
                 Statement::Create(Create::Table {
                     name: "departments".to_string(),
                     columns: vec![
-                        Column {
-                            name: "id".to_string(),
-                            data_type: Type::UnsignedInteger,
-                            constraints: vec![Constraint::PrimaryKey],
-                        },
-                        Column {
-                            name: "name".to_string(),
-                            data_type: Type::Varchar(69),
-                            constraints: vec![],
-                        },
+                        Column::primary_key("id", Type::UnsignedInteger),
+                        Column::new("name", Type::Varchar(69)),
                     ],
                 }),
                 Statement::Select(
@@ -1292,21 +1295,9 @@ mod tests {
             Ok(Statement::Create(Create::Table {
                 name: "events".into(),
                 columns: vec![
-                    Column {
-                        name: "event_id".into(),
-                        data_type: Type::Integer,
-                        constraints: vec![Constraint::PrimaryKey],
-                    },
-                    Column {
-                        name: "event_name".into(),
-                        data_type: Type::Varchar(100),
-                        constraints: vec![]
-                    },
-                    Column {
-                        name: "event_date".into(),
-                        data_type: Type::Date,
-                        constraints: vec![]
-                    }
+                    Column::primary_key("event_id", Type::Integer),
+                    Column::new("event_name", Type::Varchar(100)),
+                    Column::new("event_date", Type::Date),
                 ]
             }))
         )
@@ -1385,21 +1376,9 @@ mod tests {
             Statement::Create(Create::Table {
                 name: "books".into(),
                 columns: vec![
-                    Column {
-                        name: "book_id".into(),
-                        data_type: Type::Integer,
-                        constraints: vec![Constraint::PrimaryKey],
-                    },
-                    Column {
-                        name: "title".into(),
-                        data_type: Type::Varchar(255),
-                        constraints: vec![]
-                    },
-                    Column {
-                        name: "pages".into(),
-                        data_type: Type::SmallInt,
-                        constraints: vec![]
-                    }
+                    Column::primary_key("book_id", Type::Integer),
+                    Column::new("title", Type::Varchar(255)),
+                    Column::new("pages", Type::SmallInt)
                 ]
             })
         )
@@ -2319,5 +2298,27 @@ mod tests {
                 ]
             }))
         );
+    }
+
+    #[test]
+    fn test_create_table_with_enum() {
+        let sql =
+            r#"CREATE TABLE tasks (id INT PRIMARY KEY, status "todo" | "in_progress" | "done");"#;
+        let statement = Parser::new(sql).parse_statement();
+
+        assert_eq!(
+            statement,
+            Ok(Statement::Create(Create::Table {
+                name: "tasks".into(),
+                columns: vec![
+                    Column::primary_key("id", Type::Integer),
+                    Column::with_enum(
+                        "status",
+                        Type::Enum(0),
+                        vec!["todo".into(), "in_progress".into(), "done".into()]
+                    )
+                ],
+            }))
+        )
     }
 }

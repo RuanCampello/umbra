@@ -179,6 +179,9 @@ pub(in crate::sql) fn analyze<'s>(
                 }
 
                 for expr in returning {
+                    if matches!(expr, Expression::Wildcard) {
+                        continue;
+                    }
                     analyze_expression(&metadata.schema, None, expr)?;
                 }
             }
@@ -300,6 +303,9 @@ pub(in crate::sql) fn analyze<'s>(
             analyze_where(&metadata.schema, r#where)?;
 
             for expr in returning {
+                if matches!(expr, Expression::Wildcard) {
+                    continue;
+                };
                 analyze_expression(&metadata.schema, None, expr)?;
             }
         }
@@ -337,6 +343,20 @@ fn analyze_assignment<'exp, 'id>(
         true => analyze_expression(&table.schema, Some(&data_type), value)?,
         false => analyze_expression(&Schema::empty(), Some(&data_type), value)?,
     };
+
+    if let (Type::Enum(id), Expression::Value(Value::String(str))) = (data_type, value) {
+        let variants = column.type_def.as_ref().or(table.schema.get_enum(id));
+
+        if let Some(variants) = variants {
+            if !variants.contains(str) {
+                return Err(SqlError::Type(TypeError::InvalidEnumVariant {
+                    allowed: variants.clone(),
+                    found: str.to_string(),
+                }));
+            }
+            return Ok(());
+        }
+    }
 
     if let Expression::Value(Value::Null) = value {
         if !column.is_nullable() {
@@ -758,6 +778,8 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         (Value::Interval(_), _) => VmType::Interval,
         (Value::Numeric(_), _) => VmType::Numeric,
         (Value::Uuid(_), _) => VmType::Number,
+
+        (Value::Enum(_), _) => VmType::Enum,
     })
 }
 
@@ -861,6 +883,13 @@ fn are_types_compatible(
             (left, right) => is_numeric(left) && is_numeric(right),
         },
         Op::Mul | Op::Div => is_numeric(left_type) && is_numeric(right_type),
+        // allow enum-string comparisons for comparison operators
+        Op::Eq | Op::Neq | Op::Lt | Op::LtEq | Op::Gt | Op::GtEq => {
+            matches!(
+                (left_type, right_type),
+                (VmType::Enum, VmType::String) | (VmType::String, VmType::Enum)
+            )
+        }
         _ => false,
     }
 }
@@ -1496,6 +1525,28 @@ mod tests {
             sql: "SELECT EXTRACT(YEAR FROM birth_date) FROM users;",
             ctx,
             expected: Ok(()),
+        }
+        .assert()
+    }
+
+    #[test]
+    fn test_insert_enum() -> AnalyzerResult {
+        let ctx = &["CREATE TABLE items (status 'open' | 'closed');"];
+        Analyze {
+            sql: "INSERT INTO items (status) VALUES ('open');",
+            ctx,
+            expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "INSERT INTO items (status) VALUES ('wrong');",
+            ctx,
+            expected: Err(TypeError::InvalidEnumVariant {
+                allowed: vec!["open".to_string(), "closed".to_string()],
+                found: "wrong".to_string(),
+            }
+            .into()),
         }
         .assert()
     }

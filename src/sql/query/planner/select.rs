@@ -16,6 +16,7 @@ use crate::{
         },
     },
     vm::{
+        cost::{Cost, CostEstimator},
         expression::VmType,
         planner::{
             AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, IndexNestedLoopJoin,
@@ -171,6 +172,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
         &mut self,
         from: &TableRef,
         joins: &'s [JoinClause],
+        where_clause: Option<&Expression>,
         db: &mut Database<File>,
     ) -> Result<(), DatabaseError> {
         if joins.is_empty() {
@@ -194,11 +196,27 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             let index_cadidate = join.index_cadidate(&right_table);
             let left = self.source.take().unwrap();
 
-            // heuristic: we only want to use index nested loop join if the left side is selective
-            // if the left side is a sequential scan, we prefer hash join
-            let use_inlj = match (&index_cadidate, &left.is_selective()) {
-                (Some(_), true) => true,
-                _ => false,
+            let filter = where_clause.and_then(|expr| extract_table_filter(expr, join.table.key()));
+            let right = query::optimiser::generate_seq_plan(&join.table.name, filter, db)?;
+
+            let use_inlj = {
+                let left_cost = left.estimate();
+                let right_cost = right.estimate();
+
+                // TODO: we should do this in the cost module
+                let inlj_cost = {
+                    let right_rows_total = right_table.count.max(1);
+                    let lookup = (right_rows_total as f64).log2().max(1.0);
+                    left_cost.value + (left_cost.rows as f64 * lookup)
+                };
+
+                let hash_cost = {
+                    let io = left_cost.value + right_cost.value;
+                    let cpu_cost = (left_cost.rows + right_cost.rows) as f64 * Cost::CPU_TUPLE_COST;
+                    io + cpu_cost
+                };
+
+                inlj_cost <= hash_cost
             };
 
             match (use_inlj, index_cadidate) {
@@ -234,11 +252,11 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                         pager: Rc::clone(&db.pager),
                         left_tables: left_tables.clone(),
                         right_tables,
+                        schema: self.schema.clone(),
                     }));
                 }
 
                 _ => {
-                    let right = query::optimiser::generate_seq_plan(&join.table.name, None, db)?;
                     let should_be_null = matches!(join.join_type, JoinType::Left | JoinType::Full);
 
                     right_table
@@ -672,4 +690,50 @@ fn find_implicit_group_columns<'e>(
 
         !in_group_by
     })
+}
+
+fn extract_table_filter(expr: &Expression, table_key: &str) -> Option<Expression> {
+    use crate::sql::statement::BinaryOperator;
+
+    match expr {
+        Expression::BinaryOperation {
+            left,
+            operator: BinaryOperator::And,
+            right,
+        } => {
+            let left_filter = extract_table_filter(left, table_key);
+            let right_filter = extract_table_filter(right, table_key);
+
+            match (left_filter, right_filter) {
+                (Some(l), Some(r)) => Some(Expression::BinaryOperation {
+                    left: Box::new(l),
+                    operator: BinaryOperator::And,
+                    right: Box::new(r),
+                }),
+                (Some(f), None) | (None, Some(f)) => Some(f),
+                (None, None) => None,
+            }
+        }
+        Expression::Nested(inner) => extract_table_filter(inner, table_key),
+        _ => match is_bound_to_table(expr, table_key) {
+            true => Some(expr.clone()),
+            _ => None,
+        },
+    }
+}
+
+fn is_bound_to_table(expr: &Expression, table_key: &str) -> bool {
+    match expr {
+        Expression::QualifiedIdentifier { table, .. } => table == table_key,
+        Expression::BinaryOperation { left, right, .. } => {
+            is_bound_to_table(left, table_key) && is_bound_to_table(right, table_key)
+        }
+        Expression::UnaryOperation { expr, .. } => is_bound_to_table(expr, table_key),
+        Expression::Nested(expr) => is_bound_to_table(expr, table_key),
+        Expression::Function { args, .. } => {
+            args.iter().all(|arg| is_bound_to_table(arg, table_key))
+        }
+        Expression::Value(_) => true,
+        _ => false,
+    }
 }
