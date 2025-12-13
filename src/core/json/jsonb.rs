@@ -2,7 +2,7 @@
 
 use super::JsonError;
 use crate::parse_error;
-use std::{borrow::Cow, cmp::Ordering, hint::unreachable_unchecked, str::FromStr};
+use std::{borrow::Cow, cmp::Ordering, fmt::Display, hint::unreachable_unchecked, str::FromStr};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Jsonb {
@@ -20,8 +20,8 @@ pub(crate) enum Header {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum JsonIdentation<'i> {
-    Identation(Cow<'i, str>),
+pub enum JsonIndentation<'i> {
+    Indentation(Cow<'i, str>),
     None,
 }
 
@@ -518,6 +518,142 @@ impl Jsonb {
         Ok(None)
     }
 
+    fn serialize_value(
+        &self,
+        string: &mut String,
+        cursor: usize,
+        depth: usize,
+        delimiter: &JsonIndentation,
+    ) -> super::Result<usize> {
+        let (header, offset) = self.read_header(cursor)?;
+
+        let cursor = cursor + offset;
+
+        let current = match header {
+            JsonHeader(ElementType::OBJECT, len) => todo!(),
+            _ => todo!(),
+        };
+
+        todo!()
+    }
+
+    fn serialize_object(
+        &self,
+        string: &mut String,
+        cursor: usize,
+        len: usize,
+        mut depth: usize,
+        indent: &JsonIndentation,
+    ) -> super::Result<usize> {
+        let end_cursor = cursor + len;
+        let mut current_cursor = cursor;
+        depth += 1;
+        string.push('{');
+        if indent.is_pretty() {
+            string.push('\n');
+        };
+        while current_cursor < end_cursor {
+            let (key_header, key_header_offset) = self.read_header(current_cursor)?;
+            current_cursor += key_header_offset;
+            let JsonHeader(element_type, len) = key_header;
+            if let JsonIndentation::Indentation(value) = indent {
+                for _ in 0..depth {
+                    string.push_str(value);
+                }
+            };
+
+            match element_type {
+                ElementType::TEXT
+                | ElementType::TEXTRAW
+                | ElementType::TEXTJ
+                | ElementType::TEXT5 => {
+                    current_cursor =
+                        self.serialize_string(string, current_cursor, len, &element_type, true)?;
+                }
+                _ => parse_error!("malformed JSON"),
+            }
+
+            string.push(':');
+            if indent.is_pretty() {
+                string.push(' ');
+            }
+            current_cursor = self.serialize_value(string, current_cursor, depth, indent)?;
+            if current_cursor < end_cursor {
+                string.push(',');
+            }
+
+            if indent.is_pretty() {
+                string.push('\n');
+            };
+        }
+
+        if let JsonIndentation::Indentation(value) = indent {
+            for _ in 0..depth - 1 {
+                string.push_str(value);
+            }
+        };
+
+        string.push('}');
+
+        Ok(current_cursor)
+    }
+
+    fn serialize_array(
+        &self,
+        string: &mut String,
+        cursor: usize,
+        len: usize,
+        mut depth: usize,
+        indent: &JsonIndentation,
+    ) -> super::Result<usize> {
+        let end_cursor = cursor + len;
+        let mut current_cursor = cursor;
+
+        depth += 1;
+        string.push('[');
+        if indent.is_pretty() {
+            string.push('\n');
+        };
+
+        while current_cursor < end_cursor {
+            if let JsonIndentation::Indentation(value) = indent {
+                for _ in 0..depth {
+                    string.push_str(value);
+                }
+            };
+
+            current_cursor = self.serialize_value(string, current_cursor, depth, indent)?;
+
+            if current_cursor < end_cursor {
+                string.push(',');
+            }
+            if indent.is_pretty() {
+                string.push('\n');
+            };
+        }
+
+        if let JsonIndentation::Indentation(value) = indent {
+            for _ in 0..depth - 1 {
+                string.push_str(value);
+            }
+        };
+
+        string.push(']');
+
+        Ok(current_cursor)
+    }
+
+    fn serialize_string(
+        &self,
+        string: &mut String,
+        cursor: usize,
+        len: usize,
+        kind: &ElementType,
+        quote: bool,
+    ) -> super::Result<usize> {
+        unimplemented!()
+    }
+
     fn write_element_header(
         &mut self,
         cursor: usize,
@@ -605,6 +741,15 @@ impl FromStr for Jsonb {
         }
 
         Ok(result)
+    }
+}
+
+impl Display for Jsonb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut result = String::with_capacity(self.len() * 2);
+
+        let cursor = 0;
+        todo!()
     }
 }
 
@@ -718,9 +863,9 @@ impl Header {
     }
 }
 
-impl<'i> JsonIdentation<'i> {
+impl<'i> JsonIndentation<'i> {
     pub const fn is_pretty(&self) -> bool {
-        matches!(self, Self::Identation(_))
+        matches!(self, Self::Indentation(_))
     }
 }
 
@@ -835,5 +980,19 @@ fn parse_error(msg: &str, location: Option<usize>) -> super::JsonError {
     super::JsonError::Message {
         msg: msg.to_string(),
         location: location,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn null_serialisation() {
+        let mut json = Jsonb::new(10, None);
+        json.data.push(ElementType::NULL as u8);
+
+        let json_str = json.to_string();
+        todo!()
     }
 }
