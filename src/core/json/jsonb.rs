@@ -106,8 +106,21 @@ impl Jsonb {
         }
 
         match input[position] {
+            b'{' => {
+                position += 1;
+                position = self.deserialize_obj(input, position, depth + 1)?;
+            }
+
+            b'[' => {
+                position += 1;
+                position = self.deserialize_array(input, position, depth + 1)?;
+            }
+
+            b'"' | b'\"' => position = self.deserialize_string(input, position)?,
             _ => parse_error!("Unexpected character at {position}"),
-        }
+        };
+
+        Ok(position)
     }
 
     fn deserialize_obj(
@@ -117,75 +130,151 @@ impl Jsonb {
         depth: usize,
     ) -> super::Result<usize> {
         if depth > MAX_DEPTH {
-            parse_error!("Too deep");
+            parse_error("Too deep", Some(pos));
         }
 
         if self.data.capacity() - self.data.len() < 50 {
             self.data.reserve(self.data.capacity());
         }
         if pos >= input.len() {
-            parse_error!("Unexpected end of input");
+            parse_error("Unexpected end of input", Some(pos));
         }
 
         let header_pos = self.len();
         self.write_element_header(header_pos, ElementType::OBJECT, 0, false)
-            .map_err(|_| parse_error!("Failed to write to header"))?;
-
+            .map_err(|_| parse_error("Failed to write to header", Some(pos)))?;
         let obj_start = self.len();
         let mut first = true;
 
         loop {
             pos = Self::skip_whitespace(input, pos);
             if pos >= input.len() {
-                parse_error!("Unexpected end of input");
+                parse_error("Unexpected end of input", Some(pos));
             }
 
             match input[pos] {
                 b'}' => {
                     pos += 1;
-                    if first {
-                        return Ok(pos);
-                    } else {
+
+                    if !first {
                         let obj_size = self.len() - obj_start;
                         self.write_element_header(header_pos, ElementType::OBJECT, obj_size, false)
-                            .map_err(|_| parse_error!("Failed to write to header"))?;
+                            .map_err(|_| parse_error("Failed to write to header", Some(pos)))?;
+                    }
 
-                        return Ok(pos);
+                    return Ok(pos);
+                }
+
+                b',' => {
+                    if first {
+                        parse_error("Unexpected comma", Some(pos));
+                    }
+
+                    pos += 1;
+                    pos = Self::skip_whitespace(input, pos);
+                    if input[pos] == b',' || input[pos] == b'{' {
+                        parse_error!("Two commas in a row");
+                    }
+
+                    continue;
+                }
+
+                _ => {}
+            }
+
+            pos = self.deserialize_obj_entry(input, pos, depth)?;
+            first = false;
+        }
+    }
+
+    fn deserialize_array(
+        &mut self,
+        input: &[u8],
+        mut pos: usize,
+        depth: usize,
+    ) -> super::Result<usize> {
+        if depth > MAX_DEPTH {
+            return Err(parse_error("Too deep", Some(pos)));
+        }
+
+        let header_pos = self.len();
+        self.write_element_header(header_pos, ElementType::ARRAY, 0, false)?;
+        let array_start = self.len();
+        let mut first = true;
+
+        loop {
+            pos = Self::skip_whitespace(input, pos);
+            if pos >= input.len() {
+                return Err(parse_error("Unexpected end of input", Some(pos)));
+            }
+
+            match input[pos] {
+                b']' => {
+                    pos += 1;
+
+                    match first {
+                        true => return Ok(pos),
+                        _ => {
+                            let array_len = self.len() - array_start;
+                            self.write_element_header(
+                                header_pos,
+                                ElementType::ARRAY,
+                                array_len,
+                                false,
+                            )?;
+
+                            return Ok(pos);
+                        }
                     }
                 }
 
                 b',' if !first => {
                     pos += 1;
                     pos = Self::skip_whitespace(input, pos);
-                    if input[pos] == b',' || input[pos] == b'{' {
-                        parse_error!("Two commas in a row");
+
+                    if input[pos] == b',' {
+                        return Err(parse_error("Two commas in a row", Some(pos)));
                     }
                 }
+
                 _ => {
-                    pos = self.deserialize_string(input, pos)?;
-
                     pos = Self::skip_whitespace(input, pos);
-                    if pos >= input.len() || input[pos] != b':' {
-                        parse_error!("Expected : after object key");
-                    }
-
-                    pos += 1;
-                    pos = Self::skip_whitespace(input, pos);
-
                     pos = self.deserialize_value(input, pos, depth + 1)?;
-                    pos = Self::skip_whitespace(input, pos);
-                    if pos < input.len() && !matches!(input[pos], b',' | b'}') {
-                        parse_error!("Should be , or }}");
-                    }
+
                     first = false;
                 }
             }
         }
     }
 
+    fn deserialize_obj_entry(
+        &mut self,
+        input: &[u8],
+        mut pos: usize,
+        depth: usize,
+    ) -> super::Result<usize> {
+        pos = self.deserialize_string(input, pos)?;
+        pos = Self::skip_whitespace(input, pos);
+
+        if pos >= input.len() || input[pos] != b':' {
+            return Err(parse_error("Expected : after object key", Some(pos)));
+        }
+
+        pos += 1;
+        pos = Self::skip_whitespace(input, pos);
+        pos = self.deserialize_value(input, pos, depth + 1)?;
+        pos = Self::skip_whitespace(input, pos);
+
+        if pos < input.len() && !matches!(input[pos], b',' | b'}') {
+            return Err(parse_error("Should be , or }}", Some(pos)));
+        }
+
+        Ok(pos)
+    }
+
     fn deserialize_string(&mut self, input: &[u8], mut pos: usize) -> super::Result<usize> {
         if pos >= input.len() {
-            parse_error!("Unexpected end of input");
+            parse_error("Unexpected end of input", Some(pos));
         }
 
         let string_start = self.len();
@@ -193,46 +282,21 @@ impl Jsonb {
         pos += 1;
 
         let quoted = quote == b'"' || quote == b'\'';
-        let mut len = 0;
 
         if quoted {
-            let mut end_pos = pos;
-            let is_simple = true;
-
-            while end_pos < input.len() {
-                let c = input[end_pos];
-                if c == quote {
-                    if is_simple {
-                        let len = end_pos - pos;
-                        let header_pos = self.data.len();
-
-                        if len <= 11 {
-                            self.data
-                                .push((ElementType::TEXT as u8) | ((len as u8) << 4));
-                        } else {
-                            self.write_element_header(header_pos, ElementType::TEXT, len, false)
-                                .map_err(|_| parse_error!("Failed to write header"))?;
-                        }
-
-                        self.data.extend_from_slice(&input[pos..end_pos]);
-                        return Ok(end_pos + 1);
-                    }
-                    break;
-                } else if c == b'\\' || c < 32 {
-                    break;
-                }
-                end_pos += 1;
+            if let Some(simple_end) = self.try_deserialize_simple_string(input, pos, quote)? {
+                return Ok(simple_end);
             }
         }
 
-        self.write_element_header(string_start, ElementType::TEXT, 0, false)
-            .map_err(|_| parse_error!("Failed to write header"))?;
+        self.write_element_header(string_start, ElementType::TEXT, 0, false)?;
 
         if pos >= input.len() {
-            parse_error!("Unexpected end of input");
+            parse_error("Unexpected end of input", Some(pos));
         }
 
         let mut element_type = ElementType::TEXT;
+        let mut len = 0;
 
         if !quoted {
             self.data.push(quote);
@@ -251,124 +315,153 @@ impl Jsonb {
 
             if quoted && c == quote {
                 break;
-            } else if !quoted && (c == b'"' || c == b'\'') {
-                parse_error!("Unexpected input");
-            } else if c == b'\\' {
-                if pos >= input.len() {
-                    parse_error!("Unexpected end of input");
-                }
+            }
 
-                let esc = input[pos];
-                pos += 1;
+            if !quoted && (c == b'"' || c == b'\'') {
+                parse_error("Unexpected input", Some(pos));
+            }
 
-                match esc {
-                    b'b' => {
-                        self.data.extend_from_slice(b"\\b");
-                        len += 2;
-                        element_type = ElementType::TEXTJ;
-                    }
-                    b'f' => {
-                        self.data.extend_from_slice(b"\\f");
-                        len += 2;
-                        element_type = ElementType::TEXTJ;
-                    }
-                    b'n' => {
-                        self.data.extend_from_slice(b"\\n");
-                        len += 2;
-                        element_type = ElementType::TEXTJ;
-                    }
-                    b'r' => {
-                        self.data.extend_from_slice(b"\\r");
-                        len += 2;
-                        element_type = ElementType::TEXTJ;
-                    }
-                    b't' => {
-                        self.data.extend_from_slice(b"\\t");
-                        len += 2;
-                        element_type = ElementType::TEXTJ;
-                    }
-                    b'\\' | b'"' | b'/' => {
-                        self.data.push(b'\\');
-                        self.data.push(esc);
-                        len += 2;
-                        element_type = ElementType::TEXTJ;
-                    }
-                    b'u' => {
-                        if pos + 4 > input.len() {
-                            parse_error!("Incomplete unicode escape sequence")
-                        }
+            if c == b'\\' {
+                let (new_pos, new_len, esc_type) =
+                    self.handle_escape_sequence(input, pos, len, &mut escape_buffer)?;
+                pos = new_pos;
+                len = new_len;
+                element_type = esc_type;
 
-                        escape_buffer[0] = b'\\';
-                        escape_buffer[1] = b'u';
+                continue;
+            }
 
-                        for i in 0..4 {
-                            let h = input[pos + i];
-                            escape_buffer[2 + i] = h;
-                        }
-
-                        self.data.extend_from_slice(&escape_buffer[0..6]);
-                        len += 6;
-                        pos += 4;
-                        element_type = ElementType::TEXTJ;
-                    }
-                    b'\n' => {
-                        self.data.extend_from_slice(b"\\\n");
-                        len += 2;
-                        element_type = ElementType::TEXT5;
-                    }
-                    b'\'' => {
-                        self.data.extend_from_slice(b"\\\'");
-                        len += 2;
-                        element_type = ElementType::TEXT5;
-                    }
-                    b'0' => {
-                        self.data.extend_from_slice(b"\\0");
-                        len += 2;
-                        element_type = ElementType::TEXT5;
-                    }
-                    b'v' => {
-                        self.data.extend_from_slice(b"\\v");
-                        len += 2;
-                        element_type = ElementType::TEXT5;
-                    }
-                    b'x' => {
-                        if pos + 2 > input.len() {
-                            parse_error!("Incomplete hex escape sequence")
-                        }
-
-                        escape_buffer[0] = b'\\';
-                        escape_buffer[1] = b'x';
-
-                        for i in 0..2 {
-                            let h = input[pos + i];
-                            escape_buffer[2 + i] = h;
-                        }
-
-                        self.data.extend_from_slice(&escape_buffer[0..4]);
-                        len += 4;
-                        pos += 2;
-                        element_type = ElementType::TEXT5;
-                    }
-
-                    _ => parse_error!("Invalid escape sequence"),
-                }
-            } else if !quoted && (c == b':' || c.is_ascii_whitespace()) {
+            if !quoted && (c == b':' || c.is_ascii_whitespace()) {
                 pos -= 1;
                 break;
-            } else if c <= 0x1F {
-                element_type = ElementType::TEXT5;
-                self.data.push(c);
-                len += 1;
-            } else {
-                self.data.push(c);
-                len += 1;
             }
+
+            if c <= 0x1F {
+                element_type = ElementType::TEXT5;
+            }
+
+            self.data.push(c);
+            len += 1;
         }
 
-        self.write_element_header(string_start, element_type, len, false)
-            .map_err(|_| parse_error!("Failed to write header"))?;
-
+        self.write_element_header(string_start, element_type, len, false)?;
         Ok(pos)
+    }
+
+    fn handle_escape_sequence(
+        &mut self,
+        input: &[u8],
+        mut pos: usize,
+        mut len: usize,
+        escape_buffer: &mut [u8; 6],
+    ) -> super::Result<(usize, usize, ElementType)> {
+        const ESCAPE_PREFIX: usize = 2;
+        const HEX_ESCAPE_DIGITS: usize = 2;
+        const UNICODE_HEX_DIGITS: usize = 4;
+
+        if pos >= input.len() {
+            parse_error("Unexpected end of input", Some(pos));
+        }
+
+        let esc = input[pos];
+        pos += 1;
+
+        let (bytes, element_type) = match esc {
+            b'b' => (&b"\\b"[..], ElementType::TEXTJ),
+            b'f' => (&b"\\f"[..], ElementType::TEXTJ),
+            b'n' => (&b"\\n"[..], ElementType::TEXTJ),
+            b'r' => (&b"\\r"[..], ElementType::TEXTJ),
+            b't' => (&b"\\t"[..], ElementType::TEXTJ),
+
+            b'\\' | b'"' | b'/' => {
+                self.data.push(b'\\');
+                self.data.push(esc);
+                len += 2;
+                return Ok((pos, len, ElementType::TEXTJ));
+            }
+
+            b'u' => {
+                if pos + UNICODE_HEX_DIGITS > input.len() {
+                    parse_error!("Incomplete unicode escape sequence");
+                }
+                escape_buffer[0] = b'\\';
+                escape_buffer[1] = b'u';
+                let hex_start = ESCAPE_PREFIX;
+                let hex_end = ESCAPE_PREFIX + UNICODE_HEX_DIGITS;
+                escape_buffer[hex_start..hex_end]
+                    .copy_from_slice(&input[pos..pos + UNICODE_HEX_DIGITS]);
+                pos += UNICODE_HEX_DIGITS;
+                len += 6;
+                self.data.extend_from_slice(&escape_buffer[..6]);
+                return Ok((pos, len, ElementType::TEXTJ));
+            }
+
+            b'\n' => (&b"\\\n"[..], ElementType::TEXT5),
+            b'\'' => (&b"\\\'"[..], ElementType::TEXT5),
+            b'0' => (&b"\\0"[..], ElementType::TEXT5),
+            b'v' => (&b"\\v"[..], ElementType::TEXT5),
+
+            b'x' => {
+                if pos + HEX_ESCAPE_DIGITS > input.len() {
+                    parse_error!("Incomplete hex escape sequence");
+                }
+                escape_buffer[0] = b'\\';
+                escape_buffer[1] = b'x';
+                let hex_start = ESCAPE_PREFIX;
+                let hex_end = ESCAPE_PREFIX + HEX_ESCAPE_DIGITS;
+                escape_buffer[hex_start..hex_end]
+                    .copy_from_slice(&input[pos..pos + HEX_ESCAPE_DIGITS]);
+                pos += HEX_ESCAPE_DIGITS;
+                len += ESCAPE_PREFIX + HEX_ESCAPE_DIGITS;
+                self.data
+                    .extend_from_slice(&escape_buffer[..ESCAPE_PREFIX + HEX_ESCAPE_DIGITS]);
+                return Ok((pos, len, ElementType::TEXT5));
+            }
+            _ => parse_error!("Invalid escape sequence"),
+        };
+
+        self.data.extend_from_slice(bytes);
+        len += bytes.len();
+
+        Ok((pos, len, element_type))
+    }
+
+    fn try_deserialize_simple_string(
+        &mut self,
+        input: &[u8],
+        start_pos: usize,
+        quote: u8,
+    ) -> super::Result<Option<usize>> {
+        let mut end_pos = start_pos;
+
+        while end_pos < input.len() {
+            let c = input[end_pos];
+
+            if c == quote {
+                let len = end_pos - start_pos;
+                let header_pos = self.data.len();
+
+                match len <= 11 {
+                    true => self
+                        .data
+                        .push((ElementType::TEXT as u8) | ((len as u8) << 4)),
+                    _ => {
+                        self.write_element_header(header_pos, ElementType::TEXT, len, false)?;
+                    }
+                };
+
+                self.data.extend_from_slice(&input[start_pos..end_pos]);
+                return Ok(Some(end_pos + 1));
+            }
+
+            if c == b'\\' || c < 32 {
+                return Ok(None);
+            }
+
+            end_pos += 1;
+        }
+
+        Ok(None)
     }
 
     fn write_element_header(
@@ -476,38 +569,32 @@ impl JsonHeader {
                 }
 
                 let header_size = header >> 4;
-                let offset: usize;
+                let (offset, total_size) = match header_size {
+                    size if size <= 11 => (1, size as usize),
 
-                let total_size = match header_size {
-                    size if size <= 11 => {
-                        offset = 1;
-                        size as usize
+                    12 => {
+                        let value = slice
+                            .get(cursor + 1)
+                            .ok_or(parse_error("Failed to read 1-byte size", None))?;
+                        (2, *value as usize)
                     }
 
-                    12 => match slice.get(cursor + 1) {
-                        Some(value) => {
-                            offset = 2;
-                            *value as usize
-                        }
-                        None => parse_error!("Failed to read 1-byte size"),
-                    },
+                    13 => {
+                        let bytes = slice
+                            .get(cursor + 1..cursor + 3)
+                            .ok_or(parse_error("Failed to read 2-byte size", None))?;
+                        (3, u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
+                    }
 
-                    13 => match slice.get(cursor + 1..cursor + 3) {
-                        Some(bytes) => {
-                            offset = 3;
-                            u16::from_be_bytes([bytes[0], bytes[1]]) as usize
-                        }
-                        None => parse_error!("Failed to read 2-byte size"),
-                    },
-
-                    14 => match slice.get(cursor + 1..cursor + 5) {
-                        Some(bytes) => {
-                            offset = 5;
-                            u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize
-                        }
-                        None => parse_error!("Failed to read 4-byte size"),
-                    },
-
+                    14 => {
+                        let bytes = slice
+                            .get(cursor + 1..cursor + 5)
+                            .ok_or(parse_error("Failed to read 4-byte size", None))?;
+                        (
+                            5,
+                            u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize,
+                        )
+                    }
                     _ => unreachable!(),
                 };
 
@@ -688,4 +775,11 @@ const fn char_type_ok_table() -> Table {
         i += 1;
     }
     table
+}
+
+fn parse_error(msg: &str, location: Option<usize>) -> super::JsonError {
+    super::JsonError::Message {
+        msg: msg.to_string(),
+        location: location,
+    }
 }
