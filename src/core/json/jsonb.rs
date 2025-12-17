@@ -1433,4 +1433,25 @@ line three",
         assert!(result.contains("你好"));
         assert!(result.contains(r#""pathological":" \t\r\n\\\/\"' ""#));
     }
+
+    #[test]
+    fn array_serialisation() {
+        let result = Jsonb::from_str("[]").unwrap();
+        assert_eq!(result.to_string(), "[]");
+
+        let result = Jsonb::from_str("[1,2,3]").unwrap();
+        assert_eq!(result.to_string(), "[1,2,3]");
+
+        let result = Jsonb::from_str("[[1,2],[3,4]]").unwrap();
+        assert_eq!(result.to_string(), "[[1,2],[3,4]]");
+
+        let result = Jsonb::from_str(r#"[1,"text",true,null,{"key":"value"}]"#).unwrap();
+        assert_eq!(
+            result.to_string(),
+            r#"[1,"text",true,null,{"key":"value"}]"#
+        );
+
+        let header = JsonHeader::from_slice(0, &result.data).unwrap().0;
+        assert!(matches!(header.0, ElementType::ARRAY));
+    }
 }
