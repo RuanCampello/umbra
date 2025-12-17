@@ -1390,4 +1390,47 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.to_string(), "[1,2,3]");
     }
+
+    #[test]
+    fn whitespace() {
+        let json = r#"
+            {
+                "key":              "value",
+                    "key2": [1,             2,3]      ,
+                "key3"  : {
+                            "nested"        :       true
+                }
+            }"#;
+
+        let result = Jsonb::from_str(json).unwrap();
+        assert_eq!(
+            result.to_string(),
+            r#"{"key":"value","key2":[1,2,3],"key3":{"nested":true}}"#
+        );
+    }
+
+    #[test]
+    fn string_json_5() {
+        let json = r#"{
+        "multi_line": "Line one \
+line two \
+line three",
+        "emoji_soup": "👨‍👩‍👧‍👦 🚀 \u2728",
+        "nested_json_string": "{\"key\": \"value with \\\"quotes\\\"\"}",
+        "mixed_scripts": "Greetings! 你好, שָׁלוֹם, 👋",
+        "pathological": " \t\r\n\\\/\"' ",
+        "unicode_max": "\uDBFF\uDFFF"
+    }"#;
+        let result = Jsonb::from_str(json)
+            .expect("Failed to parse complex JSON")
+            .to_string();
+
+        assert!(result.contains(r#""multi_line":"Line one line two line three""#));
+        assert!(result.contains("👨‍👩‍👧‍👦"));
+        assert!(
+            result.contains(r#""nested_json_string":"{\"key\": \"value with \\\"quotes\\\"\"}""#)
+        );
+        assert!(result.contains("你好"));
+        assert!(result.contains(r#""pathological":" \t\r\n\\\/\"' ""#));
+    }
 }
