@@ -844,7 +844,132 @@ impl Jsonb {
         kind: &ElementType,
         quote: bool,
     ) -> super::Result<usize> {
-        unimplemented!()
+        let word = &self.data[cursor..cursor + len];
+        if quote {
+            string.push('"');
+        }
+
+        match kind {
+            ElementType::TEXT | ElementType::TEXTJ => {
+                let word = std::str::from_utf8(word)
+                    .map_err(|_| parse_error("Failed to serialize string", Some(cursor)))?;
+                string.push_str(word);
+            }
+
+            ElementType::TEXT5 => {
+                let mut idx = 0;
+
+                while idx < word.len() {
+                    let c = word[idx];
+
+                    if c == b'\'' {
+                        string.push(c as char);
+                        idx += 1;
+
+                        continue;
+                    }
+
+                    match c {
+                        b'"' => {
+                            string.push_str("\\\"");
+                            idx += 1;
+                        }
+
+                        c if c <= 0x1F => {
+                            match c {
+                                0x08 => string.push_str("\\b"),
+                                b'\t' => string.push_str("\\t"),
+                                b'\n' => string.push_str("\\n"),
+                                0x0C => string.push_str("\\f"),
+                                b'\r' => string.push_str("\\r"),
+                                _ => {
+                                    let hex = format!("\\u{c:04x}");
+                                    string.push_str(&hex);
+                                }
+                            }
+
+                            idx += 1;
+                        }
+
+                        b'\\' if idx + 1 < word.len() => {
+                            let next = word[idx + 1];
+
+                            match next {
+                                b'\'' => {
+                                    string.push('\'');
+                                    idx += 2;
+                                }
+                                b'v' => {
+                                    string.push_str("\\u0009");
+                                    idx += 2;
+                                }
+                                b'x' if idx + 3 < word.len() => {
+                                    string.push_str("\\u00");
+                                    string.push(word[idx + 2] as char);
+                                    string.push(word[idx + 3] as char);
+
+                                    idx += 4;
+                                }
+                                b'0' => {
+                                    string.push_str("\\u0000");
+                                    idx += 2;
+                                }
+                                b'\r' => match idx + 2 < word.len() && word[idx + 2] == b'\n' {
+                                    true => idx += 3,
+                                    _ => idx += 2,
+                                },
+                                b'\n' => idx += 2,
+                                0xe2 if idx + 3 < word.len()
+                                    && word[idx + 2] == 0x80
+                                    && (word[idx + 3] == 0xa8 || word[idx + 3] == 0xa9) =>
+                                {
+                                    idx += 4;
+                                }
+
+                                _ => {
+                                    string.push('\\');
+                                    string.push(next as char);
+
+                                    idx += 2;
+                                }
+                            }
+                        }
+
+                        _ => {
+                            string.push(c as char);
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+
+            ElementType::TEXTRAW => {
+                let word = std::str::from_utf8(word)
+                    .map_err(|_| parse_error("Failed to serialize string", Some(cursor)))?;
+
+                for c in word.chars() {
+                    match c {
+                        '"' => string.push_str("\\\""),
+                        '\\' => string.push_str("\\\\"),
+                        '\x08' => string.push_str("\\b"),
+                        '\x0C' => string.push_str("\\f"),
+                        '\n' => string.push_str("\\n"),
+                        '\r' => string.push_str("\\r"),
+                        '\t' => string.push_str("\\t"),
+                        c if c <= '\u{001F}' => string.push_str(&format!("\\u{:04x}", c as u32)),
+                        _ => string.push(c),
+                    }
+                }
+            }
+
+            _ => unsafe { unreachable_unchecked() },
+        }
+
+        if quote {
+            string.push('"');
+        }
+
+        Ok(cursor + len)
     }
 
     fn write_element_header(
@@ -1199,7 +1324,7 @@ mod tests {
 
     #[test]
     fn binary_conversion() {
-        let json = r#"{"key":"value","array":[1, 2, 3]}"#;
+        let json = r#"{"key":"value","array":[1,2,3]}"#;
         let result = Jsonb::from_str(json).unwrap();
         let binary = result.data.clone();
 
