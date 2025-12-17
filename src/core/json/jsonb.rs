@@ -1366,13 +1366,28 @@ mod tests {
     #[test]
     fn comments() {
         let result = Jsonb::from_str(
-            r#"
-            // line comment
-            "key": "value"
-            "#,
+            r#"{
+            // a line comment
+            "key": "value" }"#,
         )
         .unwrap();
-
         assert_eq!(result.to_string(), r#"{"key":"value"}"#);
+
+        let result = Jsonb::from_str(
+            r#"{
+            /* a block
+                comment */
+            "key": "value"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(result.to_string(), r#"{"key":"value"}"#);
+
+        let parsed = Jsonb::from_str(
+            r#"[1, // Comment
+                                       2, /* Another comment */ 3]"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.to_string(), "[1,2,3]");
     }
 }
