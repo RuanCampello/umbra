@@ -2,10 +2,7 @@
 
 use super::JsonError;
 use crate::parse_error;
-use std::{
-    borrow::Cow, cmp::Ordering, f64::consts::E, fmt::Display, hint::unreachable_unchecked,
-    str::FromStr,
-};
+use std::{borrow::Cow, cmp::Ordering, fmt::Display, hint::unreachable_unchecked, str::FromStr};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Jsonb {
@@ -126,7 +123,15 @@ impl Jsonb {
             b'f' => position = self.deserialize_literal(input, position, FALSE, ElementType::FALSE)?,
             b'n' | b'N' => position = self.deserialize_null_or_nan(input, position)?,
             b'"' | b'\"' => position = self.deserialize_string(input, position)?,
-            _ => parse_error!("Unexpected character at {position}"),
+            c if c.is_ascii_digit()
+                || c.eq_ignore_ascii_case(&b'i')
+                || c == b'+'
+                || c == b'-'
+                || c == b'.' =>
+            {
+                position = self.deserialize_number(input, position)?
+            }
+            _ => return Err(parse_error("Unexpected character", Some(position))),
         };
 
         Ok(position)
@@ -178,6 +183,136 @@ impl Jsonb {
         }
 
         Err(parse_error("Expected null or nan", Some(pos)))
+    }
+
+    fn deserialize_number(&mut self, input: &[u8], mut pos: usize) -> super::Result<usize> {
+        let start = self.len();
+        let mut len = 0;
+        let mut is_float = false;
+        let mut is_v5 = false;
+
+        macro_rules! push_current {
+            () => {
+                self.data.push(input[pos]);
+                pos += 1;
+                len += 1;
+            };
+        }
+
+        self.write_element_header(start, ElementType::INT, 0, false)
+            .map_err(|_| parse_error("Failed to write to header", Some(pos)))?;
+
+        match pos < input.len() && (input[pos] == b'-' || input[pos] == b'+') {
+            true if input[pos] == b'+' => {
+                is_v5 = true;
+                pos += 1;
+            }
+            _ => {
+                push_current!();
+            }
+        }
+
+        if pos < input.len() && input[pos] == b'.' {
+            is_v5 = true;
+            is_float = true;
+        }
+
+        if pos < input.len() && input[pos] == b'0' && pos + 1 < input.len() {
+            push_current!();
+
+            // hexdecimal
+            if pos < input.len() && (input[pos] == b'x' || input[pos] == b'X') {
+                push_current!();
+
+                let mut has_digit = false;
+                while pos < input.len() && is_hex(input[pos]) {
+                    push_current!();
+
+                    has_digit = true;
+                }
+
+                if !has_digit {
+                    return Err(parse_error("Invalid hex digit", Some(pos)));
+                }
+
+                self.write_element_header(start, ElementType::INT5, len, false)
+                    .map_err(|_| parse_error("Unexpected input after JSON", Some(pos)))?;
+
+                return Ok(pos);
+            } else if pos < input.len() && input[pos].is_ascii_digit() {
+                return Err(parse_error("Leading zero is not allowed", Some(pos)));
+            }
+        }
+
+        if pos < input.len() && (input[pos] == b'I' || input[pos] == b'i') {
+            let infinity = b"infinity";
+            let mut idx = 0;
+
+            while idx < infinity.len() && pos + idx < input.len() {
+                if input[pos + idx].to_ascii_lowercase() != infinity[idx] {
+                    return Err(parse_error("Invalid number", Some(pos)));
+                }
+
+                idx += 1;
+            }
+
+            if idx < infinity.len() {
+                return Err(parse_error("Incomplete infinity", Some(pos)));
+            }
+
+            pos += infinity.len();
+
+            self.data.extend_from_slice(b"9.0e+999");
+            self.write_element_header(
+                start,
+                ElementType::FLOAT5,
+                len + INFINITY_CHAR as usize,
+                false,
+            )
+            .map_err(|_| parse_error("Failed to write to header", Some(pos)))?;
+
+            return Ok(pos);
+        }
+
+        while pos < input.len() {
+            match input[pos] {
+                b'0'..b'9' => {
+                    push_current!();
+                }
+                b'.' => {
+                    push_current!();
+                    is_float = true;
+
+                    if pos >= input.len() || !input[pos].is_ascii_digit() {
+                        is_v5 = true;
+                    }
+                }
+                b'e' | b'E' => {
+                    push_current!();
+                    is_float = true;
+
+                    if pos < input.len() && (input[pos] == b'+' || input[pos] == b'-') {
+                        push_current!();
+                    }
+                }
+                _ => break,
+            };
+        }
+
+        if len == 0 && (!is_v5 || !is_float) {
+            return Err(parse_error("Not a digit", Some(pos)));
+        }
+
+        let element = match (is_float, is_v5) {
+            (true, true) => ElementType::FLOAT5,
+            (false, true) => ElementType::INT5,
+            _ => ElementType::INT,
+        };
+
+        self.write_element_header(start, element, len, false)
+            .map_err(|_| parse_error("Unexpected input after JSON", Some(pos)))?;
+
+        Ok(pos)
     }
 
     fn deserialize_obj(
@@ -1032,6 +1167,11 @@ const fn char_type_ok_table() -> Table {
         i += 1;
     }
     table
+}
+
+#[inline]
+const fn is_hex(c: u8) -> bool {
+    (CHARACTER_TYPE[c as usize] & 3) == 2 || (CHARACTER_TYPE[c as usize] & 3) == 3
 }
 
 fn parse_error(msg: &str, location: Option<usize>) -> super::JsonError {
