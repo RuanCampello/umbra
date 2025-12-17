@@ -554,16 +554,44 @@ impl Jsonb {
             JsonHeader(ElementType::INT, len)
             | JsonHeader(ElementType::INT5, len)
             | JsonHeader(ElementType::FLOAT, len)
-            | JsonHeader(ElementType::FLOAT5, len) => todo!("serialize_number"),
+            | JsonHeader(ElementType::FLOAT5, len) => {
+                self.serialize_number(string, cursor, len, &header.0)?
+            }
 
-            JsonHeader(ElementType::TRUE, _)
-            | JsonHeader(ElementType::FALSE, _)
-            | JsonHeader(ElementType::NULL, _) => todo!("serialize_bool"),
+            JsonHeader(ElementType::TRUE, _) => self.serialize_literal(string, cursor, "true"),
+            JsonHeader(ElementType::FALSE, _) => self.serialize_literal(string, cursor, "false"),
+            JsonHeader(ElementType::NULL, _) => self.serialize_literal(string, cursor, "null"),
 
             JsonHeader(_, _) => unsafe { unreachable_unchecked() },
         };
 
-        Ok(cursor)
+        Ok(current)
+    }
+
+    fn serialize_literal(&self, string: &mut String, cursor: usize, literal: &str) -> usize {
+        string.push_str(literal);
+        cursor
+    }
+
+    fn serialize_number(
+        &self,
+        string: &mut String,
+        cursor: usize,
+        len: usize,
+        kind: &ElementType,
+    ) -> super::Result<usize> {
+        let current = cursor + len;
+        let slice = std::str::from_utf8(&self.data[cursor..current])
+            .map_err(|_| JsonError::Internal("Failed to parse integer".into()))?;
+
+        match kind {
+            ElementType::INT | ElementType::FLOAT => string.push_str(slice),
+            ElementType::INT5 => unimplemented!(),
+            ElementType::FLOAT5 => unimplemented!(),
+            _ => unsafe { unreachable_unchecked() },
+        }
+
+        Ok(current)
     }
 
     fn serialize_object(
@@ -1023,7 +1051,10 @@ mod tests {
         json.data.push(ElementType::NULL as u8);
 
         let json_str = json.to_string();
-        todo!()
+        assert_eq!(json_str, "null");
+
+        let json = Jsonb::from_str("null").unwrap();
+        assert_eq!(json.data[0], ElementType::NULL as u8);
     }
 
     #[test]
