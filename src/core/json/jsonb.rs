@@ -122,14 +122,14 @@ impl Jsonb {
             #[rustfmt::skip]
             b'f' => position = self.deserialize_literal(input, position, FALSE, ElementType::FALSE)?,
             b'n' | b'N' => position = self.deserialize_null_or_nan(input, position)?,
-            b'"' | b'\"' => position = self.deserialize_string(input, position)?,
+            b'"' | b'\'' => position = self.deserialize_string(input, position)?,
             c if c.is_ascii_digit()
                 || c.eq_ignore_ascii_case(&b'i')
                 || c == b'+'
                 || c == b'-'
                 || c == b'.' =>
             {
-                position = self.deserialize_number(input, position)?
+                position = self.deserialize_number(input, position)?;
             }
             _ => return Err(parse_error("Unexpected character", Some(position))),
         };
@@ -1031,9 +1031,40 @@ impl Jsonb {
         JsonHeader::from_slice(cursor, &self.data)
     }
 
+    #[inline]
     pub fn skip_whitespace(input: &[u8], mut pos: usize) -> usize {
-        while pos < input.len() && WS_TABLE[input[pos] as usize] == 1 {
-            pos += 1;
+        while let Some(&ch) = input.get(pos) {
+            match ch {
+                _ if (WS_TABLE[ch as usize] & 1) != 0 => {
+                    pos += 1;
+                }
+                b'/' => match input.get(pos + 1) {
+                    Some(b'/') => {
+                        pos += 2;
+                        while pos < input.len() && input[pos] != b'\n' {
+                            pos += 1;
+                        }
+                        if pos < input.len() {
+                            pos += 1;
+                        }
+                    }
+                    Some(b'*') => {
+                        pos += 2;
+                        while let Some(window) = input.get(pos..pos + 2) {
+                            if window == b"*/" {
+                                pos += 2;
+                                break;
+                            }
+                            pos += 1;
+                        }
+                        if pos < input.len() && pos + 1 >= input.len() {
+                            pos = input.len();
+                        }
+                    }
+                    _ => break,
+                },
+                _ => break,
+            }
         }
 
         pos
@@ -1330,5 +1361,18 @@ mod tests {
 
         let result = Jsonb::new(0, Some(&binary));
         assert_eq!(result.to_string(), json)
+    }
+
+    #[test]
+    fn comments() {
+        let result = Jsonb::from_str(
+            r#"
+            // line comment
+            "key": "value"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(result.to_string(), r#"{"key":"value"}"#);
     }
 }
