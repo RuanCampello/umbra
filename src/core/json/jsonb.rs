@@ -2,7 +2,10 @@
 
 use super::JsonError;
 use crate::parse_error;
-use std::{borrow::Cow, cmp::Ordering, fmt::Display, hint::unreachable_unchecked, str::FromStr};
+use std::{
+    borrow::Cow, cmp::Ordering, f64::consts::E, fmt::Display, hint::unreachable_unchecked,
+    str::FromStr,
+};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Jsonb {
@@ -518,6 +521,12 @@ impl Jsonb {
         Ok(None)
     }
 
+    fn write_string(&self, string: &mut String, indentation: JsonIndentation) {
+        let cursor = 0;
+
+        let _ = self.serialize_value(string, cursor, 0, &indentation);
+    }
+
     fn serialize_value(
         &self,
         string: &mut String,
@@ -530,11 +539,31 @@ impl Jsonb {
         let cursor = cursor + offset;
 
         let current = match header {
-            JsonHeader(ElementType::OBJECT, len) => todo!(),
-            _ => todo!(),
+            #[rustfmt::skip]
+            JsonHeader(ElementType::OBJECT, len) => self.serialize_object(string, cursor, len, depth, delimiter)?,
+            #[rustfmt::skip]
+            JsonHeader(ElementType::ARRAY, len) => self.serialize_array(string, cursor, len, depth, delimiter)?,
+
+            JsonHeader(ElementType::TEXT, len)
+            | JsonHeader(ElementType::TEXTJ, len)
+            | JsonHeader(ElementType::TEXTRAW, len)
+            | JsonHeader(ElementType::TEXT5, len) => {
+                self.serialize_string(string, cursor, len, &header.0, true)?
+            }
+
+            JsonHeader(ElementType::INT, len)
+            | JsonHeader(ElementType::INT5, len)
+            | JsonHeader(ElementType::FLOAT, len)
+            | JsonHeader(ElementType::FLOAT5, len) => todo!("serialize_number"),
+
+            JsonHeader(ElementType::TRUE, _)
+            | JsonHeader(ElementType::FALSE, _)
+            | JsonHeader(ElementType::NULL, _) => todo!("serialize_bool"),
+
+            JsonHeader(_, _) => unsafe { unreachable_unchecked() },
         };
 
-        todo!()
+        Ok(cursor)
     }
 
     fn serialize_object(
@@ -552,6 +581,7 @@ impl Jsonb {
         if indent.is_pretty() {
             string.push('\n');
         };
+
         while current_cursor < end_cursor {
             let (key_header, key_header_offset) = self.read_header(current_cursor)?;
             current_cursor += key_header_offset;
@@ -748,8 +778,8 @@ impl Display for Jsonb {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut result = String::with_capacity(self.len() * 2);
 
-        let cursor = 0;
-        todo!()
+        self.write_string(&mut result, JsonIndentation::None);
+        write!(f, "{result}")
     }
 }
 
@@ -994,5 +1024,15 @@ mod tests {
 
         let json_str = json.to_string();
         todo!()
+    }
+
+    #[test]
+    fn binary_conversion() {
+        let json = r#"{"key":"value","array":[1, 2, 3]}"#;
+        let result = Jsonb::from_str(json).unwrap();
+        let binary = result.data.clone();
+
+        let result = Jsonb::new(0, Some(&binary));
+        assert_eq!(result.to_string(), json)
     }
 }
