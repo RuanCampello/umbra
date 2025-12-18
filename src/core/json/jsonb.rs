@@ -107,6 +107,100 @@ impl Jsonb {
         }
     }
 
+    pub fn is_valid(&self) -> bool {
+        self.validate(0, self.data.len(), 0).is_ok()
+    }
+    fn validate(&self, start: usize, end: usize, depth: usize) -> super::Result<()> {
+        if depth > MAX_DEPTH {
+            parse_error!("Too deep");
+        }
+
+        if start >= end {
+            parse_error!("Empty element");
+        }
+
+        let (header, offset) = self.read_header(start)?;
+        let start = start + offset;
+        let payload_size = header.payload_size();
+        let payload_end = start + payload_size;
+
+        if payload_end != end {
+            parse_error!("Size mismatch");
+        }
+
+        match header.element_type() {
+            ElementType::NULL | ElementType::TRUE | ElementType::FALSE => match payload_size > 0 {
+                true => Ok(()),
+                _ => parse_error!("Invalid payload for primitive value"),
+            },
+            ElementType::INT | ElementType::INT5 | ElementType::FLOAT | ElementType::FLOAT5 => {
+                match payload_size > 0 {
+                    true => Ok(()),
+                    _ => parse_error!("Empty number payload"),
+                }
+            }
+            ElementType::TEXT | ElementType::TEXTJ | ElementType::TEXT5 | ElementType::TEXTRAW => {
+                let payload = &self.data[start..payload_end];
+                std::str::from_utf8(payload)
+                    .map_err(|_| parse_error("Invalid UTF-8 in text payload", None))?;
+
+                Ok(())
+            }
+            ElementType::ARRAY => {
+                let mut position = start;
+
+                while position < payload_end {
+                    if position >= self.data.len() {
+                        parse_error!("Array element out of bounds");
+                    }
+
+                    let (header, size) = self.read_header(position)?;
+                    let end = position + size + header.payload_size();
+                    if end > payload_end {
+                        parse_error!("Array element exceeds bounds");
+                    }
+
+                    self.validate(position, end, depth + 1)?;
+                    position = end;
+                }
+
+                Ok(())
+            }
+            ElementType::OBJECT => {
+                let mut position = start;
+                let mut count = 0;
+
+                while position < payload_end {
+                    if position >= self.data.len() {
+                        parse_error!("Object element out of bounds");
+                    }
+
+                    let (header, size) = self.read_header(position)?;
+                    if count % 2 == 0 && !header.element_type().is_valid_key() {
+                        parse_error!("Object key must be text");
+                    }
+
+                    let end = position + size + header.payload_size();
+                    if end > payload_end {
+                        parse_error!("Object element exceeds bounds");
+                    }
+
+                    self.validate(position, end, depth + 1)?;
+                    position = end;
+                    count += 1;
+                }
+
+                if count % 2 != 0 {
+                    parse_error!("Object must have an even number of elements");
+                }
+
+                Ok(())
+            }
+
+            _ => parse_error!("Invalid element type"),
+        }
+    }
+
     fn deserialize_value(
         &mut self,
         input: &[u8],

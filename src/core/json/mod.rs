@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{hint::unreachable_unchecked, str::FromStr};
 
 use error::Error as JsonError;
 use jsonb::Jsonb;
@@ -55,6 +55,51 @@ pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
             _ => Jsonb::from_str(float.to_string().as_str())
                 .map_err(|_| parse_error("Malformed JSON", None)),
         },
-        _ => todo!(),
+        Value::Blob(blob) => {
+            let index = blob
+                .iter()
+                .position(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+                .unwrap_or(blob.len());
+            let slice = &blob[index..];
+
+            let json = match slice {
+                [b'"', ..] | [b'-', ..] | [b'0'..=b'2', ..] => slice_to_json(slice, strict)?,
+                _ => match JsonHeader::from_slice(0, slice) {
+                    Ok((header, offset)) => {
+                        let size = header.payload_size();
+                        let expected = size + offset;
+
+                        match expected != slice.len() {
+                            true => slice_to_json(slice, strict)?,
+                            _ => {
+                                let json = Jsonb::from_data(slice);
+                                let is_valid = match expected <= 7 {
+                                    true => json.is_valid(),
+                                    _ => json.element_type().is_ok(),
+                                };
+
+                                match is_valid {
+                                    true => json,
+                                    _ => slice_to_json(slice, strict)?,
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => slice_to_json(slice, strict)?,
+                },
+            };
+
+            json.element_type()?;
+            Ok(json)
+        }
+        _ => unsafe { unreachable_unchecked() },
     }
+}
+
+fn slice_to_json(slice: &[u8], conversion: Conv) -> Result<Jsonb> {
+    let zero = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
+    let truncate = &slice[..zero];
+    let str = std::str::from_utf8(truncate).map_err(|_| parse_error("Malformed JSON", None))?;
+
+    Jsonb::from_str_with_mode(str, conversion).map_err(Into::into)
 }
