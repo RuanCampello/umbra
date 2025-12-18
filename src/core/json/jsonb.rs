@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use super::JsonError;
-use crate::parse_error;
+use crate::{core::json::Conv, parse_error};
 use std::{borrow::Cow, cmp::Ordering, fmt::Display, hint::unreachable_unchecked, str::FromStr};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -87,6 +87,23 @@ impl Jsonb {
             },
 
             _ => parse_error!("malformed JSON"),
+        }
+    }
+
+    pub fn from_data(data: &[u8]) -> Self {
+        Self::new(data.len(), Some(data))
+    }
+
+    pub fn from_str_with_mode(input: &str, conversion: Conv) -> super::Result<Self> {
+        match matches!(conversion, Conv::ToString) {
+            true => {
+                let mut str = input.replace('\\', "\\\\").replace('"', "\\\"");
+                str.insert(0, '"');
+                str.push('"');
+
+                Jsonb::from_str(&str)
+            }
+            _ => Jsonb::from_str(input),
         }
     }
 
@@ -1330,7 +1347,7 @@ const fn is_hex(c: u8) -> bool {
     (CHARACTER_TYPE[c as usize] & 3) == 2 || (CHARACTER_TYPE[c as usize] & 3) == 3
 }
 
-fn parse_error(msg: &str, location: Option<usize>) -> super::JsonError {
+pub(crate) fn parse_error(msg: &str, location: Option<usize>) -> super::JsonError {
     super::JsonError::Message {
         msg: msg.to_string(),
         location: location,
