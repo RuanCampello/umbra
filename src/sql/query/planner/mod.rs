@@ -203,6 +203,7 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             VmType::Interval => Type::Interval,
             VmType::Numeric => Type::Numeric(NUMERIC_ANY, NUMERIC_ANY),
             VmType::Enum => Type::Enum(0),
+            VmType::Blob => unimplemented!(),
         },
     })
 }

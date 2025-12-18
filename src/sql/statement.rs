@@ -248,6 +248,7 @@ pub enum Value {
     Interval(Interval),
     Numeric(Numeric),
     Enum(u8),
+    Blob(Vec<u8>),
     Null,
 }
 
@@ -857,6 +858,9 @@ impl Ord for Value {
             (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
             (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
             (Value::Enum(a), Value::Enum(b)) => a.cmp(b),
+            (Value::Blob(a), Value::Blob(b)) => a.cmp(b),
+            (Value::Blob(_), _) => std::cmp::Ordering::Greater,
+            (_, Value::Blob(_)) => std::cmp::Ordering::Less,
             // For sorting, NULL values are considered equal to each other
             // and sort after all non-NULL values.
             (Value::Null, Value::Null) => Ordering::Equal,
@@ -902,6 +906,7 @@ impl Hash for Value {
             Value::Interval(i) => i.hash(state),
             Value::Enum(e) => e.hash(state),
             Value::Null => NULL_HASH.hash(state),
+            Value::Blob(blob) => blob.hash(state),
             Value::Numeric(n) => todo!(),
         }
     }
@@ -1074,6 +1079,7 @@ impl Display for Value {
             Value::Interval(interval) => write!(f, "{interval}"),
             Value::Numeric(numeric) => write!(f, "{numeric}"),
             Value::Enum(index) => write!(f, "{index}"),
+            Value::Blob(blob) => write!(f, "{blob:?}"),
             Value::Null => write!(f, "NULL"),
         }
     }

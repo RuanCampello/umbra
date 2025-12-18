@@ -780,6 +780,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         (Value::Uuid(_), _) => VmType::Number,
 
         (Value::Enum(_), _) => VmType::Enum,
+        (Value::Blob(_), _) => VmType::Blob,
     })
 }
 

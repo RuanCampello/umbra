@@ -23,6 +23,7 @@ pub enum VmType {
     Interval,
     Numeric,
     Enum,
+    Blob,
 }
 
 #[derive(Debug, PartialEq)]
@@ -497,6 +498,7 @@ impl From<&VmType> for Type {
             VmType::Interval => Self::Interval,
             VmType::Enum => Self::Enum(0),
             VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
+            VmType::Blob => unimplemented!(),
         }
     }
 }
