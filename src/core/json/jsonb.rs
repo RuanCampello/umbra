@@ -4,7 +4,7 @@ use super::JsonError;
 use crate::parse_error;
 use std::{borrow::Cow, cmp::Ordering, fmt::Display, hint::unreachable_unchecked, str::FromStr};
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct Jsonb {
     data: Vec<u8>,
 }
