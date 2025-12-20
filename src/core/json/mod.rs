@@ -4,7 +4,11 @@ use error::Error as JsonError;
 use jsonb::Jsonb;
 
 use crate::{
-    core::json::jsonb::{parse_error, JsonHeader},
+    core::json::{
+        cache::{JsonCache, JsonCacheCell},
+        jsonb::{parse_error, ElementType, JsonHeader},
+    },
+    parse_error,
     sql::statement::Value,
 };
 
@@ -21,7 +25,57 @@ pub enum Conv {
     ToString,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum OutputFlag {
+    String,
+    ElementType,
+    Binary,
+}
+
 pub type Result<T> = std::result::Result<T, JsonError>;
+
+pub fn jsonb(value: &Value, cache: &JsonCacheCell) -> Result<Value> {
+    let json_fn = fn_to_json(Conv::Strict);
+    let json = cache.get_or_insert(value, json_fn);
+
+    match json {
+        Ok(json) => Ok(Value::Blob(json.data())),
+        _ => parse_error!("Malformed JSON"),
+    }
+}
+
+pub fn get(value: &Value, indent: Option<&str>) -> Result<Value> {
+    match value {
+        Value::String(_) => {
+            let value = from_value_to_jsonb(value, Conv::Strict)?;
+            let json = match indent {
+                Some(indent) => value.to_string_pretty(Some(indent))?,
+                _ => value.to_string(),
+            };
+
+            Ok(Value::String(json))
+        }
+        Value::Blob(blob) => {
+            let json = Jsonb::new(blob.len(), Some(blob));
+            json.element_type()?;
+
+            Ok(Value::String(json.to_string()))
+        }
+        Value::Null => Ok(Value::Null),
+        _ => {
+            let value = from_value_to_jsonb(value, Conv::Strict)?;
+            let json = match indent {
+                Some(indent) => Value::String(value.to_string_pretty(Some(indent))?),
+                _ => {
+                    let element_type = value.element_type()?;
+                    from_json_to_value(value, element_type, OutputFlag::ElementType)?
+                }
+            };
+
+            Ok(json)
+        }
+    }
+}
 
 pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
     match value {
@@ -40,9 +94,8 @@ pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
             result.map_err(|_| parse_error("Malformed JSON", None))
         }
         Value::Null => Ok(Jsonb::from_data(JsonHeader::null().into_bytes().as_bytes())),
-        Value::Number(int) => {
-            Jsonb::from_str(&int.to_string()).map_err(|_| parse_error("Malformed JSON", None))
-        }
+        #[rustfmt::skip]
+        Value::Number(int) => Jsonb::from_str(&int.to_string()).map_err(|_| parse_error("Malformed JSON", None)),
         Value::Float(float) => match float.is_infinite() {
             true => {
                 let json = match float.is_sign_negative() {
@@ -96,10 +149,53 @@ pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
     }
 }
 
+fn fn_to_json(conversion: Conv) -> impl FnOnce(&Value) -> Result<Jsonb> {
+    move |value| from_value_to_jsonb(value, conversion)
+}
+
 fn slice_to_json(slice: &[u8], conversion: Conv) -> Result<Jsonb> {
     let zero = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
     let truncate = &slice[..zero];
     let str = std::str::from_utf8(truncate).map_err(|_| parse_error("Malformed JSON", None))?;
 
     Jsonb::from_str_with_mode(str, conversion).map_err(Into::into)
+}
+
+fn from_json_to_value(json: Jsonb, element_type: ElementType, flag: OutputFlag) -> Result<Value> {
+    let mut string = json.to_string();
+
+    if matches!(flag, OutputFlag::Binary) {
+        return Ok(Value::Blob(json.data()));
+    }
+
+    Ok(match element_type {
+        ElementType::ARRAY | ElementType::OBJECT => Value::String(string),
+        ElementType::TEXT | ElementType::TEXT5 | ElementType::TEXTJ | ElementType::TEXTRAW => {
+            match matches!(flag, OutputFlag::ElementType) {
+                false => Value::String(string),
+                _ => {
+                    string.remove(string.len() - 1);
+                    string.remove(0);
+
+                    Value::String(string)
+                }
+            }
+        }
+        ElementType::INT | ElementType::INT5 => {
+            let result = i64::from_str(&string);
+
+            match result {
+                Ok(int) => Value::Number(int as i128),
+                _ => {
+                    let result = f64::from_str(&string);
+                    match result {
+                        Ok(float) => Value::Float(float),
+                        _ => Value::Null,
+                    }
+                }
+            }
+        }
+        ElementType::NULL => Value::Null,
+        _ => unreachable!(),
+    })
 }

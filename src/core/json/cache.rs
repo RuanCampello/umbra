@@ -5,7 +5,7 @@ use crate::{core::json::jsonb::Jsonb, sql::statement::Value};
 const CACHE_SIZE: usize = 4;
 
 #[derive(Debug)]
-pub struct JsonCache {
+pub(crate) struct JsonCache {
     entries: [Option<(Value, Jsonb)>; CACHE_SIZE],
     age: [usize; CACHE_SIZE],
     used: usize,
@@ -13,7 +13,7 @@ pub struct JsonCache {
 }
 
 #[derive(Debug)]
-struct JsonCacheCell {
+pub(crate) struct JsonCacheCell {
     inner: UnsafeCell<Option<JsonCache>>,
     accessed: Cell<bool>,
 }
@@ -92,7 +92,7 @@ impl JsonCacheCell {
 
     pub fn get_or_insert(
         &self,
-        key: Value,
+        key: &Value,
         value: impl FnOnce(&Value) -> super::Result<Jsonb>,
     ) -> super::Result<Jsonb> {
         assert!(!self.accessed.get());

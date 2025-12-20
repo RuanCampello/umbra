@@ -107,9 +107,21 @@ impl Jsonb {
         }
     }
 
+    pub fn to_string_pretty(&self, indentation: Option<&str>) -> super::Result<String> {
+        let mut result = String::with_capacity(self.data.len() * 2);
+        let indent = JsonIndentation::Indentation(match indentation {
+            Some(indent) => Cow::Borrowed(indent),
+            _ => Cow::Borrowed("    "),
+        });
+
+        self.write_string(&mut result, indent);
+        Ok(result)
+    }
+
     pub fn is_valid(&self) -> bool {
         self.validate(0, self.data.len(), 0).is_ok()
     }
+
     fn validate(&self, start: usize, end: usize, depth: usize) -> super::Result<()> {
         if depth > MAX_DEPTH {
             parse_error!("Too deep");
