@@ -5,7 +5,7 @@ use jsonb::Jsonb;
 
 use crate::{
     core::json::{
-        cache::{JsonCache, JsonCacheCell},
+        cache::JsonCacheCell,
         jsonb::{parse_error, ElementType, JsonHeader},
     },
     parse_error,

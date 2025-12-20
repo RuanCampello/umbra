@@ -1,6 +1,5 @@
-use std::cell::{Cell, UnsafeCell};
-
 use crate::{core::json::jsonb::Jsonb, sql::statement::Value};
+use std::cell::{Cell, UnsafeCell};
 
 const CACHE_SIZE: usize = 4;
 

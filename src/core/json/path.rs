@@ -7,7 +7,7 @@ pub struct JsonPath<'p> {
     pub elements: Vec<PathElement<'p>>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PathElement<'p> {
     Root,
     Key(Cow<'p, str>, RawString),
