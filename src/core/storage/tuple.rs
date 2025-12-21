@@ -94,7 +94,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Interval(i) => i.serialize(buff, r#type),
         Value::Numeric(n) => n.serialize(buff),
         Value::Enum(idx) => buff.push(*idx),
-        Value::Blob(blob) => unimplemented!(),
+        Value::Blob(_) => unimplemented!(),
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
