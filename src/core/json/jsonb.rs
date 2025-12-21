@@ -271,14 +271,16 @@ impl Jsonb {
 
                                 let index = element_index + index;
                                 match index_map.get(&index) {
-                                    Some(index) => Ok(TransversalResult::with_array_index(
-                                        pos,
-                                        LocationKind::ArrayEntry,
-                                        0,
-                                        *index,
-                                    )),
+                                    Some(index) => {
+                                        return Ok(TransversalResult::with_array_index(
+                                            pos,
+                                            LocationKind::ArrayEntry,
+                                            0,
+                                            *index,
+                                        ))
+                                    }
                                     _ => parse_error!("Element with negative index not foun"),
-                                }
+                                };
                             }
 
                             _ => unreachable!(),
@@ -470,13 +472,199 @@ impl Jsonb {
                             }
                             _ => parse_error!("Root isn't an array"),
                         }
-                        todo!()
                     }
                     _ => parse_error!("Root isn't an array"),
                 }
             }
-            _ => todo!(),
+
+            SegmentVariant::KeyWithArrayIndex(
+                PathElement::Key(path_key, is_raw),
+                PathElement::ArrayLocator(index),
+            ) => {
+                if element_type.ne(&ElementType::OBJECT) {
+                    parse_error!("Element type isn't an object")
+                }
+
+                let end_position = pos + header_size + element_size;
+                let mut current = pos + header_size;
+
+                while current < end_position {
+                    let (JsonHeader(key_type, key_size), key_header_size) =
+                        self.read_header(current)?;
+
+                    if !key_type.is_valid_key() {
+                        parse_error!("Key must be string")
+                    }
+
+                    let object_key = unsafe {
+                        std::str::from_utf8_unchecked(
+                            &self.data
+                                [current + key_header_size..current + key_header_size + key_size],
+                        )
+                    };
+
+                    match compare((object_key, key_type), (path_key, *is_raw)) {
+                        true => break,
+                        _ => current = self.skip_element(current + key_size + key_header_size)?,
+                    }
+                }
+
+                if current == end_position && mode.allows_insert() {
+                    if let Some(index) = index {
+                        if *index == 0 {
+                            parse_error!("Cannot create an new array with index")
+                        }
+                    }
+
+                    let key_header_type = match is_raw {
+                        true => ElementType::TEXTRAW,
+                        _ => ElementType::TEXT,
+                    };
+
+                    let key_header = JsonHeader::new(key_header_type, path_key.len()).into_bytes();
+                    let key_header_bytes = key_header.as_bytes();
+                    let key_bytes = path_key.as_bytes();
+                    let array_header = JsonHeader::new(ElementType::ARRAY, 1).into_bytes();
+                    let array_header_bytes = array_header.as_bytes();
+                    let array_value_header = JsonHeader::new(ElementType::OBJECT, 0).into_bytes();
+                    let array_value_header_bytes = array_value_header.as_bytes();
+
+                    let delta = (key_header_bytes.len()
+                        + key_bytes.len()
+                        + array_header_bytes.len()
+                        + array_value_header_bytes.len()) as isize;
+
+                    self.data.splice(
+                        current..current,
+                        key_header_bytes
+                            .iter()
+                            .copied()
+                            .chain(key_bytes.iter().copied())
+                            .chain(array_header_bytes.iter().copied())
+                            .chain(array_value_header_bytes.iter().copied()),
+                    );
+
+                    let key_index = current;
+                    let value_index = current + key_header_bytes.len() + key_bytes.len();
+                    let array_index = value_index + array_header_bytes.len();
+
+                    return Ok(TransversalResult::with_array_index(
+                        value_index,
+                        LocationKind::Object(key_index),
+                        delta,
+                        array_index,
+                    ));
+                }
+
+                if current != end_position && mode.allows_replace() {
+                    let key_index = current;
+
+                    current = self.skip_element(current)?;
+                    let value_index = current;
+
+                    let (JsonHeader(value_type, value_size), value_header_size) =
+                        self.read_header(value_index)?;
+                    if value_type.ne(&ElementType::ARRAY) {
+                        parse_error!("ElementType should be an array")
+                    }
+
+                    let end_position = current + value_header_size + value_size;
+                    match index {
+                        Some(index) if *index >= 0 => {
+                            let mut count = 0;
+                            let mut array_position = value_index + value_header_size;
+
+                            while array_position < end_position && count != *index as usize {
+                                array_position = self.skip_element(array_position)?;
+                                count += 1;
+                            }
+
+                            if mode.allows_insert()
+                                && array_position == end_position
+                                && count == *index as usize
+                            {
+                                let placeholder =
+                                    JsonHeader::new(ElementType::OBJECT, 0).into_bytes();
+                                let placeholder_bytes = placeholder.as_bytes();
+
+                                self.data.splice(
+                                    array_position..array_position,
+                                    placeholder_bytes.iter().copied(),
+                                );
+
+                                self.write_element_header(
+                                    value_index,
+                                    ElementType::ARRAY,
+                                    value_size + placeholder_bytes.len(),
+                                    true,
+                                )?;
+
+                                return Ok(TransversalResult::with_array_index(
+                                    value_index,
+                                    LocationKind::Object(key_index),
+                                    placeholder_bytes.len() as isize,
+                                    array_position,
+                                ));
+                            }
+
+                            if array_position != end_position && mode.allows_replace() {
+                                return Ok(TransversalResult::with_array_index(
+                                    value_index,
+                                    LocationKind::Object(key_index),
+                                    0,
+                                    array_position,
+                                ));
+                            }
+
+                            parse_error!("Not found")
+                        }
+
+                        Some(index) if *index < 0 => {
+                            let mut index_map = HashMap::with_capacity(100);
+                            let mut element_index = 0;
+                            let mut array_position = value_index + value_header_size;
+
+                            while array_position < end_position {
+                                index_map.insert(element_index, array_position);
+                                array_position = self.skip_element(array_position)?;
+                                element_index += 1;
+                            }
+
+                            let index = element_index + index;
+
+                            match index_map.get(&index) {
+                                Some(index) => {
+                                    return Ok(TransversalResult::with_array_index(
+                                        value_index,
+                                        LocationKind::Object(key_index),
+                                        0,
+                                        *index,
+                                    ))
+                                }
+                                _ => parse_error!("Element at negative index {index} not found"),
+                            }
+                        }
+
+                        Some(_) => unreachable!(),
+
+                        None => match mode.allows_insert() {
+                            false => parse_error!("Cannot insert item"),
+                            _ => {
+                                let placeholder =
+                                    JsonHeader::new(ElementType::OBJECT, 0).into_bytes();
+                                let placeholder_bytes = placeholder.as_bytes();
+                                let insert = value_index + value_size + value_header_size;
+
+                                self.data.insert(insert, placeholder_bytes[0]);
+                            }
+                        },
+                    }
+                }
+            }
+            _ => unreachable!(),
         }
+
+        Err(parse_error!("Not found"))
     }
 
     fn skip_element(&self, mut pos: usize) -> super::Result<usize> {
@@ -1731,11 +1919,11 @@ impl<'i> JsonIndentation<'i> {
 }
 
 impl PathOperation {
-    pub fn allows_replace(&self) -> bool {
+    pub const fn allows_replace(&self) -> bool {
         matches!(self, Self::ReplaceExisting | Self::Upsert)
     }
 
-    pub fn allows_insert(&self) -> bool {
+    pub const fn allows_insert(&self) -> bool {
         matches!(self, Self::Insert | Self::Upsert)
     }
 }
