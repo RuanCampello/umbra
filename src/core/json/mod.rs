@@ -313,7 +313,7 @@ fn escape_string(str: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::json::jsonb::{DeleteOperation, InsertOperation};
+    use crate::core::json::jsonb::{DeleteOperation, InsertOperation, ReplaceOperation};
 
     use super::*;
 
@@ -467,5 +467,27 @@ mod tests {
         assert!(result.is_ok());
 
         assert_eq!(json.to_string(), r#"{"name":"John"}"#);
+    }
+
+    #[test]
+    fn replace_operation() {
+        let json = r#"{"items": [10, 20, 30]}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let value = Jsonb::from_str("50").unwrap();
+        let mut operation = ReplaceOperation::new(value);
+
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed("items"), false),
+                PathElement::ArrayLocator(Some(1)),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_ok());
+
+        assert_eq!(json.to_string(), r#"{"items":[10,50,30]}"#);
     }
 }
