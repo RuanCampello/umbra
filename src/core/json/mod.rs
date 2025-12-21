@@ -313,6 +313,8 @@ fn escape_string(str: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::json::jsonb::InsertOperation;
+
     use super::*;
 
     #[test]
@@ -425,5 +427,26 @@ mod tests {
 
         let result = json.operate_on_path(&path, &mut operation);
         assert!(result.is_err())
+    }
+
+    #[test]
+    fn insert_operation() {
+        let json = r#"{"name": "John"}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let value = Jsonb::from_str("30").unwrap();
+        let mut operation = InsertOperation::new(value);
+
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed("age"), false),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_ok());
+
+        assert_eq!(json.to_string(), r#"{"name":"John","age":30}"#)
     }
 }
