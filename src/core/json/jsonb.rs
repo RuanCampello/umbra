@@ -42,6 +42,11 @@ pub(crate) struct DeleteOperation {
     mode: PathOperationMode,
 }
 
+pub(crate) struct ReplaceOperation {
+    mode: PathOperationMode,
+    value: Jsonb,
+}
+
 pub(crate) enum Header {
     Inline([u8; 1]),
     OneByte([u8; 2]),
@@ -2230,6 +2235,81 @@ impl PathOperation for DeleteOperation {
 
             json.data.clear();
             json.data.extend_from_slice(null_bytes);
+        }
+
+        Ok(())
+    }
+
+    fn mode(&self) -> PathOperationMode {
+        self.mode
+    }
+}
+
+impl ReplaceOperation {
+    pub fn new(value: Jsonb) -> Self {
+        Self {
+            mode: PathOperationMode::ReplaceExisting,
+            value,
+        }
+    }
+}
+
+impl PathOperation for ReplaceOperation {
+    fn execute(
+        &mut self,
+        json: &mut Jsonb,
+        mut stack: Vec<TransversalResult>,
+    ) -> super::Result<()> {
+        let target = stack
+            .pop()
+            .ok_or_else(|| JsonError::Internal("Stack should not be empty after peek".into()))?;
+        let value = &self.value.data;
+
+        if target.has_specific_index() {
+            let array_index = target
+                .get_array_index()
+                .ok_or(JsonError::Internal("Target must have an index".into()))?;
+
+            let object_index = target.value_index;
+            let (JsonHeader(_, object_value_size), object_value_header_size) =
+                json.read_header(object_index)?;
+            let (JsonHeader(_, array_value_size), array_value_header_size) =
+                json.read_header(array_index)?;
+
+            let delta =
+                value.len() as isize - (array_value_size + array_value_header_size) as isize;
+            let end_position = array_index + array_value_size + array_value_header_size;
+
+            json.data
+                .splice(array_index..end_position, value.iter().copied());
+
+            let h_delta = match matches!(
+                target.key_index,
+                LocationKind::Object(_) | LocationKind::Root
+            ) {
+                false => 0,
+                _ => {
+                    let h_delta = json.write_element_header(
+                        object_index,
+                        ElementType::ARRAY,
+                        (object_value_size as isize + delta) as usize,
+                        true,
+                    )?;
+                    (h_delta - object_value_header_size) as isize
+                }
+            };
+
+            json.update_parent(stack, target.delta + delta + h_delta)?;
+        } else {
+            let value_index = target.value_index;
+            let (JsonHeader(_, value_size), value_header_size) = json.read_header(value_index)?;
+
+            let delta = value.len() as isize - (value_header_size + value_size) as isize;
+            let end_position = value_index + value_header_size + value_size;
+
+            json.data
+                .splice(value_index..end_position, value.iter().copied());
+            json.update_parent(stack, delta + target.delta)?;
         }
 
         Ok(())
