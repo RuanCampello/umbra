@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use super::JsonError;
 use crate::parse_error;
 use std::borrow::Cow;

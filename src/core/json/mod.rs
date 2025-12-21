@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::{
     core::json::{
         cache::JsonCacheCell,
