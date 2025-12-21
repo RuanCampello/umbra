@@ -191,11 +191,29 @@ impl Jsonb {
             };
 
             let result = match next_is_array {
-                false => todo!(),
-                _ => todo!(),
+                false => self.navigate_segment(SegmentVariant::Single(current), cursor, mode)?,
+                _ => {
+                    let locator = iter.next().ok_or_else(|| {
+                        parse_error("Array locator must exist after peek", Some(cursor))
+                    })?;
+
+                    self.navigate_segment(
+                        SegmentVariant::KeyWithArrayIndex(current, locator),
+                        cursor,
+                        mode,
+                    )?
+                }
             };
+
+            cursor = match &result.array_position {
+                Some(ArrayPosition::Index(index)) => *index,
+                _ => result.value_index,
+            };
+
+            stack.push(result);
         }
-        todo!()
+
+        Ok(stack)
     }
 
     fn navigate_segment(

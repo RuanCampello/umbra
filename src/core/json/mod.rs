@@ -1,7 +1,6 @@
-use std::{hint::unreachable_unchecked, str::FromStr};
-
 use error::Error as JsonError;
 use jsonb::Jsonb;
+use std::{hint::unreachable_unchecked, str::FromStr};
 
 use crate::{
     core::json::{
