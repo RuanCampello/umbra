@@ -382,6 +382,7 @@ impl Jsonb {
                         let (JsonHeader(key_type, key_len), key_header_len) =
                             self.read_header(pos)?;
 
+                        println!("{key_type:#?}");
                         if !key_type.is_valid_key() {
                             parse_error!("Key should be string");
                         }

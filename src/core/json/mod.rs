@@ -306,5 +306,14 @@ mod tests {
             Value::Number(size) => assert_eq!(size, 0),
             _ => panic!("Expected Value::Number"),
         };
+
+        cache.clear();
+        let result =
+            json_array_length(&input, Some(&Value::String("$.key".into())), &cache).unwrap();
+
+        match result {
+            Value::Number(size) => assert_eq!(size, 4),
+            _ => panic!("Expected Value::Number"),
+        };
     }
 }
