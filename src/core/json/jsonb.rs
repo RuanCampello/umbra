@@ -38,6 +38,10 @@ pub(crate) struct InsertOperation {
     value: Jsonb,
 }
 
+pub(crate) struct DeleteOperation {
+    mode: PathOperationMode,
+}
+
 pub(crate) enum Header {
     Inline([u8; 1]),
     OneByte([u8; 2]),
@@ -2149,6 +2153,83 @@ impl PathOperation for InsertOperation {
             json.data
                 .splice(old_value_index..end_position, value.iter().copied());
             json.update_parent(stack, delta + target.delta)?;
+        }
+
+        Ok(())
+    }
+
+    fn mode(&self) -> PathOperationMode {
+        self.mode
+    }
+}
+
+impl DeleteOperation {
+    pub fn new() -> Self {
+        Self {
+            mode: PathOperationMode::ReplaceExisting,
+        }
+    }
+}
+
+impl PathOperation for DeleteOperation {
+    fn execute(
+        &mut self,
+        json: &mut Jsonb,
+        mut stack: Vec<TransversalResult>,
+    ) -> super::Result<()> {
+        let target = stack
+            .pop()
+            .ok_or_else(|| JsonError::Internal("Stack must be not empty after peek".into()))?;
+
+        if target.has_specific_index() {
+            let array_value_index = target
+                .get_array_index()
+                .ok_or_else(|| JsonError::Internal("Target should have an index".into()))?;
+            let index = target.value_index;
+
+            let (JsonHeader(_, object_size), object_header_size) = json.read_header(index)?;
+            let (JsonHeader(_, array_size), array_header_size) =
+                json.read_header(array_value_index)?;
+
+            let delta = 0 - (array_size + array_header_size) as isize;
+            let end_position = array_value_index + array_size + array_header_size;
+            json.data.drain(array_value_index..end_position);
+
+            let h_delta = match matches!(
+                target.key_index,
+                LocationKind::Object(_) | LocationKind::Root
+            ) {
+                true => {
+                    let h_delta = json.write_element_header(
+                        index,
+                        ElementType::ARRAY,
+                        (object_size as isize + delta) as usize,
+                        true,
+                    )?;
+                    h_delta as isize - object_header_size as isize
+                }
+                _ => 0,
+            };
+
+            json.update_parent(stack, delta + target.delta + h_delta)?;
+        } else if let LocationKind::Object(key_index) = target.key_index {
+            let value_index = target.value_index;
+
+            let (JsonHeader(_, value_size), value_header_size) = json.read_header(value_index)?;
+            let (JsonHeader(_, key_size), key_header_size) = json.read_header(key_index)?;
+
+            let delta = 0 - (value_header_size + value_size + key_size + key_header_size) as isize;
+            let end_position =
+                key_index + value_header_size + value_size + key_size + key_header_size;
+
+            json.data.drain(key_index..end_position);
+            json.update_parent(stack, delta + target.delta)?;
+        } else {
+            let null = JsonHeader::null().into_bytes();
+            let null_bytes = null.as_bytes();
+
+            json.data.clear();
+            json.data.extend_from_slice(null_bytes);
         }
 
         Ok(())
