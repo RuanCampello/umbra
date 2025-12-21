@@ -118,15 +118,11 @@ where
 pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
     match value {
         Value::String(string) => {
-            let result = match matches!(strict, Conv::Strict) {
-                true => Jsonb::from_str_with_mode(&string, strict),
-                _ => {
-                    let mut str = string.replace('\\', "\\\\").replace('"', "\\\"");
-                    str.insert(0, '"');
-                    str.push('"');
-
-                    Jsonb::from_str(&str)
-                }
+            let result = match strict {
+                Conv::Strict => Jsonb::from_str_with_mode(&string, strict),
+                Conv::NotStrict => Jsonb::from_str_with_mode(&string, strict)
+                    .or(Jsonb::from_str(&escape_string(&string))),
+                _ => Jsonb::from_str(&escape_string(&string)),
             };
 
             result.map_err(|_| parse_error("Malformed JSON", None))
@@ -306,6 +302,13 @@ fn from_json_to_value(json: Jsonb, element_type: ElementType, flag: OutputFlag) 
         ElementType::NULL => Value::Null,
         _ => unreachable!(),
     })
+}
+
+fn escape_string(str: &str) -> String {
+    let mut str = str.replace('\\', "\\\\").replace('"', "\\\"");
+    str.insert(0, '"');
+    str.push('"');
+    str
 }
 
 #[cfg(test)]
