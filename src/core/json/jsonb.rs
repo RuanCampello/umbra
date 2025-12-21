@@ -390,6 +390,91 @@ impl Jsonb {
                 }
                 _ => parse_error!("Bah"),
             },
+            SegmentVariant::KeyWithArrayIndex(
+                PathElement::Root,
+                PathElement::ArrayLocator(index),
+            ) => {
+                let (JsonHeader(root_type, root_size), root_header_size) = self.read_header(pos)?;
+
+                match root_type {
+                    ElementType::ARRAY => {
+                        let end_position = pos + root_header_size + root_size;
+
+                        match index {
+                            Some(index) if *index >= 0 => {
+                                let mut count = 0;
+                                let mut array_position = pos + root_header_size;
+
+                                while array_position <= end_position && count != *index as usize {
+                                    array_position = self.skip_element(array_position)?;
+                                    count += 1;
+                                }
+
+                                if mode.allows_insert()
+                                    && array_position == end_position
+                                    && count == *index as usize
+                                {
+                                    let placeholder =
+                                        JsonHeader::new(ElementType::OBJECT, 0).into_bytes();
+                                    let placeholder_bytes = placeholder.as_bytes();
+
+                                    self.data.splice(
+                                        array_position..array_position,
+                                        placeholder_bytes.iter().copied(),
+                                    );
+
+                                    return Ok(TransversalResult::with_array_index(
+                                        pos,
+                                        LocationKind::Root,
+                                        placeholder_bytes.len() as isize,
+                                        array_position,
+                                    ));
+                                }
+
+                                if array_position != end_position && mode.allows_replace() {
+                                    return Ok(TransversalResult::with_array_index(
+                                        pos,
+                                        LocationKind::Root,
+                                        0,
+                                        array_position,
+                                    ));
+                                }
+
+                                parse_error!("Not found")
+                            }
+
+                            Some(index) if *index < 0 => {
+                                let mut index_map = HashMap::with_capacity(100);
+                                let mut element_index = 0;
+                                let mut array_position = pos + root_header_size;
+
+                                while array_position < end_position {
+                                    index_map.insert(element_index, array_position);
+                                    array_position = self.skip_element(array_position)?;
+                                    element_index += 1;
+                                }
+
+                                let index = element_index + index;
+
+                                match index_map.get(&index) {
+                                    Some(index) => {
+                                        return Ok(TransversalResult::with_array_index(
+                                            pos,
+                                            LocationKind::Root,
+                                            0,
+                                            *index,
+                                        ))
+                                    }
+                                    _ => parse_error!("Element with negative index was not found"),
+                                }
+                            }
+                            _ => parse_error!("Root isn't an array"),
+                        }
+                        todo!()
+                    }
+                    _ => parse_error!("Root isn't an array"),
+                }
+            }
             _ => todo!(),
         }
     }
@@ -1780,17 +1865,127 @@ fn compare(key: (&str, ElementType), path_key: (&str, bool)) -> bool {
     }
 
     if !is_raw {
-        todo!();
+        return unescape_string(key) == path_key;
     }
 
     match element_type {
         ElementType::TEXTJ | ElementType::TEXT5 | ElementType::TEXTRAW | ElementType::TEXT => {
-            todo!();
+            return unescape_string(key) == unescape_string(path_key)
         }
         _ => {}
     }
 
     false
+}
+
+#[inline]
+fn unescape_string(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut code_point = String::with_capacity(5);
+
+    while let Some(c) = chars.next() {
+        match c == '\\' {
+            true => match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('r') => result.push('\r'),
+                Some('t') => result.push('\t'),
+                Some('\\') => result.push('\\'),
+                Some('/') => result.push('/'),
+                Some('"') => result.push('"'),
+                Some('b') => result.push('\u{0008}'),
+                Some('f') => result.push('\u{000C}'),
+
+                Some('x') => {
+                    code_point.clear();
+
+                    for _ in 0..2 {
+                        match chars.next() {
+                            Some(hex) => code_point.push(hex),
+                            #[rustfmt::skip]
+                            _ => { break; }
+                        }
+                    }
+
+                    if let Ok(code) = u16::from_str_radix(&code_point, 16) {
+                        if let Some(c) = char::from_u32(code as u32) {
+                            result.push(c)
+                        }
+                    }
+                }
+
+                Some('u') => {
+                    code_point.clear();
+
+                    for _ in 0..4 {
+                        match chars.next() {
+                            Some(hex) => code_point.push(hex),
+                            #[rustfmt::skip]
+                            _ => { break; }
+                        }
+                    }
+
+                    if let Ok(code) = u16::from_str_radix(&code_point, 16) {
+                        if matches!(code, 0xD800..=0xDBFF) {
+                            match chars.next() == Some('\\') && chars.next() == Some('u') {
+                                true => {
+                                    code_point.clear();
+
+                                    for _ in 0..4 {
+                                        match chars.next() {
+                                            Some(hex) => code_point.push(hex),
+                                            #[rustfmt::skip]
+                                            _ => { break; }
+                                        }
+                                    }
+
+                                    if let Ok(low) = u16::from_str_radix(&code_point, 16) {
+                                        match (0xDC00..=0xDFFF).contains(&low) {
+                                            false => {
+                                                if let Some(c1) = char::from_u32(code as u32) {
+                                                    result.push(c1);
+                                                }
+
+                                                if let Some(c2) = char::from_u32(low as u32) {
+                                                    result.push(c2)
+                                                }
+                                            }
+                                            _ => {
+                                                let high_bits = (code - 0xD800) as u32;
+                                                let low_bits = (low - 0xDC00) as u32;
+                                                let code_point = (high_bits << 10) | low_bits;
+                                                let unicode_value = code_point + 0x10000;
+
+                                                if let Some(unicode_char) =
+                                                    char::from_u32(unicode_value)
+                                                {
+                                                    result.push(unicode_char);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                #[rustfmt::skip]
+                                _ => if let Some(unicode_char) = char::from_u32(code as u32) {
+                                    result.push(unicode_char);
+                                },
+                            }
+                        }
+                    }
+                }
+
+                Some(c) => {
+                    result.push('\\');
+                    result.push(c)
+                }
+                None => result.push('\\'),
+            },
+            _ => result.push(c),
+        }
+    }
+
+    result
 }
 
 pub(crate) fn parse_error(msg: &str, location: Option<usize>) -> super::JsonError {
