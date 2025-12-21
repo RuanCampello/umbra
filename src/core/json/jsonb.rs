@@ -257,6 +257,23 @@ impl Jsonb {
         Ok(count)
     }
 
+    pub fn empty_object(size: usize) -> Self {
+        let mut json = Self::new(size, None);
+        json.write_element_header(0, ElementType::OBJECT, 0, false)
+            .expect("Header writing should not fail");
+
+        json
+    }
+
+    pub fn append(&mut self, mut data: Vec<u8>) {
+        self.data.append(&mut data);
+    }
+
+    pub fn finalise(&mut self, element_type: ElementType) -> super::Result<()> {
+        self.write_element_header(0, element_type, self.len() - 1, false)?;
+        Ok(())
+    }
+
     fn navigate_segment(
         &mut self,
         segment: SegmentVariant,

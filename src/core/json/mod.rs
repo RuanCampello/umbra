@@ -76,6 +76,45 @@ pub fn get(value: &Value, indent: Option<&str>) -> Result<Value> {
     }
 }
 
+pub fn object<'v, I, E>(values: I) -> Result<Value>
+where
+    E: ExactSizeIterator<Item = &'v Value>,
+    I: IntoIterator<IntoIter = E, Item = &'v Value>,
+{
+    let mut values = values.into_iter();
+    if values.len() % 2 != 0 {
+        return Err(JsonError::Internal(format!(
+            "json::object requires an even number of arguments"
+        )));
+    }
+
+    let mut json = Jsonb::empty_object(values.len() * 50);
+
+    while values.len() > 1 {
+        let first = values.next().ok_or_else(|| {
+            JsonError::Internal("Values must have at least 2 elements".to_string())
+        })?;
+
+        if !matches!(first, &Value::String(_)) {
+            return Err(JsonError::Internal(
+                "json::object labels must be text type".to_string(),
+            ));
+        }
+
+        let key = from_value_to_jsonb(first, Conv::ToString)?;
+        json.append(key.data());
+
+        let second = values.next().ok_or_else(|| {
+            JsonError::Internal("Values must have at least 2 elements".to_string())
+        })?;
+        let value = from_value_to_jsonb(second, Conv::NotStrict)?;
+        json.append(value.data());
+    }
+
+    json.finalise(ElementType::OBJECT)?;
+    from_json_to_value(json, ElementType::OBJECT, OutputFlag::String)
+}
+
 pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
     match value {
         Value::String(string) => {
@@ -328,5 +367,23 @@ mod tests {
             Value::Number(size) => assert_eq!(size, 4),
             _ => panic!("Expected Value::Number"),
         };
+    }
+
+    #[test]
+    fn json_object() {
+        let key = Value::String("key".into());
+        let value = Value::String("value".into());
+        let input = [key, value];
+
+        let parent_key = Value::String("parent_key".into());
+        let parent_value = object(&input).unwrap();
+        let parent_input = [parent_key, parent_value];
+
+        let result = object(&parent_input).unwrap();
+
+        match result {
+            Value::String(json) => assert_eq!(json.as_str(), r#"{"parent_key":{"key":"value"}}"#),
+            _ => panic!("Expected Value::Text"),
+        }
     }
 }
