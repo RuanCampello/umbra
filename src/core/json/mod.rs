@@ -286,4 +286,25 @@ mod tests {
             _ => panic!("Expected Value::String"),
         }
     }
+
+    #[test]
+    fn array_length() {
+        let input = Value::String("[1,2,3,4]".into());
+        let mut cache = JsonCacheCell::new();
+        let result = json_array_length(&input, Some(&Value::String("$".into())), &cache).unwrap();
+
+        match result {
+            Value::Number(size) => assert_eq!(size, 4),
+            _ => panic!("Expected Value::Number"),
+        };
+
+        let input = Value::String("{key: [1,2,3,4]}".into());
+        cache.clear();
+        let result = json_array_length(&input, None, &cache).unwrap();
+
+        match result {
+            Value::Number(size) => assert_eq!(size, 0),
+            _ => panic!("Expected Value::Number"),
+        };
+    }
 }

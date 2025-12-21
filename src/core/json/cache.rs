@@ -125,6 +125,11 @@ impl JsonCacheCell {
         self.accessed.set(false);
         result
     }
+
+    pub(in crate::core::json) fn clear(&mut self) {
+        self.accessed.set(false);
+        self.inner = UnsafeCell::new(None);
+    }
 }
 
 #[cfg(test)]
