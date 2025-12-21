@@ -1,7 +1,3 @@
-use error::Error as JsonError;
-use jsonb::Jsonb;
-use std::{hint::unreachable_unchecked, str::FromStr};
-
 use crate::{
     core::json::{
         cache::JsonCacheCell,
@@ -10,6 +6,9 @@ use crate::{
     parse_error,
     sql::statement::Value,
 };
+use error::Error as JsonError;
+use jsonb::Jsonb;
+use std::{hint::unreachable_unchecked, str::FromStr};
 
 mod cache;
 pub mod error;
@@ -197,4 +196,23 @@ fn from_json_to_value(json: Jsonb, element_type: ElementType, flag: OutputFlag) 
         ElementType::NULL => Value::Null,
         _ => unreachable!(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blob_jsonb() {
+        let binary = vec![124, 55, 104, 101, 121, 39, 121, 111];
+        let input = Value::Blob(binary);
+        let json = get(&input, None).unwrap();
+
+        match json {
+            Value::String(string) => {
+                assert!(string.as_str().contains(r#"{"hey":"yo"}"#));
+            }
+            _ => panic!("Expected Value::String"),
+        }
+    }
 }
