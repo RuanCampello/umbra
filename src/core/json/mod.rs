@@ -409,4 +409,21 @@ mod tests {
         let result = operation.result().to_string();
         assert_eq!(result, r#"{"name":"Jonh","age":30,"surname":"Smith"}"#);
     }
+
+    #[test]
+    fn non_existent_search_operation() {
+        let json = r#"{"name": "Jonh", "age": 30}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let mut operation = SearchOperation::new(50);
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed(""), false),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_err())
+    }
 }
