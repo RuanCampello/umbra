@@ -376,7 +376,7 @@ impl Jsonb {
             SegmentVariant::Single(PathElement::Key(path_key, is_raw)) => match element_type {
                 ElementType::OBJECT => {
                     let end_position = pos + element_size + header_size;
-                    pos + header_size;
+                    pos += header_size;
 
                     while pos < end_position {
                         let (JsonHeader(key_type, key_len), key_header_len) =

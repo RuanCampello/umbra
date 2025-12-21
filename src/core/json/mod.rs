@@ -316,4 +316,17 @@ mod tests {
             _ => panic!("Expected Value::Number"),
         };
     }
+
+    #[test]
+    fn array_length_indexing() {
+        let input = Value::String("[[1,2,3,4]]".into());
+        let cache = JsonCacheCell::new();
+        let result =
+            json_array_length(&input, Some(&Value::String("$[0]".into())), &cache).unwrap();
+
+        match result {
+            Value::Number(size) => assert_eq!(size, 4),
+            _ => panic!("Expected Value::Number"),
+        };
+    }
 }
