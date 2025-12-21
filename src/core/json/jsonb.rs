@@ -33,6 +33,11 @@ pub(crate) struct SearchOperation {
     value: Jsonb,
 }
 
+pub(crate) struct InsertOperation {
+    mode: PathOperationMode,
+    value: Jsonb,
+}
+
 pub(crate) enum Header {
     Inline([u8; 1]),
     OneByte([u8; 2]),
@@ -741,6 +746,52 @@ impl Jsonb {
         }
 
         Err(parse_error!("Not found"))
+    }
+
+    fn update_parent(&mut self, stack: Vec<TransversalResult>, delta: isize) -> super::Result<()> {
+        let mut delta = delta;
+        let mut is_prev_array = false;
+
+        for parent in stack.iter().rev() {
+            let (JsonHeader(element_type, element_size), element_header_len) =
+                self.read_header(parent.value_index)?;
+
+            match element_type == ElementType::ARRAY && !is_prev_array {
+                true => {
+                    is_prev_array = true;
+
+                    let array_element_index = parent.get_array_index().ok_or_else(|| {
+                        JsonError::Internal("Array length must have an index".into())
+                    })?;
+
+                    let (
+                        JsonHeader(array_element_type, array_element_size),
+                        array_element_header_len,
+                    ) = self.read_header(array_element_index)?;
+
+                    let new_array_header_len = self.write_element_header(
+                        array_element_index,
+                        array_element_type,
+                        (array_element_size as isize + delta) as usize,
+                        true,
+                    )?;
+
+                    delta += (new_array_header_len - array_element_header_len) as isize;
+                }
+                _ => is_prev_array = false,
+            }
+
+            let size = element_size as isize + delta;
+            let header_size =
+                self.write_element_header(parent.value_index, element_type, size as usize, true)?;
+
+            let header_diff = header_size as isize - element_header_len as isize;
+
+            delta += parent.delta;
+            delta += header_diff;
+        }
+
+        Ok(())
     }
 
     fn skip_element(&self, mut pos: usize) -> super::Result<usize> {
@@ -1982,6 +2033,10 @@ impl TransversalResult {
             _ => None,
         }
     }
+
+    pub fn has_specific_index(&self) -> bool {
+        matches!(self.array_position, Some(ArrayPosition::Index(_)))
+    }
 }
 
 impl SearchOperation {
@@ -2016,6 +2071,85 @@ impl PathOperation for SearchOperation {
         self.value
             .data
             .extend_from_slice(&json.data[index..index + header_size + size]);
+
+        Ok(())
+    }
+
+    fn mode(&self) -> PathOperationMode {
+        self.mode
+    }
+}
+
+impl InsertOperation {
+    pub fn new(value: Jsonb) -> Self {
+        Self {
+            value,
+            mode: PathOperationMode::Insert,
+        }
+    }
+}
+
+impl PathOperation for InsertOperation {
+    fn execute(
+        &mut self,
+        json: &mut Jsonb,
+        mut stack: Vec<TransversalResult>,
+    ) -> super::Result<()> {
+        if stack.is_empty() {
+            parse_error!("Nothing to operate on");
+        }
+
+        let value = &self.value.data;
+        let target = stack
+            .pop()
+            .ok_or_else(|| JsonError::Internal("Stack should be not empty after peek".into()))?;
+
+        if target.has_specific_index() {
+            let array_value_index = target.get_array_index().ok_or(JsonError::Internal(
+                "Target should have an array index".into(),
+            ))?;
+
+            let object_index = target.value_index;
+
+            let (JsonHeader(_, object_value_size), object_value_header_size) =
+                json.read_header(object_index)?;
+            let (JsonHeader(_, array_value_size), array_value_header_size) =
+                json.read_header(array_value_index)?;
+
+            let delta =
+                value.len() as isize - (array_value_size + array_value_header_size) as isize;
+            let end_position = array_value_index + array_value_size + array_value_header_size;
+            json.data
+                .splice(array_value_index..end_position, value.iter().copied());
+
+            let h_delta = match matches!(
+                target.key_index,
+                LocationKind::Object(_) | LocationKind::Root
+            ) {
+                false => 0,
+                _ => {
+                    let delta = json.write_element_header(
+                        object_index,
+                        ElementType::ARRAY,
+                        (object_value_size as isize + delta) as usize,
+                        true,
+                    )?;
+                    (delta - object_value_header_size) as isize
+                }
+            };
+
+            json.update_parent(stack, target.delta + delta + h_delta)?;
+        } else {
+            let old_value_index = target.value_index;
+            let (JsonHeader(_, old_value_size), old_value_header_size) =
+                json.read_header(old_value_index)?;
+            let delta = value.len() as isize - (old_value_header_size + old_value_size) as isize;
+            let end_position = old_value_index + old_value_header_size + old_value_size;
+
+            json.data
+                .splice(old_value_index..end_position, value.iter().copied());
+            json.update_parent(stack, delta + target.delta)?;
+        }
 
         Ok(())
     }
