@@ -441,6 +441,7 @@ impl<File: FileOperations> Planner<File> {
         Ok(())
     }
 
+    #[inline(always)]
     pub(crate) fn schema(&self) -> Option<Schema> {
         let schema = match self {
             Self::SeqScan(seq) => &seq.table.schema,
@@ -1278,12 +1279,13 @@ impl<File: PlanExecutor> Execute for Project<File> {
             return Ok(None);
         };
 
-        Ok(Some(
-            self.projection
-                .iter()
-                .map(|expr| resolve_expression(&tuple, &self.input, expr))
-                .collect::<Result<Tuple, _>>()?,
-        ))
+        // PERFORMANCE: maybe creating a new array is a foot shot
+        let mut project = Vec::with_capacity(self.projection.len());
+        for expr in &self.projection {
+            project.push(resolve_expression(&tuple, &self.input, expr)?);
+        }
+
+        Ok(Some(project))
     }
 }
 
@@ -1296,14 +1298,14 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
         self.output_buffer.clear();
 
         let input_schema = self.source.schema().unwrap();
-        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> = HashMap::new();
+        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> = HashMap::with_capacity(128);
 
         while let Some(row) = self.source.try_next()? {
-            let key = self
-                .group_by
-                .iter()
-                .map(|expr| resolve_expression(&row, &input_schema, &expr))
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut key = Vec::with_capacity(self.group_by.len());
+            for expr in &self.group_by {
+                key.push(resolve_expression(&row, &input_schema, expr)?);
+            }
+
             groups.entry(key).or_default().push(row)
         }
 
@@ -1527,10 +1529,10 @@ impl<File: FileOperations> HashJoin<File> {
             right: Box::new(right),
 
             hash_built: false,
-            table: HashMap::new(),
+            table: HashMap::with_capacity(1024),
             current_left: None,
             current_matches: None,
-            matched_right_keys: HashSet::new(),
+            matched_right_keys: HashSet::with_capacity(1024),
             unmatched_right: None,
             unmatched_right_index: 0,
             index: 0,
@@ -1849,7 +1851,7 @@ impl TupleBuffer {
             packed,
             current_size: if packed { 0 } else { TUPLE_HEADER_SIZE },
             largest_size: 0,
-            tuples: VecDeque::new(),
+            tuples: VecDeque::with_capacity(page_size.saturating_sub(TUPLE_HEADER_SIZE)),
         }
     }
 
