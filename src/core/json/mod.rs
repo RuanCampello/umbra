@@ -389,4 +389,24 @@ mod tests {
             _ => panic!("Expected Value::Text"),
         }
     }
+
+    #[test]
+    fn search_operation() {
+        let json = r#"{"person": {"name": "Jonh", "age": 30, "surname": "Smith"}}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let mut operation = SearchOperation::new(50);
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed("person"), false),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_ok());
+
+        let result = operation.result().to_string();
+        assert_eq!(result, r#"{"name":"Jonh","age":30,"surname":"Smith"}"#);
+    }
 }
