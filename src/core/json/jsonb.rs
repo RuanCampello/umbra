@@ -2719,4 +2719,103 @@ line three",
         let header = JsonHeader::from_slice(0, &result.data).unwrap().0;
         assert!(matches!(header.0, ElementType::ARRAY));
     }
+
+    #[test]
+    fn search_operation() {
+        let json = r#"{"person": {"name": "Jonh", "age": 30, "surname": "Smith"}}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let mut operation = SearchOperation::new(50);
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed("person"), false),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_ok());
+
+        let result = operation.result().to_string();
+        assert_eq!(result, r#"{"name":"Jonh","age":30,"surname":"Smith"}"#);
+    }
+
+    #[test]
+    fn non_existent_search_operation() {
+        let json = r#"{"name": "Jonh", "age": 30}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let mut operation = SearchOperation::new(50);
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed(""), false),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_err())
+    }
+
+    #[test]
+    fn insert_operation() {
+        let json = r#"{"name": "John"}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let value = Jsonb::from_str("30").unwrap();
+        let mut operation = InsertOperation::new(value);
+
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed("age"), false),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_ok());
+
+        assert_eq!(json.to_string(), r#"{"name":"John","age":30}"#)
+    }
+
+    #[test]
+    fn delete_operation() {
+        let json = r#"{"name": "John", "age": 20}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let mut operation = DeleteOperation::new();
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed("age"), false),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_ok());
+
+        assert_eq!(json.to_string(), r#"{"name":"John"}"#);
+    }
+
+    #[test]
+    fn replace_operation() {
+        let json = r#"{"items": [10, 20, 30]}"#;
+        let mut json = Jsonb::from_str(json).unwrap();
+
+        let value = Jsonb::from_str("50").unwrap();
+        let mut operation = ReplaceOperation::new(value);
+
+        let path = JsonPath {
+            elements: vec![
+                PathElement::Root,
+                PathElement::Key(Cow::Borrowed("items"), false),
+                PathElement::ArrayLocator(Some(1)),
+            ],
+        };
+
+        let result = json.operate_on_path(&path, &mut operation);
+        assert!(result.is_ok());
+
+        assert_eq!(json.to_string(), r#"{"items":[10,50,30]}"#);
+    }
 }
