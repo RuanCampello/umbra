@@ -28,6 +28,11 @@ pub(crate) struct TransversalResult {
     array_position: Option<ArrayPosition>,
 }
 
+pub(crate) struct SearchOperation {
+    mode: PathOperationMode,
+    value: Jsonb,
+}
+
 pub(crate) enum Header {
     Inline([u8; 1]),
     OneByte([u8; 2]),
@@ -42,7 +47,7 @@ pub enum JsonIndentation<'i> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum PathOperation {
+pub(crate) enum PathOperationMode {
     ReplaceExisting,
     Upsert,
     Insert,
@@ -85,6 +90,12 @@ pub enum ElementType {
     RESERVED1,
     RESERVED2,
     RESERVED3,
+}
+
+pub trait PathOperation {
+    fn mode(&self) -> PathOperationMode;
+
+    fn execute(&mut self, json: &mut Jsonb, stack: Vec<TransversalResult>) -> super::Result<()>;
 }
 
 type Table = [u8; 256];
@@ -166,7 +177,7 @@ impl Jsonb {
     pub fn navigate_path(
         &mut self,
         path: &JsonPath,
-        mode: PathOperation,
+        mode: PathOperationMode,
     ) -> super::Result<Vec<TransversalResult>> {
         let mut iter = path.elements.iter().peekable();
         let mut cursor = 0;
@@ -186,7 +197,7 @@ impl Jsonb {
             };
 
             let mode = match is_intermediate {
-                true => PathOperation::Upsert,
+                true => PathOperationMode::Upsert,
                 _ => mode,
             };
 
@@ -216,11 +227,41 @@ impl Jsonb {
         Ok(stack)
     }
 
+    pub fn operate_on_path<O: PathOperation>(
+        &mut self,
+        path: &JsonPath,
+        operation: &mut O,
+    ) -> super::Result<()> {
+        let mode = operation.mode();
+        let stack = self.navigate_path(path, mode)?;
+
+        operation.execute(self, stack)?;
+        Ok(())
+    }
+
+    pub fn array_length(&self) -> super::Result<usize> {
+        let (header, header_skip) = self.read_header(0)?;
+
+        if header.0 != ElementType::ARRAY {
+            return Ok(0);
+        }
+
+        let mut count = 0;
+        let mut position = header_skip;
+
+        while position < header_skip + header.1 {
+            position = self.skip_element(position)?;
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
     fn navigate_segment(
         &mut self,
         segment: SegmentVariant,
         mut pos: usize,
-        mode: PathOperation,
+        mode: PathOperationMode,
     ) -> super::Result<TransversalResult> {
         let (JsonHeader(element_type, element_size), header_size) = self.read_header(pos)?;
 
@@ -1917,6 +1958,54 @@ impl TransversalResult {
             array_position: Some(ArrayPosition::Index(index)),
         }
     }
+
+    pub fn get_array_index(&self) -> Option<usize> {
+        match self.array_position {
+            Some(ArrayPosition::Index(index)) => Some(index),
+            _ => None,
+        }
+    }
+}
+
+impl SearchOperation {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            mode: PathOperationMode::ReplaceExisting,
+            value: Jsonb::new(capacity, None),
+        }
+    }
+
+    pub fn result(self) -> Jsonb {
+        self.value
+    }
+}
+
+impl PathOperation for SearchOperation {
+    fn execute(
+        &mut self,
+        json: &mut Jsonb,
+        mut stack: Vec<TransversalResult>,
+    ) -> super::Result<()> {
+        let target = stack.pop().ok_or_else(|| {
+            JsonError::Internal("Stack should be not empty after peek".to_string())
+        })?;
+
+        let index = match target.get_array_index() {
+            Some(index) => index,
+            _ => target.value_index,
+        };
+
+        let (JsonHeader(_, size), header_size) = json.read_header(index)?;
+        self.value
+            .data
+            .extend_from_slice(&json.data[index..index + header_size + size]);
+
+        Ok(())
+    }
+
+    fn mode(&self) -> PathOperationMode {
+        self.mode
+    }
 }
 
 impl Header {
@@ -1936,7 +2025,7 @@ impl<'i> JsonIndentation<'i> {
     }
 }
 
-impl PathOperation {
+impl PathOperationMode {
     pub const fn allows_replace(&self) -> bool {
         matches!(self, Self::ReplaceExisting | Self::Upsert)
     }

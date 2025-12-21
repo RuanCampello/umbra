@@ -1,14 +1,15 @@
 use crate::{
     core::json::{
         cache::JsonCacheCell,
-        jsonb::{parse_error, ElementType, JsonHeader},
+        jsonb::{parse_error, ElementType, JsonHeader, SearchOperation},
+        path::{json_path, JsonPath, PathElement},
     },
     parse_error,
     sql::statement::Value,
 };
 use error::Error as JsonError;
 use jsonb::Jsonb;
-use std::{hint::unreachable_unchecked, str::FromStr};
+use std::{borrow::Cow, hint::unreachable_unchecked, str::FromStr};
 
 mod cache;
 pub mod error;
@@ -145,6 +146,76 @@ pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
         }
         _ => unsafe { unreachable_unchecked() },
     }
+}
+
+fn json_array_length(value: &Value, path: Option<&Value>, cache: &JsonCacheCell) -> Result<Value> {
+    let json_fn = fn_to_json(Conv::Strict);
+    let mut json = cache.get_or_insert(value, json_fn)?;
+
+    if path.is_none() {
+        let length = json.array_length()?;
+        return Ok(Value::Number(length as i128));
+    }
+
+    let path = from_value_to_path(path.unwrap(), true)?;
+
+    if let Some(path) = path {
+        let mut operation = SearchOperation::new(json.len() / 2);
+        json.operate_on_path(&path, &mut operation)?;
+
+        if let Ok(len) = operation.result().array_length() {
+            return Ok(Value::Number(len as i128));
+        }
+    }
+
+    Ok(Value::Null)
+}
+
+fn from_value_to_path<'v>(path: &'v Value, strict: bool) -> Result<Option<JsonPath<'v>>> {
+    let path = match strict {
+        true => match path {
+            Value::String(string) => json_path(string.as_str())?,
+            Value::Null => return Ok(None),
+            _ => {
+                return Err(JsonError::Internal(format!(
+                    "JSON path error near: {:?}",
+                    path.to_string()
+                )))
+            }
+        },
+        _ => match path {
+            Value::String(string) => match string.starts_with("$") {
+                true => json_path(string.as_str())?,
+                _ => JsonPath {
+                    elements: vec![
+                        PathElement::Root,
+                        PathElement::Key(Cow::Borrowed(string.as_str()), false),
+                    ],
+                },
+            },
+            Value::Number(int) => JsonPath {
+                elements: vec![
+                    PathElement::Root,
+                    PathElement::ArrayLocator(Some(*int as i32)),
+                ],
+            },
+            Value::Float(float) => JsonPath {
+                elements: vec![
+                    PathElement::Root,
+                    PathElement::Key(Cow::Owned(float.to_string()), false),
+                ],
+            },
+            Value::Null => return Ok(None),
+            _ => {
+                return Err(JsonError::Internal(format!(
+                    "JSON path error near: {:?}",
+                    path.to_string()
+                )))
+            }
+        },
+    };
+
+    Ok(Some(path))
 }
 
 fn fn_to_json(conversion: Conv) -> impl FnOnce(&Value) -> Result<Jsonb> {
