@@ -13,8 +13,9 @@ use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlErro
 use crate::sql::statement::{
     join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
 };
-use crate::vm;
-use crate::vm::expression::{evaluate_where, VmType};
+#[cfg(not(feature = "simd"))]
+use crate::vm::evaluate_where;
+use crate::vm::{self, expression::VmType};
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::hash_map::IntoIter;
@@ -707,6 +708,7 @@ impl<File: PlanExecutor> Execute for LogicalScan<File> {
 }
 
 impl<File: PlanExecutor> Execute for Filter<File> {
+    #[cfg(not(feature = "simd"))]
     fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
         while let Some(tuple) = self.source.try_next()? {
             if evaluate_where(&self.schema, &tuple, &self.filter)? {
@@ -715,6 +717,11 @@ impl<File: PlanExecutor> Execute for Filter<File> {
         }
 
         Ok(None)
+    }
+
+    #[cfg(feature = "simd")]
+    fn try_next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        todo!()
     }
 }
 

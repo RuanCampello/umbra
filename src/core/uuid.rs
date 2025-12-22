@@ -6,7 +6,7 @@ use super::random::{random_seed, Rng};
 use std::{fmt::Display, str::FromStr};
 
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, Hash)]
 /// A 128 bits Universally Unique Identifier.
 /// To learn more about UUIDs on databases,
 /// read [this](https://planetscale.com/blog/the-problem-with-using-a-uuid-primary-key-in-mysql) article about MySql
@@ -160,6 +160,32 @@ const fn parse_hyphenated(string: &[u8]) -> Result<[u8; 16], UuidError> {
 
     Ok(buffer)
 }
+
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+impl PartialEq for Uuid {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        unsafe {
+            use std::arch::x86_64::{__m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8};
+
+            let a = _mm_loadu_si128(self.0.as_ptr() as *const __m128i);
+            let b = _mm_loadu_si128(other.0.as_ptr() as *const __m128i);
+
+            let cmp = _mm_cmpeq_epi8(a, b);
+
+            _mm_movemask_epi8(cmp) == 0xFFFF
+        }
+    }
+}
+
+#[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+impl PartialEq for Uuid {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for Uuid {}
 
 impl Display for Uuid {
     #[inline(always)]
