@@ -3,10 +3,11 @@ use crate::core::date::interval::IntervalParseError;
 use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
 use crate::core::numeric::{Numeric, NumericError};
 use crate::core::uuid::{Uuid, UuidError};
+use crate::core::json;
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
-    ArithmeticPair, BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
-    NUMERIC_ANY,
+    ArithmeticPair, BinaryOperator, Expression, Function, PathSegment, Temporal, Type,
+    UnaryOperator, Value, NUMERIC_ANY,
 };
 use std::fmt::{Display, Formatter};
 use std::mem;
@@ -94,6 +95,52 @@ pub(crate) fn resolve_expression<'exp>(
             Some(idx) => Ok(val[idx].clone()),
             None => Err(SqlError::InvalidColumn(column.clone())),
         },
+        Expression::Path { head, segments } => {
+            let (base_value, remaining_segments) = match segments.first() {
+                Some(PathSegment::Key(first_key)) => {
+                    let qualified = format!("{head}.{first_key}");
+                    match schema.index_of(&qualified) {
+                        Some(idx) => (val[idx].clone(), &segments[1..]),
+                        None => (
+                            resolve_expression(val, schema, &Expression::Identifier(head.clone()))?,
+                            &segments[..],
+                        ),
+                    }
+                }
+                _ => (
+                    resolve_expression(val, schema, &Expression::Identifier(head.clone()))?,
+                    &segments[..],
+                ),
+            };
+
+            if matches!(base_value, Value::Null) {
+                return Ok(Value::Null);
+            }
+
+            if remaining_segments.is_empty() {
+                return Ok(base_value);
+            }
+
+            let mut path = String::from("$");
+            for seg in remaining_segments {
+                match seg {
+                    PathSegment::Key(key) => {
+                        path.push('.');
+                        path.push_str(key);
+                    }
+                    PathSegment::Index(idx) => {
+                        path.push('[');
+                        path.push_str(&idx.to_string());
+                        path.push(']');
+                    }
+                }
+            }
+
+            match json::get_path(&base_value, &path, json::OutputFlag::ElementType) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(Value::Null),
+            }
+        }
         Expression::QualifiedIdentifier { column, table } => {
             let idx = schema
                 .index_of(&format!("{table}.{column}"))

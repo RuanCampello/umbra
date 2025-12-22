@@ -248,6 +248,7 @@ fn split_where<'expr>(
             Expression::Identifier(_) => true,
             Expression::Value(_) | Expression::Wildcard => false,
             Expression::QualifiedIdentifier { table: table_name, .. } => table_name != table,
+            Expression::Path { .. } => true,
             Expression::UnaryOperation {  expr , .. } | Expression::IsNull { expr, .. } => references(expr, table),
             Expression::BinaryOperation { left, right, .. } => references(left, table) || references(right, table),
             Expression::Function {args, .. } => args.iter().any(|a| references(a, table)),

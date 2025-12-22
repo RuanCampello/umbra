@@ -137,6 +137,10 @@ pub enum Expression {
         table: String,
         column: String,
     },
+    Path {
+        head: String,
+        segments: Vec<PathSegment>,
+    },
     Value(Value),
     Wildcard,
     UnaryOperation {
@@ -161,6 +165,12 @@ pub enum Expression {
         negated: bool,
     },
     Nested(Box<Self>),
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
+pub enum PathSegment {
+    Key(String),
+    Index(usize),
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
@@ -977,26 +987,40 @@ impl Display for Expression {
             Self::Identifier(ident) => f.write_str(ident),
             Self::QualifiedIdentifier { table, column } => write!(f, "{table}.{column}"),
             Self::Value(value) => write!(f, "{value}"),
-            Self::Wildcard => f.write_char('*'),
+            Self::Wildcard => f.write_str("*"),
+            Self::UnaryOperation { operator, expr } => write!(f, "{operator}{expr}"),
+            Self::Nested(expr) => write!(f, "({expr})"),
             Self::BinaryOperation {
                 operator,
                 left,
                 right,
-            } => {
-                write!(f, "{left} {operator} {right}")
+            } => write!(f, "{left} {operator} {right}"),
+            Self::Path { head, segments } => {
+                f.write_str(head)?;
+                for seg in segments {
+                    match seg {
+                        PathSegment::Key(key) => write!(f, ".{key}")?,
+                        PathSegment::Index(idx) => write!(f, "[{idx}]")?,
+                    }
+                }
+                Ok(())
             }
-            Self::UnaryOperation { operator, expr } => {
-                write!(f, "{operator}{expr}")
+            Self::Function { func, args } => {
+                let mut args = args.iter();
+                write!(f, "{func}(")?;
+                if let Some(arg) = args.next() {
+                    write!(f, "{arg}")?;
+                    for arg in args {
+                        write!(f, ", {arg}")?;
+                    }
+                }
+                write!(f, ")")
             }
-            Self::Function { func, args } => write!(f, "{func}"),
             Self::Alias { expr, alias } => write!(f, "{expr} AS {alias}"),
-            Self::IsNull { expr, negated } => {
-                write!(f, "{expr} IS ");
-
-                let is = if *negated { "NOT NULL" } else { "NULL" };
-                f.write_str(is)
-            }
-            Self::Nested(expr) => write!(f, "({expr})"),
+            Self::IsNull { expr, negated } => match negated {
+                false => write!(f, "{expr} IS NULL"),
+                _ => write!(f, "{expr} IS NOT NULL"),
+            },
         }
     }
 }

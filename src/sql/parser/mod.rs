@@ -13,23 +13,20 @@ mod tokenizer;
 mod tokens;
 
 use crate::core::date::interval::Interval;
-use crate::core::date::{
-    ExtractKind, NaiveDate as Date, NaiveDateTime as DateTime, NaiveTime as Time, Parse,
-};
+use crate::sql::parser::tokens::{Keyword, Token, Whitespace};
+use crate::sql::parser::tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
 use crate::sql::statement::{
-    Assignment, BinaryOperator, Column, Constraint, Create, Drop, Expression, Function, JoinClause,
-    JoinType, Statement, TableRef, Type, UnaryOperator, Value, NUMERIC_ANY,
+    Assignment, BinaryOperator, Column, Constraint, Create, Delete, Drop, Expression, Function,
+    Insert, JoinClause, JoinType, OrderBy, OrderDirection, PathSegment, Select, SelectBuilder,
+    Statement, Type, UnaryOperator, Update, Value,
 };
+use crate::sql::statement::{NUMERIC_ANY};
+
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::iter::Peekable;
 use std::str::FromStr;
-use tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
-use tokens::Token;
 
-pub use tokens::Keyword;
-
-use super::statement::{Delete, Insert, Select, Update};
 
 pub(crate) struct Parser<'input> {
     input: &'input str,
@@ -245,6 +242,14 @@ impl<'input> Parser<'input> {
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
             Token::Keyword(Keyword::Null) => Ok(Expression::Value(Value::Null)),
+            Token::LeftBrace => {
+                let json = self.parse_json_object()?;
+                Ok(Expression::Value(Value::String(json)))
+            }
+            Token::LeftBracket => {
+                let json = self.parse_json_array()?;
+                Ok(Expression::Value(Value::String(json)))
+            }
             Token::Keyword(Keyword::Interval) => self.parse_interval(),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
@@ -273,16 +278,50 @@ impl<'input> Parser<'input> {
                         .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
                 ))),
             },
-            Token::Identifier(identifier) => match self.consume_optional(Token::Dot) {
-                false => Ok(Expression::Identifier(identifier)),
-                _ => {
-                    let column = self.parse_ident()?;
-                    Ok(Expression::QualifiedIdentifier {
-                        table: identifier,
-                        column,
-                    })
+            Token::Identifier(identifier) => {
+                let mut segments = Vec::new();
+
+                loop {
+                    if self.consume_optional(Token::Dot) {
+                        let key = self.parse_ident()?;
+                        segments.push(PathSegment::Key(key));
+                        continue;
+                    }
+
+                    if self.consume_optional(Token::LeftBracket) {
+                        let token = self.next_token()?;
+                        let idx = match token {
+                            Token::Number(n) if !n.contains('.') => n.parse::<usize>().map_err(|_| {
+                                self.error(ErrorKind::Expected {
+                                    expected: Token::Number(Default::default()),
+                                    found: Token::Number(n),
+                                })
+                            })?,
+                            other => {
+                                return Err(self.error(ErrorKind::Expected {
+                                    expected: Token::Number(Default::default()),
+                                    found: other,
+                                }))
+                            }
+                        };
+
+                        self.expect_token(Token::RightBracket)?;
+                        segments.push(PathSegment::Index(idx));
+                        continue;
+                    }
+
+                    break;
                 }
-            },
+
+                match segments.is_empty() {
+                    true => Ok(Expression::Identifier(identifier)),
+                    _ => Ok(Expression::Path {
+                        head: identifier,
+                        segments,
+                    }),
+                }
+            }
+            }
             token @ (Token::Minus | Token::Plus) => {
                 let op = match token {
                     Token::Minus => UnaryOperator::Minus,
@@ -301,10 +340,120 @@ impl<'input> Parser<'input> {
                     Token::Mul,
                     Token::Minus,
                     Token::Plus,
+                    Token::LeftBrace,
+                    Token::LeftBracket,
                     Token::LeftParen,
                 ],
                 found: token,
             })),
+        }
+    }
+
+    fn json_escape(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+
+        for ch in s.chars() {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                other => out.push(other),
+            }
+        }
+
+        out
+    }
+
+    fn parse_json_value(&mut self) -> ParserResult<String> {
+        Ok(match self.next_token()? {
+            Token::LeftBrace => self.parse_json_object()?,
+            Token::LeftBracket => self.parse_json_array()?,
+            Token::String(s) => format!("\"{}\"", Self::json_escape(&s)),
+            Token::Number(n) => n,
+            Token::Keyword(Keyword::True) => "true".into(),
+            Token::Keyword(Keyword::False) => "false".into(),
+            Token::Keyword(Keyword::Null) => "null".into(),
+            other => {
+                return Err(self.error(ErrorKind::ExpectedOneOf {
+                    expected: vec![
+                        Token::LeftBrace,
+                        Token::LeftBracket,
+                        Token::String(Default::default()),
+                        Token::Number(Default::default()),
+                        Token::Keyword(Keyword::True),
+                        Token::Keyword(Keyword::False),
+                        Token::Keyword(Keyword::Null),
+                    ],
+                    found: other,
+                }))
+            }
+        })
+    }
+
+    fn parse_json_object(&mut self) -> ParserResult<String> {
+        let mut out = String::from("{");
+
+        if self.consume_optional(Token::RightBrace) {
+            out.push('}');
+            return Ok(out);
+        }
+
+        loop {
+            let key = match self.next_token()? {
+                Token::Identifier(id) => id,
+                Token::String(s) => s,
+                other => {
+                    return Err(self.error(ErrorKind::ExpectedOneOf {
+                        expected: vec![
+                            Token::Identifier(Default::default()),
+                            Token::String(Default::default()),
+                        ],
+                        found: other,
+                    }))
+                }
+            };
+
+            self.expect_token(Token::Colon)?;
+            let value = self.parse_json_value()?;
+
+            out.push('"');
+            out.push_str(&Self::json_escape(&key));
+            out.push_str("\":");
+            out.push_str(&value);
+
+            if self.consume_optional(Token::Comma) {
+                continue;
+            }
+
+            self.expect_token(Token::RightBrace)?;
+            out.push('}');
+
+            return Ok(out);
+        }
+    }
+
+    fn parse_json_array(&mut self) -> ParserResult<String> {
+        let mut out = String::from("[");
+
+        if self.consume_optional(Token::RightBracket) {
+            out.push(']');
+            return Ok(out);
+        }
+
+        loop {
+            let value = self.parse_json_value()?;
+            out.push_str(&value);
+
+            if self.consume_optional(Token::Comma) {
+                continue;
+            }
+
+            self.expect_token(Token::RightBracket)?;
+            out.push(']');
+            
+            return Ok(out);
         }
     }
 
@@ -614,37 +763,30 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression> {
+        use crate::sql::statement::Temporal;
+        
         let value_str = self.parse_ident()?;
 
-        let value = match keyword {
-            Keyword::Date => Date::parse_str(&value_str)
-                .map(|x| ToString::to_string(&x))
-                .map_err(|e| {
-                    self.error(ErrorKind::FormatError(format!(
-                        "Invalid date format: {:?}",
-                        e
-                    )))
-                })?,
-            Keyword::Time => Time::parse_str(&value_str)
-                .map(|x| ToString::to_string(&x))
-                .map_err(|e| {
-                    self.error(ErrorKind::FormatError(format!(
-                        "Invalid time format: {:?}",
-                        e
-                    )))
-                })?,
-            Keyword::Timestamp => DateTime::parse_str(&value_str)
-                .map(|x| ToString::to_string(&x))
-                .map_err(|e| {
-                    self.error(ErrorKind::FormatError(format!(
-                        "Invalid timestamp format: {:?}",
-                        e
-                    )))
-                })?,
-            _ => unreachable!(),
+        let parsed = Temporal::try_from(value_str.as_str()).map_err(|e| {
+            self.error(ErrorKind::FormatError(format!(
+                "Invalid date/time format: {e:?}"
+            )))
+        })?;
+
+        let valid_for_keyword = match (keyword, parsed) {
+            (Keyword::Date, Temporal::Date(_)) => true,
+            (Keyword::Time, Temporal::Time(_)) => true,
+            (Keyword::Timestamp, Temporal::DateTime(_)) => true,
+            _ => false,
         };
 
-        Ok(Expression::Value(Value::String(value)))
+        if !valid_for_keyword {
+            return Err(self.error(ErrorKind::FormatError(format!(
+                "Invalid {keyword} format: {value_str} - parsed as {parsed:?}",
+            ))));
+        }
+
+        Ok(Expression::Value(Value::String(value_str)))
     }
 
     fn parse_func(&mut self, function: Keyword) -> ParserResult<Expression> {

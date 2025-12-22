@@ -541,19 +541,17 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             }
         }
         Expression::QualifiedIdentifier { table, column } => {
-            let data_type = ctx
-                .resolve_qualified_identifier(table, column)
-                .map(|tuple| tuple.1)
-                .ok_or(SqlError::InvalidQualifiedColumn {
-                    table: table.clone(),
-                    column: column.clone(),
-                })?;
-
-            match data_type {
-                Type::Uuid => VmType::String,
-                r#type => r#type.into(),
-            }
+            let col = format!("{table}.{column}");
+            let (idx, data_type) = ctx.resolve_identifier(&col).ok_or(
+                SqlError::InvalidQualifiedColumn {
+                    table: table.into(),
+                    column: column.into(),
+                },
+            )?;
+            VmType::from(data_type)
         }
+
+        Expression::Path { .. } => VmType::String,
 
         Expression::BinaryOperation {
             operator,
@@ -892,13 +890,9 @@ fn are_types_compatible(
             (left, right) => is_numeric(left) && is_numeric(right),
         },
         Op::Mul | Op::Div => is_numeric(left_type) && is_numeric(right_type),
-        // allow enum-string comparisons for comparison operators
-        Op::Eq | Op::Neq | Op::Lt | Op::LtEq | Op::Gt | Op::GtEq => {
-            matches!(
-                (left_type, right_type),
-                (VmType::Enum, VmType::String) | (VmType::String, VmType::Enum)
-            )
-        }
+        // comparisons are handled at runtime (Value implements comparisons across variants);
+        // this also enables JSON path access expressions whose type is only known at runtime.
+        Op::Eq | Op::Neq | Op::Lt | Op::LtEq | Op::Gt | Op::GtEq => true,
         _ => false,
     }
 }

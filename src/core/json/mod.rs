@@ -45,6 +45,37 @@ pub fn jsonb(value: &Value, cache: &JsonCacheCell) -> Result<Value> {
     }
 }
 
+// PERFORMANCE: use json cache
+pub fn get_path(value: &Value, path: &str, flag: OutputFlag) -> Result<Value> {
+    if matches!(value, Value::Null) {
+        return Ok(Value::Null);
+    }
+
+    let mut json = from_value_to_jsonb(value, Conv::Strict)?;
+    let path = json_path(path)?;
+    let mut operation = SearchOperation::new(json.len() / 2);
+
+    if json.operate_on_path(&path, &mut operation).is_err() {
+        return Ok(Value::Null);
+    }
+
+    let json = operation.result();
+    let element_type = match json.element_type() {
+        Ok(t) => t,
+        Err(_) => return Ok(Value::Null),
+    };
+
+    let flag = match flag {
+        OutputFlag::Binary => OutputFlag::Binary,
+        _ => match element_type {
+            ElementType::ARRAY | ElementType::OBJECT => OutputFlag::Binary,
+            _ => flag,
+        },
+    };
+
+    from_json_to_value(json, element_type, flag)
+}
+
 pub fn get(value: &Value, indent: Option<&str>) -> Result<Value> {
     match value {
         Value::String(_) => {
