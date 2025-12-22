@@ -1,4 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use fake::{Fake, Faker};
 use std::hint::black_box;
 use std::str::FromStr;
 use umbra::Uuid;
@@ -6,16 +7,23 @@ use umbra::Uuid;
 fn benchmark_uuid_parse(c: &mut Criterion) {
     let mut group = c.benchmark_group("Uuid::from_str");
 
-    let inputs = [
-        "00000000-0000-0000-0000-000000000000",
-        "123e4567-e89b-12d3-a456-426614174000",
-        "550e8400-e29b-41d4-a716-446655440000",
-        "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-        "ffffffff-ffff-ffff-ffff-ffffffffffff",
-    ];
+    let inputs: Vec<String> = (0..5)
+        .map(|_| {
+            let v: u128 = Faker.fake();
+            let hex = format!("{:032x}", v);
+            format!(
+                "{}-{}-{}-{}-{}",
+                &hex[0..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..32]
+            )
+        })
+        .collect();
 
-    for input in inputs {
-        group.bench_with_input(BenchmarkId::from_parameter(input), input, |b, input| {
+    for (i, input) in inputs.iter().enumerate() {
+        group.bench_with_input(BenchmarkId::new("random_sample", i), input, |b, input| {
             b.iter(|| {
                 let uuid = Uuid::from_str(black_box(input)).unwrap();
                 black_box(uuid);
