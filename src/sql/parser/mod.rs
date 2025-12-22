@@ -13,20 +13,22 @@ mod tokenizer;
 mod tokens;
 
 use crate::core::date::interval::Interval;
-use crate::sql::parser::tokens::{Keyword, Token, Whitespace};
+use crate::core::date::ExtractKind;
 use crate::sql::parser::tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
+use crate::sql::parser::tokens::Token;
 use crate::sql::statement::{
     Assignment, BinaryOperator, Column, Constraint, Create, Delete, Drop, Expression, Function,
-    Insert, JoinClause, JoinType, OrderBy, OrderDirection, PathSegment, Select, SelectBuilder,
-    Statement, Type, UnaryOperator, Update, Value,
+    Insert, JoinClause, JoinType, PathSegment, Select, Statement, Type, UnaryOperator, Update,
+    Value,
 };
-use crate::sql::statement::{NUMERIC_ANY};
+use crate::sql::statement::{TableRef, NUMERIC_ANY};
 
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::iter::Peekable;
 use std::str::FromStr;
 
+pub use tokens::Keyword;
 
 pub(crate) struct Parser<'input> {
     input: &'input str,
@@ -291,12 +293,14 @@ impl<'input> Parser<'input> {
                     if self.consume_optional(Token::LeftBracket) {
                         let token = self.next_token()?;
                         let idx = match token {
-                            Token::Number(n) if !n.contains('.') => n.parse::<usize>().map_err(|_| {
-                                self.error(ErrorKind::Expected {
-                                    expected: Token::Number(Default::default()),
-                                    found: Token::Number(n),
-                                })
-                            })?,
+                            Token::Number(n) if !n.contains('.') => {
+                                n.parse::<usize>().map_err(|_| {
+                                    self.error(ErrorKind::Expected {
+                                        expected: Token::Number(Default::default()),
+                                        found: Token::Number(n),
+                                    })
+                                })?
+                            }
                             other => {
                                 return Err(self.error(ErrorKind::Expected {
                                     expected: Token::Number(Default::default()),
@@ -320,7 +324,6 @@ impl<'input> Parser<'input> {
                         segments,
                     }),
                 }
-            }
             }
             token @ (Token::Minus | Token::Plus) => {
                 let op = match token {
@@ -452,7 +455,7 @@ impl<'input> Parser<'input> {
 
             self.expect_token(Token::RightBracket)?;
             out.push(']');
-            
+
             return Ok(out);
         }
     }
@@ -764,7 +767,7 @@ impl<'input> Parser<'input> {
 
     fn parse_datetime(&mut self, keyword: Keyword) -> ParserResult<Expression> {
         use crate::sql::statement::Temporal;
-        
+
         let value_str = self.parse_ident()?;
 
         let parsed = Temporal::try_from(value_str.as_str()).map_err(|e| {

@@ -107,7 +107,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
 
                 buff.extend_from_slice(blob);
             }
-            _ => unreachable!("Unsupported type {r#type} for Blob value"),
+            _ => unreachable!("Unsupported type {} for Blob value", r#type),
         },
         Value::Null => panic!("NULL values cannot be serialised"),
     }

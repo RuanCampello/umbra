@@ -2,20 +2,19 @@
 
 #![allow(dead_code)]
 
+use crate::core::json;
 use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
-use crate::core::storage::tuple;
-use crate::core::storage::tuple::byte_len_of_type;
-use crate::core::storage::tuple::utf_8_length_bytes;
-use crate::core::json;
-use crate::db::{DatabaseError, Relation, RowId, Schema, SqlError, TableMetadata, DB_METADATA};
-use crate::os::FileSystemBlockSize;
-use crate::sql::statement::{Column, Expression, JoinType, Type, Value};
-use crate::vm::expression::{
-    resolve_expression, resolve_only_expression, resolve_projection, TypeError, VmError, VmType,
+use crate::core::storage::pagination::pager::{reassemble_content, Pager};
+use crate::core::storage::tuple::{self, deserialize};
+use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
+use crate::sql::statement::{
+    join, Assignment, Expression, Function, JoinType, OrderDirection, Type, Value,
 };
+use crate::vm;
+use crate::vm::expression::{evaluate_where, resolve_expression, resolve_only_expression, VmType};
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::hash_map::IntoIter;
@@ -371,8 +370,7 @@ fn coerce_jsonb_tuple(schema: &Schema, tuple: &mut [Value]) -> Result<(), Databa
         }
         if tuple.get(idx).is_none() {
             return Err(DatabaseError::Corrupted(format!(
-                "Tuple length does not match schema length: tuple={}, schema={}"
-                ,
+                "Tuple length does not match schema length: tuple={}, schema={}",
                 tuple.len(),
                 schema.len()
             )));
@@ -1103,8 +1101,9 @@ impl<File: PlanExecutor> Execute for Update<File> {
 
             let new_value = resolve_expression(&tuple, &self.table.schema, &assignment.value)?;
 
-            let new_value = coerce_jsonb_value(&self.table.schema.columns[col].data_type, new_value)
-                .map_err(DatabaseError::from)?;
+            let new_value =
+                coerce_jsonb_value(&self.table.schema.columns[col].data_type, new_value)
+                    .map_err(DatabaseError::from)?;
 
             if new_value.ne(&tuple[col]) {
                 let old_value = std::mem::replace(&mut tuple[col], new_value);

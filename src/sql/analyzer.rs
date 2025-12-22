@@ -542,12 +542,12 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
         }
         Expression::QualifiedIdentifier { table, column } => {
             let col = format!("{table}.{column}");
-            let (idx, data_type) = ctx.resolve_identifier(&col).ok_or(
-                SqlError::InvalidQualifiedColumn {
-                    table: table.into(),
-                    column: column.into(),
-                },
-            )?;
+            let (_, data_type) =
+                ctx.resolve_identifier(&col)
+                    .ok_or(SqlError::InvalidQualifiedColumn {
+                        table: table.into(),
+                        column: column.into(),
+                    })?;
             VmType::from(data_type)
         }
 
@@ -824,7 +824,7 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
         Type::Jsonb => {
             use crate::core::json::{from_value_to_jsonb, Conv};
             let value = Value::String(s.to_string());
-            
+
             from_value_to_jsonb(&value, Conv::Strict)
                 .map_err(|e| SqlError::Other(e.to_string()))?;
             Ok(VmType::Blob)
