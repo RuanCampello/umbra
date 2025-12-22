@@ -824,8 +824,9 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
             use crate::core::json::{from_value_to_jsonb, Conv};
             let value = Value::String(s.to_string());
 
-            from_value_to_jsonb(&value, Conv::Strict)
-                .map_err(|e| SqlError::Other(e.to_string()))?;
+            from_value_to_jsonb(&value, Conv::Strict).map_err(|e| {
+                SqlError::Other(format!("Malformed JSON: {s} ({e})"))
+            })?;
             Ok(VmType::Blob)
         }
         _ => Ok(VmType::String),

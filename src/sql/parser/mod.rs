@@ -431,6 +431,7 @@ impl<'input> Parser<'input> {
             out.push_str(&value);
 
             if self.consume_optional(Token::Comma) {
+                out.push(',');
                 continue;
             }
 
@@ -454,6 +455,7 @@ impl<'input> Parser<'input> {
             out.push_str(&value);
 
             if self.consume_optional(Token::Comma) {
+                out.push(',');
                 continue;
             }
 

@@ -3203,3 +3203,32 @@ fn enum_ordering() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn jsonb() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+    CREATE TABLE users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100),
+        metadata JSONB
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO users (name, metadata)
+    VALUES 
+        ('Alice', {age: 30, city: 'NYC'}),
+        ('Bob', {age: 25, address: {street: 'Main St', zip: 10001}}),
+        ('Carol', {age: 35, hobbies: ['reading', 'gaming', 'coding']});
+    "#,
+    )?;
+
+    let query = db.exec(r#"SELECT name, metadata FROM users;"#)?;
+    println!("{query}");
+
+    Ok(())
+}

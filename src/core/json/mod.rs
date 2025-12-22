@@ -158,7 +158,7 @@ pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
                 _ => Jsonb::from_str(&escape_string(&string)),
             };
 
-            result.map_err(|_| parse_error("Malformed JSON", None))
+            result
         }
         Value::Null => Ok(Jsonb::from_data(JsonHeader::null().into_bytes().as_bytes())),
         #[rustfmt::skip]
