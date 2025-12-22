@@ -323,7 +323,15 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 Expression::Alias { alias, expr } if contains_aggregate(expr) => {
                     Some((expr.as_ref(), alias.to_string()))
                 }
-                expr if contains_aggregate(expr) => Some((expr, expr.to_string())),
+                expr if contains_aggregate(expr) => {
+                    let name = match expr {
+                        Expression::Function { func, .. } => func.to_string(),
+                        _ => expr.to_string(),
+                    };
+
+                    Some((expr, name))
+                }
+
                 _ => None,
             })
             .collect();
@@ -500,6 +508,10 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 Expression::Identifier(column) => {
                     Ok(self.schema.columns[self.schema.index_of(column).unwrap()].clone())
                 }
+                Expression::Function { func, .. } => Ok(Column::new(
+                    &func.to_string(),
+                    resolve_type(&self.schema, expr)?,
+                )),
                 _ => Ok(Column::new(
                     &expr.to_string(),
                     resolve_type(&self.schema, expr)?,

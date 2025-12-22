@@ -317,8 +317,12 @@ impl<'input> Parser<'input> {
                     break;
                 }
 
-                match segments.is_empty() {
-                    true => Ok(Expression::Identifier(identifier)),
+                match segments.as_slice() {
+                    [] => Ok(Expression::Identifier(identifier)),
+                    [PathSegment::Key(column)] => Ok(Expression::QualifiedIdentifier {
+                        table: identifier,
+                        column: column.clone(),
+                    }),
                     _ => Ok(Expression::Path {
                         head: identifier,
                         segments,

@@ -541,13 +541,12 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             }
         }
         Expression::QualifiedIdentifier { table, column } => {
-            let col = format!("{table}.{column}");
-            let (_, data_type) =
-                ctx.resolve_identifier(&col)
-                    .ok_or(SqlError::InvalidQualifiedColumn {
-                        table: table.into(),
-                        column: column.into(),
-                    })?;
+            let (_, data_type) = ctx.resolve_qualified_identifier(table, &column).ok_or(
+                SqlError::InvalidQualifiedColumn {
+                    table: table.into(),
+                    column: column.into(),
+                },
+            )?;
             VmType::from(data_type)
         }
 
