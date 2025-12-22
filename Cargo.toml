@@ -31,5 +31,9 @@ name = "select_benchmark"
 harness = false
 
 [[bench]]
+name = "uuid_benchmark"
+harness = false
+
+[[bench]]
 name = "stress_benchmark"
 harness = false
