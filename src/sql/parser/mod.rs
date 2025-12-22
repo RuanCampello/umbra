@@ -393,6 +393,7 @@ impl<'input> Parser<'input> {
             Keyword::Time => Ok(Type::Time),
             Keyword::Interval => Ok(Type::Interval),
             Keyword::Text => Ok(Type::Text),
+            Keyword::Jsonb => Ok(Type::Jsonb),
             keyword => unreachable!("unexpected column token: {keyword}"),
         }
     }
@@ -871,7 +872,7 @@ impl<'input> Parser<'input> {
         ]
     }
 
-    const fn supported_types() -> [Keyword; 17] {
+    const fn supported_types() -> [Keyword; 18] {
         [
             Keyword::SmallSerial,
             Keyword::Serial,
@@ -885,6 +886,7 @@ impl<'input> Parser<'input> {
             Keyword::Bool,
             Keyword::Varchar,
             Keyword::Text,
+            Keyword::Jsonb,
             Keyword::Time,
             Keyword::Date,
             Keyword::Timestamp,

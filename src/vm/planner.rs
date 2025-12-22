@@ -2,20 +2,19 @@
 
 #![allow(dead_code)]
 
-use super::expression::{resolve_expression, resolve_only_expression};
 use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
-use crate::core::storage::pagination::pager::{reassemble_content, Pager};
-use crate::core::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{
-    join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
-};
-use crate::vm::{
-    self,
-    expression::{evaluate_where, VmType},
+use crate::core::storage::tuple;
+use crate::core::storage::tuple::byte_len_of_type;
+use crate::core::storage::tuple::utf_8_length_bytes;
+use crate::core::json;
+use crate::db::{DatabaseError, Relation, RowId, Schema, SqlError, TableMetadata, DB_METADATA};
+use crate::os::FileSystemBlockSize;
+use crate::sql::statement::{Column, Expression, JoinType, Type, Value};
+use crate::vm::expression::{
+    resolve_expression, resolve_only_expression, resolve_projection, TypeError, VmError, VmType,
 };
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
@@ -362,6 +361,44 @@ impl<File: PlanExecutor> Execute for Planner<File> {
             Self::Collect(collection) => collection.try_next(),
             Self::Values(values) => values.try_next(),
         }
+    }
+}
+
+fn coerce_jsonb_tuple(schema: &Schema, tuple: &mut [Value]) -> Result<(), DatabaseError> {
+    for (idx, col) in schema.columns.iter().enumerate() {
+        if !matches!(col.data_type, Type::Jsonb) {
+            continue;
+        }
+        if tuple.get(idx).is_none() {
+            return Err(DatabaseError::Corrupted(format!(
+                "Tuple length does not match schema length: tuple={}, schema={}"
+                ,
+                tuple.len(),
+                schema.len()
+            )));
+        }
+        let value = std::mem::replace(&mut tuple[idx], Value::Null);
+        tuple[idx] = coerce_jsonb_value(&col.data_type, value).map_err(DatabaseError::from)?;
+    }
+    Ok(())
+}
+
+fn coerce_jsonb_value(data_type: &Type, value: Value) -> Result<Value, SqlError> {
+    if !matches!(data_type, Type::Jsonb) {
+        return Ok(value);
+    }
+
+    match value {
+        Value::Null => Ok(Value::Null),
+        Value::Blob(_) => Ok(value),
+        Value::String(s) => {
+            let json = json::from_value_to_jsonb(&Value::String(s), json::Conv::Strict)
+                .map_err(|e| SqlError::Other(e.to_string()))?;
+            Ok(Value::Blob(json.data()))
+        }
+        other => Err(SqlError::Other(format!(
+            "Cannot coerce value {other} into JSONB"
+        ))),
     }
 }
 
@@ -1001,6 +1038,8 @@ impl<File: PlanExecutor> Execute for Insert<File> {
             return Ok(None);
         };
 
+        coerce_jsonb_tuple(&self.table.schema, &mut tuple)?;
+
         let mut pager = self.pager.borrow_mut();
 
         BTree::new(&mut pager, self.table.root, self.comparator.clone())
@@ -1063,6 +1102,9 @@ impl<File: PlanExecutor> Execute for Update<File> {
             )?;
 
             let new_value = resolve_expression(&tuple, &self.table.schema, &assignment.value)?;
+
+            let new_value = coerce_jsonb_value(&self.table.schema.columns[col].data_type, new_value)
+                .map_err(DatabaseError::from)?;
 
             if new_value.ne(&tuple[col]) {
                 let old_value = std::mem::replace(&mut tuple[col], new_value);

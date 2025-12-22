@@ -199,11 +199,11 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             VmType::Bool => Type::Boolean,
             VmType::Number => Type::BigInteger,
             VmType::String => Type::Text,
-            VmType::Date => Type::Date,
+            VmType::Date => Type::DateTime,
             VmType::Interval => Type::Interval,
             VmType::Numeric => Type::Numeric(NUMERIC_ANY, NUMERIC_ANY),
             VmType::Enum => Type::Enum(0),
-            VmType::Blob => unimplemented!(),
+            VmType::Blob => Type::Jsonb,
         },
     })
 }

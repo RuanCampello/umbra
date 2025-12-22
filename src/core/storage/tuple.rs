@@ -94,7 +94,21 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Interval(i) => i.serialize(buff, r#type),
         Value::Numeric(n) => n.serialize(buff),
         Value::Enum(idx) => buff.push(*idx),
-        Value::Blob(_) => unimplemented!(),
+        Value::Blob(blob) => match r#type {
+            Type::Jsonb => {
+                let len = blob.len();
+                match len < 127 {
+                    true => buff.push(len as u8),
+                    false => {
+                        buff.push(0x80);
+                        buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
+                    }
+                }
+
+                buff.extend_from_slice(blob);
+            }
+            _ => unreachable!("Unsupported type {r#type} for Blob value"),
+        },
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
@@ -183,6 +197,15 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                         Numeric::Long { digits, .. } => 14 + digits.len() * 2,
                     },
 
+                    Value::Blob(blob) => match col.data_type {
+                        Type::Jsonb => {
+                            let len = blob.len();
+                            let header_len = if len < 127 { 1 } else { 4 };
+                            header_len + len
+                        }
+                        _ => byte_len_of_type(&col.data_type),
+                    },
+
                     Value::Float(_) | Value::Number(_)
                         if matches!(col.data_type, Type::Numeric(_, _)) =>
                     {
@@ -265,6 +288,25 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             Ok(Value::String(
                 String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
             ))
+        }
+
+        Type::Jsonb => {
+            let mut header = [0; 4];
+            reader.read_exact(&mut header[..1])?;
+            let header_len = varlena_header_len(header[0]);
+
+            let length = match header_len == 1 {
+                false => {
+                    reader.read_exact(&mut header[1..4])?;
+                    let be = [0, header[1], header[2], header[3]];
+                    u32::from_be_bytes(be) as usize
+                }
+                true => header[0] as usize,
+            };
+
+            let mut buf = vec![0; length];
+            reader.read_exact(&mut buf)?;
+            Ok(Value::Blob(buf))
         }
 
         Type::Numeric(_, _) => {

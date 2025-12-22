@@ -476,6 +476,7 @@ impl From<&Type> for VmType {
             Type::Varchar(_) | Type::Text => VmType::String,
             Type::Date | Type::DateTime | Type::Time => VmType::Date,
             Type::Interval => VmType::Interval,
+            Type::Jsonb => VmType::Blob,
             Type::Numeric(_, _) => VmType::Numeric,
             Type::Enum(_) => VmType::Enum,
             float if float.is_float() => VmType::Float,
@@ -498,7 +499,7 @@ impl From<&VmType> for Type {
             VmType::Interval => Self::Interval,
             VmType::Enum => Self::Enum(0),
             VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
-            VmType::Blob => unimplemented!(),
+            VmType::Blob => Self::Jsonb,
         }
     }
 }

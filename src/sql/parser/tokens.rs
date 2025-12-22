@@ -137,6 +137,7 @@ pub enum Keyword {
     Timestamp,
     Date,
     Time,
+    Jsonb,
     /// This is not an actual SQL keyword, but it's used for convenience.
     None,
 }
@@ -293,6 +294,7 @@ impl Borrow<str> for Keyword {
             Self::Time => "TIME",
             Self::Timestamp => "TIMESTAMP",
             Self::Interval => "INTERVAL",
+            Self::Jsonb => "JSONB",
             Self::Count => "COUNT",
             Self::Abs => "ABS",
             Self::Sqrt => "SQRT",
@@ -401,6 +403,7 @@ impl FromStr for Keyword {
             "NUMERIC" | "DECIMAL" => Keyword::Numeric,
             "DATE" => Keyword::Date,
             "TIME" => Keyword::Time,
+            "JSONB" => Keyword::Jsonb,
             _ => Keyword::None,
         };
 

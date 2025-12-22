@@ -339,6 +339,7 @@ pub enum Type {
     Time,
     DateTime,
     Interval,
+    Jsonb,
     Enum(u32),
 }
 
@@ -1058,6 +1059,7 @@ impl Display for Type {
             Type::Text => write!(f, "TEXT"),
             Type::Enum(_) => write!(f, "ENUM"),
             Type::Interval => f.write_str("INTERVAL"),
+            Type::Jsonb => f.write_str("JSONB"),
             Type::Numeric(precision, scale) => match (precision, scale) {
                 (&NUMERIC_ANY, _) => write!(f, "NUMERIC"),
                 (precision, 0) => write!(f, "NUMERIC({precision})"),

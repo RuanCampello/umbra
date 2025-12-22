@@ -823,6 +823,14 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
             Interval::from_str(s).map_err(|e| TypeError::InvalidInterval(e))?;
             Ok(VmType::Interval)
         }
+        Type::Jsonb => {
+            use crate::core::json::{from_value_to_jsonb, Conv};
+            let value = Value::String(s.to_string());
+            
+            from_value_to_jsonb(&value, Conv::Strict)
+                .map_err(|e| SqlError::Other(e.to_string()))?;
+            Ok(VmType::Blob)
+        }
         _ => Ok(VmType::String),
     }
 }
