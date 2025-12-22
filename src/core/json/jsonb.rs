@@ -1050,9 +1050,12 @@ impl Jsonb {
                     .map_err(|_| parse_error("Unexpected input after JSON", Some(pos)))?;
 
                 return Ok(pos);
-            } else if pos < input.len() && input[pos].is_ascii_digit() {
-                return Err(parse_error("Leading zero is not allowed", Some(pos)));
             }
+
+            // TODO: we shall reflect on this
+            //  else if pos < input.len() && input[pos].is_ascii_digit() {
+            //      return Err(parse_error("Leading zero is not allowed", Some(pos)));
+            //  }
         }
 
         if pos < input.len() && (input[pos] == b'I' || input[pos] == b'i') {

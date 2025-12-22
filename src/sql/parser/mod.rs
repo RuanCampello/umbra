@@ -14,6 +14,7 @@ mod tokens;
 
 use crate::core::date::interval::Interval;
 use crate::core::date::ExtractKind;
+use crate::core::json;
 use crate::sql::parser::tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
 use crate::sql::parser::tokens::Token;
 use crate::sql::statement::{
@@ -245,12 +246,16 @@ impl<'input> Parser<'input> {
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
             Token::Keyword(Keyword::Null) => Ok(Expression::Value(Value::Null)),
             Token::LeftBrace => {
-                let json = self.parse_json_object()?;
-                Ok(Expression::Value(Value::String(json)))
+                let json_text = self.parse_json_object()?;
+                let jsonb = json::from_value_to_jsonb(&Value::String(json_text), json::Conv::Strict)
+                    .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
+                Ok(Expression::Value(Value::Blob(jsonb.data())))
             }
             Token::LeftBracket => {
-                let json = self.parse_json_array()?;
-                Ok(Expression::Value(Value::String(json)))
+                let json_text = self.parse_json_array()?;
+                let jsonb = json::from_value_to_jsonb(&Value::String(json_text), json::Conv::Strict)
+                    .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
+                Ok(Expression::Value(Value::Blob(jsonb.data())))
             }
             Token::Keyword(Keyword::Interval) => self.parse_interval(),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
@@ -1754,7 +1759,7 @@ mod tests {
                     })
                     .into()
             )
-        )
+        );
     }
 
     #[test]
@@ -1794,7 +1799,7 @@ mod tests {
                     })
                     .into()
             )
-        )
+        );
     }
 
     #[test]
@@ -1817,7 +1822,7 @@ mod tests {
                     .from("users")
                     .into()
             )
-        )
+        );
     }
 
     #[test]
@@ -1839,7 +1844,7 @@ mod tests {
                     })
                     .into()
             )
-        )
+        );
     }
 
     #[test]
@@ -1861,7 +1866,7 @@ mod tests {
                     })
                     .into()
             )
-        )
+        );
     }
 
     #[test]
@@ -1880,7 +1885,7 @@ mod tests {
                     })
                     .into()
             )
-        )
+        );
     }
 
     #[test]
@@ -1899,7 +1904,7 @@ mod tests {
                     .from("products")
                     .into(),
             )
-        )
+        );
     }
 
     #[test]
@@ -1944,7 +1949,7 @@ mod tests {
                     ])
                     .into()
             )
-        )
+        );
     }
 
     #[test]
