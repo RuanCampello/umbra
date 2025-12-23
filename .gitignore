@@ -12,3 +12,4 @@
 # benchmarking
 perf.data*
 *.svg
+*.journal
