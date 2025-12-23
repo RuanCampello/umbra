@@ -184,11 +184,7 @@ impl Cache {
             return false;
         }
 
-        let pinned = self.pages.get(&page_number).map_or(false, |id| {
-            self.buffer[*id].set(PINNED_FLAG);
-            true
-        });
-
+        let pinned = self.set_flags(page_number, PINNED_FLAG);
         if pinned {
             self.pinned_pages += 1
         }
@@ -239,6 +235,10 @@ impl Cache {
         self.buffer[self.clock].is_set(DIRTY_FLAG)
     }
 
+    pub fn mark_dirty(&mut self, page_number: PageNumber) -> bool {
+        self.set_flags(page_number, DIRTY_FLAG)
+    }
+
     pub fn mark_clean(&mut self, page_number: PageNumber) -> bool {
         self.unset_flags(page_number, DIRTY_FLAG)
     }
@@ -247,6 +247,13 @@ impl Cache {
         self.pages.get(&page_number).map_or(false, |frame_id| {
             self.buffer[*frame_id].unset(flags);
 
+            true
+        })
+    }
+
+    fn set_flags(&mut self, page_number: PageNumber, flags: u8) -> bool {
+        self.pages.get(&page_number).map_or(false, |id| {
+            self.buffer[*id].set(PINNED_FLAG);
             true
         })
     }

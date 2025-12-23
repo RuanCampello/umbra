@@ -434,7 +434,7 @@ impl<File: Seek + FileOperations> Pager<File> {
 impl<File: Write + FileOperations> Pager<File> {
     /// Append the given page to `already written` pages in the journal.
     fn push_to_written_queue(&mut self, page_number: PageNumber, id: FrameId) -> io::Result<()> {
-        // TODO: mark as `dirty` in cache
+        self.cache.mark_dirty(page_number);
         self.dirty_pages.insert(page_number);
 
         if !self.journal_pages.contains(&page_number) {
