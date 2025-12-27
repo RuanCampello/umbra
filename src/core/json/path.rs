@@ -14,6 +14,7 @@ pub enum PathElement<'p> {
     Root,
     Key(Cow<'p, str>, RawString),
     ArrayLocator(Option<i32>),
+    Wildcard,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -136,7 +137,10 @@ fn in_key<'p>(
                         }
                     }
 
-                    parts.push(PathElement::Key(Cow::Borrowed(key), false));
+                    match key {
+                        "+" => parts.push(PathElement::Wildcard),
+                        _ => parts.push(PathElement::Key(Cow::Borrowed(key), false)),
+                    }
                 }
             }
         }
@@ -158,6 +162,15 @@ fn array_index(
 ) -> super::Result<()> {
     match (&index_state, c.1) {
         (ArrayIndexState::Start, '#') => *index_state = ArrayIndexState::AfterHash,
+        (ArrayIndexState::Start, '-') => negative_index(index_state, index, path_iter, path)?,
+        (ArrayIndexState::Start, '*') => {
+            *state = State::ExpectDotOrBracket;
+
+            match path_iter.next() {
+                Some((_, ']')) => parts.push(PathElement::Wildcard),
+                _ => parse_error!("Expected ']' after '*' in array index"),
+            }
+        }
         (ArrayIndexState::Start, '0'..='9') => {
             *index = c.1.to_digit(10).ok_or(JsonError::Message {
                 msg: format!("failed to parse digit: {}", c.1),
@@ -238,7 +251,10 @@ fn finalise<'p>(
                     parse_error!("Bad JSON path: {path}")
                 }
 
-                parts.push(PathElement::Key(Cow::Borrowed(key), false))
+                match key {
+                    "*" => parts.push(PathElement::Wildcard),
+                    _ => parts.push(PathElement::Key(Cow::Borrowed(key), false)),
+                }
             }
         },
         _ => (),
@@ -365,6 +381,5 @@ mod tests {
 
         assert!(json_path("$[0").is_err());
         assert!(json_path("$[").is_err());
-        assert!(json_path("$[-1]").is_err());
     }
 }

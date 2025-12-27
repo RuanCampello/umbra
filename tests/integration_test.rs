@@ -3230,5 +3230,17 @@ fn jsonb() -> Result<()> {
     let query = db.exec(r#"SELECT name, metadata FROM users;"#)?;
     println!("{query}");
 
+    let query = db.exec(r#"SELECT metadata.age FROM users ORDER BY id;"#)?;
+    assert_eq!(
+        query.tuples,
+        vec![vec![30.into()], vec![25.into()], vec![35.into()]]
+    );
+
+    let query = db.exec("SELECT metadata.hobbies[*] FROM users WHERE name = 'Carol';")?;
+    assert!(!query.tuples.is_empty());
+
+    let query = db.exec("SELECT metadata.age[*] FROM users WHERE name = 'Alice';")?;
+    assert_eq!(query.tuples, vec![vec![Value::Null]]);
+
     Ok(())
 }

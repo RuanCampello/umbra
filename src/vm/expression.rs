@@ -133,6 +133,7 @@ pub(crate) fn resolve_expression<'exp>(
                         path.push_str(&idx.to_string());
                         path.push(']');
                     }
+                    PathSegment::Wildcard => path.push_str(".*"),
                 }
             }
 
@@ -148,10 +149,27 @@ pub(crate) fn resolve_expression<'exp>(
 
             match idx {
                 Some(idx) => Ok(val[idx].clone()),
-                None => Err(SqlError::InvalidQualifiedColumn {
-                    table: table.into(),
-                    column: column.into(),
-                }),
+                None => {
+                    // Check if `table` matches a column name. If so, treat `column` as a path key on that column.
+                    if let Some(idx) = schema
+                        .index_of(table)
+                        .or_else(|| schema.last_index_of(table))
+                    {
+                        let base_value = val[idx].clone();
+                        if matches!(base_value, Value::Null) {
+                            return Ok(Value::Null);
+                        }
+
+                        let path = format!("$.{}", column);
+                        return json::get_path(&base_value, &path, json::OutputFlag::ElementType)
+                            .map_err(|e| SqlError::Other(e.to_string()));
+                    }
+
+                    Err(SqlError::InvalidQualifiedColumn {
+                        table: table.into(),
+                        column: column.into(),
+                    })
+                }
             }
         }
         Expression::UnaryOperation { operator, expr } => {

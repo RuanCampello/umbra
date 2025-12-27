@@ -170,7 +170,8 @@ pub enum Expression {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub enum PathSegment {
     Key(String),
-    Index(usize),
+    Index(isize),
+    Wildcard,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
@@ -1001,6 +1002,7 @@ impl Display for Expression {
                     match seg {
                         PathSegment::Key(key) => write!(f, ".{key}")?,
                         PathSegment::Index(idx) => write!(f, "[{idx}]")?,
+                        PathSegment::Wildcard => write!(f, "*")?,
                     }
                 }
                 Ok(())

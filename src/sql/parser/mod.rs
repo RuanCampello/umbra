@@ -247,14 +247,16 @@ impl<'input> Parser<'input> {
             Token::Keyword(Keyword::Null) => Ok(Expression::Value(Value::Null)),
             Token::LeftBrace => {
                 let json_text = self.parse_json_object()?;
-                let jsonb = json::from_value_to_jsonb(&Value::String(json_text), json::Conv::Strict)
-                    .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
+                let jsonb =
+                    json::from_value_to_jsonb(&Value::String(json_text), json::Conv::Strict)
+                        .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
                 Ok(Expression::Value(Value::Blob(jsonb.data())))
             }
             Token::LeftBracket => {
                 let json_text = self.parse_json_array()?;
-                let jsonb = json::from_value_to_jsonb(&Value::String(json_text), json::Conv::Strict)
-                    .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
+                let jsonb =
+                    json::from_value_to_jsonb(&Value::String(json_text), json::Conv::Strict)
+                        .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
                 Ok(Expression::Value(Value::Blob(jsonb.data())))
             }
             Token::Keyword(Keyword::Interval) => self.parse_interval(),
@@ -290,6 +292,11 @@ impl<'input> Parser<'input> {
 
                 loop {
                     if self.consume_optional(Token::Dot) {
+                        if self.consume_optional(Token::Mul) {
+                            segments.push(PathSegment::Wildcard);
+                            continue;
+                        }
+
                         let key = self.parse_ident()?;
                         segments.push(PathSegment::Key(key));
                         continue;
@@ -297,15 +304,37 @@ impl<'input> Parser<'input> {
 
                     if self.consume_optional(Token::LeftBracket) {
                         let token = self.next_token()?;
-                        let idx = match token {
+                        match token {
                             Token::Number(n) if !n.contains('.') => {
-                                n.parse::<usize>().map_err(|_| {
+                                let idx = n.parse::<isize>().map_err(|_| {
                                     self.error(ErrorKind::Expected {
                                         expected: Token::Number(Default::default()),
                                         found: Token::Number(n),
                                     })
-                                })?
+                                })?;
+                                segments.push(PathSegment::Index(idx));
                             }
+                            Token::Minus => {
+                                let token = self.next_token()?;
+                                let idx = match token {
+                                    Token::Number(n) if !n.contains('.') => {
+                                        n.parse::<isize>().map_err(|_| {
+                                            self.error(ErrorKind::Expected {
+                                                expected: Token::Number(Default::default()),
+                                                found: Token::Number(n),
+                                            })
+                                        })?
+                                    }
+                                    other => {
+                                        return Err(self.error(ErrorKind::Expected {
+                                            expected: Token::Number(Default::default()),
+                                            found: other,
+                                        }))
+                                    }
+                                };
+                                segments.push(PathSegment::Index(-idx));
+                            }
+                            Token::Mul => segments.push(PathSegment::Wildcard),
                             other => {
                                 return Err(self.error(ErrorKind::Expected {
                                     expected: Token::Number(Default::default()),
@@ -315,7 +344,6 @@ impl<'input> Parser<'input> {
                         };
 
                         self.expect_token(Token::RightBracket)?;
-                        segments.push(PathSegment::Index(idx));
                         continue;
                     }
 
