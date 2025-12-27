@@ -16,7 +16,6 @@ use std::{borrow::Cow, hint::unreachable_unchecked, str::FromStr};
 mod cache;
 pub mod error;
 mod jsonb;
-mod ops;
 mod path;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -43,6 +42,27 @@ pub fn jsonb(value: &Value, cache: &JsonCacheCell) -> Result<Value> {
         Ok(json) => Ok(Value::Blob(json.data())),
         _ => parse_error!("Malformed JSON"),
     }
+}
+
+pub fn extract<'e, E, P>(value: &Value, paths: P, cache: &JsonCacheCell) -> Result<Value>
+where
+    E: ExactSizeIterator<Item = &'e Value>,
+    P: IntoIterator<IntoIter = E, Item = &'e Value>,
+{
+    if value.is_null() {
+        return Ok(Value::Null);
+    }
+
+    let paths = paths.into_iter();
+    if paths.len() == 0 {
+        return Ok(Value::Null);
+    }
+
+    let json = cache.get_or_insert(value, fn_to_json(Conv::Strict))?;
+    let (json, element_type) = json_extract(json, paths)?;
+    let result = from_json_to_value(json, element_type, OutputFlag::ElementType)?;
+
+    Ok(result)
 }
 
 // PERFORMANCE: use json cache
@@ -146,6 +166,66 @@ where
 
     json.finalise(ElementType::OBJECT)?;
     from_json_to_value(json, ElementType::OBJECT, OutputFlag::String)
+}
+
+fn json_extract<'v, P>(value: Jsonb, mut paths: P) -> Result<(Jsonb, ElementType)>
+where
+    P: ExactSizeIterator<Item = &'v Value>,
+{
+    let null = Jsonb::from_data(JsonHeader::null().into_bytes().as_bytes());
+
+    if paths.len() == 1 {
+        let first_path = paths.next().ok_or(JsonError::Internal(
+            "Paths should have one element".to_string(),
+        ))?;
+
+        match from_value_to_path(&first_path, true)? {
+            Some(path) => {
+                let mut json = value;
+                let mut op = SearchOperation::new(json.len());
+
+                let result = json.operate_on_path(&path, &mut op);
+                let extract = op.result();
+
+                let element_type = match extract.element_type() {
+                    Ok(element) => element,
+                    Err(_) => return Ok((null, ElementType::NULL)),
+                };
+
+                match result.is_ok() {
+                    true => return Ok((extract, element_type)),
+                    _ => return Ok((null, ElementType::NULL)),
+                }
+            }
+            _ => return Ok((null, ElementType::NULL)),
+        }
+    }
+
+    let mut json = value;
+    let mut result = Jsonb::empty_array(json.len());
+
+    // PERFORMANCE: avoid creating new json for every path element
+    for path in paths {
+        let path = from_value_to_path(&path, true)?;
+
+        match path {
+            Some(path) => {
+                let mut op = SearchOperation::new(json.len());
+
+                let res = json.operate_on_path(&path, &mut op);
+                let extract = op.result();
+
+                match res.is_ok() {
+                    true => result.append_unsafe(&extract.data()),
+                    _ => result.append_unsafe(JsonHeader::null().into_bytes().as_bytes()),
+                }
+            }
+            _ => return Ok((null, ElementType::NULL)),
+        }
+    }
+
+    result.finalise(ElementType::ARRAY)?;
+    Ok((result, ElementType::ARRAY))
 }
 
 pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {

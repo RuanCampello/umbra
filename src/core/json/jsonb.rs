@@ -279,8 +279,20 @@ impl Jsonb {
         json
     }
 
+    pub fn empty_array(size: usize) -> Self {
+        let mut json = Self::new(size, None);
+        json.write_element_header(0, ElementType::ARRAY, 0, false)
+            .expect("Header writing should not fail");
+
+        json
+    }
+
     pub fn append(&mut self, mut data: Vec<u8>) {
         self.data.append(&mut data);
+    }
+
+    pub fn append_unsafe(&mut self, data: &[u8]) {
+        self.data.extend_from_slice(data);
     }
 
     pub fn finalise(&mut self, element_type: ElementType) -> super::Result<()> {

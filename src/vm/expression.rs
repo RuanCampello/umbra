@@ -1,9 +1,9 @@
 use super::{functions, math};
 use crate::core::date::interval::IntervalParseError;
 use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
+use crate::core::json;
 use crate::core::numeric::{Numeric, NumericError};
 use crate::core::uuid::{Uuid, UuidError};
-use crate::core::json;
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
     ArithmeticPair, BinaryOperator, Expression, Function, PathSegment, Temporal, Type,
