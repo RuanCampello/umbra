@@ -749,7 +749,7 @@ impl Numeric {
                     remaining /= N_BASE as u128;
                     len += 1;
                 }
-                digits.reverse();
+                digits[..len].reverse();
 
                 let fract_groups = (s + 3) / 4;
                 let weight = (len as i16) - (fract_groups as i16) - 1;
