@@ -504,6 +504,9 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                             _ => Ok(Column::new(alias, resolve_type(&self.schema, expr)?)),
                         }
                     }
+                    Expression::Path { .. } => {
+                        Ok(Column::nullable(alias, resolve_type(&self.schema, expr)?))
+                    }
                     _ => Ok(Column::new(alias, resolve_type(&self.schema, expr)?)),
                 },
                 Expression::QualifiedIdentifier { column, table } => {
@@ -518,6 +521,10 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 Expression::Identifier(column) => {
                     Ok(self.schema.columns[self.schema.index_of(column).unwrap()].clone())
                 }
+                Expression::Path { .. } => Ok(Column::nullable(
+                    &expr.to_string(),
+                    resolve_type(&self.schema, expr)?,
+                )),
                 Expression::Function { func, .. } => Ok(Column::new(
                     &func.to_string(),
                     resolve_type(&self.schema, expr)?,

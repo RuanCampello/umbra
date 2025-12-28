@@ -413,6 +413,11 @@ fn from_json_to_value(json: Jsonb, element_type: ElementType, flag: OutputFlag) 
             }
         }
         ElementType::NULL => Value::Null,
+        ElementType::TRUE => Value::Boolean(true),
+        ElementType::FALSE => Value::Boolean(false),
+        ElementType::FLOAT | ElementType::FLOAT5 => f64::from_str(&string)
+            .map(Value::Float)
+            .unwrap_or(Value::Null),
         _ => unreachable!(),
     })
 }

@@ -15,10 +15,6 @@ use crate::{
     sql::statement::{Column, Temporal, Type, Value},
 };
 
-/// Size in bytes to storing JSON path expression results (number or float).
-/// This matches the size of i64/f64 which is sufficient for JSON numeric values.
-const JSON_PATH_NUMERIC_SIZE: usize = 8;
-
 trait ValueSerialize {
     fn serialize(&self, buff: &mut Vec<u8>, to: &Type);
 }
@@ -90,9 +86,18 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
 
             _ => string.serialize(buff, r#type),
         },
-        Value::Number(n) => n.serialize(buff, r#type),
-        Value::Float(f) => f.serialize(buff, r#type),
-        Value::Boolean(b) => b.serialize(buff, r#type),
+        Value::Number(n) => match r#type {
+            Type::Text => Value::String(n.to_string()).utf8_serialize(buff),
+            _ => n.serialize(buff, r#type),
+        },
+        Value::Float(f) => match r#type {
+            Type::Text => Value::String(f.to_string()).utf8_serialize(buff),
+            _ => f.serialize(buff, r#type),
+        },
+        Value::Boolean(b) => match r#type {
+            Type::Text => Value::String(b.to_string()).utf8_serialize(buff),
+            _ => b.serialize(buff, r#type),
+        },
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
         Value::Interval(i) => i.serialize(buff, r#type),
@@ -214,8 +219,13 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 
                         num.size()
                     }
-                    Value::Float(_) | Value::Number(_) if matches!(col.data_type, Type::Text) => {
-                        JSON_PATH_NUMERIC_SIZE
+                    Value::Float(_) | Value::Number(_) | Value::Boolean(_)
+                        if matches!(col.data_type, Type::Text) =>
+                    {
+                        let s = tuple[idx].to_string();
+                        let len = s.as_bytes().len();
+                        let header_len = if len < 127 { 1 } else { 4 };
+                        header_len + len
                     }
                     _ => byte_len_of_type(&col.data_type),
                 }),

@@ -137,10 +137,7 @@ pub(crate) fn resolve_expression<'exp>(
                 }
             }
 
-            match json::get_path(&base_value, &path, json::OutputFlag::ElementType) {
-                Ok(v) => Ok(v),
-                Err(_) => Ok(Value::Null),
-            }
+            json::get_path(&base_value, &path, json::OutputFlag::ElementType).or(Ok(Value::Null))
         }
         Expression::QualifiedIdentifier { column, table } => {
             let idx = schema
