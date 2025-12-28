@@ -313,10 +313,21 @@ fn users_metadata() {
         r#"
         SELECT name, metadata.age AS age, metadata.city AS city
         FROM users
-        WHERE metadata.active = true;"#,
+        WHERE metadata.active = true
+        ORDER BY name DESC
+        LIMIT 5;"#,
     );
-    print!("{query}");
     assert!(!query.tuples.is_empty());
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Sven".into(), 49.into(), "Amsterdam".into()],
+            vec!["Rafael".into(), 37.into(), "São Paulo".into()],
+            vec!["Paulo".into(), 50.into(), "São Paulo".into()],
+            vec!["Olivia".into(), 24.into(), "London".into()],
+            vec!["OLiver".into(), 44.into(), "London".into()],
+        ]
+    );
 
     let query = db.exec(
         r#"
@@ -324,9 +335,15 @@ fn users_metadata() {
         FROM users
         WHERE metadata.profile.lang = 'pt' AND metadata.age >= 18;"#,
     );
-
-    print!("{query}");
     assert!(!query.tuples.is_empty());
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Ivan".into(), "São Paulo".into()],
+            vec!["Mateus".into(), "São Paulo".into()],
+            vec!["Rafael".into(), "São Paulo".into()],
+        ]
+    );
 }
 
 #[test]
