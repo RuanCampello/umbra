@@ -983,7 +983,15 @@ impl Hash for Value {
         match self {
             Self::Float(f) => encode_float(f).hash(state),
             Self::Null => NULL_HASH.hash(state),
-            other => other.hash(state),
+            Self::String(s) => s.hash(state),
+            Self::Number(n) => n.hash(state),
+            Self::Boolean(b) => b.hash(state),
+            Self::Temporal(t) => t.hash(state),
+            Self::Uuid(u) => u.hash(state),
+            Self::Interval(i) => i.hash(state),
+            Self::Numeric(n) => n.hash(state),
+            Self::Enum(e) => e.hash(state),
+            Self::Blob(b) => b.hash(state),
         }
     }
 }
