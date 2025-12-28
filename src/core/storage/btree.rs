@@ -130,7 +130,7 @@ impl<Type> Keys for Type where Type: IntoIterator<Item = u64> {}
 
 impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, File, Cmp> {
     /// Returns a value of a given key.
-    pub fn get(&mut self, entry: &[u8]) -> IOResult<Option<Content>> {
+    pub fn get(&mut self, entry: &[u8]) -> IOResult<Option<Content<'_>>> {
         let search = self.search(self.root, entry, &mut Vec::new())?;
 
         match search.index {
@@ -526,7 +526,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         Ok(siblings)
     }
 
-    pub(crate) fn max(&mut self) -> IOResult<Option<Content>> {
+    pub(crate) fn max(&mut self) -> IOResult<Option<Content<'_>>> {
         let (page, slot) = self.search_leaf_key(self.root, &mut Vec::new(), LeafKeySearch::Max)?;
 
         if self.pager.get(page)?.len() == 0 {

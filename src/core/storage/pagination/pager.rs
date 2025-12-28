@@ -1,4 +1,4 @@
-#![allow(private_bounds, elided_named_lifetimes)]
+#![allow(private_bounds)]
 
 use super::cache::{Cache, FrameId};
 use super::io::{BlockIo, FileOperations};
@@ -190,7 +190,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         self.get_as::<Page>(page_number)
     }
 
-    pub fn get_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&Page>
+    pub fn get_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&'p Page>
     where
         Page: PageConversion + AsMut<[u8]>,
         &'p Page: TryFrom<&'p MemoryPage>,
@@ -207,7 +207,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
     }
 
     /// The same as [get_as](Self::get_as) but for a mutable reference. Of course, it marks the page as `dirty`.
-    pub fn get_mut_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&mut Page>
+    pub fn get_mut_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&'p mut Page>
     where
         Page: PageConversion + AsMut<[u8]>,
         &'p mut Page: TryFrom<&'p mut MemoryPage>,
@@ -645,7 +645,7 @@ pub(crate) fn reassemble_content<File: Seek + Write + Read + FileOperations>(
     pager: &mut Pager<File>,
     page_number: PageNumber,
     slot_id: SlotId,
-) -> io::Result<Content> {
+) -> io::Result<Content<'_>> {
     let cell = pager.get(page_number)?.cell(slot_id);
 
     if !cell.header.is_overflow {
