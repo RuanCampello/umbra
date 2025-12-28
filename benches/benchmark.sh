@@ -127,7 +127,7 @@ FROM customers c
 JOIN orders o ON c.customer_id = o.customer_id
 GROUP BY country
 ORDER BY gross_revenue DESC
-LIMIT 10;"
+LIMIT 1000;"
 
 QUERY_BASKET_SIZE="
 SELECT o.order_id,
@@ -139,7 +139,7 @@ WHERE o.status = 'completed'
   AND o.order_date BETWEEN '2022-01-01' AND '2023-12-31'
 GROUP BY o.order_id, o.order_date
 ORDER BY basket_total DESC
-LIMIT 50;"
+LIMIT 5000;"
 
 QUERY_CATEGORY_MIX="
 SELECT p.category,
