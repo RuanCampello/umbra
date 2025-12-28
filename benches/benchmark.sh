@@ -12,6 +12,8 @@ HYPERFINE_BIN="${HYPERFINE_BIN:-hyperfine}"
 UMBRA_BIN="${UMBRA_BIN:-cargo run --quiet --release --}"
 USQL_BIN="${USQL_BIN:-cargo run --quiet --release --package usql --}"
 
+WARMUPS=10
+
 UMBRA_PID=""
 UMBRA_LOG=""
 UMBRA_LOAD_LOG=""
@@ -112,7 +114,7 @@ bench_query() {
 
   echo ""
   echo "Benchmarking $name..."
-  $HYPERFINE_BIN --warmup 1 --runs "$RUNS" \
+  $HYPERFINE_BIN --warmup $WARMUPS --runs "$RUNS" \
     --command-name "umbra-$name" "$umbra_cmd" \
     --command-name "postgres-$name" "$pg_cmd"
 
