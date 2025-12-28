@@ -305,6 +305,31 @@ fn analytics_reporting() {
 }
 
 #[test]
+fn users_metadata() {
+    let server = State::new("sql/users-json.sql");
+    let mut db = server.client();
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.age AS age, metadata.city AS city
+        FROM users
+        WHERE metadata.active = true;"#,
+    );
+    print!("{query}");
+    assert!(!query.tuples.is_empty());
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.city AS city
+        WHERE metadata.profile.lang = 'pt' AND metadata.age >= 18
+        FROM users;"#,
+    );
+
+    print!("{query}");
+    assert!(!query.tuples.is_empty());
+}
+
+#[test]
 fn project_requests() {
     let server = State::new("sql/user-requests.sql");
     let mut db = server.client();
