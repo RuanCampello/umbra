@@ -191,7 +191,6 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         }
 
         query_set.display_enums();
-        query_set.align_dynamic_types();
         Ok(query_set)
     }
 
@@ -648,54 +647,6 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
 impl QuerySet {
     pub(crate) fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
         Self { schema, tuples }
-    }
-
-    fn align_dynamic_types(&mut self) {
-        use crate::sql::statement::{Constraint, Temporal, NUMERIC_ANY};
-
-        for (idx, col) in self.schema.columns.iter_mut().enumerate() {
-            let nullable = self
-                .tuples
-                .iter()
-                .any(|tuple| matches!(tuple.get(idx), Some(Value::Null)));
-
-            if !matches!(col.data_type, Type::Text) {
-                continue;
-            }
-
-            let inferred = self
-                .tuples
-                .iter()
-                .filter_map(|tuple| tuple.get(idx))
-                .find_map(|value| match value {
-                    Value::Number(_) => Some(Type::BigInteger),
-                    Value::Float(_) => Some(Type::DoublePrecision),
-                    Value::Boolean(_) => Some(Type::Boolean),
-                    Value::Temporal(temporal) => match temporal {
-                        Temporal::Date(_) => Some(Type::Date),
-                        Temporal::DateTime(_) => Some(Type::DateTime),
-                        Temporal::Time(_) => Some(Type::Time),
-                    },
-                    Value::Uuid(_) => Some(Type::Uuid),
-                    Value::Interval(_) => Some(Type::Interval),
-                    Value::Numeric(_) => Some(Type::Numeric(NUMERIC_ANY, NUMERIC_ANY)),
-                    Value::Blob(_) => Some(Type::Jsonb),
-                    Value::String(_) | Value::Enum(_) | Value::Null => None,
-                });
-
-            if nullable
-                && !col
-                    .constraints
-                    .iter()
-                    .any(|constraint| matches!(constraint, Constraint::Nullable))
-            {
-                col.constraints.push(Constraint::Nullable);
-            }
-
-            if let Some(inferred) = inferred {
-                col.data_type = inferred;
-            }
-        }
     }
 
     pub(crate) fn empty() -> Self {

@@ -3227,6 +3227,8 @@ fn jsonb() -> Result<()> {
     "#,
     )?;
 
+    let query = db.exec("SELECT metadata.address.street FROM users;")?;
+    println!("{query}");
     let query = db.exec(r#"SELECT metadata.age FROM users ORDER BY id;"#)?;
     assert_eq!(
         query.tuples,
