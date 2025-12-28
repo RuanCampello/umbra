@@ -1,1 +1,2 @@
 /benches/dataset.sql linguist-generated
+*.sql -linguist-detectable
