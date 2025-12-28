@@ -15,6 +15,10 @@ use crate::{
     sql::statement::{Column, Temporal, Type, Value},
 };
 
+/// Size in bytes to storing JSON path expression results (number or float).
+/// This matches the size of i64/f64 which is sufficient for JSON numeric values.
+const JSON_PATH_NUMERIC_SIZE: usize = 8;
+
 trait ValueSerialize {
     fn serialize(&self, buff: &mut Vec<u8>, to: &Type);
 }
@@ -192,19 +196,12 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                         }
                         _ => byte_len_of_type(&col.data_type),
                     },
-                    Value::Numeric(num) => match num {
-                        Numeric::Short(_) | Numeric::NaN => 8,
-                        Numeric::Long { digits, .. } => 14 + digits.len() * 2,
-                    },
-
-                    Value::Blob(blob) => match col.data_type {
-                        Type::Jsonb => {
-                            let len = blob.len();
-                            let header_len = if len < 127 { 1 } else { 4 };
-                            header_len + len
-                        }
-                        _ => byte_len_of_type(&col.data_type),
-                    },
+                    Value::Numeric(num) => num.size(),
+                    Value::Blob(blob) => {
+                        let len = blob.len();
+                        let header_len = if len < 127 { 1 } else { 4 };
+                        header_len + len
+                    }
 
                     Value::Float(_) | Value::Number(_)
                         if matches!(col.data_type, Type::Numeric(_, _)) =>
@@ -212,13 +209,13 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                         let num = match &tuple[idx] {
                             Value::Float(f) => Numeric::try_from(*f).unwrap(),
                             Value::Number(n) => Numeric::from(*n),
-                            _ => unreachable!(),
+                            _ => unsafe { std::hint::unreachable_unchecked() },
                         };
 
-                        match num {
-                            Numeric::Short(_) | Numeric::NaN => 8,
-                            Numeric::Long { digits, .. } => 14 + digits.len() * 2,
-                        }
+                        num.size()
+                    }
+                    Value::Float(_) | Value::Number(_) if matches!(col.data_type, Type::Text) => {
+                        JSON_PATH_NUMERIC_SIZE
                     }
                     _ => byte_len_of_type(&col.data_type),
                 }),

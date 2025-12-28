@@ -763,7 +763,19 @@ impl Jsonb {
                     }
                 }
             }
-            _ => unreachable!(),
+
+            SegmentVariant::Single(PathElement::Wildcard) => {
+                if matches!(element_type, ElementType::ARRAY) {
+                    return Ok(TransversalResult::new(pos, LocationKind::Root, 0));
+                }
+
+                return Err(parse_error(
+                    "Wildcard can only be applied to arrays",
+                    Some(pos),
+                ));
+            }
+
+            _ => {}
         }
 
         Err(parse_error!("Not found"))

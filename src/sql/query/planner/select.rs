@@ -496,14 +496,24 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             .map(|expr| match expr {
                 Expression::Alias { expr, alias } => match expr.as_ref() {
                     Expression::QualifiedIdentifier { column, table } => {
-                        let mut column = resolve_qualified_column(table, column, &self.tables)?;
-                        column.name = alias.clone();
-                        Ok(column)
+                        match resolve_qualified_column(table, column, &self.tables) {
+                            Ok(mut col) => {
+                                col.name = alias.clone();
+                                Ok(col)
+                            }
+                            _ => Ok(Column::new(alias, resolve_type(&self.schema, expr)?)),
+                        }
                     }
                     _ => Ok(Column::new(alias, resolve_type(&self.schema, expr)?)),
                 },
                 Expression::QualifiedIdentifier { column, table } => {
-                    resolve_qualified_column(table, column, &self.tables)
+                    match resolve_qualified_column(table, column, &self.tables) {
+                        Ok(col) => Ok(col),
+                        Err(_) => Ok(Column::new(
+                            &expr.to_string(),
+                            resolve_type(&self.schema, expr)?,
+                        )),
+                    }
                 }
                 Expression::Identifier(column) => {
                     Ok(self.schema.columns[self.schema.index_of(column).unwrap()].clone())

@@ -1,19 +1,12 @@
 use std::collections::HashMap;
-use std::io::{Read, Seek, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::storage::btree::{
-    BTree, BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp,
-};
+use crate::core::storage::btree::{BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
-use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
 use crate::db::{DatabaseError, RowId, Schema};
 use crate::sql::analyzer::AnalyzerError;
-use crate::sql::statement::{Column, Type, Value};
-
-use super::schema::umbra_schema;
-use super::Database;
+use crate::sql::statement::{Column, Type};
 
 /// That's all the information we've from a table during runtime.
 /// We save this to the database metadata table at page zero.
@@ -57,6 +50,7 @@ pub(crate) struct SequenceMetadata {
 pub(crate) enum Relation {
     Index(IndexMetadata),
     Table(TableMetadata),
+    #[allow(unused)]
     Sequence(SequenceMetadata),
 }
 
@@ -151,17 +145,13 @@ impl TableMetadata {
 
             _ => FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
                 .map(BTreeKeyCmp::MemCmp)
-                .map_err(|e| {
+                .map_err(|_| {
                     DatabaseError::Corrupted(format!(
                         "Table {} is using a non-int Btree key with type {:#?}",
                         self.name, self.schema.columns[0].data_type
                     ))
                 }),
         }
-    }
-
-    pub fn keys(&self) -> &Column {
-        self.schema.keys()
     }
 
     pub fn key_only_schema(&self) -> Schema {
@@ -185,20 +175,16 @@ impl Relation {
                 let first = &idx.schema.columns[0].data_type;
 
                 match first {
-                    Type::Varchar(max) => {
-                        let pk = &idx.schema.columns[1].data_type;
-
-                        match idx.schema.has_nullable() {
-                            false => BTreeKeyCmp::from(first),
-                            true => {
-                                let bitmap_len = idx.schema.null_bitmap_len();
-                                BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
-                                    bitmap_len,
-                                    prefix_len: utf_8_length_bytes(*max),
-                                })
-                            }
+                    Type::Varchar(max) => match idx.schema.has_nullable() {
+                        false => BTreeKeyCmp::from(first),
+                        true => {
+                            let bitmap_len = idx.schema.null_bitmap_len();
+                            BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                                bitmap_len,
+                                prefix_len: utf_8_length_bytes(*max),
+                            })
                         }
-                    }
+                    },
                     _ => BTreeKeyCmp::from(first),
                 }
             }
@@ -228,7 +214,7 @@ impl Relation {
 
     pub fn schema(&self) -> &Schema {
         match self {
-            Self::Sequence(seq) => panic!("Sequence does not have a schema"),
+            Self::Sequence(_) => panic!("Sequence does not have a schema"),
             Self::Index(idx) => &idx.schema,
             Self::Table(table) => &table.schema,
         }

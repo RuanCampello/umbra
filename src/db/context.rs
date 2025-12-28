@@ -1,5 +1,5 @@
+use crate::db::DatabaseError;
 use crate::db::{Ctx, SqlError, TableMetadata};
-use crate::db::{DatabaseError, DEFAULT_CACHE_SIZE};
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -28,7 +28,10 @@ struct Entry {
 }
 
 impl Context {
+    #[cfg(test)]
     pub fn new() -> Self {
+        use crate::db::DEFAULT_CACHE_SIZE;
+
         Self::with_size(DEFAULT_CACHE_SIZE)
     }
 

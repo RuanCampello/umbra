@@ -87,6 +87,13 @@ impl Numeric {
         matches!(self, Self::NaN)
     }
 
+    pub const fn size(&self) -> usize {
+        match self {
+            Numeric::Short(_) | Numeric::NaN => 8,
+            Numeric::Long { digits, .. } => 14 + digits.len() * 2,
+        }
+    }
+
     #[inline]
     pub const fn is_negative(&self) -> bool {
         match self {
