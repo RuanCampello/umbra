@@ -444,11 +444,13 @@ impl<'input> Parser<'input> {
             let key = match self.next_token()? {
                 Token::Identifier(id) => id,
                 Token::String(s) => s,
+                Token::Keyword(k) => k.to_string(),
                 other => {
                     return Err(self.error(ErrorKind::ExpectedOneOf {
                         expected: vec![
                             Token::Identifier(Default::default()),
                             Token::String(Default::default()),
+                            Token::Keyword(Keyword::None),
                         ],
                         found: other,
                     }))

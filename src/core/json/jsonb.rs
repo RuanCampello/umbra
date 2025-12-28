@@ -1112,9 +1112,9 @@ impl Jsonb {
             return Ok(pos);
         }
 
-        while pos < input.len() {
+        while let Some(c) = input.get(pos) {
             match input[pos] {
-                b'0'..b'9' => {
+                c if c.is_ascii_digit() => {
                     push_current!();
                 }
                 b'.' => {

@@ -321,8 +321,8 @@ fn users_metadata() {
     let query = db.exec(
         r#"
         SELECT name, metadata.city AS city
-        WHERE metadata.profile.lang = 'pt' AND metadata.age >= 18
-        FROM users;"#,
+        FROM users
+        WHERE metadata.profile.lang = 'pt' AND metadata.age >= 18;"#,
     );
 
     print!("{query}");
