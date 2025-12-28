@@ -5,6 +5,7 @@
 use super::Keyword;
 use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::json::Jsonb;
 use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
 use crate::db::{IndexMetadata, TableMetadata};
@@ -1179,8 +1180,8 @@ impl Display for Value {
             Value::Interval(interval) => write!(f, "{interval}"),
             Value::Numeric(numeric) => write!(f, "{numeric}"),
             Value::Enum(index) => write!(f, "{index}"),
-            Value::Blob(blob) => write!(f, "{blob:?}"),
-            Value::Null => write!(f, "NULL"),
+            Value::Blob(blob) => write!(f, "{}", Jsonb::new(blob.len(), Some(blob))),
+            Value::Null => f.write_str("NULL"),
         }
     }
 }

@@ -10,7 +10,7 @@ use crate::{
     sql::statement::Value,
 };
 use error::Error as JsonError;
-use jsonb::Jsonb;
+pub use jsonb::Jsonb;
 use std::{borrow::Cow, hint::unreachable_unchecked, str::FromStr};
 
 mod cache;

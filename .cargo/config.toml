@@ -2,4 +2,4 @@
 MIRIFLAGS = "-Zmiri-disable-isolation" # a database need access to the filesystem, so...
 
 [build]
-rustflags = ["-C", "target-cpu=native"]
+rustflags = ["-Ctarget-cpu=native", "-Cforce-frame-pointers=yes"]
