@@ -399,15 +399,52 @@ pub enum Function {
     UuidV4,
 }
 
-#[derive(Debug)]
-pub(crate) enum ArithmeticPair<'p> {
-    Numeric(f64, f64),
-    Temporal(Temporal, Interval),
-    Arbitrary(Cow<'p, Numeric>, Cow<'p, Numeric>),
-}
-
 const NULL_HASH: u32 = 0x4E554C4C;
 pub const NUMERIC_ANY: usize = usize::MAX;
+
+pub trait Coerce: Sized {
+    fn coerce_to(self, other: Self) -> (Self, Self);
+}
+
+macro_rules! impl_value_op {
+    ($trait:ty, $method:ident, $op:tt) => {
+        impl $trait for &Value {
+            type Output = Option<Value>;
+            fn $method(self, rhs: Self) -> Self::Output {
+                match (self, rhs) {
+                    // float arithmetic
+                    (Value::Float(a), Value::Float(b)) => Some(Value::Float(*a $op *b)),
+                    (Value::Number(a), Value::Float(b)) => Some(Value::Float(*a as f64 $op *b)),
+                    (Value::Float(a), Value::Number(b)) => Some(Value::Float(*a $op *b as f64)),
+                    (Value::Number(a), Value::Number(b)) => {
+                        let result = *a as f64 $op *b as f64;
+                        match result.fract() == 0.0 {
+                            true => Some(Value::Number(result as i128)),
+                            _ => Some(Value::Float(result))
+                        }
+                    }
+
+                    // arbitrary precision numeric
+                    (Value::Numeric(a), Value::Numeric(b)) => Some(Value::Numeric(a $op b)),
+                    (Value::Numeric(a), Value::Number(b)) => {
+                        Some(Value::Numeric(a $op &Numeric::from(*b)))
+                    }
+                    (Value::Number(a), Value::Numeric(b)) => {
+                        Some(Value::Numeric(&Numeric::from(*a) $op b))
+                    }
+                    (Value::Numeric(a), Value::Float(b)) => {
+                        Numeric::try_from(*b).ok().map(|nb| Value::Numeric(a $op &nb))
+                    }
+                    (Value::Float(a), Value::Numeric(b)) => {
+                        Numeric::try_from(*a).ok().map(|na| Value::Numeric(&na $op b))
+                    }
+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
 
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
@@ -777,44 +814,78 @@ impl JoinClause {
 }
 
 impl Value {
-    pub(crate) fn is_null(&self) -> bool {
+    pub(crate) const fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 
-    /// Tries to convert a pair of `Value`s into a representation suitable for arithmetic.
-    pub(crate) fn as_arithmetic_pair<'p>(&'p self, other: &'p Self) -> Option<ArithmeticPair<'p>> {
-        use crate::core::numeric::Numeric as Num;
-        use std::borrow::Cow::*;
-        use ArithmeticPair as Pair;
-        use Value::*;
+    pub const fn is_zero(&self) -> bool {
+        match self {
+            Value::Number(n) if *n == 0 => true,
+            Value::Float(f) if *f == 0.0 => true,
+            Value::Numeric(n) if n.is_zero() => true,
+            _ => false,
+        }
+    }
+
+    pub const fn is_compatible(&self, other: &Self) -> bool {
+        use self::Value::*;
 
         match (self, other) {
-            (Float(a), Float(b)) => Some(Pair::Numeric(*a, *b)),
-            (Number(a), Float(b)) => Some(Pair::Numeric(*a as f64, *b)),
-            (Float(a), Number(b)) => Some(Pair::Numeric(*a, *b as f64)),
-            (Number(a), Number(b)) => Some(Pair::Numeric(*a as f64, *b as f64)),
-
-            (Temporal(t), Interval(i)) => Some(Pair::Temporal(*t, *i)),
-            (Interval(i), Temporal(t)) => Some(Pair::Temporal(*t, *i)),
-
-            (Numeric(a), Numeric(b)) => Some(Pair::Arbitrary(Borrowed(a), Borrowed(b))),
-            (Numeric(a), Number(b)) => Some(Pair::Arbitrary(Borrowed(a), Owned(Num::from(*b)))),
-            (Number(a), Numeric(b)) => Some(Pair::Arbitrary(Owned(Num::from(*a)), Borrowed(b))),
-
-            (Numeric(a), Float(b)) => Num::try_from(*b)
-                .ok()
-                .map(|nb| Pair::Arbitrary(Borrowed(a), Owned(nb))),
-            (Float(a), Numeric(b)) => Num::try_from(*a)
-                .ok()
-                .map(|na| Pair::Arbitrary(Owned(na), Borrowed(b))),
-
-            _ => None,
+            (Float(_) | Number(_) | Numeric(_), Float(_) | Number(_) | Numeric(_)) => true,
+            (Temporal(_), Interval(_)) | (Interval(_), Temporal(_)) => true,
+            _ => false,
         }
     }
 }
 
-impl Temporal {
-    pub(crate) fn try_coerce(self, other: Self) -> (Self, Self) {
+impl Coerce for Value {
+    fn coerce_to(self, other: Self) -> (Self, Self) {
+        match (&self, &other) {
+            // Numeric coercion: Integer <-> Float
+            (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
+            (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
+
+            // String -> Temporal coercion
+            (Value::String(string), Value::Temporal(_)) => {
+                match Temporal::try_from(string.as_str()) {
+                    Ok(parsed) => (Value::Temporal(parsed), other),
+                    _ => (self, other),
+                }
+            }
+            (Value::Temporal(from), Value::String(string)) => {
+                use std::mem::discriminant;
+
+                match Temporal::try_from(string.as_str()) {
+                    Ok(parsed) => match discriminant(from) == discriminant(&parsed) {
+                        true => (self, Value::Temporal(parsed)),
+
+                        _ => {
+                            let (left, right) = from.coerce_to(parsed);
+                            (Value::Temporal(left), Value::Temporal(right))
+                        }
+                    },
+                    _ => (self, other),
+                }
+            }
+
+            // String <-> UUID coercion
+            (Value::Uuid(_), Value::String(s)) => match Uuid::from_str(s) {
+                Ok(parsed) => (self, Value::Uuid(parsed)),
+                _ => (self, other),
+            },
+            (Value::String(s), Value::Uuid(_)) => match Uuid::from_str(s) {
+                Ok(parsed) => (Value::Uuid(parsed), other),
+                _ => (self, other),
+            },
+
+            // No coercion needed or not possible
+            _ => (self, other),
+        }
+    }
+}
+
+impl Coerce for Temporal {
+    fn coerce_to(self, other: Self) -> (Self, Self) {
         match (self, other) {
             (Self::Time(_), Self::DateTime(timestamp)) => (self, Self::Time(timestamp.into())),
             (Self::DateTime(timestamp), Self::Time(_)) => (Self::Time(timestamp.into()), other),
@@ -824,6 +895,11 @@ impl Temporal {
         }
     }
 }
+
+impl_value_op!(std::ops::Add, add, +);
+impl_value_op!(std::ops::Sub, sub, -);
+impl_value_op!(std::ops::Mul, mul, *);
+impl_value_op!(std::ops::Div, div, /);
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
