@@ -1,7 +1,5 @@
 //! SQL tokenizer that generates ours [tokens](Token) instances.
 
-#![allow(unused)]
-
 use super::tokens::{Keyword, Token, Whitespace};
 use std::fmt::Display;
 use std::iter::Peekable;
@@ -53,9 +51,13 @@ pub(in crate::sql) struct Location {
 #[derive(Debug, PartialEq)]
 pub(in crate::sql) enum ErrorKind {
     UnexpectedToken(char),
-    UnexpectedOperator { unexpected: char, operator: Token },
+    UnexpectedOperator {
+        unexpected: char,
+        operator: Token,
+    },
     OperatorUnclosed(Token),
     StringUnclosed,
+    #[allow(unused)]
     Other(String),
 }
 
@@ -69,6 +71,7 @@ impl<'input> Tokenizer<'input> {
         }
     }
 
+    #[cfg(test)]
     pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
         self.iter()
             .map(|token| token.map(TokenWithLocation::token_only))
@@ -88,6 +91,7 @@ impl<'input> Tokenizer<'input> {
         })
     }
 
+    #[cfg(test)]
     fn iter<'token>(&'token mut self) -> Iter<'token, 'input> {
         self.into_iter()
     }
@@ -230,6 +234,7 @@ impl TokenWithLocation {
     }
 
     /// Returns the [Token] discarding the [Location]
+    #[cfg(test)]
     fn token_only(self) -> Token {
         self.token
     }
@@ -307,6 +312,7 @@ impl<'input> Iterator for IntoIter<'input> {
 }
 
 impl Location {
+    #[cfg(test)]
     pub fn new(line: usize, col: usize) -> Self {
         Self { line, col }
     }

@@ -10,7 +10,7 @@ use std::{cmp::Ordering, convert::TryFrom, fmt::Display, ops::Add, str::FromStr}
 
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq)]
 pub enum Numeric {
     /// Small numeric value packed into a single 64-bit word.
     /// No heap allocation, optimal for cache locality.
@@ -900,8 +900,6 @@ impl PartialOrd for Numeric {
         Some(self.cmp(other))
     }
 }
-
-impl Eq for Numeric {}
 
 impl Default for Numeric {
     fn default() -> Self {

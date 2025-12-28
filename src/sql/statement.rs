@@ -2,8 +2,6 @@
 //! See [this](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 //! to reach out about statements and/or AST.
 
-#![allow(unused)]
-
 use super::Keyword;
 use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
@@ -17,7 +15,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
-use std::ops::{Add, Neg};
+use std::ops::Neg;
 use std::str::FromStr;
 
 /// SQL statements.
@@ -519,7 +517,7 @@ impl Type {
         match self {
             Self::Real => *float >= f32::MIN as f64 && *float <= f32::MAX as f64,
             Self::DoublePrecision => float.is_finite(),
-            other => panic!("bound checking must be used only for floats"),
+            _ => panic!("bound checking must be used only for floats"),
         }
     }
 
@@ -723,10 +721,6 @@ impl Expression {
             Expression::Nested(expr) => expr.unwrap_name(),
             expr => Cow::Owned(expr.to_string()),
         }
-    }
-
-    pub(in crate::sql) fn is_aggr_fn(&self) -> bool {
-        matches!(self, Expression::Function { func, .. } if func.is_aggr())
     }
 
     pub(in crate::sql) fn as_identifier(&self) -> Option<&str> {
@@ -967,12 +961,14 @@ impl PartialOrd for Value {
 
 impl Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        fn encode_float(f: &f64) -> u64 {
+        #[inline(always)]
+        const fn encode_float(f: &f64) -> u64 {
             // normalize -0.0 and 0.0 to the same bits, and treat all nans the same.
             let mut bits = f.to_bits();
             if bits == (-0.0f64).to_bits() {
                 bits = 0.0f64.to_bits();
             }
+
             if f.is_nan() {
                 // all nans are hashed as the same.
                 bits = 0x7ff8000000000000u64;
@@ -986,16 +982,8 @@ impl Hash for Value {
 
         match self {
             Self::Float(f) => encode_float(f).hash(state),
-            Value::Number(n) => n.hash(state),
-            Value::String(s) => s.hash(state),
-            Value::Boolean(b) => b.hash(state),
-            Value::Temporal(t) => t.hash(state),
-            Value::Uuid(u) => u.hash(state),
-            Value::Interval(i) => i.hash(state),
-            Value::Enum(e) => e.hash(state),
-            Value::Null => NULL_HASH.hash(state),
-            Value::Blob(blob) => blob.hash(state),
-            Value::Numeric(n) => todo!(),
+            Self::Null => NULL_HASH.hash(state),
+            other => other.hash(state),
         }
     }
 }
@@ -1050,7 +1038,7 @@ impl Display for Column {
                 Constraint::PrimaryKey => "PRIMARY KEY",
                 Constraint::Unique => "UNIQUE",
                 Constraint::Nullable => "NULLABLE",
-                Constraint::Default(value) => "DEFAULT {value}",
+                Constraint::Default(_) => unimplemented!("default values"),
             })?;
         }
 
@@ -1384,6 +1372,7 @@ where
 }
 
 impl Select {
+    #[allow(unused)]
     pub fn builder() -> SelectBuilder {
         SelectBuilder::default()
     }
