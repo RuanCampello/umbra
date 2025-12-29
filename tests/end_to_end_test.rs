@@ -325,7 +325,7 @@ fn users_metadata() {
             vec!["Rafael".into(), 37.into(), "São Paulo".into()],
             vec!["Paulo".into(), 50.into(), "São Paulo".into()],
             vec!["Olivia".into(), 24.into(), "London".into()],
-            vec!["OLiver".into(), 44.into(), "London".into()],
+            vec!["Oliver".into(), 44.into(), "London".into()],
         ]
     );
 

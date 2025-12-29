@@ -506,9 +506,13 @@ impl From<&Type> for VmType {
     }
 }
 
-impl From<&VmType> for Type {
-    fn from(value: &VmType) -> Self {
-        match value {
+impl<T> From<T> for Type
+where
+    T: std::borrow::Borrow<VmType>,
+{
+    fn from(value: T) -> Self {
+        let vm_type = value.borrow();
+        match vm_type {
             VmType::Bool => Self::Boolean,
             VmType::String => Self::Text,
             VmType::Number => Self::BigInteger,
@@ -519,12 +523,6 @@ impl From<&VmType> for Type {
             VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
             VmType::Blob => Self::Jsonb,
         }
-    }
-}
-
-impl From<VmType> for Type {
-    fn from(value: VmType) -> Self {
-        Self::from(&value)
     }
 }
 
