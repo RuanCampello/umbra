@@ -609,7 +609,8 @@ impl Numeric {
         let weight_max = max(w1, w2);
         let weight_min = min(w1_end, w2_end);
 
-        let mut digits = Vec::new();
+        let capacity = (weight_max as i32 - weight_min as i32 + 2).max(0) as usize;
+        let mut digits = Vec::with_capacity(capacity);
         let mut carry = 0i32;
 
         for weight in weight_min..=weight_max {
@@ -669,7 +670,8 @@ impl Numeric {
         let weight_max = w_large;
         let weight_min = min(w_large_end, w_small_end);
 
-        let mut digits = Vec::new();
+        let capacity = (weight_max as i32 - weight_min as i32 + 1).max(0) as usize;
+        let mut digits = Vec::with_capacity(capacity);
         let mut borrow: i32 = 0;
 
         for weigth in weight_min..=weight_max {
