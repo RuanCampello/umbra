@@ -137,7 +137,8 @@ pub(crate) fn resolve_expression<'exp>(
                 }
             }
 
-            json::get_path(&base_value, &path, json::OutputFlag::ElementType).or(Ok(Value::Null))
+            json::get_path(&base_value, &path, json::OutputFlag::ElementType)
+                .map_err(|e| SqlError::Other(e.to_string()))
         }
         Expression::QualifiedIdentifier { column, table } => {
             let idx = schema
@@ -523,6 +524,27 @@ where
             VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
             VmType::Blob => Self::Jsonb,
         }
+    }
+}
+
+impl TryFrom<&Value> for Type {
+    type Error = ();
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Number(_) => Some(Type::BigInteger),
+            Value::Float(_) => Some(Type::DoublePrecision),
+            Value::Boolean(_) => Some(Type::Boolean),
+            Value::Temporal(Temporal::Date(_)) => Some(Type::Date),
+            Value::Temporal(Temporal::DateTime(_)) => Some(Type::DateTime),
+            Value::Temporal(Temporal::Time(_)) => Some(Type::Time),
+            Value::Interval(_) => Some(Type::Interval),
+            Value::Uuid(_) => Some(Type::Uuid),
+            Value::Numeric(n) => Some(Type::Numeric(n.precision(), n.scale() as usize)),
+            Value::Blob(_) => Some(Type::Jsonb),
+            _ => None,
+        }
+        .ok_or(())
     }
 }
 

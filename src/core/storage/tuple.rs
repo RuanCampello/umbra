@@ -20,6 +20,7 @@ trait ValueSerialize {
 }
 
 /// Returns the byte length of a given SQL [`Type`].
+#[inline(always)]
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
         Type::Uuid | Type::Interval => 16,
@@ -207,7 +208,6 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                         let header_len = if len < 127 { 1 } else { 4 };
                         header_len + len
                     }
-
                     Value::Float(_) | Value::Number(_)
                         if matches!(col.data_type, Type::Numeric(_, _)) =>
                     {
@@ -219,14 +219,14 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 
                         num.size()
                     }
-                    Value::Float(_) | Value::Number(_) | Value::Boolean(_)
-                        if matches!(col.data_type, Type::Text) =>
-                    {
-                        let s = tuple[idx].to_string();
-                        let len = s.as_bytes().len();
-                        let header_len = if len < 127 { 1 } else { 4 };
-                        header_len + len
-                    }
+                    // Value::Float(_) | Value::Number(_) | Value::Boolean(_)
+                    //     if matches!(col.data_type, Type::Text | Type::Varchar(_)) =>
+                    // {
+                    //     let s = tuple[idx].to_string();
+                    //     let len = s.as_bytes().len();
+                    //     let header_len = if len < 127 { 1 } else { 4 };
+                    //     header_len + len
+                    // }
                     _ => byte_len_of_type(&col.data_type),
                 }),
             })

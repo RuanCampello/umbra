@@ -363,43 +363,6 @@ impl<File: PlanExecutor> Execute for Planner<File> {
     }
 }
 
-fn coerce_jsonb_tuple(schema: &Schema, tuple: &mut [Value]) -> Result<(), DatabaseError> {
-    for (idx, col) in schema.columns.iter().enumerate() {
-        if !matches!(col.data_type, Type::Jsonb) {
-            continue;
-        }
-        if tuple.get(idx).is_none() {
-            return Err(DatabaseError::Corrupted(format!(
-                "Tuple length does not match schema length: tuple={}, schema={}",
-                tuple.len(),
-                schema.len()
-            )));
-        }
-        let value = std::mem::replace(&mut tuple[idx], Value::Null);
-        tuple[idx] = coerce_jsonb_value(&col.data_type, value).map_err(DatabaseError::from)?;
-    }
-    Ok(())
-}
-
-fn coerce_jsonb_value(data_type: &Type, value: Value) -> Result<Value, SqlError> {
-    if !matches!(data_type, Type::Jsonb) {
-        return Ok(value);
-    }
-
-    match value {
-        Value::Null => Ok(Value::Null),
-        Value::Blob(_) => Ok(value),
-        Value::String(s) => {
-            let json = json::from_value_to_jsonb(&Value::String(s), json::Conv::Strict)
-                .map_err(|e| SqlError::Other(e.to_string()))?;
-            Ok(Value::Blob(json.data()))
-        }
-        other => Err(SqlError::Other(format!(
-            "Cannot coerce value {other} into JSONB"
-        ))),
-    }
-}
-
 impl<File: FileOperations> Planner<File> {
     pub fn child(&self) -> Option<&Self> {
         Some(match self {
@@ -1324,9 +1287,19 @@ impl<File: PlanExecutor> Execute for Project<File> {
 
         // PERFORMANCE: maybe creating a new array is a foot shot
         let mut project = Vec::with_capacity(self.projection.len());
-        for expr in &self.projection {
-            project.push(resolve_expression(&tuple, &self.input, expr)?);
+        println!("before\n {}", self.output);
+        for (idx, expr) in self.projection.iter().enumerate() {
+            let value = resolve_expression(&tuple, &self.input, expr)?;
+            let col = &mut self.output.columns[idx];
+
+            if matches!(col.data_type, Type::Text | Type::Varchar(_)) {
+                let new_type = Type::try_from(&value).unwrap_or(col.data_type);
+                col.data_type = new_type;
+            }
+            project.push(value);
         }
+        coerce_jsonb_tuple(&self.output, &mut project)?;
+        println!("after\n {}", self.output);
 
         Ok(Some(project))
     }
@@ -2215,6 +2188,43 @@ fn temp_file<File: FileOperations>(
     let file = File::create(&path)?;
 
     Ok((path, file))
+}
+
+fn coerce_jsonb_tuple(schema: &Schema, tuple: &mut [Value]) -> Result<(), DatabaseError> {
+    for (idx, col) in schema.columns.iter().enumerate() {
+        if !matches!(col.data_type, Type::Jsonb) {
+            continue;
+        }
+
+        if tuple.get(idx).is_none() {
+            return Err(DatabaseError::Corrupted(format!(
+                "Tuple length does not match schema length: tuple={}, schema={}",
+                tuple.len(),
+                schema.len()
+            )));
+        }
+
+        let value = std::mem::replace(&mut tuple[idx], Value::Null);
+        tuple[idx] = coerce_jsonb_value(&col.data_type, value).map_err(DatabaseError::from)?;
+    }
+
+    Ok(())
+}
+
+fn coerce_jsonb_value(data_type: &Type, value: Value) -> Result<Value, SqlError> {
+    if !matches!(data_type, Type::Jsonb) {
+        return Ok(value);
+    }
+
+    match value {
+        Value::Null => Ok(Value::Null),
+        Value::Blob(_) => Ok(value),
+        other => {
+            let json = json::from_value_to_jsonb(&other, json::Conv::Strict)
+                .map_err(|e| SqlError::Other(e.to_string()))?;
+            Ok(Value::Blob(json.data()))
+        }
+    }
 }
 
 impl<File: FileOperations> Display for Planner<File> {

@@ -318,6 +318,7 @@ fn users_metadata() {
         LIMIT 5;"#,
     );
     assert!(!query.tuples.is_empty());
+    println!("{query}\n{}", query.schema);
     assert_eq!(
         query.tuples,
         vec![
