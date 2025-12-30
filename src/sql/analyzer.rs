@@ -559,7 +559,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             });
         }
 
-        Expression::Path { .. } => VmType::String,
+        Expression::Path { .. } => VmType::Blob,
 
         Expression::BinaryOperation {
             operator,

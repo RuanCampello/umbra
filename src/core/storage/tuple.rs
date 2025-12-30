@@ -1,18 +1,18 @@
+use crate::{
+    core::{
+        date::{interval::Interval, NaiveDate, NaiveDateTime, NaiveTime, Parse},
+        json::{self, Conv, Jsonb},
+        numeric::Numeric,
+        uuid::Uuid,
+        Serialize,
+    },
+    db::{RowId, Schema},
+    sql::statement::{Column, Temporal, Type, Value},
+};
 use std::{
     io::{self, Read},
     mem,
     str::FromStr,
-};
-
-use crate::{
-    core::Serialize,
-    core::{
-        date::{interval::Interval, NaiveDate, NaiveDateTime, NaiveTime, Parse},
-        numeric::Numeric,
-        uuid::Uuid,
-    },
-    db::{RowId, Schema},
-    sql::statement::{Column, Temporal, Type, Value},
 };
 
 trait ValueSerialize {
@@ -87,18 +87,13 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
 
             _ => string.serialize(buff, r#type),
         },
-        Value::Number(n) => match r#type {
-            Type::Text => Value::String(n.to_string()).utf8_serialize(buff),
-            _ => n.serialize(buff, r#type),
-        },
-        Value::Float(f) => match r#type {
-            Type::Text => Value::String(f.to_string()).utf8_serialize(buff),
-            _ => f.serialize(buff, r#type),
-        },
-        Value::Boolean(b) => match r#type {
-            Type::Text => Value::String(b.to_string()).utf8_serialize(buff),
-            _ => b.serialize(buff, r#type),
-        },
+        Value::Boolean(_) | Value::Float(_) | Value::Number(_) if matches!(r#type, Type::Jsonb) => {
+            let json = json::from_value_to_jsonb(value, Conv::Strict).unwrap();
+            serialize_into(buff, r#type, &Value::Blob(json.data()))
+        }
+        Value::Number(n) => n.serialize(buff, r#type),
+        Value::Float(f) => f.serialize(buff, r#type),
+        Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
         Value::Interval(i) => i.serialize(buff, r#type),
@@ -189,15 +184,26 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
             .columns
             .iter()
             .enumerate()
-            .filter_map(|(idx, col)| match tuple[idx].is_null() {
-                true => None,
-                _ => Some(match &tuple[idx] {
+            .filter_map(|(idx, col)| {
+                // Special handling for Jsonb to ensure we use the correct serialization logic (including metadata)
+                // regardless of the underlying Value type (String, Number, etc).
+                if matches!(col.data_type, Type::Jsonb) {
+                    let json = json::from_value_to_jsonb(&tuple[idx], Conv::NotStrict).unwrap();
+                    let len = json.len();
+                    let header_len = if len < 127 { 1 } else { 4 };
+                    return Some(header_len + len);
+                }
+
+                if tuple[idx].is_null() {
+                    return None;
+                }
+
+                Some(match &tuple[idx] {
                     Value::String(str) => match col.data_type {
                         Type::Varchar(max) => utf_8_length_bytes(max) + str.as_bytes().len(),
                         Type::Text => {
                             let len = str.as_bytes().len();
                             let header_len = if len < 127 { 1 } else { 4 };
-
                             header_len + len
                         }
                         _ => byte_len_of_type(&col.data_type),
@@ -216,19 +222,21 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                             Value::Number(n) => Numeric::from(*n),
                             _ => unsafe { std::hint::unreachable_unchecked() },
                         };
-
                         num.size()
                     }
-                    // Value::Float(_) | Value::Number(_) | Value::Boolean(_)
-                    //     if matches!(col.data_type, Type::Text | Type::Varchar(_)) =>
-                    // {
-                    //     let s = tuple[idx].to_string();
-                    //     let len = s.as_bytes().len();
-                    //     let header_len = if len < 127 { 1 } else { 4 };
-                    //     header_len + len
-                    // }
-                    _ => byte_len_of_type(&col.data_type),
-                }),
+                    _ => match &col.data_type {
+                        Type::Text => {
+                            let serialized = format!("{}", tuple[idx]);
+                            let len = serialized.as_bytes().len();
+                            if len < 127 {
+                                1 + len
+                            } else {
+                                4 + len
+                            }
+                        }
+                        t => byte_len_of_type(t),
+                    },
+                })
             })
             .sum::<usize>()
 }
@@ -259,6 +267,25 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
     values.collect()
 }
 
+fn read_varlena(reader: &mut impl Read) -> io::Result<(usize, Vec<u8>)> {
+    let mut header = [0u8; 4];
+    reader.read_exact(&mut header[0..1])?;
+    let header_len = varlena_header_len(header[0]);
+
+    let length = match header_len == 1 {
+        false => {
+            reader.read_exact(&mut header[1..4])?;
+            let be = [0, header[1], header[2], header[3]];
+            u32::from_be_bytes(be) as usize
+        }
+        true => header[0] as usize,
+    };
+
+    let mut buf = vec![0; length];
+    reader.read_exact(&mut buf)?;
+    Ok((length, buf))
+}
+
 fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
     match col.data_type {
         Type::Varchar(size) => {
@@ -277,43 +304,23 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
         }
 
         Type::Text => {
-            let mut header = [0; 4];
-            reader.read_exact(&mut header[..1])?;
-            let header_len = varlena_header_len(header[0]);
-
-            let length = match header_len == 1 {
-                false => {
-                    reader.read_exact(&mut header[1..4])?;
-                    let be = [0, header[1], header[2], header[3]];
-                    u32::from_be_bytes(be) as usize
-                }
-                _ => header[0] as usize,
-            };
-
-            let mut buf = vec![0; length];
-            reader.read_exact(&mut buf)?;
+            let (_, buf) = read_varlena(reader)?;
             Ok(Value::String(
                 String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
             ))
         }
 
         Type::Jsonb => {
-            let mut header = [0; 4];
-            reader.read_exact(&mut header[..1])?;
-            let header_len = varlena_header_len(header[0]);
+            use std::io::{Error, ErrorKind};
+            let (_, buf) = read_varlena(reader)?;
 
-            let length = match header_len == 1 {
-                false => {
-                    reader.read_exact(&mut header[1..4])?;
-                    let be = [0, header[1], header[2], header[3]];
-                    u32::from_be_bytes(be) as usize
-                }
-                true => header[0] as usize,
-            };
+            let json = Jsonb::from_data(&buf);
+            let element_type = json
+                .element_type()
+                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-            let mut buf = vec![0; length];
-            reader.read_exact(&mut buf)?;
-            Ok(Value::Blob(buf))
+            json::from_json_to_value(json, element_type, json::OutputFlag::ElementType)
+                .map_err(|e| Error::new(ErrorKind::InvalidData, e))
         }
 
         Type::Numeric(_, _) => {
@@ -519,6 +526,18 @@ impl ValueSerialize for i128 {
                 _ => unreachable!("What kind of float is this?"),
             },
             Type::Numeric(_, _) => Numeric::from(*self).serialize(buff),
+            Type::Text | Type::Jsonb => {
+                // Serialize number as varlena for JSONB field extraction
+                let s = self.to_string();
+                let bytes = s.as_bytes();
+                if bytes.len() < 127 {
+                    buff.push(bytes.len() as u8);
+                } else {
+                    buff.push(0x80);
+                    buff.extend_from_slice(&(bytes.len() as u32).to_be_bytes()[1..]);
+                }
+                buff.extend_from_slice(bytes);
+            }
             _ => unreachable!("Unsupported type {to} for i128 value"),
         }
     }

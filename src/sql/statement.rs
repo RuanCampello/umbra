@@ -812,23 +812,6 @@ impl Value {
         matches!(self, Value::Null)
     }
 
-    pub(crate) fn utf8_serialize(&self, buff: &mut Vec<u8>) {
-        let Value::String(string) = self else {
-            unreachable!("utf8_serialize must be called on string values")
-        };
-
-        let len = string.as_bytes().len();
-        let header_len = if len < 127 { 1 } else { 4 };
-        match header_len == 1 {
-            true => buff.push(len as u8),
-            _ => {
-                buff.push(0x80);
-                buff.extend_from_slice(&(len as u32).to_be_bytes()[1..])
-            }
-        }
-        buff.extend_from_slice(string.as_bytes());
-    }
-
     pub const fn is_zero(&self) -> bool {
         match self {
             Value::Number(n) if *n == 0 => true,

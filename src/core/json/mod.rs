@@ -228,6 +228,7 @@ where
     Ok((result, ElementType::ARRAY))
 }
 
+#[inline(always)]
 pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
     match value {
         Value::String(string) => {
@@ -378,7 +379,11 @@ fn slice_to_json(slice: &[u8], conversion: Conv) -> Result<Jsonb> {
     Jsonb::from_str_with_mode(str, conversion).map_err(Into::into)
 }
 
-fn from_json_to_value(json: Jsonb, element_type: ElementType, flag: OutputFlag) -> Result<Value> {
+pub(in crate::core) fn from_json_to_value(
+    json: Jsonb,
+    element_type: ElementType,
+    flag: OutputFlag,
+) -> Result<Value> {
     let mut string = json.to_string();
 
     if matches!(flag, OutputFlag::Binary) {

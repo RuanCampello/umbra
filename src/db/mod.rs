@@ -187,7 +187,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 return Err(DatabaseError::NoMemory);
             }
 
-            query_set.tuples.push(tuple)
+            query_set.tuples.push(tuple);
         }
 
         query_set.display_enums();

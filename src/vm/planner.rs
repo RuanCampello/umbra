@@ -1287,19 +1287,10 @@ impl<File: PlanExecutor> Execute for Project<File> {
 
         // PERFORMANCE: maybe creating a new array is a foot shot
         let mut project = Vec::with_capacity(self.projection.len());
-        println!("before\n {}", self.output);
-        for (idx, expr) in self.projection.iter().enumerate() {
-            let value = resolve_expression(&tuple, &self.input, expr)?;
-            let col = &mut self.output.columns[idx];
-
-            if matches!(col.data_type, Type::Text | Type::Varchar(_)) {
-                let new_type = Type::try_from(&value).unwrap_or(col.data_type);
-                col.data_type = new_type;
-            }
-            project.push(value);
+        for expr in &self.projection {
+            project.push(resolve_expression(&tuple, &self.input, expr)?);
         }
         coerce_jsonb_tuple(&self.output, &mut project)?;
-        println!("after\n {}", self.output);
 
         Ok(Some(project))
     }
@@ -2220,7 +2211,7 @@ fn coerce_jsonb_value(data_type: &Type, value: Value) -> Result<Value, SqlError>
         Value::Null => Ok(Value::Null),
         Value::Blob(_) => Ok(value),
         other => {
-            let json = json::from_value_to_jsonb(&other, json::Conv::Strict)
+            let json = json::from_value_to_jsonb(&other, json::Conv::NotStrict)
                 .map_err(|e| SqlError::Other(e.to_string()))?;
             Ok(Value::Blob(json.data()))
         }

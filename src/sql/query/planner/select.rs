@@ -496,12 +496,24 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             .map(|expr| match expr {
                 Expression::Alias { expr, alias } => match expr.as_ref() {
                     Expression::QualifiedIdentifier { column, table } => {
+                        use crate::sql::statement::Type::Jsonb;
                         match resolve_qualified_column(table, column, &self.tables) {
                             Ok(mut col) => {
                                 col.name = alias.clone();
                                 Ok(col)
                             }
-                            _ => Ok(Column::new(alias, resolve_type(&self.schema, expr)?)),
+                            // check if 'table' is actually a JSONB column
+                            _ => {
+                                let col_type = match self.schema.index_of(table) {
+                                    Some(idx)
+                                        if matches!(self.schema.columns[idx].data_type, Jsonb) =>
+                                    {
+                                        Jsonb
+                                    }
+                                    _ => resolve_type(&self.schema, expr)?,
+                                };
+                                Ok(Column::new(alias, col_type))
+                            }
                         }
                     }
                     Expression::Path { .. } => {
