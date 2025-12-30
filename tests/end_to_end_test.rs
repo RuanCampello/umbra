@@ -331,12 +331,20 @@ fn users_metadata() {
 
     let query = db.exec(
         r#"
-        SELECT metadata.age AS age FROM users ORDER BY age DESC;
+        SELECT name, metadata.age AS age, metadata.city AS city
+        FROM users ORDER BY age DESC LIMIT 3;
         "#,
     );
     assert!(!query.tuples.is_empty());
-    println!("{query}");
-    println!("{}", query.schema);
+    assert_eq!(query.tuples.len(), 3);
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Paulo".into(), 50.into(), "São Paulo".into()],
+            vec!["Sven".into(), 49.into(), "Amsterdam".into()],
+            vec!["Nathan".into(), 48.into(), "Toronto".into()],
+        ]
+    );
 
     let query = db.exec(
         r#"
