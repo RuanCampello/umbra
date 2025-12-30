@@ -185,17 +185,15 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
             .iter()
             .enumerate()
             .filter_map(|(idx, col)| {
-                // Special handling for Jsonb to ensure we use the correct serialization logic (including metadata)
-                // regardless of the underlying Value type (String, Number, etc).
+                if tuple[idx].is_null() {
+                    return None;
+                }
+                // special handling for Jsonb to ensure we use the correct serialisation logic
                 if matches!(col.data_type, Type::Jsonb) {
                     let json = json::from_value_to_jsonb(&tuple[idx], Conv::NotStrict).unwrap();
                     let len = json.len();
                     let header_len = if len < 127 { 1 } else { 4 };
                     return Some(header_len + len);
-                }
-
-                if tuple[idx].is_null() {
-                    return None;
                 }
 
                 Some(match &tuple[idx] {
@@ -226,15 +224,13 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                     }
                     _ => match &col.data_type {
                         Type::Text => {
-                            let serialized = format!("{}", tuple[idx]);
-                            let len = serialized.as_bytes().len();
-                            if len < 127 {
-                                1 + len
-                            } else {
-                                4 + len
+                            let len = tuple[idx].to_string().as_bytes().len();
+                            match len < 127 {
+                                true => 1 + len,
+                                _ => 4 + len,
                             }
                         }
-                        t => byte_len_of_type(t),
+                        typ => byte_len_of_type(typ),
                     },
                 })
             })
