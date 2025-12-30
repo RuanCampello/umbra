@@ -549,7 +549,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             // maybe a json
             if let Some((_, col_type)) = ctx.resolve_identifier(table) {
                 if matches!(col_type, Type::Jsonb) {
-                    return Ok(VmType::String);
+                    return Ok(VmType::Blob);
                 }
             }
 

@@ -557,7 +557,7 @@ fn resolve_column_for_order<'a>(
     schema: &Schema,
     ident: &str,
 ) -> Result<Either<&'a Expression, usize>, SqlError> {
-    for (i, expr) in columns.iter().enumerate() {
+    for expr in columns {
         if let Expression::Alias {
             expr: aliased_expr,
             alias,
@@ -566,7 +566,10 @@ fn resolve_column_for_order<'a>(
             if alias == ident {
                 return match aliased_expr.as_ref() {
                     Expression::Identifier(_) | Expression::QualifiedIdentifier { .. } => {
-                        Ok(Either::Right(i))
+                        match schema.index_of(&aliased_expr.to_string()) {
+                            Some(idx) => Ok(Either::Right(idx)),
+                            None => Ok(Either::Left(aliased_expr.as_ref())),
+                        }
                     }
                     _ => Ok(Either::Left(aliased_expr.as_ref())),
                 };

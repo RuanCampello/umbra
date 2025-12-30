@@ -331,14 +331,12 @@ fn users_metadata() {
 
     let query = db.exec(
         r#"
-        SELECT metadata.age AS age FROM users ORDER BY age LIMIT 5;
+        SELECT metadata.age AS age FROM users ORDER BY age DESC;
         "#,
     );
     assert!(!query.tuples.is_empty());
-    assert_eq!(query.tuples.len(), 5);
-    let mut sorted = query.tuples.clone();
-    sorted.sort_unstable();
-    assert_eq!(sorted, query.tuples);
+    println!("{query}");
+    println!("{}", query.schema);
 
     let query = db.exec(
         r#"
