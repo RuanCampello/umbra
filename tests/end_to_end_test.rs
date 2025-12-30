@@ -361,6 +361,55 @@ fn users_metadata() {
             vec!["Rafael".into(), "São Paulo".into()],
         ]
     );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.profile.lang as lang
+        FROM users
+        WHERE metadata.profile.lang IS NOT NULL
+        ORDER BY name;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "en".into()],
+            vec!["Bob".into(), "en".into()],
+            vec!["Daniel".into(), "en".into()],
+            vec!["Dave".into(), "en".into()],
+            vec!["Frank".into(), "jp".into()],
+            vec!["Ivan".into(), "pt".into()],
+            vec!["Liam".into(), "de".into()],
+            vec!["Mateus".into(), "pt".into()],
+            vec!["Rafael".into(), "pt".into()],
+        ]
+    );
+
+    db.exec(
+        r#"
+        INSERT INTO users (name, metadata) VALUES 
+        ('Baby', {age: 5});
+        "#,
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.age
+        FROM users
+        ORDER BY metadata.age ASC
+        LIMIT 3;"#,
+    );
+    assert!(!query.tuples.is_empty());
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Baby".into(), 5.into()],
+            vec!["Grace".into(), 19.into()],
+            vec!["Liam".into(), 21.into()],
+        ]
+    );
+
+    let query = db.exec("SELECT metadata.non_existent_field FROM users LIMIT 1");
+    assert_eq!(query.tuples[0][0], Value::Null);
 }
 
 #[test]
