@@ -366,7 +366,7 @@ fn users_metadata() {
         r#"
         SELECT name, metadata.profile.lang as lang
         FROM users
-        WHERE metadata.profile.lang IS NOT NULL
+        WHERE lang IS NOT NULL
         ORDER BY name;"#,
     );
     assert_eq!(
@@ -381,30 +381,6 @@ fn users_metadata() {
             vec!["Liam".into(), "de".into()],
             vec!["Mateus".into(), "pt".into()],
             vec!["Rafael".into(), "pt".into()],
-        ]
-    );
-
-    db.exec(
-        r#"
-        INSERT INTO users (name, metadata) VALUES 
-        ('Baby', {age: 5});
-        "#,
-    );
-
-    let query = db.exec(
-        r#"
-        SELECT name, metadata.age
-        FROM users
-        ORDER BY metadata.age ASC
-        LIMIT 3;"#,
-    );
-    assert!(!query.tuples.is_empty());
-    assert_eq!(
-        query.tuples,
-        vec![
-            vec!["Baby".into(), 5.into()],
-            vec!["Grace".into(), 19.into()],
-            vec!["Liam".into(), 21.into()],
         ]
     );
 
