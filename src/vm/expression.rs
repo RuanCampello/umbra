@@ -137,8 +137,7 @@ pub(crate) fn resolve_expression<'exp>(
                 }
             }
 
-            json::get_path(&base_value, &path, json::OutputFlag::ElementType)
-                .map_err(|e| SqlError::Other(e.to_string()))
+            json::get_path(&base_value, &path, json::OutputFlag::ElementType).or(Ok(Value::Null))
         }
         Expression::QualifiedIdentifier { column, table } => {
             let idx = schema
@@ -160,7 +159,7 @@ pub(crate) fn resolve_expression<'exp>(
 
                         let path = format!("$.{}", column);
                         return json::get_path(&base_value, &path, json::OutputFlag::ElementType)
-                            .map_err(|e| SqlError::Other(e.to_string()));
+                            .or(Ok(Value::Null));
                     }
 
                     Err(SqlError::InvalidQualifiedColumn {
