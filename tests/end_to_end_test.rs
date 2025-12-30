@@ -318,7 +318,6 @@ fn users_metadata() {
         LIMIT 5;"#,
     );
     assert!(!query.tuples.is_empty());
-    println!("{query}\n{}", query.schema);
     assert_eq!(
         query.tuples,
         vec![
@@ -329,6 +328,17 @@ fn users_metadata() {
             vec!["Oliver".into(), 44.into(), "London".into()],
         ]
     );
+
+    let query = db.exec(
+        r#"
+        SELECT metadata.age AS age FROM users ORDER BY age LIMIT 5;
+        "#,
+    );
+    assert!(!query.tuples.is_empty());
+    assert_eq!(query.tuples.len(), 5);
+    let mut sorted = query.tuples.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, query.tuples);
 
     let query = db.exec(
         r#"
