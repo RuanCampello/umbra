@@ -256,6 +256,10 @@ pub fn from_value_to_jsonb(value: &Value, strict: Conv) -> Result<Jsonb> {
             _ => Jsonb::from_str(float.to_string().as_str())
                 .map_err(|_| parse_error("Malformed JSON", None)),
         },
+        Value::Boolean(b) => {
+            let bool = if *b { "true" } else { "false" };
+            Jsonb::from_str(bool)
+        }
         Value::Blob(blob) => {
             let index = blob
                 .iter()

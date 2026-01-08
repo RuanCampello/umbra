@@ -405,6 +405,60 @@ fn users_metadata() {
 }
 
 #[test]
+fn jsonb_comprehensive() {
+    let server = State::new("sql/users-json.sql");
+    let mut db = server.client();
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.city, metadata.age, metadata.active
+        FROM users
+        WHERE name = 'Alice';"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![vec![
+            "Alice".into(),
+            "NYC".into(),
+            30.into(),
+            Value::Boolean(true)
+        ]]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.profile.lang, metadata.profile.timezone
+        FROM users
+        WHERE metadata.profile.timezone IS NOT NULL
+        ORDER BY name;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "en".into(), "UTC-5".into()],
+            vec!["Ivan".into(), "pt".into(), "UTC-3".into()],
+            vec!["Rafael".into(), "pt".into(), "UTC-3".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.permissions.db AS db_access, metadata.city
+        FROM users
+        WHERE db_access = true;"#,
+    );
+    println!("{query}");
+    assert_eq!(
+        query.tuples,
+        vec![vec![
+            "Heidi".into(),
+            Value::Boolean(true),
+            "Amsterdam".into()
+        ]]
+    );
+}
+
+#[test]
 fn project_requests() {
     let server = State::new("sql/user-requests.sql");
     let mut db = server.client();
