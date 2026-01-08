@@ -730,6 +730,59 @@ impl Expression {
 
         None
     }
+
+    /// Recursively substitutes identifiers that refer to aliases with their actual expressions.
+    /// This enables using `SELECT` aliases in `WHERE/ORDER BY/GROUP BY` clauses.
+    pub(in crate::sql) fn substitute_aliases<F>(&self, resolve_alias: F) -> Self
+    where
+        F: Fn(&str) -> Option<Expression> + Copy,
+    {
+        match self {
+            Expression::Identifier(ident) => match resolve_alias(ident) {
+                Some(aliased_expr) => aliased_expr.substitute_aliases(resolve_alias),
+                _ => self.clone(),
+            },
+
+            Expression::BinaryOperation {
+                operator,
+                left,
+                right,
+            } => Expression::BinaryOperation {
+                operator: *operator,
+                left: Box::new(left.substitute_aliases(resolve_alias)),
+                right: Box::new(right.substitute_aliases(resolve_alias)),
+            },
+
+            Expression::UnaryOperation { operator, expr } => Expression::UnaryOperation {
+                operator: *operator,
+                expr: Box::new(expr.substitute_aliases(resolve_alias)),
+            },
+
+            Expression::IsNull { expr, negated } => Expression::IsNull {
+                expr: Box::new(expr.substitute_aliases(resolve_alias)),
+                negated: *negated,
+            },
+
+            Expression::Function { func, args } => Expression::Function {
+                func: *func,
+                args: args
+                    .iter()
+                    .map(|a| a.substitute_aliases(resolve_alias))
+                    .collect(),
+            },
+
+            Expression::Alias { expr, alias } => Expression::Alias {
+                expr: Box::new(expr.substitute_aliases(resolve_alias)),
+                alias: alias.clone(),
+            },
+
+            Expression::Nested(expr) => {
+                Expression::Nested(Box::new(expr.substitute_aliases(resolve_alias)))
+            }
+
+            _ => self.clone(),
+        }
+    }
 }
 
 impl Default for Expression {

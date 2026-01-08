@@ -80,7 +80,19 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }));
             }
 
-            let r#where = r#where.map(|w| substitute_aliases(w, &columns));
+            let r#where = r#where.map(|w| {
+                w.substitute_aliases(|ident| {
+                    columns.iter().find_map(|col| {
+                        if let Expression::Alias { expr, alias } = col {
+                            if alias == ident {
+                                return Some((**expr).clone());
+                            }
+                        }
+                        None
+                    })
+                })
+            });
+
             let source = optimiser::generate_seq_plan(&from.name, r#where, db)?;
             let mut builder = SelectBuilder::new(
                 source,
@@ -261,61 +273,6 @@ fn split_where<'expr>(
     match references(r#where, table) {
         true => (None, Some(r#where)),
         _ => (Some(r#where), None),
-    }
-}
-
-fn substitute_aliases(expr: &Expression, columns: &[Expression]) -> Expression {
-    match expr {
-        Expression::Identifier(ident) => {
-            for column_expr in columns {
-                if let Expression::Alias {
-                    expr: aliased_expr,
-                    alias,
-                } = column_expr
-                {
-                    if alias == ident {
-                        return (**aliased_expr).clone();
-                    }
-                };
-            }
-            expr.clone()
-        }
-
-        Expression::BinaryOperation {
-            operator,
-            left,
-            right,
-        } => Expression::BinaryOperation {
-            operator: *operator,
-            left: Box::new(substitute_aliases(left, columns)),
-            right: Box::new(substitute_aliases(right, columns)),
-        },
-
-        Expression::UnaryOperation { operator, expr } => Expression::UnaryOperation {
-            operator: *operator,
-            expr: Box::new(substitute_aliases(expr, columns)),
-        },
-
-        Expression::Function { func, args } => Expression::Function {
-            func: *func,
-            args: args
-                .iter()
-                .map(|arg| substitute_aliases(arg, columns))
-                .collect(),
-        },
-
-        Expression::IsNull { expr, negated } => Expression::IsNull {
-            expr: Box::new(substitute_aliases(expr, columns)),
-            negated: *negated,
-        },
-
-        Expression::Nested(expr) => Expression::Nested(Box::new(substitute_aliases(expr, columns))),
-
-        Expression::Value(_)
-        | Expression::Wildcard
-        | Expression::QualifiedIdentifier { .. }
-        | Expression::Path { .. }
-        | Expression::Alias { .. } => expr.clone(),
     }
 }
 

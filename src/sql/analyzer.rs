@@ -19,11 +19,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::str::FromStr;
 
-struct AliasCtx<'s> {
-    schema: &'s Schema,
-    aliases: &'s HashMap<String, &'s Expression>,
-}
-
 struct JoinCtx<'s> {
     schema: &'s Schema,
     tables: &'s HashMap<&'s str, Schema>,
@@ -252,26 +247,22 @@ pub(in crate::sql) fn analyze<'s>(
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
+                let substituted = order
+                    .expr
+                    .substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
                 match joins.is_empty() {
-                    true => analyze_expression_with_aliases(&schema, &aliases, None, &order.expr)?,
-                    _ => analyze_expression_with_aliases_and_joins(
-                        &JoinCtx::new(&schema, &tables),
-                        &aliases,
-                        None,
-                        &order.expr,
-                    )?,
+                    true => analyze_expression(&schema, None, &substituted)?,
+                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?,
                 };
             }
 
             for expr in group_by {
+                let substituted =
+                    expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
+
                 match joins.is_empty() {
-                    true => analyze_expression_with_aliases(&schema, &aliases, None, expr)?,
-                    _ => analyze_expression_with_aliases_and_joins(
-                        &JoinCtx::new(&schema, &tables),
-                        &aliases,
-                        None,
-                        expr,
-                    )?,
+                    true => analyze_expression(&schema, None, &substituted)?,
+                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?,
                 };
             }
         }
@@ -472,24 +463,6 @@ impl AnalyzeCtx for Schema {
     fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
         self.last_index_of(column)
             .map(|idx| (idx, &self.columns[idx].data_type))
-    }
-}
-
-impl<'s> AnalyzeCtx for AliasCtx<'s> {
-    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
-        if let Some(_) = self.aliases.get(ident) {
-            return None;
-        }
-
-        self.schema
-            .index_of(ident)
-            .map(|idx| (idx, &self.schema.columns[idx].data_type))
-    }
-
-    fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
-        self.schema
-            .last_index_of(column)
-            .map(|idx| (idx, &self.schema.columns[idx].data_type))
     }
 }
 
@@ -711,14 +684,11 @@ fn analyze_where_with_join<'exp>(
 ) -> Result<(), SqlError> {
     let Some(expr) = r#where else { return Ok(()) };
 
+    let substituted = expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
+
     let result = match no_joins {
-        true => analyze_expression_with_aliases(schema, aliases, None, expr)?,
-        false => analyze_expression_with_aliases_and_joins(
-            &JoinCtx::new(schema, tables),
-            aliases,
-            None,
-            expr,
-        )?,
+        true => analyze_expression(schema, None, &substituted)?,
+        false => analyze_expression(&JoinCtx::new(schema, tables), None, &substituted)?,
     };
 
     if let VmType::Bool = result {
@@ -730,42 +700,6 @@ fn analyze_where_with_join<'exp>(
         found: expr.clone(),
     }
     .into())
-}
-
-fn analyze_expression_with_aliases_and_joins<'exp>(
-    join_ctx: &JoinCtx,
-    aliases: &HashMap<String, &Expression>,
-    col_type: Option<&Type>,
-    expr: &'exp Expression,
-) -> Result<VmType, SqlError> {
-    if let Expression::Identifier(ident) = expr {
-        if let Some(alias) = aliases.get(ident) {
-            return analyze_expression_with_aliases_and_joins(join_ctx, aliases, col_type, &alias);
-        }
-    }
-
-    analyze_expression(join_ctx, col_type, expr)
-}
-
-fn analyze_expression_with_aliases<'exp>(
-    schema: &Schema,
-    aliases: &HashMap<String, &Expression>,
-    col_type: Option<&Type>,
-    expr: &'exp Expression,
-) -> Result<VmType, SqlError> {
-    if let Expression::Identifier(ident) = expr {
-        if let Some(aliases_expr) = aliases.get(ident) {
-            return analyze_expression_with_aliases(schema, aliases, col_type, &aliases_expr);
-        }
-    }
-
-    if let Expression::IsNull { expr, .. } = expr {
-        analyze_expression_with_aliases(schema, aliases, None, expr)?;
-        return Ok(VmType::Bool);
-    }
-
-    let ctx = AliasCtx { schema, aliases };
-    analyze_expression(&ctx, col_type, expr)
 }
 
 fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
