@@ -364,7 +364,7 @@ fn users_metadata() {
 
     let query = db.exec(
         r#"
-        SELECT name, metadata.profile.lang as lang
+        SELECT name, metadata.profile.lang AS lang
         FROM users
         WHERE lang IS NOT NULL
         ORDER BY name;"#,
@@ -386,6 +386,22 @@ fn users_metadata() {
 
     let query = db.exec("SELECT metadata.non_existent_field FROM users LIMIT 1;");
     assert_eq!(query.tuples[0][0], Value::Null);
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.hobbies[-1] AS last_hobby
+        FROM users
+        WHERE last_hobby IS NOT NULL
+        LIMIT 3;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Carol".into(), "coding".into()],
+            vec!["Eve".into(), "travel".into()],
+            vec!["Liam".into(), "gaming".into()]
+        ]
+    );
 }
 
 #[test]
