@@ -496,26 +496,20 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             .map(|expr| match expr {
                 Expression::Alias { expr, alias } => match expr.as_ref() {
                     Expression::QualifiedIdentifier { column, table } => {
-                        use crate::sql::statement::Type::Jsonb;
                         match resolve_qualified_column(table, column, &self.tables) {
                             Ok(mut col) => {
                                 col.name = alias.clone();
                                 Ok(col)
                             }
-                            // check if 'table' is actually a JSONB column
-                            _ => {
-                                let col_type = match self.schema.index_of(table) {
-                                    Some(idx)
-                                        if matches!(self.schema.columns[idx].data_type, Jsonb) =>
-                                    {
-                                        Jsonb
-                                    }
-                                    _ => resolve_type(&self.schema, expr)?,
-                                };
-                                Ok(Column::new(alias, col_type))
-                            }
+                            _ => create_jsonb_field_column(
+                                &self.schema,
+                                table,
+                                &expr.to_string(),
+                                expr,
+                            ),
                         }
                     }
+
                     Expression::Path { .. } => {
                         Ok(Column::nullable(alias, resolve_type(&self.schema, expr)?))
                     }
@@ -524,10 +518,9 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 Expression::QualifiedIdentifier { column, table } => {
                     match resolve_qualified_column(table, column, &self.tables) {
                         Ok(col) => Ok(col),
-                        Err(_) => Ok(Column::new(
-                            &expr.to_string(),
-                            resolve_type(&self.schema, expr)?,
-                        )),
+                        Err(_) => {
+                            create_jsonb_field_column(&self.schema, table, &expr.to_string(), expr)
+                        }
                     }
                 }
                 Expression::Identifier(column) => {
@@ -779,5 +772,29 @@ fn is_bound_to_table(expr: &Expression, table_key: &str) -> bool {
         }
         Expression::Value(_) => true,
         _ => false,
+    }
+}
+
+fn create_jsonb_field_column(
+    schema: &Schema,
+    table: &str,
+    name: &str,
+    expr: &Expression,
+) -> Result<Column, SqlError> {
+    use crate::sql::statement::Type;
+
+    let is_json = schema
+        .index_of(table)
+        .map(|idx| matches!(schema.columns[idx].data_type, Type::Jsonb))
+        .unwrap_or_default();
+
+    let col_type = match is_json {
+        true => Type::Jsonb,
+        _ => resolve_type(schema, expr)?,
+    };
+
+    match is_json {
+        true => Ok(Column::nullable(name, col_type)),
+        _ => Ok(Column::new(name, col_type)),
     }
 }

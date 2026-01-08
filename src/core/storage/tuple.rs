@@ -85,6 +85,12 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
                 buff.extend_from_slice(string.as_bytes());
             }
 
+            Type::Jsonb => {
+                let json = json::from_value_to_jsonb(value, Conv::NotStrict)
+                    .expect("JSON serialisation should not fail");
+                serialize_into(buff, r#type, &Value::Blob(json.data()))
+            }
+
             _ => string.serialize(buff, r#type),
         },
         Value::Boolean(_) | Value::Float(_) | Value::Number(_) if matches!(r#type, Type::Jsonb) => {

@@ -366,7 +366,7 @@ fn users_metadata() {
         r#"
         SELECT name, metadata.profile.lang as lang
         FROM users
-        WHERE lang IS NOT NULL
+        WHERE metadata.profile.lang IS NOT NULL
         ORDER BY name;"#,
     );
     assert_eq!(
@@ -384,7 +384,7 @@ fn users_metadata() {
         ]
     );
 
-    let query = db.exec("SELECT metadata.non_existent_field FROM users LIMIT 1");
+    let query = db.exec("SELECT metadata.non_existent_field FROM users LIMIT 1;");
     assert_eq!(query.tuples[0][0], Value::Null);
 }
 

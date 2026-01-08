@@ -248,7 +248,7 @@ pub(in crate::sql) fn analyze<'s>(
                 };
             }
 
-            analyze_where_with_join(&schema, &tables, r#where, joins.is_empty())?;
+            analyze_where_with_join(&schema, &tables, r#where, &aliases, joins.is_empty())?;
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
@@ -706,13 +706,19 @@ fn analyze_where_with_join<'exp>(
     schema: &'exp Schema,
     tables: &'exp HashMap<&'exp str, Schema>,
     r#where: &'exp Option<Expression>,
-    has_join: bool,
+    aliases: &HashMap<String, &'exp Expression>,
+    no_joins: bool,
 ) -> Result<(), SqlError> {
     let Some(expr) = r#where else { return Ok(()) };
 
-    let result = match has_join {
-        true => analyze_expression(schema, None, expr)?,
-        _ => analyze_expression(&JoinCtx::new(schema, tables), None, expr)?,
+    let result = match no_joins {
+        true => analyze_expression_with_aliases(schema, aliases, None, expr)?,
+        false => analyze_expression_with_aliases_and_joins(
+            &JoinCtx::new(schema, tables),
+            aliases,
+            None,
+            expr,
+        )?,
     };
 
     if let VmType::Bool = result {
@@ -751,6 +757,11 @@ fn analyze_expression_with_aliases<'exp>(
         if let Some(aliases_expr) = aliases.get(ident) {
             return analyze_expression_with_aliases(schema, aliases, col_type, &aliases_expr);
         }
+    }
+
+    if let Expression::IsNull { expr, .. } = expr {
+        analyze_expression_with_aliases(schema, aliases, None, expr)?;
+        return Ok(VmType::Bool);
     }
 
     let ctx = AliasCtx { schema, aliases };

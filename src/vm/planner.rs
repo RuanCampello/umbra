@@ -1290,7 +1290,6 @@ impl<File: PlanExecutor> Execute for Project<File> {
         for expr in &self.projection {
             project.push(resolve_expression(&tuple, &self.input, expr)?);
         }
-        coerce_jsonb_tuple(&self.output, &mut project)?;
 
         Ok(Some(project))
     }
