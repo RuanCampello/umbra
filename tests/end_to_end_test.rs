@@ -366,7 +366,7 @@ fn users_metadata() {
         r#"
         SELECT name, metadata.profile.lang as lang
         FROM users
-        WHERE metadata.profile.lang IS NOT NULL
+        WHERE lang IS NOT NULL
         ORDER BY name;"#,
     );
     assert_eq!(
