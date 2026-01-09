@@ -1159,6 +1159,18 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
             return Numeric::NaN;
         }
 
+        if let (Numeric::Short(_), Numeric::Short(_)) = (self, rhs) {
+            let (val_a, scale_a) = self.unpack_short();
+            let (val_b, scale_b) = rhs.unpack_short();
+
+            let scale = scale_a + scale_b;
+            if let Some(value) = val_a.checked_mul(val_b) {
+                if let Ok(res) = Numeric::from_scaled_i128(value, scale) {
+                    return res;
+                }
+            }
+        }
+
         let (w1, dig1, neg1, d1) = self.as_long_view();
         let (w2, dig2, neg2, d2) = rhs.as_long_view();
 
