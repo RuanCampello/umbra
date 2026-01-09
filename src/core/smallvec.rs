@@ -58,6 +58,7 @@ impl<T, const S: usize> SmallVec<T, S> {
         self.len.value(Self::is_zst())
     }
 
+    #[inline]
     pub fn push(&mut self, value: T) {
         let len = self.len();
 
@@ -68,6 +69,46 @@ impl<T, const S: usize> SmallVec<T, S> {
         let ptr = unsafe { self.as_mut_ptr().add(len) };
         unsafe { ptr.write(value) };
         unsafe { self.set_len(len + 1) };
+    }
+
+    #[inline]
+    pub fn pop(&mut self) -> Option<T> {
+        match self.is_empty() {
+            true => None,
+            _ => {
+                let len = self.len() - 1;
+                unsafe { self.set_len(len) };
+
+                let value = unsafe { self.as_mut_ptr().add(len).read() };
+                Some(value)
+            }
+        }
+    }
+
+    #[inline]
+    pub fn append<const OS: usize>(&mut self, other: &mut SmallVec<T, OS>) {
+        let len = self.len();
+        let other_len = other.len();
+        let total_len = len + other_len;
+
+        if total_len > self.capacity() {
+            self.reserve(other_len);
+        }
+
+        let ptr = unsafe { self.as_mut_ptr().add(len) };
+        unsafe { other.set_len(0) };
+        unsafe { copy_nonoverlapping(other.as_ptr(), ptr, other_len) };
+        unsafe { self.set_len(total_len) }
+    }
+
+    #[inline]
+    pub fn pop_if(&mut self, predicate: impl FnOnce(&mut T) -> bool) -> Option<T> {
+        let last = self.last_mut()?;
+
+        match predicate(last) {
+            true => self.pop(),
+            _ => None,
+        }
     }
 
     #[inline]
@@ -276,7 +317,7 @@ impl<T, const S: usize> RawSmallVec<T, S> {
             return Err(AllocErr::CapacityOverflow);
         }
 
-        let new_ptr = match len == 0 && !was_on_heap {
+        let new_ptr = match len == 0 || !was_on_heap {
             // fresh allocation
             true => {
                 let new_ptr = alloc(new_layout) as *mut T;
@@ -402,6 +443,19 @@ mod tests {
         vec.push("hello");
         vec.push("world");
 
-        assert_eq!(&*vec, &["hello", "world"][..]);
+        assert_eq!(&*vec, &["hello", "world"]);
+    }
+
+    #[test]
+    fn spill() {
+        let mut vec = SmallVec::<_, 2>::new();
+
+        vec.push("hello");
+        assert_eq!(vec[0], "hello");
+        vec.push("there");
+        vec.push("burma");
+        assert_eq!(vec[0], "hello");
+        vec.push("shave");
+        assert_eq!(&*vec, &["hello", "there", "burma", "shave"]);
     }
 }
