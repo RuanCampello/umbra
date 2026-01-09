@@ -50,9 +50,7 @@ pub enum AllocErr {
 
 #[macro_export]
 macro_rules! smallvec {
-    (@one $x:expr) => {
-        1usize
-    };
+    (@one $x:expr) => (1usize);
     () => {
         $crate::core::smallvec::SmallVec::new()
     };
@@ -362,6 +360,30 @@ impl<T, const S: usize> core::ops::Deref for SmallVec<T, S> {
 impl<T, const S: usize> core::ops::DerefMut for SmallVec<T, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut_slice()
+    }
+}
+
+impl<T, const S: usize> Drop for SmallVec<T, S> {
+    fn drop(&mut self) {
+        let on_heap = self.spilled();
+        let len = self.len();
+        let ptr = self.as_mut_ptr();
+
+        unsafe {
+            let _ = match on_heap {
+                true => {
+                    let capacity = self.capacity();
+                    Some(DropDealloc {
+                        ptr: NonNull::new_unchecked(ptr as *mut u8),
+                        size: capacity * size_of::<T>(),
+                        align: align_of::<T>(),
+                    })
+                }
+                _ => None,
+            };
+
+            core::ptr::slice_from_raw_parts_mut(ptr, len).drop_in_place();
+        }
     }
 }
 
