@@ -37,6 +37,11 @@ struct DropDealloc {
     align: usize,
 }
 
+struct DropGuard<T> {
+    ptr: *mut T,
+    len: usize,
+}
+
 #[derive(Debug)]
 pub enum AllocErr {
     CapacityOverflow,
@@ -51,8 +56,11 @@ macro_rules! smallvec {
     () => {
         $crate::core::smallvec::SmallVec::new()
     };
+    ($element:expr, $size:expr) => ({
+        $crate::core::smallvec::from_element($element, $size)
+    });
     ($($x:expr),+$(,)?) => ({
-        const COUNT: usize = 0usize $(+ $crate::core::smallvec::smallvec!(@one $x))+;
+        const COUNT: usize = 0usize $(+ $crate::smallvec!(@one $x))+;
         let mut vec = $crate::core::smallvec::SmallVec::new();
         if COUNT <= vec.capacity() {
             $(vec.push($x);)*
@@ -299,6 +307,31 @@ impl<T, const S: usize> SmallVec<T, S> {
         self.len = TaggedLength::new(self.len(), false, Self::is_zst());
     }
 
+    unsafe fn from_element(element: T, size: usize) -> Self
+    where
+        T: Clone,
+    {
+        let mut result = Self::new();
+
+        if size > 0 {
+            let ptr = result.raw.as_mut_inline_ptr();
+            let mut guard = DropGuard { ptr, len: 0 };
+
+            unsafe {
+                for idx in 0..(size - 1) {
+                    ptr.add(idx).write(element.clone());
+                    guard.len += 1;
+                }
+
+                core::mem::forget(guard);
+                ptr.add(size - 1).write(element);
+            }
+        }
+
+        unsafe { result.set_len(size) };
+        result
+    }
+
     const fn inline_size() -> usize {
         match Self::is_zst() {
             true => usize::MAX,
@@ -480,6 +513,15 @@ impl Drop for DropDealloc {
     }
 }
 
+impl<T> Drop for DropGuard<T> {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            core::ptr::slice_from_raw_parts_mut(self.ptr, self.len).drop_in_place();
+        }
+    }
+}
+
 impl core::fmt::Display for AllocErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Allocation error: {:?}", self)
@@ -487,6 +529,15 @@ impl core::fmt::Display for AllocErr {
 }
 
 impl core::error::Error for AllocErr {}
+
+#[inline]
+#[track_caller]
+fn from_element<T: Clone, const S: usize>(element: T, size: usize) -> SmallVec<T, S> {
+    match size > SmallVec::<T, S>::inline_size() {
+        true => SmallVec::<T, S>::from_vec(vec![element; size]),
+        _ => unsafe { SmallVec::<T, S>::from_element(element, size) },
+    }
+}
 
 #[inline]
 fn infallible<T>(result: Result<T, AllocErr>) -> T {
