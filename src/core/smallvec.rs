@@ -54,6 +54,16 @@ impl<T, const S: usize> SmallVec<T, S> {
     }
 
     #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        let mut vec = Self::new();
+        if capacity > Self::inline_size() {
+            vec.grow(capacity);
+        }
+
+        vec
+    }
+
+    #[inline]
     pub const fn len(&self) -> usize {
         self.len.value(Self::is_zst())
     }
@@ -457,5 +467,18 @@ mod tests {
         assert_eq!(vec[0], "hello");
         vec.push("shave");
         assert_eq!(&*vec, &["hello", "there", "burma", "shave"]);
+    }
+
+    #[test]
+    fn with_capacity() {
+        let vec: SmallVec<u8, 3> = SmallVec::with_capacity(1);
+        assert!(vec.is_empty());
+        assert!(!vec.spilled());
+        assert_eq!(vec.capacity(), 3);
+
+        let vec: SmallVec<u8, 3> = SmallVec::with_capacity(10);
+        assert!(vec.is_empty());
+        assert!(vec.spilled());
+        assert_eq!(vec.capacity(), 10);
     }
 }
