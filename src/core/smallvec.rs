@@ -60,6 +60,22 @@ impl<T, const S: usize> SmallVec<T, S> {
 
     pub fn push(&mut self, value: T) {
         let len = self.len();
+
+        if len == self.capacity() {
+            self.reserve(1);
+        }
+
+        let ptr = unsafe { self.as_mut_ptr().add(len) };
+        unsafe { ptr.write(value) };
+        unsafe { self.set_len(len + 1) };
+    }
+
+    #[inline]
+    pub const fn as_mut_ptr(&mut self) -> *mut T {
+        match self.len.on_heap(Self::is_zst()) {
+            true => unsafe { self.raw.as_mut_heap_ptr() },
+            _ => self.raw.as_mut_inline_ptr(),
+        }
     }
 
     pub const fn capacity(&self) -> usize {
@@ -127,6 +143,15 @@ impl<T, const S: usize> SmallVec<T, S> {
                 Ok(())
             }
         }
+    }
+
+    /// # Safety
+    ///
+    /// - `new_len <= self.capacity()` must be true.
+    /// - every element in `..self.len` must be initialisated.
+    unsafe fn set_len(&mut self, new_len: usize) {
+        assert!(new_len <= self.capacity());
+        self.len = TaggedLength::new(new_len, self.len.on_heap(Self::is_zst()), Self::is_zst())
     }
 
     /// # Safety
@@ -242,7 +267,7 @@ impl<T, const S: usize> RawSmallVec<T, S> {
     /// # Safety
     ///
     /// - This vec must be on heap
-    unsafe fn as_mut_heap_ptr(&mut self) -> *mut T {
+    const unsafe fn as_mut_heap_ptr(&mut self) -> *mut T {
         self.heap.0.as_ptr()
     }
 
