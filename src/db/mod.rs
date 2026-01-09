@@ -1,8 +1,6 @@
 //! This is where the code actually starts running.
 //! The [Database] structure owns everything and delegate it to the other modules.
 
-#![allow(unused)]
-
 mod context;
 mod metadata;
 mod schema;
@@ -24,10 +22,10 @@ use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::query;
-use crate::sql::statement::{Column, Constraint, Create, Statement, Type, Value};
+use crate::sql::statement::{Column, Create, Statement, Type, Value};
+use crate::vm;
 use crate::vm::expression::{TypeError, VmError};
 use crate::vm::planner::{Execute, Planner, Tuple};
-use crate::{index, vm};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -189,7 +187,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 return Err(DatabaseError::NoMemory);
             }
 
-            query_set.tuples.push(tuple)
+            query_set.tuples.push(tuple);
         }
 
         query_set.display_enums();
@@ -221,6 +219,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn index_metadata(&mut self, index: &str) -> Result<IndexMetadata> {
         let query = self.exec(&format!(
             "SELECT table_name FROM {DB_METADATA} WHERE name = '{index}' AND type = 'index';"
@@ -644,6 +643,7 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
     }
 }
 
+#[allow(unused)]
 impl QuerySet {
     pub(crate) fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
         Self { schema, tuples }
@@ -884,10 +884,7 @@ impl PartialEq for DatabaseError {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use crate::core::{
-        date::{NaiveDate, Parse},
         storage::{
             btree::Cursor,
             pagination::{
@@ -898,6 +895,8 @@ mod tests {
         },
         uuid::Uuid,
     };
+    use crate::index;
+    use std::str::FromStr;
 
     use super::*;
 
@@ -1443,7 +1442,7 @@ mod tests {
 
         db.exec("CREATE TABLE users (id SMALLSERIAL PRIMARY KEY, name VARCHAR(50));")?;
 
-        for serial in (0..max) {
+        for serial in 0..max {
             db.exec(&format!(
                 "INSERT INTO users (name) VALUES ('user_{serial}');"
             ))?;

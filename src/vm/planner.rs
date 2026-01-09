@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use super::expression::{resolve_expression, resolve_only_expression};
+use crate::core::json;
 use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::core::storage::page::PageNumber;
@@ -11,10 +11,10 @@ use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{
-    join, Assignment, Expression, Function, JoinType, OrderDirection, Value,
+    join, Assignment, Expression, Function, JoinType, OrderDirection, Type, Value,
 };
 use crate::vm;
-use crate::vm::expression::{evaluate_where, VmType};
+use crate::vm::expression::{evaluate_where, resolve_expression, resolve_only_expression, VmType};
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::hash_map::IntoIter;
@@ -441,6 +441,7 @@ impl<File: FileOperations> Planner<File> {
         Ok(())
     }
 
+    #[inline(always)]
     pub(crate) fn schema(&self) -> Option<Schema> {
         let schema = match self {
             Self::SeqScan(seq) => &seq.table.schema,
@@ -998,6 +999,8 @@ impl<File: PlanExecutor> Execute for Insert<File> {
             return Ok(None);
         };
 
+        coerce_jsonb_tuple(&self.table.schema, &mut tuple)?;
+
         let mut pager = self.pager.borrow_mut();
 
         BTree::new(&mut pager, self.table.root, self.comparator.clone())
@@ -1060,6 +1063,10 @@ impl<File: PlanExecutor> Execute for Update<File> {
             )?;
 
             let new_value = resolve_expression(&tuple, &self.table.schema, &assignment.value)?;
+
+            let new_value =
+                coerce_jsonb_value(&self.table.schema.columns[col].data_type, new_value)
+                    .map_err(DatabaseError::from)?;
 
             if new_value.ne(&tuple[col]) {
                 let old_value = std::mem::replace(&mut tuple[col], new_value);
@@ -1278,12 +1285,13 @@ impl<File: PlanExecutor> Execute for Project<File> {
             return Ok(None);
         };
 
-        Ok(Some(
-            self.projection
-                .iter()
-                .map(|expr| resolve_expression(&tuple, &self.input, expr))
-                .collect::<Result<Tuple, _>>()?,
-        ))
+        // PERFORMANCE: maybe creating a new array is a foot shot
+        let mut project = Vec::with_capacity(self.projection.len());
+        for expr in &self.projection {
+            project.push(resolve_expression(&tuple, &self.input, expr)?);
+        }
+
+        Ok(Some(project))
     }
 }
 
@@ -1296,14 +1304,14 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
         self.output_buffer.clear();
 
         let input_schema = self.source.schema().unwrap();
-        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> = HashMap::new();
+        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> = HashMap::with_capacity(128);
 
         while let Some(row) = self.source.try_next()? {
-            let key = self
-                .group_by
-                .iter()
-                .map(|expr| resolve_expression(&row, &input_schema, &expr))
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut key = Vec::with_capacity(self.group_by.len());
+            for expr in &self.group_by {
+                key.push(resolve_expression(&row, &input_schema, expr)?);
+            }
+
             groups.entry(key).or_default().push(row)
         }
 
@@ -1527,10 +1535,10 @@ impl<File: FileOperations> HashJoin<File> {
             right: Box::new(right),
 
             hash_built: false,
-            table: HashMap::new(),
+            table: HashMap::with_capacity(1024),
             current_left: None,
             current_matches: None,
-            matched_right_keys: HashSet::new(),
+            matched_right_keys: HashSet::with_capacity(1024),
             unmatched_right: None,
             unmatched_right_index: 0,
             index: 0,
@@ -1849,7 +1857,7 @@ impl TupleBuffer {
             packed,
             current_size: if packed { 0 } else { TUPLE_HEADER_SIZE },
             largest_size: 0,
-            tuples: VecDeque::new(),
+            tuples: VecDeque::with_capacity(page_size.saturating_sub(TUPLE_HEADER_SIZE)),
         }
     }
 
@@ -2170,6 +2178,43 @@ fn temp_file<File: FileOperations>(
     let file = File::create(&path)?;
 
     Ok((path, file))
+}
+
+fn coerce_jsonb_tuple(schema: &Schema, tuple: &mut [Value]) -> Result<(), DatabaseError> {
+    for (idx, col) in schema.columns.iter().enumerate() {
+        if !matches!(col.data_type, Type::Jsonb) {
+            continue;
+        }
+
+        if tuple.get(idx).is_none() {
+            return Err(DatabaseError::Corrupted(format!(
+                "Tuple length does not match schema length: tuple={}, schema={}",
+                tuple.len(),
+                schema.len()
+            )));
+        }
+
+        let value = std::mem::replace(&mut tuple[idx], Value::Null);
+        tuple[idx] = coerce_jsonb_value(&col.data_type, value).map_err(DatabaseError::from)?;
+    }
+
+    Ok(())
+}
+
+fn coerce_jsonb_value(data_type: &Type, value: Value) -> Result<Value, SqlError> {
+    if !matches!(data_type, Type::Jsonb) {
+        return Ok(value);
+    }
+
+    match value {
+        Value::Null => Ok(Value::Null),
+        Value::Blob(_) => Ok(value),
+        other => {
+            let json = json::from_value_to_jsonb(&other, json::Conv::NotStrict)
+                .map_err(|e| SqlError::Other(e.to_string()))?;
+            Ok(Value::Blob(json.data()))
+        }
+    }
 }
 
 impl<File: FileOperations> Display for Planner<File> {

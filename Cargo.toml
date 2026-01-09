@@ -1,8 +1,15 @@
 [package]
 name = "umbra"
 description = "A blazingly fast (and hungry) database"
-version = "1.8.1"
+version = "2.0.0"
 edition = "2021"
+
+[features]
+default = ["simd"]
+simd = []
+
+[profile.release]
+lto = "fat"
 
 [target.'cfg(unix)'.dependencies]
 libc ="0.2.172"
@@ -21,6 +28,14 @@ harness = false
 
 [[bench]]
 name = "select_benchmark"
+harness = false
+
+[[bench]]
+name = "numeric_benchmark"
+harness = false
+
+[[bench]]
+name = "uuid_benchmark"
 harness = false
 
 [[bench]]

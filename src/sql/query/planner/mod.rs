@@ -80,7 +80,20 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 }));
             }
 
-            let source = optimiser::generate_seq_plan(&from.name, r#where.cloned(), db)?;
+            let r#where = r#where.map(|w| {
+                w.substitute_aliases(|ident| {
+                    columns.iter().find_map(|col| {
+                        if let Expression::Alias { expr, alias } = col {
+                            if alias == ident {
+                                return Some((**expr).clone());
+                            }
+                        }
+                        None
+                    })
+                })
+            });
+
+            let source = optimiser::generate_seq_plan(&from.name, r#where, db)?;
             let mut builder = SelectBuilder::new(
                 source,
                 table_schema,
@@ -199,10 +212,11 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             VmType::Bool => Type::Boolean,
             VmType::Number => Type::BigInteger,
             VmType::String => Type::Text,
-            VmType::Date => Type::Date,
+            VmType::Date => Type::DateTime,
             VmType::Interval => Type::Interval,
             VmType::Numeric => Type::Numeric(NUMERIC_ANY, NUMERIC_ANY),
             VmType::Enum => Type::Enum(0),
+            VmType::Blob => Type::Jsonb,
         },
     })
 }
@@ -247,6 +261,7 @@ fn split_where<'expr>(
             Expression::Identifier(_) => true,
             Expression::Value(_) | Expression::Wildcard => false,
             Expression::QualifiedIdentifier { table: table_name, .. } => table_name != table,
+            Expression::Path { .. } => true,
             Expression::UnaryOperation {  expr , .. } | Expression::IsNull { expr, .. } => references(expr, table),
             Expression::BinaryOperation { left, right, .. } => references(left, table) || references(right, table),
             Expression::Function {args, .. } => args.iter().any(|a| references(a, table)),

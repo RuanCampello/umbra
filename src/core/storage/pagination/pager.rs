@@ -1,4 +1,4 @@
-#![allow(private_bounds, elided_named_lifetimes)]
+#![allow(private_bounds)]
 
 use super::cache::{Cache, FrameId};
 use super::io::{BlockIo, FileOperations};
@@ -190,7 +190,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
         self.get_as::<Page>(page_number)
     }
 
-    pub fn get_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&Page>
+    pub fn get_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&'p Page>
     where
         Page: PageConversion + AsMut<[u8]>,
         &'p Page: TryFrom<&'p MemoryPage>,
@@ -207,7 +207,7 @@ impl<File: Seek + Write + Read + FileOperations> Pager<File> {
     }
 
     /// The same as [get_as](Self::get_as) but for a mutable reference. Of course, it marks the page as `dirty`.
-    pub fn get_mut_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&mut Page>
+    pub fn get_mut_as<'p, Page>(&'p mut self, page_number: PageNumber) -> io::Result<&'p mut Page>
     where
         Page: PageConversion + AsMut<[u8]>,
         &'p mut Page: TryFrom<&'p mut MemoryPage>,
@@ -414,27 +414,10 @@ impl<File: Seek + Read> Pager<File> {
     }
 }
 
-impl<File: Seek + FileOperations> Pager<File> {
-    /// Adds a given page to the queue of "pages to be written" if it has not been already written.
-    fn push_to_queue(
-        &mut self,
-        page_number: PageNumber,
-        content: impl AsRef<[u8]>,
-    ) -> io::Result<()> {
-        self.dirty_pages.insert(page_number);
-
-        if self.journal_pages.insert(page_number) {
-            self.journal.push(page_number, content)?;
-        }
-
-        Ok(())
-    }
-}
-
 impl<File: Write + FileOperations> Pager<File> {
     /// Append the given page to `already written` pages in the journal.
     fn push_to_written_queue(&mut self, page_number: PageNumber, id: FrameId) -> io::Result<()> {
-        // TODO: mark as `dirty` in cache
+        self.cache.mark_dirty(page_number);
         self.dirty_pages.insert(page_number);
 
         if !self.journal_pages.contains(&page_number) {
@@ -485,6 +468,26 @@ impl<File> Journal<File> {
 }
 
 impl<File: Write + FileOperations> Journal<File> {
+    /// Add a page to the journal buffer.
+    pub fn push(&mut self, page_number: PageNumber, page: impl AsRef<[u8]>) -> io::Result<()> {
+        if self.buffered_pages as usize >= self.max_pages {
+            self.write()?;
+        }
+
+        self.buffer.extend_from_slice(&page_number.to_le_bytes()); // write the page_number.
+        self.buffer.extend_from_slice(page.as_ref()); // write its actual content.
+
+        let checksum = (self.journal_number as u32).wrapping_add(page_number);
+
+        self.buffer.extend_from_slice(&checksum.to_le_bytes());
+
+        let pages_range = JOURNAL_SIZE..JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
+
+        self.buffered_pages += 1;
+        self.buffer[pages_range].copy_from_slice(&self.buffered_pages.to_le_bytes());
+        Ok(())
+    }
+
     /// Saves the data written to the journal to disk.
     pub fn persist(&mut self) -> io::Result<()> {
         self.write()?;
@@ -504,6 +507,7 @@ impl<File: Write + FileOperations> Journal<File> {
 
         Ok(())
     }
+
     /// Passes the in-memory buffer to the journal file then clears it.
     fn write(&mut self) -> io::Result<()> {
         if self.buffer.len() <= JOURNAL_HEADER_SIZE {
@@ -528,26 +532,6 @@ impl<File: Write> Journal<File> {
 }
 
 impl<File: FileOperations> Journal<File> {
-    /// Add a page to the journal buffer.
-    pub fn push(&mut self, page_number: PageNumber, page: impl AsRef<[u8]>) -> io::Result<()> {
-        if self.buffered_pages as usize >= self.max_pages {
-            // TODO: when there are not space, just write to empty the queue.
-        }
-
-        self.buffer.extend_from_slice(&page_number.to_le_bytes()); // write the page_number.
-        self.buffer.extend_from_slice(page.as_ref()); // write its actual content.
-
-        let checksum = (self.journal_number as u32).wrapping_add(page_number);
-
-        self.buffer.extend_from_slice(&checksum.to_le_bytes());
-
-        let pages_range = JOURNAL_SIZE..JOURNAL_SIZE + JOURNAL_PAGE_SIZE;
-
-        self.buffered_pages += 1;
-        self.buffer[pages_range].copy_from_slice(&self.buffered_pages.to_le_bytes());
-        Ok(())
-    }
-
     /// Opens the journal file only if its not already open and exists.
     pub fn open_if_exists(&mut self) -> io::Result<()> {
         if self.file.is_some() {
@@ -661,7 +645,7 @@ pub(crate) fn reassemble_content<File: Seek + Write + Read + FileOperations>(
     pager: &mut Pager<File>,
     page_number: PageNumber,
     slot_id: SlotId,
-) -> io::Result<Content> {
+) -> io::Result<Content<'_>> {
     let cell = pager.get(page_number)?.cell(slot_id);
 
     if !cell.header.is_overflow {

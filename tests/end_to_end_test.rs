@@ -305,6 +305,204 @@ fn analytics_reporting() {
 }
 
 #[test]
+fn users_metadata() {
+    let server = State::new("sql/users-json.sql");
+    let mut db = server.client();
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.age AS age, metadata.city AS city
+        FROM users
+        WHERE metadata.active = true
+        ORDER BY name DESC
+        LIMIT 5;"#,
+    );
+    assert!(!query.tuples.is_empty());
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Sven".into(), 49.into(), "Amsterdam".into()],
+            vec!["Rafael".into(), 37.into(), "São Paulo".into()],
+            vec!["Paulo".into(), 50.into(), "São Paulo".into()],
+            vec!["Olivia".into(), 24.into(), "London".into()],
+            vec!["Oliver".into(), 44.into(), "London".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.age AS age, metadata.city AS city
+        FROM users ORDER BY age DESC LIMIT 3;
+        "#,
+    );
+    assert!(!query.tuples.is_empty());
+    assert_eq!(query.tuples.len(), 3);
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Paulo".into(), 50.into(), "São Paulo".into()],
+            vec!["Sven".into(), 49.into(), "Amsterdam".into()],
+            vec!["Nathan".into(), 48.into(), "Toronto".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.city AS city
+        FROM users
+        WHERE metadata.profile.lang = 'pt' AND metadata.age >= 18;"#,
+    );
+    assert!(!query.tuples.is_empty());
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Ivan".into(), "São Paulo".into()],
+            vec!["Mateus".into(), "São Paulo".into()],
+            vec!["Rafael".into(), "São Paulo".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.profile.lang AS lang
+        FROM users
+        WHERE lang IS NOT NULL
+        ORDER BY name;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "en".into()],
+            vec!["Bob".into(), "en".into()],
+            vec!["Daniel".into(), "en".into()],
+            vec!["Dave".into(), "en".into()],
+            vec!["Frank".into(), "jp".into()],
+            vec!["Ivan".into(), "pt".into()],
+            vec!["Liam".into(), "de".into()],
+            vec!["Mateus".into(), "pt".into()],
+            vec!["Rafael".into(), "pt".into()],
+        ]
+    );
+
+    let query = db.exec("SELECT metadata.non_existent_field FROM users LIMIT 1;");
+    assert_eq!(query.tuples[0][0], Value::Null);
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.hobbies[-1] AS last_hobby
+        FROM users
+        WHERE last_hobby IS NOT NULL
+        LIMIT 3;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Carol".into(), "coding".into()],
+            vec!["Eve".into(), "travel".into()],
+            vec!["Liam".into(), "gaming".into()]
+        ]
+    );
+}
+
+#[test]
+fn jsonb_comprehensive() {
+    let server = State::new("sql/users-json.sql");
+    let mut db = server.client();
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.city, metadata.age, metadata.active
+        FROM users
+        WHERE name = 'Alice';"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![vec![
+            "Alice".into(),
+            "NYC".into(),
+            30.into(),
+            Value::Boolean(true)
+        ]]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.profile.lang, metadata.profile.timezone
+        FROM users
+        WHERE metadata.profile.timezone IS NOT NULL
+        ORDER BY name;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "en".into(), "UTC-5".into()],
+            vec!["Ivan".into(), "pt".into(), "UTC-3".into()],
+            vec!["Rafael".into(), "pt".into(), "UTC-3".into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.permissions.db AS db_access, metadata.city
+        FROM users
+        WHERE db_access = true;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![vec![
+            "Heidi".into(),
+            Value::Boolean(true),
+            "Amsterdam".into()
+        ]]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.age AS user_age
+        FROM users
+        ORDER BY user_age ASC
+        LIMIT 3;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Grace".into(), 19.into()],
+            vec!["Liam".into(), 21.into()],
+            vec!["Eve".into(), 22.into()]
+        ]
+    );
+
+    // JSONB by direct access should be equally valid
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.age
+        FROM users
+        ORDER BY metadata.age ASC
+        LIMIT 3;"#,
+    );
+    assert_eq!(query.tuples.len(), 3);
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Grace".into(), 19.into()],
+            vec!["Liam".into(), 21.into()],
+            vec!["Eve".into(), 22.into()]
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.address.street, metadata.address.zip
+        FROM users
+        WHERE metadata.address.zip IS NOT NULL;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![vec!["Bob".into(), "Main St".into(), 10001.into()]],
+    );
+}
+
+#[test]
 fn project_requests() {
     let server = State::new("sql/user-requests.sql");
     let mut db = server.client();

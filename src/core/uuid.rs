@@ -6,7 +6,7 @@ use super::random::{random_seed, Rng};
 use std::{fmt::Display, str::FromStr};
 
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, Hash)]
 /// A 128 bits Universally Unique Identifier.
 /// To learn more about UUIDs on databases,
 /// read [this](https://planetscale.com/blog/the-problem-with-using-a-uuid-primary-key-in-mysql) article about MySql
@@ -86,7 +86,14 @@ impl Uuid {
     }
 
     #[inline(always)]
-    const fn format_hyphenated(&self) -> [u8; 36] {
+    fn format_hyphenated(&self) -> [u8; 36] {
+        #[cfg(all(feature = "simd", any(target_arch = "x86", target_arch = "x86_64")))]
+        {
+            if is_x86_feature_detected!("ssse3") {
+                unsafe { return format_hyphenated_ssse3(self.0.as_ptr()) }
+            }
+        }
+
         const LOWER: &[u8; 16] = b"0123456789abcdef";
         const GROUPS: [(usize, usize); 5] = [(0, 8), (9, 13), (14, 18), (19, 23), (24, 36)];
 
@@ -116,6 +123,56 @@ impl Uuid {
 
         dst
     }
+}
+
+#[cfg(all(feature = "simd", any(target_arch = "x86", target_arch = "x86_64")))]
+#[inline]
+#[target_feature(enable = "ssse3")]
+unsafe fn format_hyphenated_ssse3(bytes: *const u8) -> [u8; 36] {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::{
+        __m128i, _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_setr_epi8, _mm_shuffle_epi8,
+        _mm_srli_epi16, _mm_storeu_si128, _mm_unpackhi_epi8, _mm_unpacklo_epi8,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::{
+        __m128i, _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_setr_epi8, _mm_shuffle_epi8,
+        _mm_srli_epi16, _mm_storeu_si128, _mm_unpackhi_epi8, _mm_unpacklo_epi8,
+    };
+
+    let v = _mm_loadu_si128(bytes as *const __m128i);
+    let mask = _mm_set1_epi8(0x0f_u8 as i8);
+
+    let hi = _mm_and_si128(_mm_srli_epi16(v, 4), mask);
+    let lo = _mm_and_si128(v, mask);
+
+    let hex_lut = _mm_setr_epi8(
+        b'0' as i8, b'1' as i8, b'2' as i8, b'3' as i8, b'4' as i8, b'5' as i8, b'6' as i8,
+        b'7' as i8, b'8' as i8, b'9' as i8, b'a' as i8, b'b' as i8, b'c' as i8, b'd' as i8,
+        b'e' as i8, b'f' as i8,
+    );
+
+    let hi_lo_0 = _mm_unpacklo_epi8(hi, lo);
+    let hi_lo_1 = _mm_unpackhi_epi8(hi, lo);
+
+    let ascii_0 = _mm_shuffle_epi8(hex_lut, hi_lo_0);
+    let ascii_1 = _mm_shuffle_epi8(hex_lut, hi_lo_1);
+
+    let mut hex = [0u8; 32];
+    _mm_storeu_si128(hex.as_mut_ptr() as *mut __m128i, ascii_0);
+    _mm_storeu_si128(hex.as_mut_ptr().add(16) as *mut __m128i, ascii_1);
+
+    let mut out = [0u8; 36];
+    out[0..8].copy_from_slice(&hex[0..8]);
+    out[8] = b'-';
+    out[9..13].copy_from_slice(&hex[8..12]);
+    out[13] = b'-';
+    out[14..18].copy_from_slice(&hex[12..16]);
+    out[18] = b'-';
+    out[19..23].copy_from_slice(&hex[16..20]);
+    out[23] = b'-';
+    out[24..36].copy_from_slice(&hex[20..32]);
+    out
 }
 
 const fn try_parse(input: &[u8]) -> Result<[u8; 16], UuidError> {
@@ -161,6 +218,40 @@ const fn parse_hyphenated(string: &[u8]) -> Result<[u8; 16], UuidError> {
     Ok(buffer)
 }
 
+#[cfg(all(feature = "simd", any(target_arch = "x86", target_arch = "x86_64")))]
+impl PartialEq for Uuid {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        unsafe {
+            return eq_sse2(self.0.as_ptr(), other.0.as_ptr());
+        }
+    }
+}
+
+#[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
+#[inline]
+#[target_feature(enable = "sse2")]
+unsafe fn eq_sse2(a: *const u8, b: *const u8) -> bool {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::{__m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8};
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::{__m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8};
+
+    let a = _mm_loadu_si128(a as *const __m128i);
+    let b = _mm_loadu_si128(b as *const __m128i);
+    let cmp = _mm_cmpeq_epi8(a, b);
+    _mm_movemask_epi8(cmp) == 0xFFFF
+}
+
+#[cfg(not(all(feature = "simd", any(target_arch = "x86", target_arch = "x86_64"))))]
+impl PartialEq for Uuid {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for Uuid {}
+
 impl Display for Uuid {
     #[inline(always)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -202,11 +293,9 @@ impl From<Uuid> for u128 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, str::FromStr};
-
-    use crate::core::random::Rng;
-
     use super::Uuid;
+    use crate::core::random::Rng;
+    use std::{collections::HashSet, str::FromStr};
 
     #[test]
     fn test_new() {
@@ -253,3 +342,5 @@ mod tests {
         assert!(Uuid::from_str("").is_err());
     }
 }
+//
+

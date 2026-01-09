@@ -4,14 +4,13 @@
 //! following PostgreSQL's internal architecture with base-10000 representation.
 
 use crate::core::Serialize;
-use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::ops::{Mul, Neg, Sub};
 use std::{cmp::Ordering, convert::TryFrom, fmt::Display, ops::Add, str::FromStr};
 
 /// Arbitrary-precision numeric type.
 /// This can represent any decimal with arbitrary precision.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq)]
 pub enum Numeric {
     /// Small numeric value packed into a single 64-bit word.
     /// No heap allocation, optimal for cache locality.
@@ -33,6 +32,12 @@ pub enum NumericError {
     InvalidFormat,
     Overflow,
     DivisionByZero,
+}
+
+#[derive(Debug, PartialEq)]
+enum View<'v> {
+    Borrowed(&'v [i16]),
+    Owned([i16; 5], usize),
 }
 
 /// Base for internal digit representation. Each digit represents a value from 0 to 9999.
@@ -80,6 +85,13 @@ impl Numeric {
 
     pub const fn is_nan(&self) -> bool {
         matches!(self, Self::NaN)
+    }
+
+    pub const fn size(&self) -> usize {
+        match self {
+            Numeric::Short(_) | Numeric::NaN => 8,
+            Numeric::Long { digits, .. } => 14 + digits.len() * 2,
+        }
     }
 
     #[inline]
@@ -597,7 +609,8 @@ impl Numeric {
         let weight_max = max(w1, w2);
         let weight_min = min(w1_end, w2_end);
 
-        let mut digits = Vec::new();
+        let capacity = (weight_max as i32 - weight_min as i32 + 2).max(0) as usize;
+        let mut digits = Vec::with_capacity(capacity);
         let mut carry = 0i32;
 
         for weight in weight_min..=weight_max {
@@ -657,7 +670,8 @@ impl Numeric {
         let weight_max = w_large;
         let weight_min = min(w_large_end, w_small_end);
 
-        let mut digits = Vec::new();
+        let capacity = (weight_max as i32 - weight_min as i32 + 1).max(0) as usize;
+        let mut digits = Vec::with_capacity(capacity);
         let mut borrow: i32 = 0;
 
         for weigth in weight_min..=weight_max {
@@ -717,7 +731,7 @@ impl Numeric {
 
     /// standardise short and long format access
     #[inline]
-    fn as_long_view(&self) -> (i16, Cow<'_, [i16]>, bool, u16) {
+    fn as_long_view(&self) -> (i16, View<'_>, bool, u16) {
         match self {
             Self::NaN => panic!("NaN must be handled elsewhere"),
 
@@ -725,7 +739,7 @@ impl Numeric {
                 let (v, s) = self.unpack_short();
 
                 if v == 0 {
-                    return (0, Cow::Owned(vec![]), false, s);
+                    return (0, View::Owned([0; 5], 0), false, s);
                 }
 
                 let mut abs = v.unsigned_abs();
@@ -735,19 +749,21 @@ impl Numeric {
                     abs *= multiplier;
                 }
 
-                let mut digits = Vec::new();
+                let mut digits = [0i16; 5];
+                let mut len = 0;
                 let mut remaining = abs;
 
                 while remaining > 0 {
-                    digits.push((remaining % N_BASE as u128) as i16);
+                    digits[len] = (remaining % N_BASE as u128) as i16;
                     remaining /= N_BASE as u128;
+                    len += 1;
                 }
-                digits.reverse();
+                digits[..len].reverse();
 
                 let fract_groups = (s + 3) / 4;
-                let weight = (digits.len() as i16) - (fract_groups as i16) - 1;
+                let weight = (len as i16) - (fract_groups as i16) - 1;
 
-                (weight, Cow::Owned(digits), v.is_negative(), s)
+                (weight, View::Owned(digits, len), v.is_negative(), s)
             }
 
             Self::Long {
@@ -758,7 +774,7 @@ impl Numeric {
                 let is_neg = (sign_dscale & NUMERIC_NEG) != 0;
                 let scale = sign_dscale & DSCALE_MASK;
 
-                (*weight, Cow::Borrowed(digits), is_neg, scale)
+                (*weight, View::Borrowed(digits), is_neg, scale)
             }
         }
     }
@@ -893,8 +909,6 @@ impl PartialOrd for Numeric {
         Some(self.cmp(other))
     }
 }
-
-impl Eq for Numeric {}
 
 impl Default for Numeric {
     fn default() -> Self {
@@ -1143,6 +1157,18 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
     fn mul(self, rhs: &'b Numeric) -> Self::Output {
         if self.is_nan() || rhs.is_nan() {
             return Numeric::NaN;
+        }
+
+        if let (Numeric::Short(_), Numeric::Short(_)) = (self, rhs) {
+            let (val_a, scale_a) = self.unpack_short();
+            let (val_b, scale_b) = rhs.unpack_short();
+
+            let scale = scale_a + scale_b;
+            if let Some(value) = val_a.checked_mul(val_b) {
+                if let Ok(res) = Numeric::from_scaled_i128(value, scale) {
+                    return res;
+                }
+            }
         }
 
         let (w1, dig1, neg1, d1) = self.as_long_view();
@@ -1705,6 +1731,17 @@ impl Display for NumericError {
             Self::InvalidFormat => write!(f, "Invalid numeric format"),
             Self::Overflow => write!(f, "Numeric overflow"),
             Self::DivisionByZero => write!(f, "Numeric division by zero"),
+        }
+    }
+}
+
+impl<'v> std::ops::Deref for View<'v> {
+    type Target = [i16];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(b) => b,
+            Self::Owned(array, length) => &array[..*length],
         }
     }
 }

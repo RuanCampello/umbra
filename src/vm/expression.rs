@@ -1,17 +1,18 @@
 use super::{functions, math};
 use crate::core::date::interval::IntervalParseError;
 use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
+use crate::core::json;
 use crate::core::numeric::{Numeric, NumericError};
-use crate::core::uuid::{Uuid, UuidError};
+use crate::core::uuid::UuidError;
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
-    ArithmeticPair, BinaryOperator, Expression, Function, Temporal, Type, UnaryOperator, Value,
-    NUMERIC_ANY,
+    BinaryOperator, Coerce, Expression, Function, PathSegment, Temporal, Type, UnaryOperator,
+    Value, NUMERIC_ANY,
 };
 use std::fmt::{Display, Formatter};
+use std::hint::unreachable_unchecked;
 use std::mem;
 use std::ops::Neg;
-use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmType {
@@ -23,6 +24,7 @@ pub enum VmType {
     Interval,
     Numeric,
     Enum,
+    Blob,
 }
 
 #[derive(Debug, PartialEq)]
@@ -93,6 +95,50 @@ pub(crate) fn resolve_expression<'exp>(
             Some(idx) => Ok(val[idx].clone()),
             None => Err(SqlError::InvalidColumn(column.clone())),
         },
+        Expression::Path { head, segments } => {
+            let (base_value, remaining_segments) = match segments.first() {
+                Some(PathSegment::Key(first_key)) => {
+                    let qualified = format!("{head}.{first_key}");
+                    match schema.index_of(&qualified) {
+                        Some(idx) => (val[idx].clone(), &segments[1..]),
+                        None => (
+                            resolve_expression(val, schema, &Expression::Identifier(head.clone()))?,
+                            &segments[..],
+                        ),
+                    }
+                }
+                _ => (
+                    resolve_expression(val, schema, &Expression::Identifier(head.clone()))?,
+                    &segments[..],
+                ),
+            };
+
+            if matches!(base_value, Value::Null) {
+                return Ok(Value::Null);
+            }
+
+            if remaining_segments.is_empty() {
+                return Ok(base_value);
+            }
+
+            let mut path = String::from("$");
+            for seg in remaining_segments {
+                match seg {
+                    PathSegment::Key(key) => {
+                        path.push('.');
+                        path.push_str(key);
+                    }
+                    PathSegment::Index(idx) => {
+                        path.push('[');
+                        path.push_str(&idx.to_string());
+                        path.push(']');
+                    }
+                    PathSegment::Wildcard => path.push_str(".*"),
+                }
+            }
+
+            json::get_path(&base_value, &path, json::OutputFlag::ElementType).or(Ok(Value::Null))
+        }
         Expression::QualifiedIdentifier { column, table } => {
             let idx = schema
                 .index_of(&format!("{table}.{column}"))
@@ -100,10 +146,27 @@ pub(crate) fn resolve_expression<'exp>(
 
             match idx {
                 Some(idx) => Ok(val[idx].clone()),
-                None => Err(SqlError::InvalidQualifiedColumn {
-                    table: table.into(),
-                    column: column.into(),
-                }),
+                None => {
+                    // Check if `table` matches a column name. If so, treat `column` as a path key on that column.
+                    if let Some(idx) = schema
+                        .index_of(table)
+                        .or_else(|| schema.last_index_of(table))
+                    {
+                        let base_value = val[idx].clone();
+                        if matches!(base_value, Value::Null) {
+                            return Ok(Value::Null);
+                        }
+
+                        let path = format!("$.{}", column);
+                        return json::get_path(&base_value, &path, json::OutputFlag::ElementType)
+                            .or(Ok(Value::Null));
+                    }
+
+                    Err(SqlError::InvalidQualifiedColumn {
+                        table: table.into(),
+                        column: column.into(),
+                    })
+                }
             }
         }
         Expression::UnaryOperation { operator, expr } => {
@@ -122,7 +185,7 @@ pub(crate) fn resolve_expression<'exp>(
             let right_val = resolve_expression(val, schema, right)?;
 
             let (left, right) = try_coerce_enum(left, left_val, right, right_val, schema)?;
-            let (left, right) = try_coerce(left, right);
+            let (left, right) = left.coerce_to(right);
             if matches!(left, Value::Null) || matches!(right, Value::Null) {
                 return Ok(Value::Null);
             }
@@ -139,7 +202,7 @@ pub(crate) fn resolve_expression<'exp>(
                 BinaryOperator::Plus
                 | BinaryOperator::Minus
                 | BinaryOperator::Mul
-                | BinaryOperator::Div => left.as_arithmetic_pair(&right).is_some(),
+                | BinaryOperator::Div => left.is_compatible(&right),
 
                 // for comparisons and other operations, our custom `PartialEq` impl
                 // handles coercion and different types correctly. we don't need a strict
@@ -173,57 +236,44 @@ pub(crate) fn resolve_expression<'exp>(
                     match logical {
                         BinaryOperator::And => Value::Boolean(*left && *right),
                         BinaryOperator::Or => Value::Boolean(*left || *right),
-                        _ => unreachable!(),
+                        _ => unsafe { unreachable_unchecked() },
                     }
                 }
 
-                arithmetic => {
-                    let pair = left
-                        .as_arithmetic_pair(&right)
-                        .ok_or_else(mismatched_types)?;
+                arithmetic => match (&left, &right) {
+                    (Value::Temporal(t), Value::Interval(i))
+                    | (Value::Interval(i), Value::Temporal(t)) => match arithmetic {
+                        BinaryOperator::Plus => Value::Temporal(*t + *i),
+                        BinaryOperator::Minus => Value::Temporal(*t - *i),
+                        _ => return Err(mismatched_types()),
+                    },
 
-                    match pair {
-                        ArithmeticPair::Numeric(left_value, right_value) => {
-                            if arithmetic == &BinaryOperator::Div && right_value == 0.0 {
-                                // TODO: maybe we should do better here
-                                return Err(VmError::DivisionByZero(
-                                    left_value as i128,
-                                    right_value as i128,
-                                )
-                                .into());
-                            }
+                    _ => {
+                        let result = match arithmetic {
+                            BinaryOperator::Plus => &left + &right,
+                            BinaryOperator::Minus => &left - &right,
+                            BinaryOperator::Mul => &left * &right,
+                            BinaryOperator::Div => {
+                                // check for division by zero
 
-                            let result = match arithmetic {
-                                BinaryOperator::Plus => left_value + right_value,
-                                BinaryOperator::Minus => left_value - right_value,
-                                BinaryOperator::Mul => left_value * right_value,
-                                BinaryOperator::Div => left_value / right_value,
-                                _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
-                            };
-
-                            if let (Value::Number(_), Value::Number(_)) = (&left, &right) {
-                                if result.fract() == 0.0 {
-                                    return Ok(Value::Number(result as i128));
+                                if right.is_zero() {
+                                    let left_val = match &left {
+                                        Value::Number(n) => *n,
+                                        Value::Float(f) => *f as i128,
+                                        _ => 0,
+                                    };
+                                    return Err(VmError::DivisionByZero(left_val, 0).into());
                                 }
+
+                                &left / &right
                             }
-                            Value::Float(result)
-                        }
 
-                        ArithmeticPair::Temporal(temporal, interval) => match arithmetic {
-                            BinaryOperator::Plus => Value::Temporal(temporal + interval),
-                            BinaryOperator::Minus => Value::Temporal(temporal - interval),
-                            _ => unreachable!("not implemented this operation: {arithmetic}"),
-                        },
+                            _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
+                        };
 
-                        ArithmeticPair::Arbitrary(left_value, right_value) => match arithmetic {
-                            BinaryOperator::Plus => Value::Numeric(&*left_value + &*right_value),
-                            BinaryOperator::Minus => Value::Numeric(&*left_value - &*right_value),
-                            BinaryOperator::Mul => Value::Numeric(&*left_value * &*right_value),
-                            BinaryOperator::Div => Value::Numeric(&*left_value / &*right_value),
-                            _ => unreachable!("not implemented this operation: {arithmetic}"),
-                        },
+                        result.ok_or_else(mismatched_types)?
                     }
-                }
+                },
             })
         }
 
@@ -381,37 +431,6 @@ pub(crate) fn evaluate_where(
     }
 }
 
-fn try_coerce(left: Value, right: Value) -> (Value, Value) {
-    match (&left, &right) {
-        (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
-        (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
-        (Value::String(string), Value::Temporal(_)) => match Temporal::try_from(string.as_str()) {
-            Ok(parsed) => (Value::Temporal(parsed), right),
-            Err(_) => (left, right),
-        },
-        (Value::Temporal(from), Value::String(string)) => match Temporal::try_from(string.as_str())
-        {
-            Ok(parsed) => match mem::discriminant(from) == mem::discriminant(&parsed) {
-                true => (left, Value::Temporal(parsed)),
-                false => {
-                    let (left, right) = Temporal::try_coerce(parsed, *from);
-                    (Value::Temporal(left), Value::Temporal(right))
-                }
-            },
-            Err(_) => (left, right),
-        },
-        (Value::Uuid(_), Value::String(s)) => match Uuid::from_str(s) {
-            Ok(parsed) => (left, Value::Uuid(parsed)),
-            _ => (left, right),
-        },
-        (Value::String(s), Value::Uuid(_)) => match Uuid::from_str(s) {
-            Ok(parsed) => (Value::Uuid(parsed), right),
-            _ => (left, right),
-        },
-        _ => (left, right),
-    }
-}
-
 fn try_coerce_enum(
     left_expr: &Expression,
     left: Value,
@@ -475,6 +494,7 @@ impl From<&Type> for VmType {
             Type::Varchar(_) | Type::Text => VmType::String,
             Type::Date | Type::DateTime | Type::Time => VmType::Date,
             Type::Interval => VmType::Interval,
+            Type::Jsonb => VmType::Blob,
             Type::Numeric(_, _) => VmType::Numeric,
             Type::Enum(_) => VmType::Enum,
             float if float.is_float() => VmType::Float,
@@ -486,9 +506,13 @@ impl From<&Type> for VmType {
     }
 }
 
-impl From<&VmType> for Type {
-    fn from(value: &VmType) -> Self {
-        match value {
+impl<T> From<T> for Type
+where
+    T: std::borrow::Borrow<VmType>,
+{
+    fn from(value: T) -> Self {
+        let vm_type = value.borrow();
+        match vm_type {
             VmType::Bool => Self::Boolean,
             VmType::String => Self::Text,
             VmType::Number => Self::BigInteger,
@@ -497,13 +521,29 @@ impl From<&VmType> for Type {
             VmType::Interval => Self::Interval,
             VmType::Enum => Self::Enum(0),
             VmType::Numeric => Self::Numeric(NUMERIC_ANY, NUMERIC_ANY),
+            VmType::Blob => Self::Jsonb,
         }
     }
 }
 
-impl From<VmType> for Type {
-    fn from(value: VmType) -> Self {
-        Self::from(&value)
+impl TryFrom<&Value> for Type {
+    type Error = ();
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Number(_) => Some(Type::BigInteger),
+            Value::Float(_) => Some(Type::DoublePrecision),
+            Value::Boolean(_) => Some(Type::Boolean),
+            Value::Temporal(Temporal::Date(_)) => Some(Type::Date),
+            Value::Temporal(Temporal::DateTime(_)) => Some(Type::DateTime),
+            Value::Temporal(Temporal::Time(_)) => Some(Type::Time),
+            Value::Interval(_) => Some(Type::Interval),
+            Value::Uuid(_) => Some(Type::Uuid),
+            Value::Numeric(n) => Some(Type::Numeric(n.precision(), n.scale() as usize)),
+            Value::Blob(_) => Some(Type::Jsonb),
+            _ => None,
+        }
+        .ok_or(())
     }
 }
 

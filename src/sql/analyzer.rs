@@ -19,11 +19,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::str::FromStr;
 
-struct AliasCtx<'s> {
-    schema: &'s Schema,
-    aliases: &'s HashMap<String, &'s Expression>,
-}
-
 struct JoinCtx<'s> {
     schema: &'s Schema,
     tables: &'s HashMap<&'s str, Schema>,
@@ -248,30 +243,26 @@ pub(in crate::sql) fn analyze<'s>(
                 };
             }
 
-            analyze_where_with_join(&schema, &tables, r#where, joins.is_empty())?;
+            analyze_where_with_join(&schema, &tables, r#where, &aliases, joins.is_empty())?;
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
+                let substituted = order
+                    .expr
+                    .substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
                 match joins.is_empty() {
-                    true => analyze_expression_with_aliases(&schema, &aliases, None, &order.expr)?,
-                    _ => analyze_expression_with_aliases_and_joins(
-                        &JoinCtx::new(&schema, &tables),
-                        &aliases,
-                        None,
-                        &order.expr,
-                    )?,
+                    true => analyze_expression(&schema, None, &substituted)?,
+                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?,
                 };
             }
 
             for expr in group_by {
+                let substituted =
+                    expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
+
                 match joins.is_empty() {
-                    true => analyze_expression_with_aliases(&schema, &aliases, None, expr)?,
-                    _ => analyze_expression_with_aliases_and_joins(
-                        &JoinCtx::new(&schema, &tables),
-                        &aliases,
-                        None,
-                        expr,
-                    )?,
+                    true => analyze_expression(&schema, None, &substituted)?,
+                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?,
                 };
             }
         }
@@ -475,24 +466,6 @@ impl AnalyzeCtx for Schema {
     }
 }
 
-impl<'s> AnalyzeCtx for AliasCtx<'s> {
-    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
-        if let Some(_) = self.aliases.get(ident) {
-            return None;
-        }
-
-        self.schema
-            .index_of(ident)
-            .map(|idx| (idx, &self.schema.columns[idx].data_type))
-    }
-
-    fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
-        self.schema
-            .last_index_of(column)
-            .map(|idx| (idx, &self.schema.columns[idx].data_type))
-    }
-}
-
 impl<'s> AnalyzeCtx for JoinCtx<'s> {
     fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
         self.schema
@@ -541,19 +514,25 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             }
         }
         Expression::QualifiedIdentifier { table, column } => {
-            let data_type = ctx
-                .resolve_qualified_identifier(table, column)
-                .map(|tuple| tuple.1)
-                .ok_or(SqlError::InvalidQualifiedColumn {
-                    table: table.clone(),
-                    column: column.clone(),
-                })?;
-
-            match data_type {
-                Type::Uuid => VmType::String,
-                r#type => r#type.into(),
+            // table.column
+            if let Some((_, data_type)) = ctx.resolve_qualified_identifier(table, column) {
+                return Ok(VmType::from(data_type));
             }
+
+            // maybe a json
+            if let Some((_, col_type)) = ctx.resolve_identifier(table) {
+                if matches!(col_type, Type::Jsonb) {
+                    return Ok(VmType::Blob);
+                }
+            }
+
+            return Err(SqlError::InvalidQualifiedColumn {
+                table: table.into(),
+                column: column.into(),
+            });
         }
+
+        Expression::Path { .. } => VmType::Blob,
 
         Expression::BinaryOperation {
             operator,
@@ -700,13 +679,16 @@ fn analyze_where_with_join<'exp>(
     schema: &'exp Schema,
     tables: &'exp HashMap<&'exp str, Schema>,
     r#where: &'exp Option<Expression>,
-    has_join: bool,
+    aliases: &HashMap<String, &'exp Expression>,
+    no_joins: bool,
 ) -> Result<(), SqlError> {
     let Some(expr) = r#where else { return Ok(()) };
 
-    let result = match has_join {
-        true => analyze_expression(schema, None, expr)?,
-        _ => analyze_expression(&JoinCtx::new(schema, tables), None, expr)?,
+    let substituted = expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
+
+    let result = match no_joins {
+        true => analyze_expression(schema, None, &substituted)?,
+        false => analyze_expression(&JoinCtx::new(schema, tables), None, &substituted)?,
     };
 
     if let VmType::Bool = result {
@@ -718,37 +700,6 @@ fn analyze_where_with_join<'exp>(
         found: expr.clone(),
     }
     .into())
-}
-
-fn analyze_expression_with_aliases_and_joins<'exp>(
-    join_ctx: &JoinCtx,
-    aliases: &HashMap<String, &Expression>,
-    col_type: Option<&Type>,
-    expr: &'exp Expression,
-) -> Result<VmType, SqlError> {
-    if let Expression::Identifier(ident) = expr {
-        if let Some(alias) = aliases.get(ident) {
-            return analyze_expression_with_aliases_and_joins(join_ctx, aliases, col_type, &alias);
-        }
-    }
-
-    analyze_expression(join_ctx, col_type, expr)
-}
-
-fn analyze_expression_with_aliases<'exp>(
-    schema: &Schema,
-    aliases: &HashMap<String, &Expression>,
-    col_type: Option<&Type>,
-    expr: &'exp Expression,
-) -> Result<VmType, SqlError> {
-    if let Expression::Identifier(ident) = expr {
-        if let Some(aliases_expr) = aliases.get(ident) {
-            return analyze_expression_with_aliases(schema, aliases, col_type, &aliases_expr);
-        }
-    }
-
-    let ctx = AliasCtx { schema, aliases };
-    analyze_expression(&ctx, col_type, expr)
 }
 
 fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
@@ -780,6 +731,7 @@ fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType,
         (Value::Uuid(_), _) => VmType::Number,
 
         (Value::Enum(_), _) => VmType::Enum,
+        (Value::Blob(_), _) => VmType::Blob,
     })
 }
 
@@ -821,6 +773,14 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
         Type::Interval => {
             Interval::from_str(s).map_err(|e| TypeError::InvalidInterval(e))?;
             Ok(VmType::Interval)
+        }
+        Type::Jsonb => {
+            use crate::core::json::{from_value_to_jsonb, Conv};
+            let value = Value::String(s.to_string());
+
+            from_value_to_jsonb(&value, Conv::Strict)
+                .map_err(|e| SqlError::Other(format!("Malformed JSON: {s} ({e})")))?;
+            Ok(VmType::Blob)
         }
         _ => Ok(VmType::String),
     }
@@ -883,13 +843,9 @@ fn are_types_compatible(
             (left, right) => is_numeric(left) && is_numeric(right),
         },
         Op::Mul | Op::Div => is_numeric(left_type) && is_numeric(right_type),
-        // allow enum-string comparisons for comparison operators
-        Op::Eq | Op::Neq | Op::Lt | Op::LtEq | Op::Gt | Op::GtEq => {
-            matches!(
-                (left_type, right_type),
-                (VmType::Enum, VmType::String) | (VmType::String, VmType::Enum)
-            )
-        }
+        // comparisons are handled at runtime (Value implements comparisons across variants);
+        // this also enables JSON path access expressions whose type is only known at runtime.
+        Op::Eq | Op::Neq | Op::Lt | Op::LtEq | Op::Gt | Op::GtEq => true,
         _ => false,
     }
 }

@@ -30,6 +30,11 @@ pub(in crate::sql) enum Token {
     Semicolon,
     LeftParen,
     RightParen,
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+    Colon,
     Dot,
     Pipe,
     /// That's not an actual SQL Token, but helps mark the end of token's stream.
@@ -137,6 +142,7 @@ pub enum Keyword {
     Timestamp,
     Date,
     Time,
+    Jsonb,
     /// This is not an actual SQL keyword, but it's used for convenience.
     None,
 }
@@ -172,6 +178,11 @@ impl Display for Token {
                     Self::Dot => ".",
                     Self::LeftParen => "(",
                     Self::RightParen => ")",
+                    Self::LeftBrace => "{",
+                    Self::RightBrace => "}",
+                    Self::LeftBracket => "[",
+                    Self::RightBracket => "]",
+                    Self::Colon => ":",
                     _ => unreachable!(),
                 };
                 f.write_str(s)
@@ -293,6 +304,7 @@ impl Borrow<str> for Keyword {
             Self::Time => "TIME",
             Self::Timestamp => "TIMESTAMP",
             Self::Interval => "INTERVAL",
+            Self::Jsonb => "JSONB",
             Self::Count => "COUNT",
             Self::Abs => "ABS",
             Self::Sqrt => "SQRT",
@@ -401,6 +413,7 @@ impl FromStr for Keyword {
             "NUMERIC" | "DECIMAL" => Keyword::Numeric,
             "DATE" => Keyword::Date,
             "TIME" => Keyword::Time,
+            "JSONB" => Keyword::Jsonb,
             _ => Keyword::None,
         };
 

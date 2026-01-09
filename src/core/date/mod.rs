@@ -114,6 +114,7 @@ pub trait Current {
 }
 
 #[inline(always)]
+#[allow(unused)]
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -132,6 +133,7 @@ impl Current for NaiveDateTime {
 
 impl NaiveDateTime {
     #[inline]
+    #[allow(unused)]
     const fn from_timestamp(timestamp: i64) -> Self {
         let days = timestamp / SECS_IN_DAY;
         let secs_in_day = (timestamp % SECS_IN_DAY) as u32;
@@ -241,6 +243,7 @@ impl NaiveDate {
     }
 
     #[inline(always)]
+    #[allow(unused)]
     const fn from_days_since_epoch(days: i64) -> Self {
         const UNIX_YEAR: i32 = 1970;
         let mut year = UNIX_YEAR;

@@ -137,6 +137,34 @@ CREATE TABLE shadow_agents (
 );
 ```
 
+#### :scroll: **JSONB**
+
+Because shadows deserve structure, too. Umbra's `JSONB` implementation provides flexible syntax for
+JavaScript-like object literals, stores them in a compact binary format, and supports dot notation and 
+path expression for nested access.
+
+- Keys can skip quotes: `{name: 'Umbra', active: true}`
+- Line comments `//` and block comments `/* ... */` are ignored while parsing
+- Missing paths quietly become `NULL` instead of raising errors
+
+```sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    metadata JSONB
+);
+
+INSERT INTO users (metadata) VALUES
+({profile: {lang: 'en', hobbies: ['lurking', 'flying']}, active: true});
+
+SELECT metadata.profile.lang FROM users;       -- dot access
+SELECT metadata.hobbies[*] FROM users;         -- array expansion
+SELECT metadata.hobbies[-1] FROM users;        -- last element via negative index
+SELECT metadata.non_existent_field FROM users; -- NULL
+```
+
+> [!TIP]  
+> You can filter on JSONB directly (`WHERE metadata.active = true`) or access nested profile data (like `metadata.profile.lang`) without extra casting.
+
 - [x] `VARCHAR`
 - [x] `BOOLEAN`
 - [x] `DECIMAL`

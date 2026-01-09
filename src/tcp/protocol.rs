@@ -240,6 +240,7 @@ impl From<&Type> for u8 {
             Type::Varchar(_) => STRING_CATEGORY | 0x0,
             Type::Text => STRING_CATEGORY | 0x1,
             Type::Enum(_) => STRING_CATEGORY | 0x2,
+            Type::Jsonb => STRING_CATEGORY | 0x3,
 
             Type::Date => TEMPORAL_CATEGORY | 0x0,
             Type::Time => TEMPORAL_CATEGORY | 0x1,
@@ -273,6 +274,8 @@ impl TryFrom<&u8> for Type {
             (FLOAT_CATEGORY, 0x0) => Ok(Type::Real),
             (FLOAT_CATEGORY, 0x1) => Ok(Type::DoublePrecision),
             (FLOAT_CATEGORY, 0x2) => Ok(Type::Numeric(NUMERIC_ANY, NUMERIC_ANY)),
+
+            (STRING_CATEGORY, 0x3) => Ok(Type::Jsonb),
 
             (TEMPORAL_CATEGORY, 0x0) => Ok(Type::Date),
             (TEMPORAL_CATEGORY, 0x1) => Ok(Type::Time),

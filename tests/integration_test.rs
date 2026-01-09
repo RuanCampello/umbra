@@ -3203,3 +3203,58 @@ fn enum_ordering() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn jsonb() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+    CREATE TABLE users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100),
+        metadata JSONB
+    );"#,
+    )?;
+
+    db.exec(
+        r#"
+    INSERT INTO users (name, metadata)
+    VALUES 
+        ('Alice', {age: 30, city: 'NYC'}),
+        ('Bob', {age: 25, address: {street: 'Main St', zip: 10001}}),
+        ('Carol', {age: 35, hobbies: ['reading', 'gaming', 'coding']}),
+        ('David', {age: 21, city: 'London', active: true});
+    "#,
+    )?;
+
+    let query = db.exec("SELECT metadata.city FROM users;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["NYC".into()],
+            vec![Value::Null],
+            vec![Value::Null],
+            vec!["London".into()],
+        ]
+    );
+
+    let query = db.exec(r#"SELECT metadata.age FROM users ORDER BY id;"#)?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec![30.into()],
+            vec![25.into()],
+            vec![35.into()],
+            vec![21.into()]
+        ]
+    );
+
+    let query = db.exec("SELECT metadata.hobbies[*] FROM users WHERE name = 'Carol';")?;
+    assert!(!query.tuples.is_empty());
+
+    let query = db.exec("SELECT metadata.age[*] FROM users WHERE name = 'Alice';")?;
+    assert_eq!(query.tuples, vec![vec![Value::Null]]);
+
+    Ok(())
+}

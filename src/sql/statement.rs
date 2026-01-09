@@ -2,22 +2,20 @@
 //! See [this](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
 //! to reach out about statements and/or AST.
 
-#![allow(unused)]
-
 use super::Keyword;
 use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+use crate::core::json::Jsonb;
 use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
 use crate::db::{IndexMetadata, TableMetadata};
 use crate::index;
 use crate::vm::expression::{TypeError, VmType};
-use std::borrow::Borrow;
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
-use std::ops::{Add, Neg};
+use std::ops::Neg;
 use std::str::FromStr;
 
 /// SQL statements.
@@ -137,6 +135,10 @@ pub enum Expression {
         table: String,
         column: String,
     },
+    Path {
+        head: String,
+        segments: Vec<PathSegment>,
+    },
     Value(Value),
     Wildcard,
     UnaryOperation {
@@ -161,6 +163,13 @@ pub enum Expression {
         negated: bool,
     },
     Nested(Box<Self>),
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
+pub enum PathSegment {
+    Key(String),
+    Index(isize),
+    Wildcard,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
@@ -248,6 +257,7 @@ pub enum Value {
     Interval(Interval),
     Numeric(Numeric),
     Enum(u8),
+    Blob(Vec<u8>),
     Null,
 }
 
@@ -338,6 +348,7 @@ pub enum Type {
     Time,
     DateTime,
     Interval,
+    Jsonb,
     Enum(u32),
 }
 
@@ -386,15 +397,52 @@ pub enum Function {
     UuidV4,
 }
 
-#[derive(Debug)]
-pub(crate) enum ArithmeticPair<'p> {
-    Numeric(f64, f64),
-    Temporal(Temporal, Interval),
-    Arbitrary(Cow<'p, Numeric>, Cow<'p, Numeric>),
-}
-
 const NULL_HASH: u32 = 0x4E554C4C;
 pub const NUMERIC_ANY: usize = usize::MAX;
+
+pub trait Coerce: Sized {
+    fn coerce_to(self, other: Self) -> (Self, Self);
+}
+
+macro_rules! impl_value_op {
+    ($trait:ty, $method:ident, $op:tt) => {
+        impl $trait for &Value {
+            type Output = Option<Value>;
+            fn $method(self, rhs: Self) -> Self::Output {
+                match (self, rhs) {
+                    // float arithmetic
+                    (Value::Float(a), Value::Float(b)) => Some(Value::Float(*a $op *b)),
+                    (Value::Number(a), Value::Float(b)) => Some(Value::Float(*a as f64 $op *b)),
+                    (Value::Float(a), Value::Number(b)) => Some(Value::Float(*a $op *b as f64)),
+                    (Value::Number(a), Value::Number(b)) => {
+                        let result = *a as f64 $op *b as f64;
+                        match result.fract() == 0.0 {
+                            true => Some(Value::Number(result as i128)),
+                            _ => Some(Value::Float(result))
+                        }
+                    }
+
+                    // arbitrary precision numeric
+                    (Value::Numeric(a), Value::Numeric(b)) => Some(Value::Numeric(a $op b)),
+                    (Value::Numeric(a), Value::Number(b)) => {
+                        Some(Value::Numeric(a $op &Numeric::from(*b)))
+                    }
+                    (Value::Number(a), Value::Numeric(b)) => {
+                        Some(Value::Numeric(&Numeric::from(*a) $op b))
+                    }
+                    (Value::Numeric(a), Value::Float(b)) => {
+                        Numeric::try_from(*b).ok().map(|nb| Value::Numeric(a $op &nb))
+                    }
+                    (Value::Float(a), Value::Numeric(b)) => {
+                        Numeric::try_from(*a).ok().map(|na| Value::Numeric(&na $op b))
+                    }
+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
 
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
@@ -469,7 +517,7 @@ impl Type {
         match self {
             Self::Real => *float >= f32::MIN as f64 && *float <= f32::MAX as f64,
             Self::DoublePrecision => float.is_finite(),
-            other => panic!("bound checking must be used only for floats"),
+            _ => panic!("bound checking must be used only for floats"),
         }
     }
 
@@ -675,16 +723,65 @@ impl Expression {
         }
     }
 
-    pub(in crate::sql) fn is_aggr_fn(&self) -> bool {
-        matches!(self, Expression::Function { func, .. } if func.is_aggr())
-    }
-
     pub(in crate::sql) fn as_identifier(&self) -> Option<&str> {
         if let Self::Identifier(alias) = self {
             return Some(alias);
         };
 
         None
+    }
+
+    /// Recursively substitutes identifiers that refer to aliases with their actual expressions.
+    /// This enables using `SELECT` aliases in `WHERE/ORDER BY/GROUP BY` clauses.
+    pub(in crate::sql) fn substitute_aliases<F>(&self, resolve_alias: F) -> Self
+    where
+        F: Fn(&str) -> Option<Expression> + Copy,
+    {
+        match self {
+            Expression::Identifier(ident) => match resolve_alias(ident) {
+                Some(aliased_expr) => aliased_expr.substitute_aliases(resolve_alias),
+                _ => self.clone(),
+            },
+
+            Expression::BinaryOperation {
+                operator,
+                left,
+                right,
+            } => Expression::BinaryOperation {
+                operator: *operator,
+                left: Box::new(left.substitute_aliases(resolve_alias)),
+                right: Box::new(right.substitute_aliases(resolve_alias)),
+            },
+
+            Expression::UnaryOperation { operator, expr } => Expression::UnaryOperation {
+                operator: *operator,
+                expr: Box::new(expr.substitute_aliases(resolve_alias)),
+            },
+
+            Expression::IsNull { expr, negated } => Expression::IsNull {
+                expr: Box::new(expr.substitute_aliases(resolve_alias)),
+                negated: *negated,
+            },
+
+            Expression::Function { func, args } => Expression::Function {
+                func: *func,
+                args: args
+                    .iter()
+                    .map(|a| a.substitute_aliases(resolve_alias))
+                    .collect(),
+            },
+
+            Expression::Alias { expr, alias } => Expression::Alias {
+                expr: Box::new(expr.substitute_aliases(resolve_alias)),
+                alias: alias.clone(),
+            },
+
+            Expression::Nested(expr) => {
+                Expression::Nested(Box::new(expr.substitute_aliases(resolve_alias)))
+            }
+
+            _ => self.clone(),
+        }
     }
 }
 
@@ -764,44 +861,78 @@ impl JoinClause {
 }
 
 impl Value {
-    pub(crate) fn is_null(&self) -> bool {
+    pub(crate) const fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 
-    /// Tries to convert a pair of `Value`s into a representation suitable for arithmetic.
-    pub(crate) fn as_arithmetic_pair<'p>(&'p self, other: &'p Self) -> Option<ArithmeticPair<'p>> {
-        use crate::core::numeric::Numeric as Num;
-        use std::borrow::Cow::*;
-        use ArithmeticPair as Pair;
-        use Value::*;
+    pub const fn is_zero(&self) -> bool {
+        match self {
+            Value::Number(n) if *n == 0 => true,
+            Value::Float(f) if *f == 0.0 => true,
+            Value::Numeric(n) if n.is_zero() => true,
+            _ => false,
+        }
+    }
+
+    pub const fn is_compatible(&self, other: &Self) -> bool {
+        use self::Value::*;
 
         match (self, other) {
-            (Float(a), Float(b)) => Some(Pair::Numeric(*a, *b)),
-            (Number(a), Float(b)) => Some(Pair::Numeric(*a as f64, *b)),
-            (Float(a), Number(b)) => Some(Pair::Numeric(*a, *b as f64)),
-            (Number(a), Number(b)) => Some(Pair::Numeric(*a as f64, *b as f64)),
-
-            (Temporal(t), Interval(i)) => Some(Pair::Temporal(*t, *i)),
-            (Interval(i), Temporal(t)) => Some(Pair::Temporal(*t, *i)),
-
-            (Numeric(a), Numeric(b)) => Some(Pair::Arbitrary(Borrowed(a), Borrowed(b))),
-            (Numeric(a), Number(b)) => Some(Pair::Arbitrary(Borrowed(a), Owned(Num::from(*b)))),
-            (Number(a), Numeric(b)) => Some(Pair::Arbitrary(Owned(Num::from(*a)), Borrowed(b))),
-
-            (Numeric(a), Float(b)) => Num::try_from(*b)
-                .ok()
-                .map(|nb| Pair::Arbitrary(Borrowed(a), Owned(nb))),
-            (Float(a), Numeric(b)) => Num::try_from(*a)
-                .ok()
-                .map(|na| Pair::Arbitrary(Owned(na), Borrowed(b))),
-
-            _ => None,
+            (Float(_) | Number(_) | Numeric(_), Float(_) | Number(_) | Numeric(_)) => true,
+            (Temporal(_), Interval(_)) | (Interval(_), Temporal(_)) => true,
+            _ => false,
         }
     }
 }
 
-impl Temporal {
-    pub(crate) fn try_coerce(self, other: Self) -> (Self, Self) {
+impl Coerce for Value {
+    fn coerce_to(self, other: Self) -> (Self, Self) {
+        match (&self, &other) {
+            // Numeric coercion: Integer <-> Float
+            (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
+            (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
+
+            // String -> Temporal coercion
+            (Value::String(string), Value::Temporal(_)) => {
+                match Temporal::try_from(string.as_str()) {
+                    Ok(parsed) => (Value::Temporal(parsed), other),
+                    _ => (self, other),
+                }
+            }
+            (Value::Temporal(from), Value::String(string)) => {
+                use std::mem::discriminant;
+
+                match Temporal::try_from(string.as_str()) {
+                    Ok(parsed) => match discriminant(from) == discriminant(&parsed) {
+                        true => (self, Value::Temporal(parsed)),
+
+                        _ => {
+                            let (left, right) = from.coerce_to(parsed);
+                            (Value::Temporal(left), Value::Temporal(right))
+                        }
+                    },
+                    _ => (self, other),
+                }
+            }
+
+            // String <-> UUID coercion
+            (Value::Uuid(_), Value::String(s)) => match Uuid::from_str(s) {
+                Ok(parsed) => (self, Value::Uuid(parsed)),
+                _ => (self, other),
+            },
+            (Value::String(s), Value::Uuid(_)) => match Uuid::from_str(s) {
+                Ok(parsed) => (Value::Uuid(parsed), other),
+                _ => (self, other),
+            },
+
+            // No coercion needed or not possible
+            _ => (self, other),
+        }
+    }
+}
+
+impl Coerce for Temporal {
+    fn coerce_to(self, other: Self) -> (Self, Self) {
         match (self, other) {
             (Self::Time(_), Self::DateTime(timestamp)) => (self, Self::Time(timestamp.into())),
             (Self::DateTime(timestamp), Self::Time(_)) => (Self::Time(timestamp.into()), other),
@@ -811,6 +942,11 @@ impl Temporal {
         }
     }
 }
+
+impl_value_op!(std::ops::Add, add, +);
+impl_value_op!(std::ops::Sub, sub, -);
+impl_value_op!(std::ops::Mul, mul, *);
+impl_value_op!(std::ops::Div, div, /);
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
@@ -857,6 +993,9 @@ impl Ord for Value {
             (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
             (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
             (Value::Enum(a), Value::Enum(b)) => a.cmp(b),
+            (Value::Blob(a), Value::Blob(b)) => a.cmp(b),
+            (Value::Blob(_), _) => std::cmp::Ordering::Greater,
+            (_, Value::Blob(_)) => std::cmp::Ordering::Less,
             // For sorting, NULL values are considered equal to each other
             // and sort after all non-NULL values.
             (Value::Null, Value::Null) => Ordering::Equal,
@@ -875,12 +1014,14 @@ impl PartialOrd for Value {
 
 impl Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        fn encode_float(f: &f64) -> u64 {
+        #[inline(always)]
+        const fn encode_float(f: &f64) -> u64 {
             // normalize -0.0 and 0.0 to the same bits, and treat all nans the same.
             let mut bits = f.to_bits();
             if bits == (-0.0f64).to_bits() {
                 bits = 0.0f64.to_bits();
             }
+
             if f.is_nan() {
                 // all nans are hashed as the same.
                 bits = 0x7ff8000000000000u64;
@@ -894,15 +1035,16 @@ impl Hash for Value {
 
         match self {
             Self::Float(f) => encode_float(f).hash(state),
-            Value::Number(n) => n.hash(state),
-            Value::String(s) => s.hash(state),
-            Value::Boolean(b) => b.hash(state),
-            Value::Temporal(t) => t.hash(state),
-            Value::Uuid(u) => u.hash(state),
-            Value::Interval(i) => i.hash(state),
-            Value::Enum(e) => e.hash(state),
-            Value::Null => NULL_HASH.hash(state),
-            Value::Numeric(n) => todo!(),
+            Self::Null => NULL_HASH.hash(state),
+            Self::String(s) => s.hash(state),
+            Self::Number(n) => n.hash(state),
+            Self::Boolean(b) => b.hash(state),
+            Self::Temporal(t) => t.hash(state),
+            Self::Uuid(u) => u.hash(state),
+            Self::Interval(i) => i.hash(state),
+            Self::Numeric(n) => n.hash(state),
+            Self::Enum(e) => e.hash(state),
+            Self::Blob(b) => b.hash(state),
         }
     }
 }
@@ -957,7 +1099,7 @@ impl Display for Column {
                 Constraint::PrimaryKey => "PRIMARY KEY",
                 Constraint::Unique => "UNIQUE",
                 Constraint::Nullable => "NULLABLE",
-                Constraint::Default(value) => "DEFAULT {value}",
+                Constraint::Default(_) => unimplemented!("default values"),
             })?;
         }
 
@@ -971,26 +1113,41 @@ impl Display for Expression {
             Self::Identifier(ident) => f.write_str(ident),
             Self::QualifiedIdentifier { table, column } => write!(f, "{table}.{column}"),
             Self::Value(value) => write!(f, "{value}"),
-            Self::Wildcard => f.write_char('*'),
+            Self::Wildcard => f.write_str("*"),
+            Self::UnaryOperation { operator, expr } => write!(f, "{operator}{expr}"),
+            Self::Nested(expr) => write!(f, "({expr})"),
             Self::BinaryOperation {
                 operator,
                 left,
                 right,
-            } => {
-                write!(f, "{left} {operator} {right}")
+            } => write!(f, "{left} {operator} {right}"),
+            Self::Path { head, segments } => {
+                f.write_str(head)?;
+                for seg in segments {
+                    match seg {
+                        PathSegment::Key(key) => write!(f, ".{key}")?,
+                        PathSegment::Index(idx) => write!(f, "[{idx}]")?,
+                        PathSegment::Wildcard => write!(f, "*")?,
+                    }
+                }
+                Ok(())
             }
-            Self::UnaryOperation { operator, expr } => {
-                write!(f, "{operator}{expr}")
+            Self::Function { func, args } => {
+                let mut args = args.iter();
+                write!(f, "{func}(")?;
+                if let Some(arg) = args.next() {
+                    write!(f, "{arg}")?;
+                    for arg in args {
+                        write!(f, ", {arg}")?;
+                    }
+                }
+                write!(f, ")")
             }
-            Self::Function { func, args } => write!(f, "{func}"),
             Self::Alias { expr, alias } => write!(f, "{expr} AS {alias}"),
-            Self::IsNull { expr, negated } => {
-                write!(f, "{expr} IS ");
-
-                let is = if *negated { "NOT NULL" } else { "NULL" };
-                f.write_str(is)
-            }
-            Self::Nested(expr) => write!(f, "({expr})"),
+            Self::IsNull { expr, negated } => match negated {
+                false => write!(f, "{expr} IS NULL"),
+                _ => write!(f, "{expr} IS NOT NULL"),
+            },
         }
     }
 }
@@ -1053,6 +1210,7 @@ impl Display for Type {
             Type::Text => write!(f, "TEXT"),
             Type::Enum(_) => write!(f, "ENUM"),
             Type::Interval => f.write_str("INTERVAL"),
+            Type::Jsonb => f.write_str("JSONB"),
             Type::Numeric(precision, scale) => match (precision, scale) {
                 (&NUMERIC_ANY, _) => write!(f, "NUMERIC"),
                 (precision, 0) => write!(f, "NUMERIC({precision})"),
@@ -1074,7 +1232,8 @@ impl Display for Value {
             Value::Interval(interval) => write!(f, "{interval}"),
             Value::Numeric(numeric) => write!(f, "{numeric}"),
             Value::Enum(index) => write!(f, "{index}"),
-            Value::Null => write!(f, "NULL"),
+            Value::Blob(blob) => write!(f, "{}", Jsonb::new(blob.len(), Some(blob))),
+            Value::Null => f.write_str("NULL"),
         }
     }
 }
@@ -1274,6 +1433,7 @@ where
 }
 
 impl Select {
+    #[allow(unused)]
     pub fn builder() -> SelectBuilder {
         SelectBuilder::default()
     }

@@ -101,9 +101,23 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 }
 
                 Expression::QualifiedIdentifier { table, column } => {
-                    let idx = resolve_qualified_order_idx(&self.schema, column, table)?;
-                    indexes.push(idx);
-                    directions.push(order.direction)
+                    match resolve_qualified_order_idx(&self.schema, column, table) {
+                        Ok(idx) => {
+                            indexes.push(idx);
+                            directions.push(order.direction);
+                        }
+
+                        // if it fails, this might be a JSONB field
+                        // so we treat like an expression that needs to be computed
+                        Err(_) => {
+                            let typ = resolve_type(&self.schema, &order.expr)?;
+                            indexes.push(sorted_schema.len());
+                            directions.push(order.direction);
+
+                            sorted_schema.push(Column::new(&order.expr.to_string(), typ));
+                            extra_exprs.push(order.expr.clone());
+                        }
+                    }
                 }
 
                 _ => {
@@ -323,7 +337,15 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 Expression::Alias { alias, expr } if contains_aggregate(expr) => {
                     Some((expr.as_ref(), alias.to_string()))
                 }
-                expr if contains_aggregate(expr) => Some((expr, expr.to_string())),
+                expr if contains_aggregate(expr) => {
+                    let name = match expr {
+                        Expression::Function { func, .. } => func.to_string(),
+                        _ => expr.to_string(),
+                    };
+
+                    Some((expr, name))
+                }
+
                 _ => None,
             })
             .collect();
@@ -488,18 +510,44 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             .map(|expr| match expr {
                 Expression::Alias { expr, alias } => match expr.as_ref() {
                     Expression::QualifiedIdentifier { column, table } => {
-                        let mut column = resolve_qualified_column(table, column, &self.tables)?;
-                        column.name = alias.clone();
-                        Ok(column)
+                        match resolve_qualified_column(table, column, &self.tables) {
+                            Ok(mut col) => {
+                                col.name = alias.clone();
+                                Ok(col)
+                            }
+                            _ => create_jsonb_field_column(
+                                &self.schema,
+                                table,
+                                &expr.to_string(),
+                                expr,
+                            ),
+                        }
+                    }
+
+                    Expression::Path { .. } => {
+                        Ok(Column::nullable(alias, resolve_type(&self.schema, expr)?))
                     }
                     _ => Ok(Column::new(alias, resolve_type(&self.schema, expr)?)),
                 },
                 Expression::QualifiedIdentifier { column, table } => {
-                    resolve_qualified_column(table, column, &self.tables)
+                    match resolve_qualified_column(table, column, &self.tables) {
+                        Ok(col) => Ok(col),
+                        Err(_) => {
+                            create_jsonb_field_column(&self.schema, table, &expr.to_string(), expr)
+                        }
+                    }
                 }
                 Expression::Identifier(column) => {
                     Ok(self.schema.columns[self.schema.index_of(column).unwrap()].clone())
                 }
+                Expression::Path { .. } => Ok(Column::nullable(
+                    &expr.to_string(),
+                    resolve_type(&self.schema, expr)?,
+                )),
+                Expression::Function { func, .. } => Ok(Column::new(
+                    &func.to_string(),
+                    resolve_type(&self.schema, expr)?,
+                )),
                 _ => Ok(Column::new(
                     &expr.to_string(),
                     resolve_type(&self.schema, expr)?,
@@ -516,7 +564,7 @@ fn resolve_column_for_order<'a>(
     schema: &Schema,
     ident: &str,
 ) -> Result<Either<&'a Expression, usize>, SqlError> {
-    for (i, expr) in columns.iter().enumerate() {
+    for expr in columns {
         if let Expression::Alias {
             expr: aliased_expr,
             alias,
@@ -525,7 +573,10 @@ fn resolve_column_for_order<'a>(
             if alias == ident {
                 return match aliased_expr.as_ref() {
                     Expression::Identifier(_) | Expression::QualifiedIdentifier { .. } => {
-                        Ok(Either::Right(i))
+                        match schema.index_of(&aliased_expr.to_string()) {
+                            Some(idx) => Ok(Either::Right(idx)),
+                            None => Ok(Either::Left(aliased_expr.as_ref())),
+                        }
                     }
                     _ => Ok(Either::Left(aliased_expr.as_ref())),
                 };
@@ -735,5 +786,29 @@ fn is_bound_to_table(expr: &Expression, table_key: &str) -> bool {
         }
         Expression::Value(_) => true,
         _ => false,
+    }
+}
+
+fn create_jsonb_field_column(
+    schema: &Schema,
+    table: &str,
+    name: &str,
+    expr: &Expression,
+) -> Result<Column, SqlError> {
+    use crate::sql::statement::Type;
+
+    let is_json = schema
+        .index_of(table)
+        .map(|idx| matches!(schema.columns[idx].data_type, Type::Jsonb))
+        .unwrap_or_default();
+
+    let col_type = match is_json {
+        true => Type::Jsonb,
+        _ => resolve_type(schema, expr)?,
+    };
+
+    match is_json {
+        true => Ok(Column::nullable(name, col_type)),
+        _ => Ok(Column::new(name, col_type)),
     }
 }
