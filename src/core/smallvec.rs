@@ -43,6 +43,26 @@ pub enum AllocErr {
     Allocation { layout: Layout },
 }
 
+#[macro_export]
+macro_rules! smallvec {
+    (@one $x:expr) => {
+        1usize
+    };
+    () => {
+        $crate::core::smallvec::SmallVec::new()
+    };
+    ($($x:expr),+$(,)?) => ({
+        const COUNT: usize = 0usize $(+ $crate::core::smallvec::smallvec!(@one $x))+;
+        let mut vec = $crate::core::smallvec::SmallVec::new();
+        if COUNT <= vec.capacity() {
+            $(vec.push($x);)*
+            vec
+        } else {
+            $crate::core::smallvec::SmallVec::from_vec(vec![$($x,)+])
+        }
+    });
+}
+
 impl<T, const S: usize> SmallVec<T, S> {
     #[inline]
     pub const fn new() -> Self {
@@ -61,6 +81,41 @@ impl<T, const S: usize> SmallVec<T, S> {
         }
 
         vec
+    }
+
+    #[inline]
+    pub fn from_vec(vec: Vec<T>) -> Self {
+        if vec.capacity() == 0 {
+            return Self::new();
+        }
+
+        match Self::is_zst() {
+            true => {
+                let mut vec = vec;
+                let len = vec.len();
+
+                unsafe { vec.set_len(0) };
+
+                Self {
+                    raw: RawSmallVec::new(),
+                    len: TaggedLength::new(len, false, Self::is_zst()),
+                    _marker: PhantomData,
+                }
+            }
+            _ => {
+                let mut vec = ManuallyDrop::new(vec);
+                let len = vec.len();
+                let capacity = vec.capacity();
+
+                let ptr = unsafe { NonNull::new_unchecked(vec.as_mut_ptr()) };
+
+                Self {
+                    raw: RawSmallVec::new_heap(ptr, capacity),
+                    len: TaggedLength::new(len, true, Self::is_zst()),
+                    _marker: PhantomData,
+                }
+            }
+        }
     }
 
     #[inline]
