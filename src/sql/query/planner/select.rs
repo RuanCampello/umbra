@@ -101,9 +101,23 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 }
 
                 Expression::QualifiedIdentifier { table, column } => {
-                    let idx = resolve_qualified_order_idx(&self.schema, column, table)?;
-                    indexes.push(idx);
-                    directions.push(order.direction)
+                    match resolve_qualified_order_idx(&self.schema, column, table) {
+                        Ok(idx) => {
+                            indexes.push(idx);
+                            directions.push(order.direction);
+                        }
+
+                        // if it fails, this might be a JSONB field
+                        // so we treat like an expression that needs to be computed
+                        Err(_) => {
+                            let typ = resolve_type(&self.schema, &order.expr)?;
+                            indexes.push(sorted_schema.len());
+                            directions.push(order.direction);
+
+                            sorted_schema.push(Column::new(&order.expr.to_string(), typ));
+                            extra_exprs.push(order.expr.clone());
+                        }
+                    }
                 }
 
                 _ => {

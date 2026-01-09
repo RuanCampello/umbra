@@ -447,7 +447,6 @@ fn jsonb_comprehensive() {
         FROM users
         WHERE db_access = true;"#,
     );
-    println!("{query}");
     assert_eq!(
         query.tuples,
         vec![vec![
@@ -455,6 +454,51 @@ fn jsonb_comprehensive() {
             Value::Boolean(true),
             "Amsterdam".into()
         ]]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.age AS user_age
+        FROM users
+        ORDER BY user_age ASC
+        LIMIT 3;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Grace".into(), 19.into()],
+            vec!["Liam".into(), 21.into()],
+            vec!["Eve".into(), 22.into()]
+        ]
+    );
+
+    // JSONB by direct access should be equally valid
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.age
+        FROM users
+        ORDER BY metadata.age ASC
+        LIMIT 3;"#,
+    );
+    assert_eq!(query.tuples.len(), 3);
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Grace".into(), 19.into()],
+            vec!["Liam".into(), 21.into()],
+            vec!["Eve".into(), 22.into()]
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+        SELECT name, metadata.address.street, metadata.address.zip
+        FROM users
+        WHERE metadata.address.zip IS NOT NULL;"#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![vec!["Bob".into(), "Main St".into(), 10001.into()]],
     );
 }
 
