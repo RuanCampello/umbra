@@ -71,6 +71,29 @@ impl<T, const S: usize> SmallVec<T, S> {
     }
 
     #[inline]
+    pub const fn as_slice(&self) -> &[T] {
+        let len = self.len();
+        let ptr = self.as_ptr();
+
+        unsafe { core::slice::from_raw_parts(ptr, len) }
+    }
+
+    pub const fn as_mut_slice(&mut self) -> &mut [T] {
+        let len = self.len();
+        let ptr = self.as_mut_ptr();
+
+        unsafe { core::slice::from_raw_parts_mut(ptr, len) }
+    }
+
+    #[inline]
+    pub const fn as_ptr(&self) -> *const T {
+        match self.len.on_heap(Self::is_zst()) {
+            true => unsafe { self.raw.as_heap_ptr() },
+            _ => self.raw.as_inline_ptr(),
+        }
+    }
+
+    #[inline]
     pub const fn as_mut_ptr(&mut self) -> *mut T {
         match self.len.on_heap(Self::is_zst()) {
             true => unsafe { self.raw.as_mut_heap_ptr() },
@@ -189,6 +212,20 @@ impl<T, const S: usize> Default for SmallVec<T, S> {
     }
 }
 
+impl<T, const S: usize> core::ops::Deref for SmallVec<T, S> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<T, const S: usize> core::ops::DerefMut for SmallVec<T, S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
+    }
+}
+
 impl<T, const S: usize> RawSmallVec<T, S> {
     #[inline]
     const fn is_zst() -> bool {
@@ -273,9 +310,20 @@ impl<T, const S: usize> RawSmallVec<T, S> {
 
     /// # Safety
     ///
+    /// - This vec must be on heap
+    const unsafe fn as_heap_ptr(&self) -> *const T {
+        self.heap.0.as_ptr()
+    }
+
+    /// # Safety
+    ///
     /// - This vec must be on inline
     const fn as_mut_inline_ptr(&mut self) -> *mut T {
         (unsafe { std::ptr::addr_of!(self.inline) }) as *mut T
+    }
+
+    const fn as_inline_ptr(&self) -> *const T {
+        (unsafe { std::ptr::addr_of!(self.inline) }) as *const T
     }
 }
 
@@ -340,5 +388,20 @@ fn infallible<T>(result: Result<T, AllocErr>) -> T {
         Ok(x) => x,
         Err(AllocErr::CapacityOverflow) => panic!("capacity overflow"),
         Err(AllocErr::Allocation { layout }) => std::alloc::handle_alloc_error(layout),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline() {
+        let mut vec = SmallVec::<_, 16>::new();
+
+        vec.push("hello");
+        vec.push("world");
+
+        assert_eq!(&*vec, &["hello", "world"][..]);
     }
 }
