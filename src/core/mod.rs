@@ -1,4 +1,5 @@
 pub(crate) mod date;
+mod hash;
 pub(crate) mod json;
 pub(crate) mod log;
 pub(crate) mod numeric;
