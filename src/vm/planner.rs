@@ -2,13 +2,14 @@
 
 #![allow(dead_code)]
 
-use crate::core::json;
 use crate::core::random::Rng;
 use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{self, deserialize};
+use crate::core::{json, BuildHasher};
+use crate::core::{HashMap, HashSet};
 use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{
     join, Assignment, Expression, Function, JoinType, OrderDirection, Type, Value,
@@ -18,7 +19,7 @@ use crate::vm::expression::{evaluate_where, resolve_expression, resolve_only_exp
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::hash_map::IntoIter;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use std::ops::{Bound, Index, RangeBounds};
@@ -1052,7 +1053,7 @@ impl<File: PlanExecutor> Execute for Update<File> {
             return Ok(None);
         };
 
-        let mut updated_cols = HashMap::new();
+        let mut updated_cols = HashMap::default();
 
         for assignment in &self.assigments {
             let col = self.table.schema.index_of(&assignment.identifier).ok_or(
@@ -1304,7 +1305,8 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
         self.output_buffer.clear();
 
         let input_schema = self.source.schema().unwrap();
-        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> = HashMap::with_capacity(128);
+        let mut groups: HashMap<Vec<Value>, Vec<Tuple>> =
+            HashMap::with_capacity_and_hasher(128, BuildHasher);
 
         while let Some(row) = self.source.try_next()? {
             let mut key = Vec::with_capacity(self.group_by.len());
@@ -1535,10 +1537,10 @@ impl<File: FileOperations> HashJoin<File> {
             right: Box::new(right),
 
             hash_built: false,
-            table: HashMap::with_capacity(1024),
+            table: HashMap::with_capacity_and_hasher(1024, BuildHasher),
             current_left: None,
             current_matches: None,
-            matched_right_keys: HashSet::with_capacity(1024),
+            matched_right_keys: HashSet::with_capacity_and_hasher(1024, BuildHasher),
             unmatched_right: None,
             unmatched_right_index: 0,
             index: 0,

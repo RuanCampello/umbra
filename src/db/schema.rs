@@ -1,7 +1,7 @@
+use crate::core::HashMap;
 use crate::db::ROW_COL_ID;
 use crate::sql::statement::{Column, Constraint, JoinType, Type};
 use core::fmt;
-use std::collections::HashMap;
 use std::fmt::Display;
 
 /// The representation of the table schema during runtime.

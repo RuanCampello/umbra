@@ -6,9 +6,10 @@ use super::page::{Cell, OverflowPage, Page, PageNumber, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
+use crate::core::HashSet;
 use crate::sql::statement::Type;
 use std::cmp::{min, Ordering, Reverse};
-use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, VecDeque};
 use std::io::{Read, Result as IOResult, Seek, Write};
 use std::mem;
 

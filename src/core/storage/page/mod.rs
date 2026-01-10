@@ -12,7 +12,8 @@ pub(in crate::core) use zero::DATABASE_IDENTIFIER;
 pub(in crate::core::storage) use zero::{DatabaseHeader, PageZero};
 
 use crate::core::storage::page::buffer::BufferWithHeader;
-use std::collections::{BinaryHeap, HashMap};
+use crate::core::HashMap;
+use std::collections::BinaryHeap;
 use std::fmt::{Debug, Formatter};
 use std::ops::Bound;
 use std::ptr::NonNull;
@@ -556,7 +557,7 @@ impl<Header> From<BufferWithHeader<Header>> for Page {
 
         Self {
             buffer,
-            overflow: HashMap::new(),
+            overflow: HashMap::default(),
         }
     }
 }

@@ -1,5 +1,4 @@
 use std::{
-    collections::{HashMap, HashSet},
     io::{Read, Seek, Write},
     path::PathBuf,
     rc::Rc,
@@ -7,7 +6,9 @@ use std::{
 
 use crate::{
     core::storage::pagination::io::FileOperations,
+    core::{HashMap, HashSet},
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
+    hash_map, hash_set,
     sql::{
         analyzer::contains_aggregate,
         query::{self, planner::resolve_type},
@@ -51,11 +52,8 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
         work_dir: std::path::PathBuf,
         table_key: &'s str,
     ) -> Self {
-        let mut tables = HashMap::new();
-        tables.insert(table_key.to_string(), schema.clone());
-
-        let mut ranges = HashMap::new();
-        ranges.insert(table_key, (0, schema.len()));
+        let tables = hash_map!(table_key.to_string() => schema.clone());
+        let ranges = hash_map!(table_key => (0, schema.len()));
 
         Self {
             source: Some(source),
@@ -201,7 +199,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
             .expect("FROM table should always be in ranges");
         self.schema.add_qualified_name(from, start, end);
 
-        let mut left_tables = HashSet::from([from.to_string()]);
+        let mut left_tables = hash_set!(from.to_string());
 
         for join in joins {
             let right_table = db.metadata(&join.table.name)?.clone();
@@ -255,7 +253,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                         .add_qualified_name(right_key, left_len, right_end);
                     self.ranges.insert(right_key, (left_len, right_end));
 
-                    let right_tables = HashSet::from([right_key.to_string()]);
+                    let right_tables = hash_set!(right_key.to_string());
                     self.source = Some(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
                         left: Box::new(left),
                         right_table: right_table.clone(),
@@ -292,7 +290,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                         .add_qualified_name(right_key, left_len, right_end);
                     self.ranges.insert(right_key, (left_len, right_end));
 
-                    let right_tables = HashSet::from([right_key.to_string()]);
+                    let right_tables = hash_set!(right_key.to_string());
 
                     let (left_expr, right_expr, key_type) = resolve_join_keys(
                         &join.on,

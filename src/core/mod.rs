@@ -8,7 +8,7 @@ pub(crate) mod smallvec;
 pub(crate) mod storage;
 pub(crate) mod uuid;
 
-pub(crate) use hash::{HashMap, HashSet};
+pub(crate) use hash::{BuildHasher, HashMap, HashSet};
 
 /// This serialises the date types into a compact binary format.
 pub trait Serialize {

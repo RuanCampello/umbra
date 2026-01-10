@@ -23,6 +23,24 @@ const PREVENT_TRIVIAL_ZERO_COLLAPSE: u64 = 0xa4093822299f31d0;
 pub type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasher>;
 pub type HashSet<V> = std::collections::HashSet<V, BuildHasher>;
 
+#[macro_export]
+macro_rules! hash_set {
+    ($($elem:expr),+ $(,)?) => {{
+        let mut set = HashSet::default();
+        $(set.insert($elem);)+
+        set
+    }};
+}
+
+#[macro_export]
+macro_rules! hash_map {
+    ($($key:expr => $value:expr),+ $(,)?) => {{
+        let mut map = HashMap::default();
+        $(map.insert($key, $value);)+
+        map
+    }};
+}
+
 impl Hasher {
     #[inline]
     pub const fn new() -> Self {
