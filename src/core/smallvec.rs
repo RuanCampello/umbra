@@ -363,6 +363,36 @@ impl<T, const S: usize> core::ops::DerefMut for SmallVec<T, S> {
     }
 }
 
+impl<T, U, const S: usize, const OS: usize> PartialEq<SmallVec<U, OS>> for SmallVec<T, S>
+where
+    T: PartialEq<U>,
+{
+    #[inline]
+    fn eq(&self, other: &SmallVec<U, OS>) -> bool {
+        self.as_slice().eq(other.as_slice())
+    }
+}
+
+impl<T: Eq, const S: usize> Eq for SmallVec<T, S> {}
+
+impl<T: PartialOrd, const S: usize> PartialOrd for SmallVec<T, S> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.as_slice().partial_cmp(other.as_slice())
+    }
+}
+
+impl<T: Ord, const S: usize> Ord for SmallVec<T, S> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_slice().cmp(other.as_slice())
+    }
+}
+
+impl<T: std::hash::Hash, const S: usize> std::hash::Hash for SmallVec<T, S> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state)
+    }
+}
+
 impl<T, const S: usize> Drop for SmallVec<T, S> {
     fn drop(&mut self) {
         let on_heap = self.spilled();
@@ -384,6 +414,12 @@ impl<T, const S: usize> Drop for SmallVec<T, S> {
 
             core::ptr::slice_from_raw_parts_mut(ptr, len).drop_in_place();
         }
+    }
+}
+
+impl<T: std::fmt::Debug, const S: usize> std::fmt::Debug for SmallVec<T, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
     }
 }
 
