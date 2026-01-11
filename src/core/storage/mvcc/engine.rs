@@ -1,11 +1,34 @@
 use std::{
     fs::File,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc, RwLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::core::storage::mvcc::MvccError;
+use crate::{
+    core::{
+        storage::mvcc::{registry::TransactionRegistry, version::VersionStorage, MvccError},
+        HashMap,
+    },
+    db::Schema,
+};
+
+/// MVCC storage engine.
+/// This provides snapshot isolation with a multi-version concurrency control.
+pub(crate) struct Engine {
+    path: PathBuf,
+    schemas: Arc<RwLock<HashMap<String, Arc<Schema>>>>,
+    versions: Arc<RwLock<HashMap<String, Arc<VersionStorage>>>>,
+    registry: Arc<TransactionRegistry>,
+    is_open: AtomicBool,
+    /// This is incremented on any change of the schema.
+    /// So we can invalidate the cache without lookups.
+    epoch: AtomicU64,
+}
 
 /// Good ol' "styx"
 const SNAPSHOT_MAGIC: u32 = 0x73747978;
