@@ -342,6 +342,9 @@ impl<T, const S: usize> SmallVec<T, S> {
     }
 }
 
+unsafe impl<T: Send, const S: usize> Send for SmallVec<T, S> {}
+unsafe impl<T: Sync, const S: usize> Sync for SmallVec<T, S> {}
+
 impl<T, const S: usize> Default for SmallVec<T, S> {
     #[inline]
     fn default() -> Self {
