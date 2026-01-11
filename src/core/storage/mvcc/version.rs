@@ -6,7 +6,7 @@ use std::{
 use crate::{
     core::{
         smallvec::SmallVec,
-        storage::mvcc::{get_timestamp, registry::TransactionRegistry},
+        storage::mvcc::{arena::TupleArena, get_timestamp, registry::TransactionRegistry},
     },
     db::Schema,
     vm::planner::Tuple,
@@ -22,6 +22,7 @@ pub(crate) struct VersionStorage {
     /// Maximum number of previous versions per row.
     max_version_history: usize,
     visibility_checker: Option<Arc<dyn VisibilityChecker>>,
+    arena: TupleArena,
 }
 
 pub(crate) struct VersionEntry {
@@ -67,6 +68,7 @@ impl VersionStorage {
             table,
             versions,
             visibility_checker: todo!(),
+            arena: TupleArena::new(),
             schema: RwLock::new(Arc::new(schema)),
             open: AtomicBool::new(true),
             uncommited_writes: RwLock::new(HashMap::default()),

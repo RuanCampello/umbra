@@ -1,6 +1,8 @@
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
-
-use crate::core::HashMap;
+use crate::core::{storage::mvcc::version::VisibilityChecker, HashMap};
+use std::{
+    cell::RefCell,
+    sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering},
+};
 
 #[derive(Default)]
 pub struct TransactionRegistry {
@@ -23,6 +25,10 @@ pub struct TransactionState {
     pub commit: i64,
 }
 
+struct CommittedCache {
+    entries: [i64; COMMITTED_CACHE_SIZE],
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TransactionStatus {
@@ -31,13 +37,19 @@ pub enum TransactionStatus {
     Committed,
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum IsolationLevel {
     #[default]
     ReadCommitted,
     Snapshot,
 }
+
+thread_local! {
+    static COMMITTED_CACHE: RefCell<CommittedCache> = const {RefCell::new(CommittedCache::new())}
+}
+
+const COMMITTED_CACHE_SIZE: usize = 1 << 16;
 
 impl TransactionRegistry {
     pub const INVALID_ID: i64 = i64::MIN;
@@ -121,7 +133,7 @@ impl TransactionRegistry {
         }
     }
 
-    fn recover_aborted_transaction(&mut self, txn_id: i64) {
+    pub fn recover_aborted_transaction(&mut self, txn_id: i64) {
         loop {
             let current = self.next_txn_id.load(Ordering::Acquire);
             match txn_id >= current {
@@ -136,6 +148,78 @@ impl TransactionRegistry {
                 _ => {}
             };
         }
+    }
+
+    #[inline]
+    pub fn is_directly_visible(&self, version_txn_id: i64) -> bool {
+        if version_txn_id == Self::RECOVERY_ID {
+            return true;
+        }
+
+        let cached = COMMITTED_CACHE.with(|cache| cache.borrow().contains(version_txn_id));
+        if cached {
+            return true;
+        }
+
+        if let Some(entry) = self.transactions.get(&version_txn_id) {
+            if matches!(entry.status, TransactionStatus::Committed) {
+                COMMITTED_CACHE.with(|cache| cache.borrow_mut().insert(version_txn_id));
+                return true;
+            }
+        }
+
+        false
+    }
+
+    #[inline]
+    pub fn is_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool {
+        if version_txn_id == view_txn_id {
+            return true;
+        }
+
+        if version_txn_id == Self::RECOVERY_ID {
+            return true;
+        }
+
+        if self.isolation_level.load(Ordering::Relaxed) == 0 {
+            if self.isolation_override_count.load(Ordering::Relaxed) == 0 {
+                return self.is_directly_visible(version_txn_id);
+            }
+
+            if !self.transaction_isolation_levels.contains_key(&view_txn_id) {
+                return self.is_directly_visible(version_txn_id);
+            }
+
+            if let Some(level) = self.transaction_isolation_levels.get(&view_txn_id) {
+                if *level == 0 {
+                    return self.is_directly_visible(version_txn_id);
+                }
+            }
+        }
+
+        self.is_snapshot_visible(version_txn_id, view_txn_id)
+    }
+
+    fn is_snapshot_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool {
+        if self.transaction_isolation_level(view_txn_id) == IsolationLevel::ReadCommitted {
+            return self.is_directly_visible(version_txn_id);
+        }
+
+        let version_state = match self.transactions.get(&version_txn_id) {
+            Some(entry) => *entry,
+            None => return false,
+        };
+
+        if version_state.status != TransactionStatus::Committed {
+            return false;
+        }
+
+        let view_begin = match self.transactions.get(&view_txn_id) {
+            Some(entry) => entry.begin,
+            None => return false,
+        };
+
+        version_state.commit <= view_begin
     }
 
     pub fn set_transaction_isolation_level(&mut self, txn_id: i64, level: IsolationLevel) {
@@ -169,6 +253,42 @@ impl TransactionRegistry {
         if self.transaction_isolation_levels.remove(&txn_id).is_some() {
             self.isolation_level.fetch_sub(1, Ordering::Relaxed);
         }
+    }
+}
+
+impl VisibilityChecker for TransactionRegistry {
+    fn is_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool {
+        TransactionRegistry::is_visible(self, version_txn_id, view_txn_id)
+    }
+
+    fn get_sequence(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_active_transactions(&self) -> Vec<i64> {
+        todo!()
+    }
+
+    fn is_committed_before(&self, txn_id: i64, cut_off: i64) -> bool {
+        todo!()
+    }
+}
+
+impl CommittedCache {
+    const fn new() -> Self {
+        Self {
+            entries: [0i64; COMMITTED_CACHE_SIZE],
+        }
+    }
+
+    fn insert(&mut self, txn_id: i64) {
+        let idx = (txn_id as usize) & (COMMITTED_CACHE_SIZE - 1);
+        self.entries[idx] = txn_id
+    }
+
+    fn contains(&self, txn_id: i64) -> bool {
+        let idx = (txn_id as usize) & (COMMITTED_CACHE_SIZE - 1);
+        self.entries[idx] == txn_id
     }
 }
 
