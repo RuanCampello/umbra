@@ -47,6 +47,38 @@ fn serialise_snapshot_header(path: &Path, lsn: u64) -> Result<(), MvccError> {
     Ok(())
 }
 
+/// Returns 0 if **invalid** or not found.
+fn deserialise_snapshot_header(path: &Path) -> u64 {
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        _ => return 0,
+    };
+
+    if data.len() < SNAPSHOT_HEADER_SIZE {
+        return 0;
+    }
+
+    let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    if magic != SNAPSHOT_MAGIC {
+        return 0;
+    }
+
+    let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
+    if version != SNAPSHOT_VERSION {
+        eprintln!("Snapshot version {version} not supported supported: {SNAPSHOT_VERSION}");
+        return 0;
+    }
+
+    let hash = u32::from_le_bytes(data[24..28].try_into().unwrap());
+    let computed_hash = fnv1a(&data[0..24]);
+    if hash != computed_hash {
+        eprintln!("Snapshot header checksum does not match");
+        return 0;
+    }
+
+    u64::from_le_bytes(data[8..16].try_into().unwrap())
+}
+
 #[inline(always)]
 /// Basic hashing function, used for simplicity.
 /// We could probably make it faster using `crc32` or `crc32c`, but that's a much more complex
