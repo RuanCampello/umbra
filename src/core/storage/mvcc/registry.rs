@@ -200,6 +200,7 @@ impl TransactionRegistry {
         self.is_snapshot_visible(version_txn_id, view_txn_id)
     }
 
+    #[inline(never)]
     fn is_snapshot_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool {
         if self.transaction_isolation_level(view_txn_id) == IsolationLevel::ReadCommitted {
             return self.is_directly_visible(version_txn_id);
@@ -220,6 +221,26 @@ impl TransactionRegistry {
         };
 
         version_state.commit <= view_begin
+    }
+
+    fn get_sequence(&self) -> i64 {
+        self.next_sequence.load(Ordering::Acquire)
+    }
+
+    fn is_committed_before(&self, txn_id: i64, cut_off: i64) -> bool {
+        if txn_id < 0 {
+            return true;
+        }
+
+        if let Some(entry) = self.transactions.get(&txn_id) {
+            if entry.status == TransactionStatus::Committed {
+                return entry.commit <= cut_off;
+            }
+
+            return false;
+        }
+
+        true
     }
 
     pub fn set_transaction_isolation_level(&mut self, txn_id: i64, level: IsolationLevel) {
@@ -262,15 +283,19 @@ impl VisibilityChecker for TransactionRegistry {
     }
 
     fn get_sequence(&self) -> i64 {
-        todo!()
+        TransactionRegistry::get_sequence(&self)
     }
 
     fn get_active_transactions(&self) -> Vec<i64> {
-        todo!()
+        self.transactions
+            .iter()
+            .filter(|entry| entry.1.status == TransactionStatus::Active)
+            .map(|entry| *entry.0)
+            .collect()
     }
 
     fn is_committed_before(&self, txn_id: i64, cut_off: i64) -> bool {
-        todo!()
+        TransactionRegistry::is_committed_before(&self, txn_id, cut_off)
     }
 }
 
