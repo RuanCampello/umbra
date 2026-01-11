@@ -2,6 +2,7 @@
 
 use std::sync::atomic::AtomicI64;
 
+pub(self) mod arena;
 pub(crate) mod registry;
 pub(crate) mod version;
 

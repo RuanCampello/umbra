@@ -102,14 +102,16 @@ impl TransactionRegistry {
             },
         );
 
-        loop {
-            let current = self.next_txn_id.load(Ordering::Acquire);
+        self.recover_aborted_transaction(txn_id);
 
-            match txn_id > current {
+        loop {
+            let current = self.next_sequence.load(Ordering::Acquire);
+
+            match commit >= current {
                 false => break,
                 true if self
-                    .next_txn_id
-                    .compare_exchange(current, txn_id + 1, Ordering::AcqRel, Ordering::Acquire)
+                    .next_sequence
+                    .compare_exchange_weak(current, commit + 1, Ordering::AcqRel, Ordering::Acquire)
                     .is_ok() =>
                 {
                     break
@@ -117,15 +119,16 @@ impl TransactionRegistry {
                 _ => {}
             };
         }
+    }
 
+    fn recover_aborted_transaction(&mut self, txn_id: i64) {
         loop {
-            let current = self.next_sequence.load(Ordering::Acquire);
-
-            match txn_id > current {
+            let current = self.next_txn_id.load(Ordering::Acquire);
+            match txn_id >= current {
                 false => break,
                 true if self
-                    .next_sequence
-                    .compare_exchange(current, txn_id + 1, Ordering::AcqRel, Ordering::Acquire)
+                    .next_txn_id
+                    .compare_exchange_weak(current, txn_id + 1, Ordering::AcqRel, Ordering::Acquire)
                     .is_ok() =>
                 {
                     break
@@ -144,6 +147,10 @@ impl TransactionRegistry {
             self.isolation_override_count
                 .fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    pub fn abort_transaction(&mut self, txn_id: i64) {
+        self.transactions.remove(&txn_id);
     }
 
     pub fn isolation_level(&self) -> IsolationLevel {

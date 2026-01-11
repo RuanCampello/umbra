@@ -35,8 +35,8 @@ pub(crate) struct VersionEntry {
 pub(crate) struct RowVersion {
     pub txn_id: i64, // Transaction that created this version (min_txn_id / xmin)
     pub deleted_at_txn_id: i64, // Transaction that deleted this version (max_txn_id / xmax)
-    pub data: Option<Tuple>, // TODO: we could compress this one
-    pub row_id: i64, // Or RowId
+    pub data: Option<Tuple>, // PERFORMANCE: we could compress this one
+    pub row_id: i64,
     pub created_at: i64, // Timestamp
 }
 
