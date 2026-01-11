@@ -1,10 +1,15 @@
 #![allow(unused)]
 
-use std::sync::atomic::AtomicI64;
+use std::{fmt::Display, sync::atomic::AtomicI64};
 
 pub(self) mod arena;
+pub(crate) mod engine;
 pub(crate) mod registry;
 pub(crate) mod version;
+
+pub enum MvccError {
+    SnapshotOperation(std::io::Error),
+}
 
 static LAST_USED_TIMESTAMP: AtomicI64 = AtomicI64::new(0);
 
@@ -31,5 +36,19 @@ pub(self) fn get_timestamp() -> i64 {
         {
             return next;
         }
+    }
+}
+
+impl Display for MvccError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SnapshotOperation(cause) => write!(f, "Failed to operate on snapshot: {cause}"),
+        }
+    }
+}
+
+impl From<std::io::Error> for MvccError {
+    fn from(value: std::io::Error) -> Self {
+        Self::SnapshotOperation(value)
     }
 }
