@@ -4,7 +4,10 @@ use std::{
 };
 
 use crate::{
-    core::{smallvec::SmallVec, storage::mvcc::get_timestamp},
+    core::{
+        smallvec::SmallVec,
+        storage::mvcc::{get_timestamp, registry::TransactionRegistry},
+    },
     db::Schema,
     vm::planner::Tuple,
 };
@@ -18,6 +21,7 @@ pub(crate) struct VersionStorage {
     uncommited_writes: RwLock<HashMap<i64, i64>>,
     /// Maximum number of previous versions per row.
     max_version_history: usize,
+    visibility_checker: Option<Arc<dyn VisibilityChecker>>,
 }
 
 pub(crate) struct VersionEntry {
@@ -38,17 +42,31 @@ pub(crate) struct RowVersion {
 
 type VersionChain = SmallVec<RowVersion, 1>;
 
+pub trait VisibilityChecker: Sync + Send {
+    fn is_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool;
+    fn get_sequence(&self) -> i64;
+    fn get_active_transactions(&self) -> Vec<i64>;
+
+    fn is_committed_before(&self, txn_id: i64, cut_off: i64) -> bool;
+}
+
 impl VersionStorage {
     pub fn new(table: String, schema: Schema) -> Self {
-        Self::with_capacity(table, schema, 0)
+        Self::with_capacity(table, schema, Some(Arc::new(TransactionRegistry::new())), 0)
     }
 
-    pub fn with_capacity(table: String, schema: Schema, expected_rows: usize) -> Self {
+    pub fn with_capacity(
+        table: String,
+        schema: Schema,
+        checker: Option<Arc<TransactionRegistry>>,
+        expected_rows: usize,
+    ) -> Self {
         let versions = RwLock::new(BTreeMap::new());
 
         Self {
             table,
             versions,
+            visibility_checker: todo!(),
             schema: RwLock::new(Arc::new(schema)),
             open: AtomicBool::new(true),
             uncommited_writes: RwLock::new(HashMap::default()),

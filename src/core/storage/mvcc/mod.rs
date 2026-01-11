@@ -2,6 +2,7 @@
 
 use std::sync::atomic::AtomicI64;
 
+pub(crate) mod registry;
 pub(crate) mod version;
 
 static LAST_USED_TIMESTAMP: AtomicI64 = AtomicI64::new(0);
