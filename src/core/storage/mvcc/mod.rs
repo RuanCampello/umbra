@@ -39,6 +39,27 @@ pub(self) fn get_timestamp() -> i64 {
     }
 }
 
+#[inline(always)]
+/// Basic hashing function, used for simplicity.
+/// We could probably make it faster using `crc32` or `crc32c`, but that's a much more complex
+/// algorithm.
+/// That can be done in the future thou :D
+///
+/// For the interesed ones: [https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function].
+pub(in crate::core::storage) const fn fnv1a(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c9dc5u32;
+    let mut idx = 0;
+
+    while idx < bytes.len() {
+        hash ^= bytes[idx] as u32;
+        hash = hash.wrapping_mul(0x01000193);
+
+        idx += 1;
+    }
+
+    hash
+}
+
 impl Display for MvccError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

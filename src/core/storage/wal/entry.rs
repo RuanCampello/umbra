@@ -104,6 +104,42 @@ impl WalEntry {
         entry
     }
 
+    #[inline(always)]
+    pub fn encode(&self) -> Vec<u8> {
+        use super::{WAL_BINARY_VERSION, WAL_HEADER_SIZE, WAL_MAGIC};
+        use crate::core::storage::mvcc::fnv1a;
+
+        // txn_id + name length + name + row_id + operation + timestamp + data length + data
+        let size = 8 + 2 + self.table.len() + 8 + 1 + 8 + 4 + self.data.len();
+        let mut buff = Vec::with_capacity(WAL_HEADER_SIZE as usize + size + 4);
+
+        // -- header
+        buff.extend_from_slice(&WAL_MAGIC.to_le_bytes());
+        buff.push(WAL_BINARY_VERSION);
+        buff.push(self.flags.into());
+        buff.extend_from_slice(&WAL_HEADER_SIZE.to_le_bytes());
+        buff.extend_from_slice(&self.lsn.to_le_bytes());
+        buff.extend_from_slice(&self.previous_lsn.to_le_bytes());
+        buff.extend_from_slice(&(size as u32).to_le_bytes());
+        buff.extend_from_slice(&[0u8; 4]); // reserved space
+
+        // -- content
+        buff.extend_from_slice(&self.txn_id.to_le_bytes());
+        buff.extend_from_slice(&(self.table.len() as u16).to_le_bytes());
+        buff.extend_from_slice(self.table.as_bytes());
+        buff.extend_from_slice(&self.row_id.to_le_bytes());
+        buff.push(self.operation as u8);
+        buff.extend_from_slice(&self.timestamp.to_le_bytes());
+        buff.extend_from_slice(&(self.data.len() as u32).to_le_bytes());
+        buff.extend_from_slice(&self.data);
+
+        // -- hash
+        let hash = fnv1a(&buff[WAL_HEADER_SIZE as usize..]);
+        buff.extend_from_slice(&hash.to_le_bytes());
+
+        buff
+    }
+
     #[inline]
     pub fn operate(txn_id: i64, operation: WalOperation, flags: WalFlags) -> Self {
         Self::with_flags(String::new(), txn_id, 0, operation, Vec::new(), flags)

@@ -51,7 +51,7 @@ fn serialise_snapshot_header(path: &Path, lsn: u64) -> Result<(), MvccError> {
 
     buff.extend_from_slice(&timestamp.to_le_bytes());
 
-    let hash = fnv1a(&buff);
+    let hash = super::fnv1a(&buff);
     buff.extend_from_slice(&hash.to_le_bytes());
 
     let temp = path.with_extension("temp");
@@ -93,32 +93,11 @@ fn deserialise_snapshot_header(path: &Path) -> u64 {
     }
 
     let hash = u32::from_le_bytes(data[24..28].try_into().unwrap());
-    let computed_hash = fnv1a(&data[0..24]);
+    let computed_hash = super::fnv1a(&data[0..24]);
     if hash != computed_hash {
         eprintln!("Snapshot header checksum does not match");
         return 0;
     }
 
     u64::from_le_bytes(data[8..16].try_into().unwrap())
-}
-
-#[inline(always)]
-/// Basic hashing function, used for simplicity.
-/// We could probably make it faster using `crc32` or `crc32c`, but that's a much more complex
-/// algorithm.
-/// That can be done in the future thou :D
-///
-/// For the interesed ones: [https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function].
-const fn fnv1a(bytes: &[u8]) -> u32 {
-    let mut hash = 0x811c9dc5u32;
-    let mut idx = 0;
-
-    while idx < bytes.len() {
-        hash ^= bytes[idx] as u32;
-        hash = hash.wrapping_mul(0x01000193);
-
-        idx += 1;
-    }
-
-    hash
 }

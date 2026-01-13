@@ -17,3 +17,5 @@ const CHECKPOINT_MAGIC: u32 = 0x6865726D;
 
 /// As primeagen says, it's good to track the version of your binaries.
 const WAL_BINARY_VERSION: u8 = 1;
+
+const WAL_HEADER_SIZE: u16 = 1 << 5;
