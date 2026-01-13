@@ -1,3 +1,5 @@
+mod entry;
+
 /// WAL entry magic marker.
 const WAL_MAGIC: u32 = 0x6D6E656D;
 
