@@ -292,4 +292,3 @@ impl From<WalFlags> for u8 {
         value.0
     }
 }
-
