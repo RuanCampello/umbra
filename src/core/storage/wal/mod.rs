@@ -1,6 +1,6 @@
 mod entry;
 
-/// WAL entry magic marker.
+/// WAL entry magic marker: "mnem"
 const WAL_MAGIC: u32 = 0x6D6E656D;
 
 /// Maximum WAL file size before rotating: 64MB, 2^26 bytes
