@@ -1,4 +1,15 @@
+use std::fmt::Display;
+
 mod entry;
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum WalError {
+    InvalidSize(usize),
+    Name(String),
+    Checksum,
+    UnexpectedEnd,
+    InvalidOperation(u8),
+}
 
 /// WAL entry magic marker: "mnem"
 const WAL_MAGIC: u32 = 0x6D6E656D;
@@ -19,3 +30,17 @@ const CHECKPOINT_MAGIC: u32 = 0x6865726D;
 const WAL_BINARY_VERSION: u8 = 1;
 
 const WAL_HEADER_SIZE: u16 = 1 << 5;
+
+impl Display for WalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Name(name) => write!(f, "Invalid table name: {name}"),
+            Self::InvalidSize(size) => write!(f, "Data size is incompatible: {size}"),
+            Self::InvalidOperation(operation) => {
+                write!(f, "Invalid operation type for entry: {operation}")
+            }
+            Self::Checksum => f.write_str("Checksum mismatch"),
+            Self::UnexpectedEnd => f.write_str("Unexpected end of data on reading"),
+        }
+    }
+}

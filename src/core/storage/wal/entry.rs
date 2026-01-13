@@ -1,3 +1,5 @@
+use crate::core::storage::wal::WalError;
+
 /// Write-Ahead Logging entry format (V1, 32 bytes)
 ///
 /// ┌───────────────────────────────────────────────────────────┐
@@ -140,6 +142,69 @@ impl WalEntry {
         buff
     }
 
+    #[inline(always)]
+    pub fn decode(
+        lsn: u64,
+        previous_lsn: u64,
+        flags: WalFlags,
+        data: &[u8],
+    ) -> Result<Self, WalError> {
+        use crate::core::storage::mvcc::fnv1a;
+
+        if data.len() < 35 {
+            return Err(WalError::InvalidSize(data.len()));
+        };
+
+        let offset = data.len() - 4;
+        let from = u32::from_le_bytes(data[offset..].try_into().expect("Binary format mismatch"));
+        let expected = fnv1a(&data[..offset]);
+
+        if from != expected {
+            return Err(WalError::Checksum);
+        }
+
+        let data = &data[..offset];
+        let mut cursor = 0;
+
+        let mut read_bytes = |n: usize| -> Result<&[u8], WalError> {
+            if cursor + n > data.len() {
+                return Err(WalError::UnexpectedEnd);
+            }
+            let slice = &data[cursor..cursor + n];
+            cursor += n;
+            Ok(slice)
+        };
+
+        let txn_id = i64::from_le_bytes(read_bytes(8)?.try_into().unwrap());
+
+        let table_len = u16::from_le_bytes(read_bytes(2)?.try_into().unwrap()) as usize;
+        let table_name = String::from_utf8(read_bytes(table_len)?.to_vec())
+            .map_err(|e| WalError::Name(e.to_string()))?;
+
+        let row_id = i64::from_le_bytes(read_bytes(8)?.try_into().unwrap());
+
+        let code = read_bytes(1)?[0];
+        let operation =
+            WalOperation::try_from(code).map_err(|_| WalError::InvalidOperation(code))?;
+
+        let timestamp = i64::from_le_bytes(read_bytes(8)?.try_into().unwrap());
+
+        let content_len = u32::from_le_bytes(read_bytes(4)?.try_into().unwrap()) as usize;
+        let content = data[cursor..cursor + content_len].to_vec();
+
+        Ok(Self {
+            table: table_name,
+            data: content,
+            lsn,
+            previous_lsn,
+            flags,
+            txn_id,
+            row_id,
+            operation,
+            timestamp,
+        })
+    }
+
     #[inline]
     pub fn operate(txn_id: i64, operation: WalOperation, flags: WalFlags) -> Self {
         Self::with_flags(String::new(), txn_id, 0, operation, Vec::new(), flags)
@@ -153,6 +218,27 @@ impl WalEntry {
     #[inline]
     pub fn rollback(txn_id: i64) -> Self {
         Self::operate(txn_id, WalOperation::Rollback, WalFlags::ABORT)
+    }
+}
+
+impl TryFrom<u8> for WalOperation {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Some(match value {
+            1 => Self::Insert,
+            2 => Self::Update,
+            3 => Self::Delete,
+            4 => Self::Commit,
+            5 => Self::Rollback,
+            6 => Self::CreateTable,
+            7 => Self::DropTable,
+            8 => Self::AlterTable,
+            9 => Self::CreateIndex,
+            10 => Self::DropIndex,
+            _ => return Err(()),
+        })
+        .ok_or(())
     }
 }
 
@@ -206,3 +292,4 @@ impl From<WalFlags> for u8 {
         value.0
     }
 }
+
