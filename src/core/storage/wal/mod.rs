@@ -54,12 +54,12 @@ pub(crate) struct Wal {
 
 #[derive(Debug)]
 pub(crate) struct Config {
-    enabled: bool,
-    sync: Sync,
+    pub(super) enabled: bool,
+    pub(super) sync: Sync,
     /// Time interval between snapshots in seconds
-    interval: u32,
+    pub(super) interval: u32,
     /// Number of snapshots to be kept
-    snapshots: u32,
+    pub(super) snapshots: u32,
 
     flush_trigger: usize,
     buffer_size: usize,
@@ -112,15 +112,18 @@ const WAL_BINARY_VERSION: u8 = 1;
 
 const WAL_HEADER_SIZE: u16 = 1 << 5;
 
+pub(in crate::core::storage) const SNAPSHOT_INTERVAL: usize = 300;
+pub(in crate::core::storage) const SNAPSHOT_COUNT: usize = 5;
+
 impl Wal {
     pub fn new(path: impl AsRef<Path>, sync: Sync) -> Result<Self, WalError> {
-        Self::with_config(path, sync, Config::default())
+        Self::with_config(path, sync, &Config::default())
     }
 
     pub fn with_config(
         path: impl AsRef<Path>,
         sync: Sync,
-        config: Config,
+        config: &Config,
     ) -> Result<Self, WalError> {
         let path = path.as_ref().to_path_buf();
         fs::create_dir_all(&path)?;
@@ -392,6 +395,10 @@ impl Wal {
 
         Ok(())
     }
+
+    pub fn lsn(&self) -> u64 {
+        self.lsn.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for Wal {
@@ -415,8 +422,8 @@ impl Default for Config {
         Self {
             enabled: true,
             sync: Sync::Default,
-            interval: 300,
-            snapshots: 5,
+            interval: SNAPSHOT_INTERVAL as u32,
+            snapshots: SNAPSHOT_COUNT as u32,
             flush_trigger: WAL_FLUSH_SIZE,
             buffer_size: WAL_SIZE,
             max_size: WAL_MAX_SIZE,
