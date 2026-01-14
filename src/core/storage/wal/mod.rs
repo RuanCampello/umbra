@@ -262,6 +262,16 @@ impl Wal {
         Ok(entry.lsn)
     }
 
+    pub fn write_commit(&self, txn_id: i64) -> Result<u64, WalError> {
+        let entry = WalEntry::commit(txn_id);
+        self.append(entry)
+    }
+
+    pub fn write_abort(&self, txn_id: i64) -> Result<u64, WalError> {
+        let entry = WalEntry::rollback(txn_id);
+        self.append(entry)
+    }
+
     pub fn must_sync(&self, operation: WalOperation) -> bool {
         match self.sync {
             Sync::Strict => true,
