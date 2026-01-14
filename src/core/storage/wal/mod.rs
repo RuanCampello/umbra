@@ -119,6 +119,8 @@ impl Wal {
         let path = path.as_ref().to_path_buf();
         fs::create_dir_all(&path)?;
 
+        Self::recover_from_truncation(&path)?;
+
         let mut active_file: Option<File> = None;
         let mut initial_lsn: u64 = 0;
         let mut segment_id: u64 = 0;
@@ -208,6 +210,57 @@ impl Wal {
             sequence: AtomicU64::new(segment_id),
             in_flight_writes: AtomicU64::new(0),
         })
+    }
+
+    fn recover_from_truncation(dir: &Path) -> Result<(), WalError> {
+        if !dir.exists() {
+            return Ok(());
+        }
+
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => return Ok(()),
+        };
+
+        let mut backup = Vec::new();
+        let mut temp = Vec::new();
+        let mut wal = Vec::new();
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path();
+
+            match name {
+                name if name.starts_with("wal-") && name.ends_with(".log") => wal.push(name),
+                name if name.starts_with("wal-") && name.ends_with(".tmp") => temp.push(path),
+                _ => backup.push((name, entry.path())),
+            }
+        }
+
+        for temp in temp {
+            eprintln!("Removing incomplete WAL file: {temp:?}");
+            let _ = fs::remove_file(&temp);
+        }
+
+        for (backup, path) in backup {
+            let name = backup.trim_end_matches(".bak");
+            let is_valid_wal = wal.iter().any(|wal| !wal.is_empty());
+
+            match is_valid_wal {
+                true => {
+                    let restore_path = dir.join(name);
+                    eprintln!("Recovering WAL from backup: {path:?} -> {restore_path:?}");
+                    fs::rename(&path, &restore_path)?;
+                    eprintln!("WAL backup recovery successful");
+                }
+                false => {
+                    eprintln!("Cleaning up WAL backup: {path:?}");
+                    fs::remove_file(&path)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
