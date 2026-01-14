@@ -34,12 +34,12 @@ use crate::core::storage::wal::WalError;
 pub(crate) struct WalEntry {
     table: String,
     /// Log Sequence Number
-    lsn: u64,
-    previous_lsn: u64,
+    pub(super) lsn: u64,
+    pub(super) previous_lsn: u64,
     flags: WalFlags,
     txn_id: i64,
     row_id: i64,
-    operation: WalOperation,
+    pub(super) operation: WalOperation,
     data: Vec<u8>,
     timestamp: i64,
 }
@@ -218,6 +218,26 @@ impl WalEntry {
     #[inline]
     pub fn rollback(txn_id: i64) -> Self {
         Self::operate(txn_id, WalOperation::Rollback, WalFlags::ABORT)
+    }
+}
+
+impl WalOperation {
+    pub const fn end_transaction(&self) -> bool {
+        matches!(self, WalOperation::Commit | WalOperation::Rollback)
+    }
+
+    pub const fn changes_properties(&self) -> bool {
+        matches!(
+            self,
+            WalOperation::Insert
+                | WalOperation::Update
+                | WalOperation::Delete
+                | WalOperation::CreateTable
+                | WalOperation::DropTable
+                | WalOperation::AlterTable
+                | WalOperation::CreateIndex
+                | WalOperation::DropIndex
+        )
     }
 }
 

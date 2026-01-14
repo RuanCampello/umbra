@@ -17,6 +17,8 @@ mod entry;
 use checkpoint::CheckpointMetadata;
 use entry::WalEntry;
 
+use crate::core::storage::wal::entry::WalOperation;
+
 /// Write-ahead loding
 #[derive(Debug)]
 pub(crate) struct Wal {
@@ -47,13 +49,14 @@ pub(crate) struct Wal {
     sequence: AtomicU64,
     /// Number of in-flight writes
     in_flight_writes: AtomicU64,
+    sync: Sync,
 }
 
 #[derive(Debug)]
 pub(crate) struct Config {
     enabled: bool,
     sync: Sync,
-    /// Time interval between in seconds
+    /// Time interval between snapshots in seconds
     interval: u32,
     /// Number of snapshots to be kept
     snapshots: u32,
@@ -89,6 +92,7 @@ pub enum WalError {
     WrongMagic { from: String },
     NotRunning,
     Closed,
+    LsnOverflow,
 }
 
 /// WAL entry magic marker: "mnem"
@@ -109,8 +113,8 @@ const WAL_BINARY_VERSION: u8 = 1;
 const WAL_HEADER_SIZE: u16 = 1 << 5;
 
 impl Wal {
-    pub fn new(path: impl AsRef<Path>, sync: Sync) -> Self {
-        todo!()
+    pub fn new(path: impl AsRef<Path>, sync: Sync) -> Result<Self, WalError> {
+        Self::with_config(path, sync, Config::default())
     }
 
     pub fn with_config(
@@ -211,7 +215,59 @@ impl Wal {
             file_position: AtomicU64::new(initial_file_position),
             sequence: AtomicU64::new(segment_id),
             in_flight_writes: AtomicU64::new(0),
+            sync,
         })
+    }
+
+    pub fn append(&self, mut entry: WalEntry) -> Result<u64, WalError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(WalError::Closed);
+        }
+
+        let previous_lsn = self.previous_lsn.load(Ordering::Acquire);
+        entry.previous_lsn = previous_lsn;
+
+        let current = self.lsn.load(Ordering::Acquire);
+        if current == u64::MAX {
+            return Err(WalError::LsnOverflow);
+        }
+        entry.lsn = self.lsn.fetch_add(1, Ordering::SeqCst) + 1;
+        self.previous_lsn.store(entry.lsn, Ordering::SeqCst);
+
+        let encoded = entry.encode();
+
+        let mut buff = self.buffer.lock().unwrap();
+        buff.extend_from_slice(&encoded);
+
+        let needs_flush = buff.len() >= self.flush_trigger as usize;
+
+        if needs_flush || self.must_sync(entry.operation) {
+            let mut buffer = std::mem::take(&mut *buff);
+            self.in_flight_writes.fetch_add(1, Ordering::SeqCst);
+            drop(buff);
+
+            let result = self.write(&buffer);
+            self.in_flight_writes.fetch_sub(1, Ordering::SeqCst);
+            result?;
+
+            self.file_position
+                .fetch_add(buffer.len() as u64, Ordering::SeqCst);
+
+            if self.must_sync(entry.operation) {
+                self.sync_with_lock()?;
+            }
+        }
+
+        let _ = encoded.len();
+        Ok(entry.lsn)
+    }
+
+    pub fn must_sync(&self, operation: WalOperation) -> bool {
+        match self.sync {
+            Sync::Strict => true,
+            Sync::Default if operation.end_transaction() || operation.changes_properties() => true,
+            _ => false,
+        }
     }
 
     pub fn write(&self, buffer: &[u8]) -> Result<(), WalError> {
@@ -344,6 +400,22 @@ impl From<u8> for Sync {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sync: Sync::Default,
+            interval: 300,
+            snapshots: 5,
+            flush_trigger: WAL_FLUSH_SIZE,
+            buffer_size: WAL_SIZE,
+            max_size: WAL_MAX_SIZE,
+            batch_size: 100,
+            sync_interval: 10,
+        }
+    }
+}
+
 impl Display for WalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -357,6 +429,9 @@ impl Display for WalError {
             Self::WrongMagic { from } => write!(f, "Invalid magic number for: {from}"),
             Self::Checksum => f.write_str("Checksum mismatch"),
             Self::UnexpectedEnd => f.write_str("Unexpected end of data on reading"),
+            Self::LsnOverflow => {
+                f.write_str("WAL LSN overflow: maximum sequence of number reached")
+            }
             Self::Io(io) => f.write_str(&io.to_string()),
         }
     }
