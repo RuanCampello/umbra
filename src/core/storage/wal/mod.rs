@@ -3,7 +3,7 @@
 use std::{
     fmt::Display,
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -87,6 +87,8 @@ pub enum WalError {
     InvalidOperation(u8),
     Io(std::io::Error),
     WrongMagic { from: String },
+    NotRunning,
+    Closed,
 }
 
 /// WAL entry magic marker: "mnem"
@@ -212,6 +214,30 @@ impl Wal {
         })
     }
 
+    pub fn write(&self, buffer: &[u8]) -> Result<(), WalError> {
+        if buffer.is_empty() {
+            return Ok(());
+        }
+
+        let mut file = self.active_segment.lock().unwrap();
+        match file.as_mut() {
+            Some(file) => file.write_all(buffer)?,
+            None => return Err(WalError::Closed),
+        }
+
+        Ok(())
+    }
+
+    fn sync_with_lock(&self) -> Result<(), WalError> {
+        let mut file = self.active_segment.lock().unwrap();
+        match file.as_mut() {
+            Some(file) => file.sync_data()?,
+            None => return Err(WalError::Closed),
+        }
+
+        Ok(())
+    }
+
     fn recover_from_truncation(dir: &Path) -> Result<(), WalError> {
         if !dir.exists() {
             return Ok(());
@@ -262,6 +288,50 @@ impl Wal {
 
         Ok(())
     }
+
+    pub fn flush(&self) -> Result<(), WalError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(WalError::NotRunning);
+        }
+
+        let buffer = {
+            let mut buffer = self.buffer.lock().unwrap();
+            if buffer.is_empty() {
+                return Ok(());
+            }
+
+            // increment in-flight writes before releasing the lock
+            let data = std::mem::take(&mut *buffer);
+            self.in_flight_writes.fetch_add(1, Ordering::SeqCst);
+            data
+        };
+
+        let result = self.write(&buffer);
+        self.in_flight_writes.fetch_sub(1, Ordering::SeqCst);
+        result
+    }
+
+    pub fn close(&self) -> Result<(), WalError> {
+        if !self.running.load(Ordering::SeqCst) {
+            return Err(WalError::NotRunning);
+        }
+
+        self.flush()?;
+        self.sync_with_lock()?;
+
+        self.running.store(false, Ordering::SeqCst);
+
+        let mut file = self.active_segment.lock().unwrap();
+        *file = None;
+
+        Ok(())
+    }
+}
+
+impl Drop for Wal {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
 }
 
 impl From<u8> for Sync {
@@ -282,6 +352,8 @@ impl Display for WalError {
             Self::InvalidOperation(operation) => {
                 write!(f, "Invalid operation type for entry: {operation}")
             }
+            Self::NotRunning => f.write_str("WAL is not running"),
+            Self::Closed => f.write_str("WAL is closed"),
             Self::WrongMagic { from } => write!(f, "Invalid magic number for: {from}"),
             Self::Checksum => f.write_str("Checksum mismatch"),
             Self::UnexpectedEnd => f.write_str("Unexpected end of data on reading"),
