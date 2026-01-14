@@ -1,5 +1,9 @@
 use crate::core::storage::{mvcc::fnv1a, wal::WalError};
-use std::{fs, path::Path};
+use std::{
+    fs::{self, File},
+    io::Write,
+    path::Path,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct CheckpointMetadata {
@@ -191,6 +195,70 @@ impl CheckpointMetadata {
             active_transactions,
             committed_transactions,
         })
+    }
+
+    fn encode(&self, path: &Path) -> Result<(), WalError> {
+        let mut buff = Vec::with_capacity(32);
+        let mut sections = Vec::with_capacity(32);
+
+        let mut content = Vec::with_capacity(16);
+        content.push(if self.is_consistent { 1 } else { 0 });
+        content.extend_from_slice(&self.wal_segment_sequence.to_le_bytes());
+        sections.push((CheckpointSectionKind::Info as u16, content));
+
+        let mut content = Vec::with_capacity(16);
+        content.extend_from_slice(&(self.active_transactions.len() as u64).to_le_bytes());
+        self.active_transactions
+            .iter()
+            .for_each(|txn_id| content.extend_from_slice(&txn_id.to_le_bytes()));
+        sections.push((CheckpointSectionKind::Active as u16, content));
+
+        if !self.committed_transactions.is_empty() {
+            let mut content = Vec::with_capacity(16);
+
+            content.extend_from_slice(&(self.committed_transactions.len() as u64).to_le_bytes());
+            self.committed_transactions.iter().for_each(|info| {
+                content.extend_from_slice(&info.txn_id.to_le_bytes());
+                content.extend_from_slice(&info.commit_lsn.to_le_bytes());
+            });
+            sections.push((CheckpointSectionKind::Commited as u16, content));
+        }
+
+        buff.extend_from_slice(&CHECKPOINT_MAGIC.to_le_bytes());
+        buff.push(CHECKPOINT_BINARY_VERSION);
+        buff.push(0);
+        buff.extend_from_slice(&CHECKPOINT_HEADER_SIZE.to_le_bytes());
+        buff.extend_from_slice(&self.lsn.to_le_bytes());
+        buff.extend_from_slice(&self.timestamp.to_le_bytes());
+        buff.extend_from_slice(&(sections.len() as u16).to_le_bytes());
+        buff.extend_from_slice(&[0u8; 6]);
+
+        for (kind, content) in &sections {
+            buff.extend_from_slice(&kind.to_le_bytes());
+            buff.extend_from_slice(&0u16.to_le_bytes());
+            buff.extend_from_slice(&(content.len() as u32).to_le_bytes());
+        }
+
+        #[rustfmt::skip]
+        sections.iter().for_each(|(_, content)| buff.extend_from_slice(content));
+
+        let hash = fnv1a(&buff);
+        buff.extend_from_slice(&hash.to_le_bytes());
+
+        let temp = path.with_extension("meta.tmp");
+        let mut file = File::create(&temp)?;
+
+        file.write_all(&buff)?;
+        file.sync_all()?;
+        fs::rename(&temp, path)?;
+
+        path.parent()
+            .and_then(|dir| File::open(dir).ok())
+            .inspect(|file| {
+                let _ = file.sync_all();
+            });
+
+        Ok(())
     }
 }
 
