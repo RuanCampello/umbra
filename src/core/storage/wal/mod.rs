@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::{
     fmt::Display,
     fs::{self, File},
@@ -69,6 +71,7 @@ pub enum WalError {
     UnexpectedEnd,
     InvalidOperation(u8),
     Io(std::io::Error),
+    WrongMagic { from: String },
 }
 
 /// WAL entry magic marker: "mnem"
@@ -128,6 +131,7 @@ impl Display for WalError {
             Self::InvalidOperation(operation) => {
                 write!(f, "Invalid operation type for entry: {operation}")
             }
+            Self::WrongMagic { from } => write!(f, "Invalid magic number for: {from}"),
             Self::Checksum => f.write_str("Checksum mismatch"),
             Self::UnexpectedEnd => f.write_str("Unexpected end of data on reading"),
             Self::Io(io) => f.write_str(&io.to_string()),
