@@ -117,24 +117,11 @@ impl CheckpointMetadata {
                     let mut section_c = cursor + 1;
 
                     // current wal name
-                    if section_c + 2 <= end {
-                        let len = u16::from_le_bytes(
-                            content[section_c..section_c + 2].try_into().unwrap(),
-                        ) as usize;
-                        section_c += 2;
-
-                        if section_c + len <= end {
-                            let name = &content[section_c..section_c + len];
-                            let name = String::from_utf8_lossy(name);
-
-                            let wal_segment_sequence = name
-                                .strip_prefix("wal-")
-                                .and_then(|n| n.strip_suffix(".log"))
-                                .and_then(|n| n.parse::<u64>().ok())
-                                .expect("Format for wal segment sequence must be valid");
-
-                            section_c += len;
-                        }
+                    if section_c + 8 <= end {
+                        wal_segment_sequence = u64::from_le_bytes(
+                            content[section_c..section_c + 8].try_into().unwrap(),
+                        );
+                        wal_segment_sequence += 8;
                     }
                 }
 
