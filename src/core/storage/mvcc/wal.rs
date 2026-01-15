@@ -129,6 +129,7 @@ impl WalManager {
         }
 
         let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
+        // TODO: serialise tuple version
 
         Ok(())
     }
@@ -136,12 +137,5 @@ impl WalManager {
     #[inline]
     fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Acquire)
-    }
-}
-
-impl Value {
-    #[inline(always)]
-    fn serialise(&self) -> Result<Vec<u8>> {
-        todo!()
     }
 }

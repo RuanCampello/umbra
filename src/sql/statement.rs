@@ -883,6 +883,50 @@ impl Value {
             _ => false,
         }
     }
+
+    #[inline(always)]
+    const fn tag(&self) -> u8 {
+        match self {
+            Value::Null => 0,
+            Value::Boolean(_) => 1,
+            Value::Number(_) => 2,
+            Value::Float(_) => 3,
+            Value::String(_) => 4,
+            Value::Temporal(_) => 5,
+            Value::Uuid(_) => 6,
+            Value::Interval(_) => 7,
+            Value::Numeric(_) => 8,
+            Value::Enum(_) => 9,
+            Value::Blob(_) => 10,
+        }
+    }
+
+    /// Serialise a Value to binary format.
+    #[inline(always)]
+    pub fn serialise(&self) -> std::io::Result<Vec<u8>> {
+        todo!()
+    }
+
+    #[inline(always)]
+    pub fn deserialise(data: &[u8]) -> std::io::Result<Self> {
+        if data.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Empty data",
+            ));
+        }
+
+        let missing_value = |value: &str| -> std::io::Result<Value> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Missing {value} value"),
+            ))
+        };
+
+        let tag = data[0];
+        let content = &data[1..];
+        todo!()
+    }
 }
 
 impl Coerce for Value {
