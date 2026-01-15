@@ -4,19 +4,13 @@
 
 use super::Keyword;
 use crate::core::date::interval::Interval;
-use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
-use crate::core::json::Jsonb;
-use crate::core::numeric::Numeric;
-use crate::core::uuid::Uuid;
 use crate::db::{IndexMetadata, TableMetadata};
 use crate::index;
-use crate::vm::expression::{TypeError, VmType};
+use crate::vm::expression::VmType;
 use std::borrow::{Borrow, Cow};
-use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
 use std::ops::Neg;
-use std::str::FromStr;
 
 /// SQL statements.
 #[derive(Debug, PartialEq)]
@@ -200,66 +194,8 @@ pub enum JoinType {
     Full,
 }
 
-/// Date/Time related types.
-///
-/// This enum wraps actual values of date/time types, such as a specific calendar date or a time of day.
-/// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level.
-///
-/// Values of this type are stored in the `Value::Temporal` variant.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-pub enum Temporal {
-    Date(NaiveDate),
-    DateTime(NaiveDateTime),
-    Time(NaiveTime),
-}
-
-/// A runtime value stored in a table row or returned in a query.
-///
-/// This enum represents a *concrete value* associated with a column,
-/// typically used in query results, expression evaluation, and row serialization.
-///
-/// For example:
-/// - A row with a `VARCHAR` column might store `Value::String("hello".to_string())`.
-/// - A `DATE` column would store `Value::Temporal(Temporal::Date(...))`.
-///
-/// `Value` is the counterpart to `Type`:  
-/// - `Type` defines what *kind* of value is allowed.  
-/// - `Value` holds the *actual* data.
-///
-/// This separation allows the system to validate values against schema definitions at runtime.
-///
-/// ## Equality semantics
-///
-/// `Value` implements [`PartialEq`] for deep equality:
-/// - Two values are equal only if they are the same variant and hold exactly equal contents.
-///   For example, `Value::Number(5) == Value::Number(5)` is true,  
-///   but `Value::Number(5) == Value::Float(5.0)` is also true, because they can be coerced
-///   losslessly from integer to float.
-///
-/// This enable coercing comparisons (e.g., treating `Number` and `Float` as “same kind”)
-/// during query planning.
-///
-/// ```rust
-/// use umbra::sql::statement::Value;
-///
-/// assert_eq!(Value::Number(5), Value::Number(5));
-/// assert_ne!(Value::Number(5), Value::Float(5.1));
-/// assert!(Value::Number(5).eq(&Value::Float(5.0))); // both numeric kinds and lossless coercible
-/// ```
-#[derive(Debug, Clone)]
-pub enum Value {
-    String(String),
-    Number(i128),
-    Float(f64),
-    Boolean(bool),
-    Temporal(Temporal),
-    Uuid(Uuid),
-    Interval(Interval),
-    Numeric(Numeric),
-    Enum(u8),
-    Blob(Vec<u8>),
-    Null,
-}
+// Re-export Value and Temporal from the value module
+pub use super::value::{Coerce, Temporal, Value};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Constraint {
@@ -397,52 +333,7 @@ pub enum Function {
     UuidV4,
 }
 
-const NULL_HASH: u32 = 0x4E554C4C;
 pub const NUMERIC_ANY: usize = usize::MAX;
-
-pub trait Coerce: Sized {
-    fn coerce_to(self, other: Self) -> (Self, Self);
-}
-
-macro_rules! impl_value_op {
-    ($trait:ty, $method:ident, $op:tt) => {
-        impl $trait for &Value {
-            type Output = Option<Value>;
-            fn $method(self, rhs: Self) -> Self::Output {
-                match (self, rhs) {
-                    // float arithmetic
-                    (Value::Float(a), Value::Float(b)) => Some(Value::Float(*a $op *b)),
-                    (Value::Number(a), Value::Float(b)) => Some(Value::Float(*a as f64 $op *b)),
-                    (Value::Float(a), Value::Number(b)) => Some(Value::Float(*a $op *b as f64)),
-                    (Value::Number(a), Value::Number(b)) => {
-                        let result = *a as f64 $op *b as f64;
-                        match result.fract() == 0.0 {
-                            true => Some(Value::Number(result as i128)),
-                            _ => Some(Value::Float(result))
-                        }
-                    }
-
-                    // arbitrary precision numeric
-                    (Value::Numeric(a), Value::Numeric(b)) => Some(Value::Numeric(a $op b)),
-                    (Value::Numeric(a), Value::Number(b)) => {
-                        Some(Value::Numeric(a $op &Numeric::from(*b)))
-                    }
-                    (Value::Number(a), Value::Numeric(b)) => {
-                        Some(Value::Numeric(&Numeric::from(*a) $op b))
-                    }
-                    (Value::Numeric(a), Value::Float(b)) => {
-                        Numeric::try_from(*b).ok().map(|nb| Value::Numeric(a $op &nb))
-                    }
-                    (Value::Float(a), Value::Numeric(b)) => {
-                        Numeric::try_from(*a).ok().map(|na| Value::Numeric(&na $op b))
-                    }
-
-                    _ => None,
-                }
-            }
-        }
-    };
-}
 
 impl Column {
     pub fn new(name: &str, data_type: Type) -> Self {
@@ -860,255 +751,6 @@ impl JoinClause {
     }
 }
 
-impl Value {
-    pub(crate) const fn is_null(&self) -> bool {
-        matches!(self, Value::Null)
-    }
-
-    pub const fn is_zero(&self) -> bool {
-        match self {
-            Value::Number(n) if *n == 0 => true,
-            Value::Float(f) if *f == 0.0 => true,
-            Value::Numeric(n) if n.is_zero() => true,
-            _ => false,
-        }
-    }
-
-    pub const fn is_compatible(&self, other: &Self) -> bool {
-        use self::Value::*;
-
-        match (self, other) {
-            (Float(_) | Number(_) | Numeric(_), Float(_) | Number(_) | Numeric(_)) => true,
-            (Temporal(_), Interval(_)) | (Interval(_), Temporal(_)) => true,
-            _ => false,
-        }
-    }
-
-    #[inline(always)]
-    const fn tag(&self) -> u8 {
-        match self {
-            Value::Null => 0,
-            Value::Boolean(_) => 1,
-            Value::Number(_) => 2,
-            Value::Float(_) => 3,
-            Value::String(_) => 4,
-            Value::Temporal(_) => 5,
-            Value::Uuid(_) => 6,
-            Value::Interval(_) => 7,
-            Value::Numeric(_) => 8,
-            Value::Enum(_) => 9,
-            Value::Blob(_) => 10,
-        }
-    }
-
-    /// Serialise a Value to binary format.
-    #[inline(always)]
-    pub fn serialise(&self) -> std::io::Result<Vec<u8>> {
-        todo!()
-    }
-
-    #[inline(always)]
-    pub fn deserialise(data: &[u8]) -> std::io::Result<Self> {
-        if data.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Empty data",
-            ));
-        }
-
-        let missing_value = |value: &str| -> std::io::Result<Value> {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Missing {value} value"),
-            ))
-        };
-
-        let tag = data[0];
-        let content = &data[1..];
-        todo!()
-    }
-}
-
-impl Coerce for Value {
-    fn coerce_to(self, other: Self) -> (Self, Self) {
-        match (&self, &other) {
-            // Numeric coercion: Integer <-> Float
-            (Value::Float(f), Value::Number(n)) => (Value::Float(*f), Value::Float(*n as f64)),
-            (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
-
-            // String -> Temporal coercion
-            (Value::String(string), Value::Temporal(_)) => {
-                match Temporal::try_from(string.as_str()) {
-                    Ok(parsed) => (Value::Temporal(parsed), other),
-                    _ => (self, other),
-                }
-            }
-            (Value::Temporal(from), Value::String(string)) => {
-                use std::mem::discriminant;
-
-                match Temporal::try_from(string.as_str()) {
-                    Ok(parsed) => match discriminant(from) == discriminant(&parsed) {
-                        true => (self, Value::Temporal(parsed)),
-
-                        _ => {
-                            let (left, right) = from.coerce_to(parsed);
-                            (Value::Temporal(left), Value::Temporal(right))
-                        }
-                    },
-                    _ => (self, other),
-                }
-            }
-
-            // String <-> UUID coercion
-            (Value::Uuid(_), Value::String(s)) => match Uuid::from_str(s) {
-                Ok(parsed) => (self, Value::Uuid(parsed)),
-                _ => (self, other),
-            },
-            (Value::String(s), Value::Uuid(_)) => match Uuid::from_str(s) {
-                Ok(parsed) => (Value::Uuid(parsed), other),
-                _ => (self, other),
-            },
-
-            // No coercion needed or not possible
-            _ => (self, other),
-        }
-    }
-}
-
-impl Coerce for Temporal {
-    fn coerce_to(self, other: Self) -> (Self, Self) {
-        match (self, other) {
-            (Self::Time(_), Self::DateTime(timestamp)) => (self, Self::Time(timestamp.into())),
-            (Self::DateTime(timestamp), Self::Time(_)) => (Self::Time(timestamp.into()), other),
-            (Self::Date(_), Self::DateTime(timestamp)) => (self, Self::Date(timestamp.into())),
-            (Self::DateTime(timestamp), Self::Date(_)) => (Self::Date(timestamp.into()), other),
-            _ => (self, other),
-        }
-    }
-}
-
-impl_value_op!(std::ops::Add, add, +);
-impl_value_op!(std::ops::Sub, sub, -);
-impl_value_op!(std::ops::Mul, mul, *);
-impl_value_op!(std::ops::Div, div, /);
-
-impl PartialEq for Value {
-    fn eq(&self, other: &Self) -> bool {
-        use self::Value::{Numeric as Arbitrary, *};
-        use crate::core::numeric::Numeric;
-
-        match (self, other) {
-            (Number(a), Number(b)) => a == b,
-            (Float(a), Float(b)) => a == b,
-            // we do this because we can coerce them later to do a comparison between floats and
-            // integers
-            (Number(a), Float(b)) => (*a as f64) == *b,
-            (Float(a), Number(b)) => *a == (*b as f64),
-            (Arbitrary(a), Arbitrary(b)) => a == b,
-            (Arbitrary(a), Number(n)) | (Number(n), Arbitrary(a)) => a == &Numeric::from(*n),
-            (Arbitrary(a), Float(f)) | (Float(f), Arbitrary(a)) => {
-                Numeric::try_from(*f).map(|f| &f == a).unwrap_or(false)
-            }
-            (String(a), String(b)) => a == b,
-            (Boolean(a), Boolean(b)) => a == b,
-            (Temporal(a), Temporal(b)) => a == b,
-            (Interval(a), Interval(b)) => a == b,
-            (Uuid(a), Uuid(b)) => a == b,
-            // For grouping and hashing, NULL values should be equal.
-            // SQL semantics (NULL = NULL returns NULL) is handled separetly.
-            (Null, Null) => true,
-            (Null, _) | (_, Null) => false,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for Value {}
-
-impl Ord for Value {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self, other) {
-            (Value::Float(a), Value::Float(b)) => a.total_cmp(b),
-            (Value::Number(a), Value::Number(b)) => a.cmp(b),
-            (Value::String(a), Value::String(b)) => a.cmp(b),
-            (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
-            (Value::Temporal(a), Value::Temporal(b)) => a.cmp(b),
-            (Value::Uuid(a), Value::Uuid(b)) => a.cmp(b),
-            (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
-            (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
-            (Value::Enum(a), Value::Enum(b)) => a.cmp(b),
-            (Value::Blob(a), Value::Blob(b)) => a.cmp(b),
-            (Value::Blob(_), _) => std::cmp::Ordering::Greater,
-            (_, Value::Blob(_)) => std::cmp::Ordering::Less,
-            // For sorting, NULL values are considered equal to each other
-            // and sort after all non-NULL values.
-            (Value::Null, Value::Null) => Ordering::Equal,
-            (Value::Null, _) => Ordering::Greater,
-            (_, Value::Null) => Ordering::Less,
-            _ => panic!("these values are not comparable"),
-        }
-    }
-}
-
-impl PartialOrd for Value {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Hash for Value {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        #[inline(always)]
-        const fn encode_float(f: &f64) -> u64 {
-            // normalize -0.0 and 0.0 to the same bits, and treat all nans the same.
-            let mut bits = f.to_bits();
-            if bits == (-0.0f64).to_bits() {
-                bits = 0.0f64.to_bits();
-            }
-
-            if f.is_nan() {
-                // all nans are hashed as the same.
-                bits = 0x7ff8000000000000u64;
-            } else if bits >> 63 != 0 {
-                // for negatives, flip all bits for total ordering.
-                bits = !bits;
-            }
-
-            bits
-        }
-
-        match self {
-            Self::Float(f) => encode_float(f).hash(state),
-            Self::Null => NULL_HASH.hash(state),
-            Self::String(s) => s.hash(state),
-            Self::Number(n) => n.hash(state),
-            Self::Boolean(b) => b.hash(state),
-            Self::Temporal(t) => t.hash(state),
-            Self::Uuid(u) => u.hash(state),
-            Self::Interval(i) => i.hash(state),
-            Self::Numeric(n) => n.hash(state),
-            Self::Enum(e) => e.hash(state),
-            Self::Blob(b) => b.hash(state),
-        }
-    }
-}
-
-impl Neg for Value {
-    type Output = Result<Self, TypeError>;
-    fn neg(self) -> Self::Output {
-        match self {
-            Value::Number(num) => Ok(Value::Number(-num)),
-            Value::Float(float) => Ok(Value::Float(-float)),
-            Value::Numeric(num) => Ok(Value::Numeric(-num)),
-            Value::Null => Ok(Value::Null),
-            v => Err(TypeError::CannotApplyUnary {
-                operator: UnaryOperator::Minus,
-                value: v,
-            }),
-        }
-    }
-}
-
 impl Neg for Interval {
     type Output = Self;
 
@@ -1260,24 +902,6 @@ impl Display for Type {
                 (precision, 0) => write!(f, "NUMERIC({precision})"),
                 (precision, scale) => write!(f, "NUMERIC({precision}, {scale})"),
             },
-        }
-    }
-}
-
-impl Display for Value {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::String(string) => write!(f, "\"{string}\""),
-            Value::Number(number) => write!(f, "{number}"),
-            Value::Float(float) => write!(f, "{float}"),
-            Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
-            Value::Temporal(temporal) => write!(f, "{temporal}"),
-            Value::Uuid(uuid) => write!(f, "{uuid}"),
-            Value::Interval(interval) => write!(f, "{interval}"),
-            Value::Numeric(numeric) => write!(f, "{numeric}"),
-            Value::Enum(index) => write!(f, "{index}"),
-            Value::Blob(blob) => write!(f, "{}", Jsonb::new(blob.len(), Some(blob))),
-            Value::Null => f.write_str("NULL"),
         }
     }
 }
@@ -1547,16 +1171,6 @@ impl TryFrom<&Keyword> for Function {
     }
 }
 
-impl Display for Temporal {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DateTime(datetime) => Display::fmt(datetime, f),
-            Self::Date(date) => Display::fmt(date, f),
-            Self::Time(time) => Display::fmt(time, f),
-        }
-    }
-}
-
 impl Display for OrderBy {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.direction {
@@ -1586,60 +1200,6 @@ impl Display for JoinType {
     }
 }
 
-impl From<i128> for Value {
-    fn from(value: i128) -> Self {
-        Self::Number(value)
-    }
-}
-
-impl From<f64> for Value {
-    fn from(value: f64) -> Self {
-        Self::Float(value)
-    }
-}
-
-impl From<f32> for Value {
-    fn from(value: f32) -> Self {
-        Self::Float(value as f64)
-    }
-}
-
-impl From<&str> for Value {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_string())
-    }
-}
-
-impl From<Temporal> for Value {
-    fn from(value: Temporal) -> Self {
-        Self::Temporal(value)
-    }
-}
-
-impl From<Interval> for Value {
-    fn from(value: Interval) -> Self {
-        Self::Interval(value)
-    }
-}
-
-impl From<NaiveDate> for Temporal {
-    fn from(value: NaiveDate) -> Self {
-        Self::Date(value)
-    }
-}
-
-impl From<NaiveDateTime> for Temporal {
-    fn from(value: NaiveDateTime) -> Self {
-        Self::DateTime(value)
-    }
-}
-
-impl From<NaiveTime> for Temporal {
-    fn from(value: NaiveTime) -> Self {
-        Self::Time(value)
-    }
-}
-
 impl From<Temporal> for Type {
     fn from(value: Temporal) -> Self {
         match value {
@@ -1647,26 +1207,6 @@ impl From<Temporal> for Type {
             Temporal::Time(_) => Self::Time,
             Temporal::DateTime(_) => Self::DateTime,
         }
-    }
-}
-
-impl TryFrom<&str> for Temporal {
-    type Error = DateParseError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        if let Ok(dt) = NaiveDateTime::parse_str(value) {
-            return Ok(Temporal::DateTime(dt));
-        }
-
-        if let Ok(date) = NaiveDate::parse_str(value) {
-            return Ok(Temporal::Date(date));
-        }
-
-        if let Ok(time) = NaiveTime::parse_str(value) {
-            return Ok(Temporal::Time(time));
-        }
-
-        Err(DateParseError::InvalidDateTime)
     }
 }
 

@@ -1,9 +1,3 @@
-use std::{
-    collections::BTreeMap,
-    fmt::Debug,
-    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
-};
-
 use crate::{
     core::{
         smallvec::SmallVec,
@@ -12,6 +6,11 @@ use crate::{
     },
     db::Schema,
     vm::planner::Tuple,
+};
+use std::{
+    collections::BTreeMap,
+    fmt::Debug,
+    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
 };
 
 pub(crate) struct VersionStorage {
@@ -137,8 +136,10 @@ impl TupleVersion {
     }
 }
 
-impl From<TupleVersion> for Vec<u8> {
-    fn from(value: TupleVersion) -> Self {
+impl TryFrom<TupleVersion> for Vec<u8> {
+    type Error = std::io::Error;
+
+    fn try_from(value: TupleVersion) -> Result<Self, Self::Error> {
         let mut buff = Vec::with_capacity(128);
 
         buff.extend_from_slice(&value.txn_id.to_le_bytes()); // 8
@@ -149,9 +150,19 @@ impl From<TupleVersion> for Vec<u8> {
         let values = value.data;
         buff.extend_from_slice(&(values.len() as u32).to_le_bytes()); // 4
         for value in values {
-            let bytes = todo!();
+            let bytes = value.serialise().expect("value serialisation not to fail");
+            buff.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            buff.extend_from_slice(&bytes);
         }
 
+        Ok(buff)
+    }
+}
+
+impl TryFrom<&[u8]> for TupleVersion {
+    type Error = std::io::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         todo!()
     }
 }

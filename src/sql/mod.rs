@@ -28,6 +28,7 @@ use statement::Statement;
 
 use crate::db::{Ctx, DatabaseError};
 pub use parser::Keyword;
+pub use value::Value;
 
 pub(crate) mod analyzer;
 pub(crate) mod optimiser;
@@ -36,6 +37,7 @@ pub(crate) mod query;
 
 mod prepare;
 pub mod statement;
+pub mod value;
 
 pub(crate) fn pipeline(input: &str, db: &mut impl Ctx) -> Result<Statement, DatabaseError> {
     let statement = Parser::new(input).parse_statement()?;

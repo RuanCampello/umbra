@@ -15,6 +15,8 @@ use std::{
     str::FromStr,
 };
 
+// TODO: we are going to move this logic to the mvcc
+
 trait ValueSerialize {
     fn serialize(&self, buff: &mut Vec<u8>, to: &Type);
 }
@@ -102,7 +104,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
         Value::Boolean(b) => b.serialize(buff, r#type),
         Value::Temporal(t) => t.serialize(buff, r#type),
         Value::Uuid(u) => u.serialize(buff, r#type),
-        Value::Interval(i) => i.serialize(buff, r#type),
+        Value::Interval(i) => ValueSerialize::serialize(i, buff, r#type),
         Value::Numeric(n) => n.serialize(buff),
         Value::Enum(idx) => buff.push(*idx),
         Value::Blob(blob) => match r#type {
@@ -504,9 +506,9 @@ impl ValueSerialize for String {
             Type::Date => NaiveDate::parse_str(self).unwrap().serialize(buff),
             Type::Time => NaiveTime::parse_str(self).unwrap().serialize(buff),
             Type::DateTime => NaiveDateTime::parse_str(self).unwrap().serialize(buff),
-            Type::Interval => Interval::from_str(self)
-                .unwrap()
-                .serialize(buff, &Type::Interval),
+            Type::Interval => {
+                ValueSerialize::serialize(&Interval::from_str(self).unwrap(), buff, &Type::Interval)
+            }
             Type::Uuid => buff.extend_from_slice(Uuid::from_str(self).unwrap().as_ref()),
             Type::Enum(_) => unimplemented!(),
             _ => unreachable!("Unsupported type {to} for String value"),

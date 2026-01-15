@@ -1,14 +1,13 @@
 //! Interval data type implemetation.
 
+use crate::{
+    core::date::{ExtractError, NaiveDate, NaiveDateTime, NaiveTime, SECS_IN_DAY},
+    sql::statement::{Temporal, Type},
+};
 use std::{
     fmt::Display,
     ops::{Add, Sub},
     str::FromStr,
-};
-
-use crate::{
-    core::date::{ExtractError, NaiveDate, NaiveDateTime, NaiveTime, SECS_IN_DAY},
-    sql::statement::{Temporal, Type},
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -70,6 +69,14 @@ impl Interval {
         let secs_in_micro = self.microseconds / MICROSECS_IN_SECS;
 
         secs_in_day + secs_in_month + secs_in_micro
+    }
+}
+
+impl crate::core::Serialize for Interval {
+    fn serialize(&self, buff: &mut Vec<u8>) {
+        buff.extend_from_slice(&self.months.to_le_bytes());
+        buff.extend_from_slice(&self.days.to_le_bytes());
+        buff.extend_from_slice(&self.microseconds.to_le_bytes());
     }
 }
 
