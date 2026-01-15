@@ -116,6 +116,7 @@ impl WalManager {
         Ok(())
     }
 
+    /// Used for `SELECT`, `INSERT`, `DELETE` etc...
     pub fn record_dml(
         &self,
         table: &str,
@@ -129,7 +130,42 @@ impl WalManager {
         }
 
         let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
-        // TODO: serialise tuple version
+        let entry = WalEntry::new(
+            table.to_string(),
+            txn_id,
+            row_id,
+            operation,
+            version.try_into()?,
+        );
+
+        wal.append(entry)?;
+        Ok(())
+    }
+
+    pub fn replay<C>(&self, lsn: u64, callback: C) -> Result<()> {
+        todo!()
+    }
+
+    /// Used for a transactional commit
+    pub fn record_commit(&self, txn_id: i64) -> Result<()> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
+        wal.write_commit(txn_id)?;
+
+        Ok(())
+    }
+
+    /// Used for a transactional rollback
+    pub fn record_rollback(&self, txn_id: i64) -> Result<()> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
+        wal.write_abort(txn_id)?;
 
         Ok(())
     }

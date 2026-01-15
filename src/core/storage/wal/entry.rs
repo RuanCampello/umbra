@@ -37,7 +37,7 @@ pub(crate) struct WalEntry {
     pub(super) lsn: u64,
     pub(super) previous_lsn: u64,
     flags: WalFlags,
-    txn_id: i64,
+    pub(super) txn_id: i64,
     row_id: i64,
     pub(super) operation: WalOperation,
     data: Vec<u8>,
@@ -61,6 +61,9 @@ pub(crate) enum WalOperation {
     CreateIndex,
     DropIndex = 10,
 }
+
+/// Marker for transactions entries after truncation.
+const MARKER_ID: i64 = i64::MIN + 666;
 
 impl WalEntry {
     #[inline]
@@ -136,7 +139,7 @@ impl WalEntry {
         buff.extend_from_slice(&self.data);
 
         // -- hash
-        let hash = fnv1a(&buff[WAL_HEADER_SIZE as usize..]);
+        let hash = fnv1a(&buff[WAL_HEADER_SIZE as _..]);
         buff.extend_from_slice(&hash.to_le_bytes());
 
         buff
@@ -219,6 +222,21 @@ impl WalEntry {
     pub fn rollback(txn_id: i64) -> Self {
         Self::operate(txn_id, WalOperation::Rollback, WalFlags::ABORT)
     }
+
+    #[inline]
+    pub const fn is_marker(&self) -> bool {
+        matches!(self.txn_id, MARKER_ID)
+    }
+
+    #[inline]
+    pub const fn is_abort(&self) -> bool {
+        matches!(self.operation, WalOperation::Rollback) || self.flags.contains(WalFlags::ABORT)
+    }
+
+    #[inline]
+    pub const fn is_commit(&self) -> bool {
+        matches!(self.operation, WalOperation::Commit) || self.flags.contains(WalFlags::COMMIT)
+    }
 }
 
 impl WalOperation {
@@ -284,7 +302,7 @@ impl WalFlags {
     /// Rotation marker.
     pub const ROTATION: WalFlags = WalFlags(1 << 6);
 
-    pub fn contains(&self, other: WalFlags) -> bool {
+    pub const fn contains(&self, other: WalFlags) -> bool {
         (self.0 & other.0) == other.0
     }
 

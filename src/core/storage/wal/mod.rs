@@ -1,6 +1,7 @@
 #![allow(unused)]
 
 use std::{
+    collections::HashMap,
     fmt::Display,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
@@ -17,6 +18,7 @@ mod entry;
 pub(super) use entry::WalEntry;
 pub(super) use entry::WalOperation;
 
+use crate::core::{storage::wal::entry::WalFlags, HashSet};
 use checkpoint::CheckpointMetadata;
 
 /// Write-ahead loding
@@ -81,6 +83,19 @@ pub enum Sync {
     Strict,
 }
 
+/// Information used for two-phase recovery for WAL
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct TwoPhaseRecovery {
+    /// Last LSN
+    lsn: u64,
+    /// Committed transactions found
+    committed_transactions: usize,
+    /// Aborted transactions found
+    aborted_transactions: usize,
+    applied: u64,
+    skipped: u64,
+}
+
 #[derive(Debug)]
 pub enum WalError {
     InvalidSize(usize),
@@ -110,7 +125,8 @@ const WAL_FLUSH_SIZE: usize = 1 << 15;
 /// As primeagen says, it's good to track the version of your binaries.
 const WAL_BINARY_VERSION: u8 = 1;
 
-const WAL_HEADER_SIZE: u16 = 1 << 5;
+/// Header size of a WAL entry.
+const WAL_HEADER_SIZE: isize = 1 << 5;
 
 pub(in crate::core::storage) const SNAPSHOT_INTERVAL: usize = 300;
 pub(in crate::core::storage) const SNAPSHOT_COUNT: usize = 5;
@@ -394,6 +410,178 @@ impl Wal {
         *file = None;
 
         Ok(())
+    }
+
+    pub fn replay_two_phase<C: FnMut(WalEntry) -> Result<(), WalEntry>>(
+        &self,
+        lsn: u64,
+        mut callback: C,
+    ) -> Result<TwoPhaseRecovery, WalError> {
+        self.flush()?;
+
+        let mut lsn = lsn;
+        let path = self.dir.join("checkpoint.meta");
+        if let Ok(checkpoint) = CheckpointMetadata::decode(&path) {
+            if checkpoint.lsn > lsn {
+                lsn = checkpoint.lsn;
+            }
+        }
+
+        let mut files = Vec::new();
+
+        if let Ok(entries) = fs::read_dir(&self.dir) {
+            entries.filter_map(|entry| entry.ok()).for_each(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+
+                if (name.starts_with("wal-") && name.ends_with(".log")) {
+                    files.push(entry.path())
+                }
+            })
+        }
+
+        files.sort_unstable();
+
+        let mut committed = HashSet::default();
+        let mut aborted = HashSet::default();
+        let mut last_lsn = lsn;
+
+        for path in &files {
+            Self::scan(path, lsn, &mut committed, &mut aborted, &mut last_lsn)?;
+        }
+
+        let mut applied = 0;
+        let mut skipped = 0;
+
+        // TODO: phase two: redo
+        todo!()
+    }
+
+    pub fn scan(
+        path: &Path,
+        from_lsn: u64,
+        committed: &mut HashSet<i64>,
+        aborted: &mut HashSet<i64>,
+        last_lsn: &mut u64,
+    ) -> Result<(), WalError> {
+        let Ok(mut file) = File::open(path) else {
+            return Ok(());
+        };
+
+        loop {
+            let mut header = [0u8; WAL_HEADER_SIZE as usize];
+            match file.read_exact(&mut header) {
+                Err(_) => break,
+                Ok(()) => {}
+            };
+
+            let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
+            if magic != WAL_MAGIC {
+                file.seek(SeekFrom::Current(-WAL_HEADER_SIZE as i64))?;
+                if !Self::scan_magic(&mut file) {
+                    break;
+                }
+
+                continue;
+            }
+
+            let flags = WalFlags::from(header[5]);
+            let size = u16::from_le_bytes(header[6..8].try_into().unwrap()) as usize;
+            let lsn = u64::from_le_bytes(header[8..16].try_into().unwrap());
+            let previous_lsn = u64::from_le_bytes(header[16..24].try_into().unwrap());
+            let entry_size = u32::from_le_bytes(header[24..28].try_into().unwrap()) as usize;
+
+            if size > 32 {
+                let seek = (size - WAL_HEADER_SIZE as usize) as i64;
+                if file.seek(SeekFrom::Current(seek)).is_err() {
+                    break;
+                }
+            }
+
+            let header_size = entry_size + 4;
+            if header_size > WAL_MAX_SIZE {
+                if !Self::scan_magic(&mut file) {
+                    break;
+                }
+
+                continue;
+            }
+
+            if lsn < from_lsn {
+                if file.seek(SeekFrom::Current(header_size as _)).is_err() {
+                    break;
+                }
+
+                continue;
+            }
+
+            if flags.contains(WalFlags::COMMIT) || flags.contains(WalFlags::ABORT) {
+                let mut txn_id = [0u8; 8];
+
+                match file.read_exact(&mut txn_id) {
+                    Ok(_) => {
+                        let txn_id = i64::from_le_bytes(txn_id);
+                        match flags.contains(WalFlags::COMMIT) {
+                            true => committed.insert(txn_id),
+                            _ => aborted.insert(txn_id),
+                        };
+
+                        let rest = header_size - 8;
+                        if file.seek(SeekFrom::Current(rest as _)).is_err() {
+                            break;
+                        }
+                    }
+                    _ => break,
+                };
+            } else {
+                if file.seek(SeekFrom::Current(header_size as _)).is_err() {
+                    break;
+                }
+            }
+
+            if lsn > *last_lsn {
+                *last_lsn = lsn;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Scans the file for the next magic identifier.
+    #[inline(always)]
+    pub fn scan_magic(file: &mut File) -> bool {
+        const BUFFER_SIZE: usize = 1 << 13;
+        const MAX: usize = 1 << 20;
+
+        let mut buff = [0u8; BUFFER_SIZE];
+        let mut window = 0;
+        let mut total = 0;
+
+        loop {
+            let bytes = match file.read(&mut buff) {
+                Ok(0) | Err(_) => return false,
+                Ok(n) => n,
+            };
+
+            for (idx, &byte) in buff[..bytes].iter().enumerate() {
+                window = (window >> 8) | ((byte as u32) << 24);
+
+                total += 1;
+                if total > MAX {
+                    return false;
+                }
+
+                if window == WAL_MAGIC {
+                    let seek = (bytes - idx - 1 + 4) as i64; // + 4 of the marker itself
+                    let seek = SeekFrom::Current(-seek);
+
+                    if file.seek(seek).is_ok() {
+                        return true;
+                    }
+
+                    return false;
+                }
+            }
+        }
     }
 
     pub fn lsn(&self) -> u64 {
