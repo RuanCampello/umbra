@@ -3,12 +3,15 @@
 use crate::{
     core::{
         storage::{
-            mvcc::MvccError,
-            wal::{Config, Wal, SNAPSHOT_COUNT, SNAPSHOT_INTERVAL},
+            mvcc::{version::TupleVersion, MvccError},
+            wal::{
+                Config, Wal, WalEntry, WalError, WalOperation, SNAPSHOT_COUNT, SNAPSHOT_INTERVAL,
+            },
         },
         HashMap,
     },
     db::Schema,
+    sql::statement::Value,
 };
 use std::{
     fs,
@@ -44,8 +47,14 @@ pub(crate) struct WalManagerMetadata {
     wal_lsn: AtomicU64,
 }
 
+type Result<T> = std::result::Result<T, MvccError>;
+
+/// Special transaction ID for domain defitinion operations.
+///
+pub const DDL_ID: i64 = -33;
+
 impl WalManager {
-    pub fn new(path: Option<&Path>, config: Config) -> Result<Self, MvccError> {
+    pub fn new(path: Option<&Path>, config: Config) -> Result<Self> {
         if path.is_none() || !config.enabled {
             return Ok(Self {
                 dir: PathBuf::new(),
@@ -89,5 +98,50 @@ impl WalManager {
 
         manager.metadata.last_lsn.store(lsn, Ordering::Release);
         Ok(manager)
+    }
+
+    /// Used for `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` etc...
+    /// Those are auto-committed operations that don't interleave user transactions.
+    pub fn record_ddl(&self, table: &str, operation: WalOperation, content: &[u8]) -> Result<()> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
+        let entry = WalEntry::new(table.to_string(), DDL_ID, 0, operation, content.to_vec());
+
+        wal.append(entry)?;
+        wal.write_commit(DDL_ID)?; // DDL operation are auto-commit
+
+        Ok(())
+    }
+
+    pub fn record_dml(
+        &self,
+        table: &str,
+        txn_id: i64,
+        row_id: i64,
+        operation: WalOperation,
+        version: TupleVersion,
+    ) -> Result<()> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
+
+        Ok(())
+    }
+
+    #[inline]
+    fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
+}
+
+impl Value {
+    #[inline(always)]
+    fn serialise(&self) -> Result<Vec<u8>> {
+        todo!()
     }
 }

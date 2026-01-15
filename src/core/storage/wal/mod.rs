@@ -14,10 +14,10 @@ use std::{
 mod checkpoint;
 mod entry;
 
-use checkpoint::CheckpointMetadata;
-use entry::WalEntry;
+pub(super) use entry::WalEntry;
+pub(super) use entry::WalOperation;
 
-use crate::core::storage::wal::entry::WalOperation;
+use checkpoint::CheckpointMetadata;
 
 /// Write-ahead loding
 #[derive(Debug)]

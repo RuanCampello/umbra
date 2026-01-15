@@ -45,7 +45,7 @@ pub(crate) struct VersionEntry {
 pub(crate) struct TupleVersion {
     pub txn_id: i64, // Transaction that created this version (min_txn_id / xmin)
     pub deleted_at_txn_id: i64, // Transaction that deleted this version (max_txn_id / xmax)
-    pub data: Option<Tuple>, // PERFORMANCE: we could compress this one
+    pub data: Tuple, // PERFORMANCE: we could compress this one
     pub row_id: i64,
     pub created_at: i64, // Timestamp
 }
@@ -112,7 +112,7 @@ impl TransationVersionStorage {
 }
 
 impl TupleVersion {
-    pub fn new(txn_id: i64, row_id: i64, data: Option<Tuple>) -> Self {
+    pub fn new(txn_id: i64, row_id: i64, data: Tuple) -> Self {
         Self {
             txn_id,
             row_id,
@@ -122,7 +122,7 @@ impl TupleVersion {
         }
     }
 
-    pub fn with_timestamp(txn_id: i64, row_id: i64, data: Option<Tuple>, created_at: i64) -> Self {
+    pub fn with_timestamp(txn_id: i64, row_id: i64, data: Tuple, created_at: i64) -> Self {
         Self {
             txn_id,
             row_id,
@@ -134,6 +134,25 @@ impl TupleVersion {
 
     pub fn is_deleted(&self) -> bool {
         self.deleted_at_txn_id != 0
+    }
+}
+
+impl From<TupleVersion> for Vec<u8> {
+    fn from(value: TupleVersion) -> Self {
+        let mut buff = Vec::with_capacity(128);
+
+        buff.extend_from_slice(&value.txn_id.to_le_bytes()); // 8
+        buff.extend_from_slice(&value.deleted_at_txn_id.to_le_bytes()); // 8
+        buff.extend_from_slice(&value.row_id.to_le_bytes()); // 8
+        buff.extend_from_slice(&value.created_at.to_le_bytes()); // 8
+
+        let values = value.data;
+        buff.extend_from_slice(&(values.len() as u32).to_le_bytes()); // 4
+        for value in values {
+            let bytes = todo!();
+        }
+
+        todo!()
     }
 }
 
