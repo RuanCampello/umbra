@@ -5,11 +5,13 @@ use crate::{
         HashMap,
     },
     db::Schema,
+    sql::Value,
     vm::planner::Tuple,
 };
 use std::{
     collections::BTreeMap,
     fmt::Debug,
+    io::{Error, ErrorKind},
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
 };
 
@@ -137,7 +139,7 @@ impl TupleVersion {
 }
 
 impl TryFrom<TupleVersion> for Vec<u8> {
-    type Error = std::io::Error;
+    type Error = Error;
 
     fn try_from(value: TupleVersion) -> Result<Self, Self::Error> {
         let mut buff = Vec::with_capacity(128);
@@ -150,7 +152,7 @@ impl TryFrom<TupleVersion> for Vec<u8> {
         let values = value.data;
         buff.extend_from_slice(&(values.len() as u32).to_le_bytes()); // 4
         for value in values {
-            let bytes = value.serialise().expect("value serialisation not to fail");
+            let bytes = value.serialise()?;
             buff.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
             buff.extend_from_slice(&bytes);
         }
@@ -160,10 +162,61 @@ impl TryFrom<TupleVersion> for Vec<u8> {
 }
 
 impl TryFrom<&[u8]> for TupleVersion {
-    type Error = std::io::Error;
+    type Error = Error;
 
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        todo!()
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        if data.len() < 32 {
+            return Err(Error::new(ErrorKind::InvalidInput, "Empty data"));
+        }
+
+        let mut cursor = 0;
+
+        let txn_id = i64::from_le_bytes(data[cursor..cursor + 8].try_into().unwrap());
+        cursor += 8;
+
+        let deleted_at_txn_id = i64::from_le_bytes(data[cursor..cursor + 8].try_into().unwrap());
+        cursor += 8;
+
+        let row_id = i64::from_le_bytes(data[cursor..cursor + 8].try_into().unwrap());
+        cursor += 8;
+
+        let created_at = i64::from_le_bytes(data[cursor..cursor + 8].try_into().unwrap());
+        cursor += 8;
+
+        if cursor + 4 > data.len() {
+            return Err(Error::new(ErrorKind::InvalidInput, "Missing tuple count"));
+        }
+
+        // read the quantity of values
+        let count = u32::from_le_bytes(data[cursor..cursor + 4].try_into().unwrap()) as usize;
+        cursor += 4;
+
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            // read the length prefix for this value
+            if cursor + 4 > data.len() {
+                return Err(Error::new(ErrorKind::InvalidInput, "Missing value length"));
+            }
+            let value_len =
+                u32::from_le_bytes(data[cursor..cursor + 4].try_into().unwrap()) as usize;
+            cursor += 4;
+
+            // read and deserialise the value
+            if cursor + value_len > data.len() {
+                return Err(Error::new(ErrorKind::InvalidData, "Truncated value data"));
+            }
+            let (value, _) = Value::deserialise(&data[cursor..cursor + value_len])?;
+            values.push(value);
+            cursor += value_len;
+        }
+
+        Ok(TupleVersion {
+            txn_id,
+            deleted_at_txn_id,
+            data: values,
+            row_id,
+            created_at,
+        })
     }
 }
 
