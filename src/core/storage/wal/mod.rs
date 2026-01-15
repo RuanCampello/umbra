@@ -55,7 +55,7 @@ pub(crate) struct Wal {
 }
 
 #[derive(Debug)]
-pub(crate) struct Config {
+pub(crate) struct WalConfig {
     pub(super) enabled: bool,
     pub(super) sync: Sync,
     /// Time interval between snapshots in seconds
@@ -63,12 +63,12 @@ pub(crate) struct Config {
     /// Number of snapshots to be kept
     pub(super) snapshots: u32,
 
-    flush_trigger: usize,
-    buffer_size: usize,
-    max_size: usize,
-    batch_size: usize,
+    pub(super) flush_trigger: usize,
+    pub(super) buffer_size: usize,
+    pub(super) max_size: usize,
+    pub(super) batch_size: usize,
     /// Time interval in milliseconds in [default sync](self::Sync::Default)
-    sync_interval: u32,
+    pub(super) sync_interval: u32,
 }
 
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
@@ -133,13 +133,13 @@ pub(in crate::core::storage) const SNAPSHOT_COUNT: usize = 5;
 
 impl Wal {
     pub fn new(path: impl AsRef<Path>, sync: Sync) -> Result<Self, WalError> {
-        Self::with_config(path, sync, &Config::default())
+        Self::with_config(path, sync, &WalConfig::default())
     }
 
     pub fn with_config(
         path: impl AsRef<Path>,
         sync: Sync,
-        config: &Config,
+        config: &WalConfig,
     ) -> Result<Self, WalError> {
         let path = path.as_ref().to_path_buf();
         fs::create_dir_all(&path)?;
@@ -704,7 +704,7 @@ impl From<u8> for Sync {
     }
 }
 
-impl Default for Config {
+impl Default for WalConfig {
     fn default() -> Self {
         Self {
             enabled: true,

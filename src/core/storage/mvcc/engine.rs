@@ -11,7 +11,12 @@ use std::{
 
 use crate::{
     core::{
-        storage::mvcc::{registry::TransactionRegistry, version::VersionStorage, MvccError},
+        storage::{
+            mvcc::{
+                registry::TransactionRegistry, version::VersionStorage, wal::WalManager, MvccError,
+            },
+            wal::WalConfig,
+        },
         HashMap,
     },
     db::Schema,
@@ -24,10 +29,16 @@ pub(crate) struct Engine {
     schemas: Arc<RwLock<HashMap<String, Arc<Schema>>>>,
     versions: Arc<RwLock<HashMap<String, Arc<VersionStorage>>>>,
     registry: Arc<TransactionRegistry>,
+    wal: Arc<Option<WalManager>>,
     is_open: AtomicBool,
     /// This is incremented on any change of the schema.
     /// So we can invalidate the cache without lookups.
     epoch: AtomicU64,
+}
+
+pub(crate) struct Config {
+    path: String,
+    wal: WalConfig,
 }
 
 /// Good ol' "styx"
@@ -36,6 +47,37 @@ const SNAPSHOT_VERSION: u32 = 1;
 
 /// magic (4) + version(4) + lsn(8) + time(8) + hash(4)
 const SNAPSHOT_HEADER_SIZE: usize = 28;
+
+impl Engine {
+    pub fn new(config: Config) -> Self {
+        let wal = Some(
+            WalManager::new(Some(Path::new(&config.path)), config.wal)
+                .expect("wal manager not to fail"),
+        );
+
+        Self {
+            path: config.path.into(),
+            is_open: AtomicBool::new(false),
+            schemas: Arc::new(RwLock::new(HashMap::default())),
+            versions: Arc::new(RwLock::new(HashMap::default())),
+            wal: Arc::new(wal),
+            registry: Arc::new(TransactionRegistry::new()),
+            epoch: AtomicU64::new(0),
+        }
+    }
+}
+
+impl Config {
+    fn with_path<P: Into<String>>(path: P) -> Self {
+        Self {
+            path: path.into(),
+            wal: WalConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        }
+    }
+}
 
 fn serialise_snapshot_header(path: &Path, lsn: u64) -> Result<(), MvccError> {
     let mut buff = Vec::with_capacity(SNAPSHOT_HEADER_SIZE);

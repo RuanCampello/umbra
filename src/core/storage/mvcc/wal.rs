@@ -5,7 +5,7 @@ use crate::{
         storage::{
             mvcc::{version::TupleVersion, MvccError},
             wal::{
-                Config, Wal, WalEntry, WalError, WalOperation, SNAPSHOT_COUNT, SNAPSHOT_INTERVAL,
+                Wal, WalConfig, WalEntry, WalError, WalOperation, SNAPSHOT_COUNT, SNAPSHOT_INTERVAL,
             },
         },
         HashMap,
@@ -54,7 +54,7 @@ type Result<T> = std::result::Result<T, MvccError>;
 pub const DDL_ID: i64 = -33;
 
 impl WalManager {
-    pub fn new(path: Option<&Path>, config: Config) -> Result<Self> {
+    pub fn new(path: Option<&Path>, config: WalConfig) -> Result<Self> {
         if path.is_none() || !config.enabled {
             return Ok(Self {
                 dir: PathBuf::new(),
@@ -142,8 +142,15 @@ impl WalManager {
         Ok(())
     }
 
-    pub fn replay<C>(&self, lsn: u64, callback: C) -> Result<()> {
-        todo!()
+    pub fn replay<C: FnMut(WalEntry) -> std::result::Result<(), WalError>>(
+        &self,
+        lsn: u64,
+        callback: C,
+    ) -> Result<()> {
+        let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
+
+        wal.replay_two_phase(lsn, callback)?;
+        Ok(())
     }
 
     /// Used for a transactional commit

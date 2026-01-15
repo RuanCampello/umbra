@@ -9,6 +9,7 @@ pub(crate) mod registry;
 pub(crate) mod version;
 pub(crate) mod wal;
 
+#[derive(Debug)]
 pub enum MvccError {
     SnapshotOperation(std::io::Error),
     Wal(WalError),
