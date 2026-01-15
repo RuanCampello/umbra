@@ -412,14 +412,15 @@ impl Wal {
         Ok(())
     }
 
-    pub fn replay_two_phase<C: FnMut(WalEntry) -> Result<(), WalEntry>>(
+    #[inline(always)]
+    pub fn replay_two_phase<C: FnMut(WalEntry) -> Result<(), WalError>>(
         &self,
-        lsn: u64,
+        from_lsn: u64,
         mut callback: C,
     ) -> Result<TwoPhaseRecovery, WalError> {
         self.flush()?;
 
-        let mut lsn = lsn;
+        let mut lsn = from_lsn;
         let path = self.dir.join("checkpoint.meta");
         if let Ok(checkpoint) = CheckpointMetadata::decode(&path) {
             if checkpoint.lsn > lsn {
@@ -452,10 +453,108 @@ impl Wal {
         let mut applied = 0;
         let mut skipped = 0;
 
-        // TODO: phase two: redo
-        todo!()
+        for path in &files {
+            let Ok(mut file) = File::open(path) else {
+                continue;
+            };
+
+            loop {
+                let mut header = [0u8; 32];
+                match file.read_exact(&mut header) {
+                    Ok(_) => {}
+                    Err(_) => continue,
+                };
+
+                let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
+                if magic != WAL_MAGIC {
+                    file.seek(SeekFrom::Current(-WAL_HEADER_SIZE as _))?;
+                    if !Self::scan_magic(&mut file) {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                let flags = WalFlags::from(header[5]);
+                let size = u16::from_le_bytes(header[6..8].try_into().unwrap()) as usize;
+                let lsn = u64::from_le_bytes(header[8..16].try_into().unwrap());
+                let previous_lsn = u64::from_le_bytes(header[16..24].try_into().unwrap());
+                let entry_size = u32::from_le_bytes(header[24..28].try_into().unwrap()) as usize;
+
+                if size > WAL_HEADER_SIZE as _ {
+                    let seek = size - WAL_HEADER_SIZE as usize;
+                    if file.seek(SeekFrom::Current(seek as _)).is_err() {
+                        break;
+                    }
+                }
+
+                let header_size = entry_size + 4;
+                if header_size > WAL_MAX_SIZE {
+                    if !Self::scan_magic(&mut file) {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if lsn < from_lsn {
+                    if file.seek(SeekFrom::Current(header_size as _)).is_err() {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                let mut content = vec![0u8; header_size];
+                let Ok(_) = file.read(&mut content) else {
+                    break;
+                };
+
+                match WalEntry::decode(lsn, previous_lsn, flags, &content) {
+                    Ok(entry) => {
+                        if entry.is_marker() || entry.is_abort() {
+                            continue;
+                        }
+
+                        if entry.is_commit() {
+                            if committed.contains(&entry.txn_id) {
+                                callback(entry)?;
+                            }
+
+                            continue;
+                        }
+
+                        match committed.contains(&entry.txn_id) {
+                            true => {
+                                callback(entry)?;
+                                applied += 1;
+                            }
+                            _ => skipped += 1,
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("WAL decode failed: lsn {lsn} due to {e}");
+                        skipped += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if last_lsn > self.lsn.load(Ordering::Acquire) {
+            self.lsn.store(last_lsn, Ordering::Release);
+        }
+
+        Ok(TwoPhaseRecovery {
+            lsn: last_lsn,
+            committed_transactions: committed.len(),
+            aborted_transactions: aborted.len(),
+            applied,
+            skipped,
+        })
     }
 
+    #[inline(always)]
     pub fn scan(
         path: &Path,
         from_lsn: u64,
