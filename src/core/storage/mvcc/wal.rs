@@ -5,7 +5,8 @@ use crate::{
         storage::{
             mvcc::{version::TupleVersion, MvccError},
             wal::{
-                Wal, WalConfig, WalEntry, WalError, WalOperation, SNAPSHOT_COUNT, SNAPSHOT_INTERVAL,
+                TwoPhaseRecovery, Wal, WalConfig, WalEntry, WalError, WalOperation, SNAPSHOT_COUNT,
+                SNAPSHOT_INTERVAL,
             },
         },
         HashMap,
@@ -25,7 +26,7 @@ use std::{
 
 // This is used to coordinate the disk operations.
 pub(crate) struct WalManager {
-    dir: PathBuf,
+    pub(super) dir: PathBuf,
     wal: Option<Wal>,
     metadata: WalManagerMetadata,
     enabled: AtomicBool,
@@ -142,15 +143,13 @@ impl WalManager {
         Ok(())
     }
 
-    pub fn replay<C: FnMut(WalEntry) -> std::result::Result<(), WalError>>(
+    pub fn replay<C: FnMut(WalEntry) -> std::result::Result<(), MvccError>>(
         &self,
         lsn: u64,
         callback: C,
-    ) -> Result<()> {
+    ) -> std::result::Result<TwoPhaseRecovery, MvccError> {
         let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
-
-        wal.replay_two_phase(lsn, callback)?;
-        Ok(())
+        wal.replay_two_phase(lsn, callback)
     }
 
     /// Used for a transactional commit
@@ -178,7 +177,16 @@ impl WalManager {
     }
 
     #[inline]
-    fn is_enabled(&self) -> bool {
+    pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Acquire)
+    }
+
+    pub fn start(&self) -> Result<()> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        self.running.store(true, Ordering::Release);
+        Ok(())
     }
 }

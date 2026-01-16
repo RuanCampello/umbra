@@ -18,7 +18,10 @@ mod entry;
 pub(super) use entry::WalEntry;
 pub(super) use entry::WalOperation;
 
-use crate::core::{storage::wal::entry::WalFlags, HashSet};
+use crate::core::{
+    storage::{mvcc::MvccError, wal::entry::WalFlags},
+    HashSet,
+};
 use checkpoint::CheckpointMetadata;
 
 /// Write-ahead loding
@@ -93,7 +96,7 @@ pub(crate) struct TwoPhaseRecovery {
     /// Aborted transactions found
     aborted_transactions: usize,
     applied: u64,
-    skipped: u64,
+    pub(super) skipped: u64,
 }
 
 #[derive(Debug)]
@@ -413,11 +416,11 @@ impl Wal {
     }
 
     #[inline(always)]
-    pub fn replay_two_phase<C: FnMut(WalEntry) -> Result<(), WalError>>(
+    pub fn replay_two_phase<C: FnMut(WalEntry) -> Result<(), MvccError>>(
         &self,
         from_lsn: u64,
         mut callback: C,
-    ) -> Result<TwoPhaseRecovery, WalError> {
+    ) -> Result<TwoPhaseRecovery, MvccError> {
         self.flush()?;
 
         let mut lsn = from_lsn;

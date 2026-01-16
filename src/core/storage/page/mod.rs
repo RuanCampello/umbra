@@ -54,7 +54,7 @@ pub(crate) struct Page {
 /// +-------------------------------------------------------------+-------------------+
 ///                                     PAGE
 /// ```
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(in crate::core) struct PageHeader {
     /// The Page's free space available.
     pub free_space: u16,

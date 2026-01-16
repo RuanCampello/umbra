@@ -1,25 +1,26 @@
-use std::{
-    fs::File,
-    io::Write,
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, AtomicU64},
-        Arc, RwLock,
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
-
+use super::FileLock;
 use crate::{
     core::{
         storage::{
             mvcc::{
                 registry::TransactionRegistry, version::VersionStorage, wal::WalManager, MvccError,
             },
-            wal::WalConfig,
+            wal::{WalConfig, WalEntry},
         },
         HashMap,
     },
     db::Schema,
+};
+use std::{
+    collections::BinaryHeap,
+    fs::File,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, RwLock,
+    },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// MVCC storage engine.
@@ -31,9 +32,12 @@ pub(crate) struct Engine {
     registry: Arc<TransactionRegistry>,
     wal: Arc<Option<WalManager>>,
     is_open: AtomicBool,
+    /// This prevents multiple processes of trying to access the same database file.
+    file: Mutex<Option<FileLock>>,
     /// This is incremented on any change of the schema.
     /// So we can invalidate the cache without lookups.
     epoch: AtomicU64,
+    fetching_disk: Arc<AtomicBool>,
 }
 
 pub(crate) struct Config {
@@ -47,6 +51,8 @@ const SNAPSHOT_VERSION: u32 = 1;
 
 /// magic (4) + version(4) + lsn(8) + time(8) + hash(4)
 const SNAPSHOT_HEADER_SIZE: usize = 28;
+
+type Result<T> = std::result::Result<T, MvccError>;
 
 impl Engine {
     pub fn new(config: Config) -> Self {
@@ -63,7 +69,112 @@ impl Engine {
             wal: Arc::new(wal),
             registry: Arc::new(TransactionRegistry::new()),
             epoch: AtomicU64::new(0),
+            file: Mutex::new(None),
+            fetching_disk: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn open(&self) -> Result<()> {
+        if self.is_open.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+
+        let lock = FileLock::acquire(&self.path)?;
+        let mut file = self.file.lock().unwrap();
+        *file = Some(lock);
+
+        self.registry.accept_transactions();
+
+        if let Some(ref wal) = *self.wal {
+            if wal.is_enabled() {
+                wal.start()?;
+
+                self.fetching_disk.store(true, Ordering::Release);
+                let lsn = self.load_snapshots()?;
+
+                self.fetching_disk.store(false, Ordering::Release);
+            }
+        }
+
+        todo!()
+    }
+
+    fn load_snapshots(&self) -> Result<u64> {
+        let wal = match self.wal.as_ref() {
+            Some(wal) if wal.is_enabled() => wal,
+            _ => return Ok(0),
+        };
+
+        let dir = wal.dir.join("snapshot");
+        if !dir.exists() {
+            return Ok(0);
+        }
+
+        let lsn = deserialise_snapshot_header(&dir);
+        let mut max_header_lsn = 0u64;
+
+        let Ok(tables) = std::fs::read_dir(&dir) else {
+            return Ok(0);
+        };
+
+        for entry in tables.flatten() {
+            if !entry.file_type().map(|ty| ty.is_dir()).unwrap_or(false) {
+                continue;
+            }
+
+            let table_name = entry.file_name().to_string_lossy().to_string();
+            if let Some(path) = self.latest_snapshot(&entry.path()) {
+                let lsn = self.load_table(&table_name, &path)?;
+                if lsn > max_header_lsn {
+                    max_header_lsn = lsn;
+                }
+            };
+        }
+
+        Ok(std::cmp::max(lsn, max_header_lsn))
+    }
+
+    fn latest_snapshot(&self, dir: &Path) -> Option<PathBuf> {
+        // PERFORMANCE: test with `Vec`
+        let mut snapshots = std::fs::read_dir(dir)
+            .ok()?
+            .filter_map(|f| f.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("snapshot-") && n.ends_with(".bin"))
+                    .unwrap_or(false)
+            })
+            .collect::<BinaryHeap<_>>();
+
+        snapshots.pop()
+    }
+
+    fn replay(&self, lsn: u64) -> Result<()> {
+        let wal = match self.wal.as_ref() {
+            Some(wal) if wal.is_enabled() => wal,
+            _ => return Ok(()),
+        };
+
+        let info = wal.replay(lsn, |entry| self.apply_entry(entry))?;
+        if info.skipped > 0 {
+            eprintln!(
+                "Recovery skipped {} from aborted or committed transactions",
+                info.skipped
+            )
+        }
+        // TODO: populate indexes
+
+        Ok(())
+    }
+
+    fn apply_entry(&self, entry: WalEntry) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn load_table(&self, name: &str, snapshot: &Path) -> Result<u64> {
+        unimplemented!()
     }
 }
 
@@ -79,7 +190,7 @@ impl Config {
     }
 }
 
-fn serialise_snapshot_header(path: &Path, lsn: u64) -> Result<(), MvccError> {
+fn serialise_snapshot_header(path: &Path, lsn: u64) -> Result<()> {
     let mut buff = Vec::with_capacity(SNAPSHOT_HEADER_SIZE);
 
     buff.extend_from_slice(&SNAPSHOT_MAGIC.to_le_bytes());

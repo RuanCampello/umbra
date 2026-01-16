@@ -200,6 +200,11 @@ impl TransactionRegistry {
         self.is_snapshot_visible(version_txn_id, view_txn_id)
     }
 
+    /// Start accepting new transactions
+    pub fn accept_transactions(&self) {
+        self.accepting.store(true, Ordering::Release)
+    }
+
     #[inline(never)]
     fn is_snapshot_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool {
         if self.transaction_isolation_level(view_txn_id) == IsolationLevel::ReadCommitted {

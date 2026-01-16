@@ -1,7 +1,16 @@
 #![allow(unused)]
 
-use crate::core::storage::wal::WalError;
-use std::{fmt::Display, sync::atomic::AtomicI64};
+use crate::{
+    core::storage::wal::WalError,
+    os::{Fs, Open},
+};
+use std::{
+    fmt::Display,
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::atomic::AtomicI64,
+};
 
 pub(self) mod arena;
 pub(crate) mod engine;
@@ -11,11 +20,43 @@ pub(crate) mod wal;
 
 #[derive(Debug)]
 pub enum MvccError {
-    SnapshotOperation(std::io::Error),
+    Io(std::io::Error),
     Wal(WalError),
 }
 
 static LAST_USED_TIMESTAMP: AtomicI64 = AtomicI64::new(0);
+
+/// Represents an exclusive lock on the database directory.
+pub(self) struct FileLock {
+    file: File,
+    path: PathBuf,
+}
+
+impl FileLock {
+    /// Acquires an exclusive lock on the database directory.
+    ///
+    /// Uses the OS-specific file locking from [os](crate::os).
+    pub fn acquire(path: impl AsRef<Path>) -> Result<Self, MvccError> {
+        let path = path.as_ref();
+
+        fs::create_dir_all(path)?;
+        let path = path.join("db.lock");
+
+        let mut file = Fs::options()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .lock(true)
+            .open(&path)?;
+
+        let pid = std::process::id();
+        write!(file, "{}", pid)?;
+        file.sync_all()?;
+
+        Ok(Self { file, path })
+    }
+}
 
 pub(self) fn get_timestamp() -> i64 {
     use std::sync::atomic::Ordering;
@@ -67,7 +108,7 @@ pub(in crate::core::storage) const fn fnv1a(bytes: &[u8]) -> u32 {
 impl Display for MvccError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SnapshotOperation(cause) => write!(f, "Failed to operate on snapshot: {cause}"),
+            Self::Io(cause) => write!(f, "Failed to operate on IO: {cause}"),
             Self::Wal(wal) => write!(f, "{wal}"),
         }
     }
@@ -75,7 +116,7 @@ impl Display for MvccError {
 
 impl From<std::io::Error> for MvccError {
     fn from(value: std::io::Error) -> Self {
-        Self::SnapshotOperation(value)
+        Self::Io(value)
     }
 }
 
