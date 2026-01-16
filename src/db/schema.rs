@@ -8,6 +8,7 @@ use crate::{
 use core::fmt;
 use std::{
     fmt::Display,
+    io::{Error, ErrorKind},
     sync::{Arc, OnceLock},
 };
 
@@ -201,6 +202,155 @@ impl Display for Schema {
 
         writeln!(f, "{}", full_border)?;
         Ok(())
+    }
+}
+
+impl From<&SchemaNew> for Vec<u8> {
+    fn from(value: &SchemaNew) -> Self {
+        let mut buff = Vec::new();
+
+        buff.extend_from_slice(&(value.name.len() as u16).to_le_bytes());
+        buff.extend_from_slice(&value.name.as_bytes());
+
+        buff.extend_from_slice(&(value.columns.len() as u16).to_le_bytes());
+
+        for column in &value.columns {
+            buff.extend_from_slice(&(column.name.len() as u16).to_le_bytes());
+            buff.extend_from_slice(&column.name.as_bytes());
+
+            buff.push(column.r#type.into());
+            buff.push(if column.primary_key { 1 } else { 0 });
+            buff.push(if column.nullable { 1 } else { 0 });
+            buff.push(if column.increment { 1 } else { 0 });
+
+            match column.default {
+                Some(ref expr) => {
+                    buff.extend_from_slice(&(expr.len() as u16).to_le_bytes());
+                    buff.extend_from_slice(expr.as_bytes());
+                }
+                None => buff.extend_from_slice(&0u16.to_le_bytes()),
+            }
+        }
+
+        buff
+    }
+}
+
+impl TryFrom<&[u8]> for SchemaNew {
+    type Error = Error;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        if data.len() < 32 {
+            return Err(Error::new(ErrorKind::InvalidInput, "Schema data too short"));
+        }
+
+        let mut cursor = 0;
+
+        if cursor + 2 > data.len() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Missing schema name length",
+            ));
+        }
+        let name_len = u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
+        cursor += 2;
+
+        if cursor + name_len > data.len() {
+            return Err(Error::new(ErrorKind::InvalidInput, "Missing table name"));
+        }
+        let name = String::from_utf8(data[cursor..cursor + name_len].to_vec())
+            .map_err(|_| Error::new(ErrorKind::InvalidData, "Invalid schema table name"))?;
+        cursor += name_len;
+
+        if cursor + 2 > data.len() {
+            return Err(Error::new(ErrorKind::InvalidInput, "Missing columns count"));
+        }
+        let column_count =
+            u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
+        cursor += 2;
+
+        let mut columns = Vec::with_capacity(column_count);
+        for idx in 0..column_count {
+            if cursor + 2 > data.len() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Missing column name length",
+                ));
+            }
+            let column_name_len =
+                u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
+            cursor += 2;
+
+            if cursor + column_name_len > data.len() {
+                return Err(Error::new(ErrorKind::InvalidInput, "Missing column name"));
+            }
+
+            let column_name = String::from_utf8(data[cursor..cursor + column_name_len].to_vec())
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "Invalid column name"))?;
+            cursor += column_name_len;
+
+            if cursor >= data.len() {
+                return Err(Error::new(ErrorKind::InvalidInput, "Missing column type"));
+            }
+            let r#type = Type::SmallInt; // TODO: parse type
+            cursor += 1;
+
+            if cursor >= data.len() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Missing primary key field",
+                ));
+            }
+            let primary_key = data[cursor] != 0;
+            cursor += 1;
+
+            if cursor >= data.len() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Missing nullable field",
+                ));
+            }
+            let nullable = data[cursor] != 0;
+            cursor += 1;
+
+            if cursor >= data.len() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Missing increment field",
+                ));
+            }
+            let increment = data[cursor] != 0;
+            cursor += 1;
+
+            if cursor + 2 > data.len() {
+                return Err(Error::new(ErrorKind::InvalidInput, "Missing default field"));
+            }
+            let default_len =
+                u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
+            cursor += 2;
+
+            if cursor + default_len > data.len() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "Missing default expression",
+                ));
+            }
+            let default = String::from_utf8(data[cursor..cursor + default_len].to_vec())
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "Invalid default expression"))?;
+
+            columns.push(Column {
+                id: idx,
+                name: column_name,
+                nullable,
+                r#type,
+                primary_key,
+                increment,
+                default: Some(default),
+                default_value: None,
+            })
+        }
+
+        Ok(SchemaNew::new(name, columns))
     }
 }
 
