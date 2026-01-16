@@ -20,7 +20,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, RwLock,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 /// MVCC storage engine.
@@ -38,11 +38,26 @@ pub(crate) struct Engine {
     /// So we can invalidate the cache without lookups.
     epoch: AtomicU64,
     fetching_disk: Arc<AtomicBool>,
+    config: RwLock<Config>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Config {
     path: String,
     wal: WalConfig,
+    cleanup: CleanUpConfig,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CleanUpConfig {
+    enabled: bool,
+    /// Interval in seconds between clean up
+    interval: u64,
+    /// Retation period for deleted rows in seconds
+    /// Rows deleted after that period will be permanenly removed.
+    deleted_rows_retation: u64,
+    /// Retation period for old transactions in seconds
+    transaction_retation: u64,
 }
 
 /// Good ol' "styx"
@@ -57,12 +72,12 @@ type Result<T> = std::result::Result<T, MvccError>;
 impl Engine {
     pub fn new(config: Config) -> Self {
         let wal = Some(
-            WalManager::new(Some(Path::new(&config.path)), config.wal)
+            WalManager::new(Some(Path::new(&config.path)), &config.wal)
                 .expect("wal manager not to fail"),
         );
 
         Self {
-            path: config.path.into(),
+            path: config.path.clone().into(),
             is_open: AtomicBool::new(false),
             schemas: Arc::new(RwLock::new(HashMap::default())),
             versions: Arc::new(RwLock::new(HashMap::default())),
@@ -71,6 +86,7 @@ impl Engine {
             epoch: AtomicU64::new(0),
             file: Mutex::new(None),
             fetching_disk: Arc::new(AtomicBool::new(false)),
+            config: RwLock::new(config),
         }
     }
 
@@ -91,11 +107,27 @@ impl Engine {
 
                 self.fetching_disk.store(true, Ordering::Release);
                 let lsn = self.load_snapshots()?;
+                self.replay(lsn)?;
 
                 self.fetching_disk.store(false, Ordering::Release);
             }
         }
 
+        Ok(())
+    }
+
+    pub fn cleanup(self: &Arc<Self>) {
+        let config = self.config.read().unwrap();
+        if !config.cleanup.enabled {
+            return;
+        }
+
+        let interval = Duration::from_secs(config.cleanup.interval);
+        let deleted_retation = Duration::from_secs(config.cleanup.deleted_rows_retation);
+        let transaction_retation = Duration::from_secs(config.cleanup.transaction_retation);
+        drop(config);
+
+        // TODO: internal cleanup
         todo!()
     }
 
@@ -170,7 +202,11 @@ impl Engine {
     }
 
     fn apply_entry(&self, entry: WalEntry) -> Result<()> {
-        unimplemented!()
+        use crate::core::storage::wal::WalOperation;
+
+        Ok(match entry.operation {
+            _ => unimplemented!(),
+        })
     }
 
     fn load_table(&self, name: &str, snapshot: &Path) -> Result<u64> {
@@ -186,6 +222,18 @@ impl Config {
                 enabled: false,
                 ..Default::default()
             },
+            cleanup: Default::default(),
+        }
+    }
+}
+
+impl Default for CleanUpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval: 60,
+            deleted_rows_retation: 300,
+            transaction_retation: 3600,
         }
     }
 }

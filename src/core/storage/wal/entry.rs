@@ -34,12 +34,12 @@ use crate::core::storage::wal::WalError;
 pub(crate) struct WalEntry {
     table: String,
     /// Log Sequence Number
-    pub(super) lsn: u64,
+    pub(in crate::core::storage) lsn: u64,
     pub(super) previous_lsn: u64,
     flags: WalFlags,
-    pub(super) txn_id: i64,
+    pub(in crate::core::storage) txn_id: i64,
     row_id: i64,
-    pub(super) operation: WalOperation,
+    pub(in crate::core::storage) operation: WalOperation,
     data: Vec<u8>,
     timestamp: i64,
 }

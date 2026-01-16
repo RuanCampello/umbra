@@ -15,14 +15,13 @@ use std::{
 mod checkpoint;
 mod entry;
 
-pub(super) use entry::WalEntry;
-pub(super) use entry::WalOperation;
-
 use crate::core::{
     storage::{mvcc::MvccError, wal::entry::WalFlags},
     HashSet,
 };
 use checkpoint::CheckpointMetadata;
+pub(super) use entry::WalEntry;
+pub(super) use entry::WalOperation;
 
 /// Write-ahead loding
 #[derive(Debug)]
@@ -57,7 +56,7 @@ pub(crate) struct Wal {
     sync: Sync,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct WalConfig {
     pub(super) enabled: bool,
     pub(super) sync: Sync,
