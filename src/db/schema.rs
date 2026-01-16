@@ -1,17 +1,29 @@
 use crate::{
     core::HashMap,
-    sql::{statement::Type, Value},
+    sql::{
+        statement::{Constraint, JoinType, Type},
+        Value,
+    },
 };
 use core::fmt;
 use std::{
-    cell::OnceCell,
     fmt::Display,
     sync::{Arc, OnceLock},
 };
 
+/// The representation of the table schema during runtime.
+#[derive(Debug, PartialEq, Clone, Default)]
+pub struct Schema {
+    pub columns: Vec<crate::sql::statement::Column>,
+    /// Index of columns definitions based on their name
+    index: HashMap<String, usize>,
+
+    enums: Vec<Vec<String>>,
+}
+
 /// The representation of the table schema.
 #[derive(Debug, Default, Clone)]
-pub struct Schema {
+struct SchemaNew {
     pub name: String,
     pub columns: Vec<Column>,
     pub created_at: u64,
@@ -38,7 +50,7 @@ pub struct Column {
     default_value: Option<Value>,
 }
 
-impl Schema {
+impl SchemaNew {
     pub fn new(name: impl Into<String>, columns: Vec<Column>) -> Self {
         let now = crate::core::date::now() as u64;
         let column_names = OnceLock::new();
@@ -66,6 +78,57 @@ impl Schema {
     }
 }
 
+impl Column {
+    pub fn new(
+        id: usize,
+        name: impl Into<String>,
+        r#type: Type,
+        nullable: bool,
+        primary_key: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            r#type,
+            primary_key,
+            id,
+            nullable,
+            increment: false,
+            default: None,
+            default_value: None,
+        }
+    }
+
+    pub fn nullable(id: usize, name: impl Into<String>, r#type: Type) -> Self {
+        Self::new(id, name, r#type, true, false)
+    }
+
+    pub fn primary_key(id: usize, name: impl Into<String>, r#type: Type) -> Self {
+        Self::new(id, name, r#type, false, true)
+    }
+
+    pub fn with_default(
+        id: usize,
+        name: impl Into<String>,
+        r#type: Type,
+        nullable: bool,
+        primary_key: bool,
+        increment: bool,
+        default: Option<String>,
+        default_value: Option<Value>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            r#type,
+            primary_key,
+            id,
+            nullable,
+            increment,
+            default,
+            default_value,
+        }
+    }
+}
+
 impl Display for Schema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let headers = vec!["Column", "Type", "Nullable"];
@@ -76,8 +139,8 @@ impl Display for Schema {
             .map(|col| {
                 vec![
                     col.name.clone(),
-                    col.r#type.to_string(),
-                    match col.nullable {
+                    col.data_type.to_string(),
+                    match col.is_nullable() {
                         false => "not null".to_string(),
                         _ => "".to_string(),
                     },
@@ -141,11 +204,188 @@ impl Display for Schema {
     }
 }
 
-impl PartialEq for Schema {
+impl PartialEq for SchemaNew {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.created_at == other.created_at
             && self.updated_at == other.updated_at
             && self.columns == other.columns
     }
+}
+
+// TODO: this will be removed after the transition to the new schema type
+impl Schema {
+    pub fn new(columns: Vec<crate::sql::statement::Column>) -> Self {
+        let index = columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| (col.name.clone(), i))
+            .collect();
+
+        Self {
+            columns,
+            index,
+            enums: vec![],
+        }
+    }
+
+    pub fn prepend_id(&mut self) {
+        use crate::db::ROW_COL_ID;
+        use crate::sql::statement::Column;
+
+        debug_assert!(
+            self.columns[0].name != ROW_COL_ID,
+            "schema already has {ROW_COL_ID}: {self:?}"
+        );
+
+        let col = Column::new(ROW_COL_ID, Type::UnsignedBigInteger);
+
+        self.columns.insert(0, col);
+        self.index.values_mut().for_each(|idx| *idx += 1);
+        self.index.insert(ROW_COL_ID.to_string(), 0);
+    }
+
+    pub fn push(&mut self, col: crate::sql::statement::Column) {
+        self.index.insert(col.name.to_string(), self.len());
+        self.columns.push(col);
+    }
+
+    pub fn extend(&mut self, columns: impl IntoIterator<Item = crate::sql::statement::Column>) {
+        for col in columns {
+            self.push(col)
+        }
+    }
+
+    pub fn extend_with_join(
+        &mut self,
+        columns: impl IntoIterator<Item = crate::sql::statement::Column>,
+        join_type: &JoinType,
+    ) {
+        match join_type {
+            JoinType::Inner => self.columns.extend(columns),
+            JoinType::Left => {
+                self.columns
+                    .extend(Self::make_nullable_if_needed(columns, true));
+            }
+            JoinType::Full => {
+                for col in &mut self.columns {
+                    if !col.is_nullable() {
+                        col.constraints.push(Constraint::Nullable);
+                    }
+                }
+                self.columns
+                    .extend(Self::make_nullable_if_needed(columns, true));
+            }
+            JoinType::Right => {
+                for col in &mut self.columns {
+                    if !col.is_nullable() {
+                        col.constraints.push(Constraint::Nullable);
+                    }
+                }
+                self.columns.extend(columns);
+            }
+        }
+    }
+
+    fn make_nullable_if_needed(
+        columns: impl IntoIterator<Item = crate::sql::statement::Column>,
+        should_make_nullable: bool,
+    ) -> impl Iterator<Item = crate::sql::statement::Column> {
+        columns.into_iter().map(move |mut col| {
+            if should_make_nullable && !col.is_nullable() {
+                col.constraints.push(Constraint::Nullable);
+            }
+            col
+        })
+    }
+
+    pub fn index_of(&self, col: &str) -> Option<usize> {
+        self.index.get(col).copied()
+    }
+
+    /// Finds the last occurence of column name in the schema.
+    pub fn last_index_of(&self, col: &str) -> Option<usize> {
+        self.columns.iter().rposition(|c| c.name == col)
+    }
+
+    /// Adds qualified column to index for all columns within the range.
+    /// This is usefull to support qualified identifier in self-joins where the same table appears
+    /// with different aliases.
+    pub fn add_qualified_name(&mut self, table: &str, start: usize, end: usize) {
+        for idx in start..end {
+            if let Some(col) = self.columns.get(idx) {
+                let qualified_name = format!("{table}.{}", col.name);
+                self.index.insert(qualified_name, idx);
+            }
+        }
+    }
+
+    pub fn columns_ids(&self) -> Vec<String> {
+        self.columns.iter().map(|c| c.name.to_string()).collect()
+    }
+
+    pub fn keys(&self) -> &crate::sql::statement::Column {
+        &self.columns[0]
+    }
+
+    pub fn has_btree_key(&self) -> bool {
+        self.columns[0]
+            .constraints
+            .contains(&Constraint::PrimaryKey)
+            && !matches!(self.columns[0].data_type, Type::Varchar(_) | Type::Boolean)
+    }
+
+    pub fn has_nullable(&self) -> bool {
+        self.columns.iter().any(|col| col.is_nullable())
+    }
+
+    pub const fn null_bitmap_len(&self) -> usize {
+        (self.len() + 7) / 8
+    }
+
+    pub fn empty() -> Self {
+        Self::new(Vec::new())
+    }
+
+    pub const fn len(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn update_returning_input(&self) -> Self {
+        let len = self.len();
+        let mut columns = self.columns.clone();
+        columns.extend(self.columns.clone());
+
+        let mut input_schema = Self::new(columns);
+        input_schema.add_qualified_name("old", 0, len);
+        input_schema.add_qualified_name("new", len, 2 * len);
+
+        input_schema
+    }
+
+    pub fn add_enum(&mut self, variants: Vec<String>) -> u32 {
+        self.enums.push(variants);
+        (self.enums.len() - 1) as u32
+    }
+
+    pub fn get_enum(&self, id: u32) -> Option<&Vec<String>> {
+        self.enums.get(id as usize)
+    }
+}
+
+pub(crate) fn has_btree_key(columns: &[crate::sql::statement::Column]) -> bool {
+    columns[0].constraints.contains(&Constraint::PrimaryKey)
+        && !matches!(columns[0].data_type, Type::Varchar(_) | Type::Boolean)
+}
+
+pub(crate) fn umbra_schema() -> Schema {
+    use crate::sql::statement::Column;
+
+    Schema::from(&[
+        Column::new("type", Type::Varchar(255)),
+        Column::new("name", Type::Varchar(255)),
+        Column::new("root", Type::UnsignedInteger),
+        Column::new("table_name", Type::Varchar(255)),
+        Column::new("sql", Type::Varchar(65535)),
+    ])
 }
