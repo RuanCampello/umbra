@@ -22,6 +22,8 @@ pub(crate) mod wal;
 pub enum MvccError {
     Io(std::io::Error),
     Wal(WalError),
+    NotOpen,
+    TableNotFound,
 }
 
 static LAST_USED_TIMESTAMP: AtomicI64 = AtomicI64::new(0);
@@ -109,6 +111,8 @@ impl Display for MvccError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(cause) => write!(f, "Failed to operate on IO: {cause}"),
+            Self::NotOpen => f.write_str("Engine was not open at the operation time"),
+            Self::TableNotFound => f.write_str("Table was not found by the engine"),
             Self::Wal(wal) => write!(f, "{wal}"),
         }
     }

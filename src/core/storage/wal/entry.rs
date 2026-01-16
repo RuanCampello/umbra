@@ -32,7 +32,7 @@ use crate::core::storage::wal::WalError;
 ///
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct WalEntry {
-    table: String,
+    pub(in crate::core::storage) table: String,
     /// Log Sequence Number
     pub(in crate::core::storage) lsn: u64,
     pub(super) previous_lsn: u64,
@@ -40,7 +40,7 @@ pub(crate) struct WalEntry {
     pub(in crate::core::storage) txn_id: i64,
     row_id: i64,
     pub(in crate::core::storage) operation: WalOperation,
-    data: Vec<u8>,
+    pub(in crate::core::storage) data: Vec<u8>,
     timestamp: i64,
 }
 

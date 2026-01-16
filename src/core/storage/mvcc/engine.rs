@@ -3,13 +3,16 @@ use crate::{
     core::{
         storage::{
             mvcc::{
-                registry::TransactionRegistry, version::VersionStorage, wal::WalManager, MvccError,
+                registry::TransactionRegistry,
+                version::{TupleVersion, VersionStorage},
+                wal::WalManager,
+                MvccError,
             },
             wal::{WalConfig, WalEntry},
         },
         HashMap,
     },
-    db::Schema,
+    db::SchemaNew as Schema,
 };
 use std::{
     collections::BinaryHeap,
@@ -205,12 +208,60 @@ impl Engine {
         use crate::core::storage::wal::WalOperation;
 
         Ok(match entry.operation {
+            WalOperation::CreateTable => {
+                let schema = Schema::try_from(entry.data.as_ref())?;
+                let version_storage = Arc::new(VersionStorage::with_checker(
+                    schema.name.clone(),
+                    schema.clone(),
+                    self.registry.clone(),
+                ));
+
+                let table = schema.name.clone();
+
+                let mut schemas = self.schemas.write().unwrap();
+                schemas.insert(table.clone(), Arc::new(schema));
+
+                let mut storages = self.versions.write().unwrap();
+                storages.insert(table, version_storage);
+            }
+
+            WalOperation::DropTable => {
+                let table = entry.table;
+
+                let mut schemas = self.schemas.write().unwrap();
+                schemas.remove(&table);
+
+                let mut storages = self.versions.write().unwrap();
+                if let Some(storage) = storages.remove(&table) {
+                    storage.close()
+                };
+            }
+
+            WalOperation::Update | WalOperation::Insert => {
+                let tuple_version = TupleVersion::try_from(entry.data.as_ref())?;
+                let table = entry.table;
+
+                let storage = self.version_storage(&table)?;
+                storage.recover_version(tuple_version);
+            }
             _ => unimplemented!(),
         })
     }
 
     fn load_table(&self, name: &str, snapshot: &Path) -> Result<u64> {
         unimplemented!()
+    }
+
+    fn version_storage(&self, name: &str) -> Result<Arc<VersionStorage>> {
+        if !self.is_open.load(Ordering::Acquire) {
+            return Err(MvccError::NotOpen);
+        }
+
+        let storages = self.versions.read().unwrap();
+        storages
+            .get(&name.to_string())
+            .cloned()
+            .ok_or(MvccError::TableNotFound)
     }
 }
 

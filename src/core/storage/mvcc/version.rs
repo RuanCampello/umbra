@@ -4,7 +4,7 @@ use crate::{
         storage::mvcc::{arena::TupleArena, get_timestamp, registry::TransactionRegistry},
         HashMap,
     },
-    db::Schema,
+    db::SchemaNew as Schema,
     sql::Value,
     vm::planner::Tuple,
 };
@@ -12,7 +12,10 @@ use std::{
     collections::BTreeMap,
     fmt::Debug,
     io::{Error, ErrorKind},
-    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, RwLock,
+    },
 };
 
 pub(crate) struct VersionStorage {
@@ -99,6 +102,39 @@ impl VersionStorage {
             max_version_history: 10,
         }
     }
+
+    pub fn with_checker(
+        table: impl Into<String>,
+        schema: Schema,
+        checker: Arc<TransactionRegistry>,
+    ) -> Self {
+        Self::with_capacity(table.into(), schema, Some(checker), 0)
+    }
+
+    pub fn close(&self) {
+        self.open.store(false, Ordering::Release)
+    }
+
+    pub fn recover_version(&self, version: TupleVersion) {
+        let row_id = version.row_id;
+        let is_deleted = version.is_deleted();
+        let data = version.data;
+
+        let versions = self.versions.read().unwrap();
+        if let Some(entry) = versions.get(&row_id) {
+            let entry_version = &entry.version;
+
+            if entry_version.is_deleted() || is_deleted || entry_version.data == data {
+                if row_id > 0 {
+                    // TODO: increment counter
+                }
+
+                return;
+            }
+        }
+
+        // TODO: add version && update indexes
+    }
 }
 
 impl TransationVersionStorage {
@@ -131,6 +167,10 @@ impl TupleVersion {
             created_at,
             deleted_at_txn_id: 0,
         }
+    }
+
+    pub fn get(&self, row_id: i64) -> Option<Tuple> {
+        todo!()
     }
 
     pub fn is_deleted(&self) -> bool {
