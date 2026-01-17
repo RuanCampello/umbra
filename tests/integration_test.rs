@@ -1,6 +1,6 @@
 use std::path::Path;
-use umbra::db::Numeric;
 use umbra::db::{Database, DatabaseError, QuerySet};
+use umbra::db::{Numeric, SqlError};
 use umbra::sql::statement::{Type, Value};
 use umbra::{interval, temporal};
 
@@ -3311,7 +3311,10 @@ fn text_indexing() -> Result<()> {
         JOIN student AS s ON e.sid = s.sid;
     "#,
     );
-    assert!(query.is_err());
+    assert_eq!(
+        query.unwrap_err(),
+        SqlError::InvalidGroupBy("e.cid".to_string()).into(),
+    );
 
     Ok(())
 }
