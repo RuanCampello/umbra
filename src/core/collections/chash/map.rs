@@ -1,7 +1,7 @@
 use super::{allocation, utils};
 use crate::core::collections::chash::{
     allocation::RawTable,
-    utils::{Parker, Stack},
+    utils::{Counter, Parker, Stack},
 };
 use std::sync::{
     atomic::{AtomicPtr, AtomicU8, AtomicUsize},
@@ -43,7 +43,37 @@ pub enum Resize {
 impl<K, V, S> HashMap<K, V, S> {
     #[inline]
     pub fn new(capacity: usize, hasher: S, resize: Resize) -> Self {
+        if capacity == 0 {
+            return Self {
+                table: AtomicPtr::new(std::ptr::null_mut()),
+                counter: Counter::default(),
+                resize,
+                capacity,
+                hasher,
+            };
+        };
+
         todo!()
+    }
+}
+
+impl State<()> {
+    const PENDING: u8 = 0;
+    const ABORTED: u8 = 1;
+    const PROMOTED: u8 = 2;
+}
+
+impl<T> Default for State<T> {
+    fn default() -> Self {
+        State {
+            next: AtomicPtr::new(std::ptr::null_mut()),
+            allocating: Mutex::new(()),
+            copied: AtomicUsize::new(0),
+            claim: AtomicUsize::new(0),
+            status: AtomicU8::new(State::PENDING),
+            parker: Parker::default(),
+            deffered: Stack::new(),
+        }
     }
 }
 
