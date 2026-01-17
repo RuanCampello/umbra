@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::storage::btree::{BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp};
+use crate::core::storage::btree::{
+    BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp, VarlenaCmp,
+};
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
 use crate::core::HashMap;
@@ -135,7 +137,7 @@ impl TableMetadata {
                         bitmap_len,
                         prefix_len: max,
                     })),
-
+                    Type::Text => Ok(BTreeKeyCmp::VarlenaCmp(VarlenaCmp)),
                     _ => Ok(BTreeKeyCmp::MapMemCmp(BitMapSizedCmp {
                         bitmap_len,
                         key_size: byte_len_of_type(&pk),
@@ -143,14 +145,17 @@ impl TableMetadata {
                 }
             }
 
-            _ => FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
-                .map(BTreeKeyCmp::MemCmp)
-                .map_err(|_| {
-                    DatabaseError::Corrupted(format!(
-                        "Table {} is using a non-int Btree key with type {:#?}",
-                        self.name, self.schema.columns[0].data_type
-                    ))
-                }),
+            _ => match self.schema.columns[0].data_type {
+                Type::Text => Ok(BTreeKeyCmp::VarlenaCmp(VarlenaCmp)),
+                _ => FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
+                    .map(BTreeKeyCmp::MemCmp)
+                    .map_err(|_| {
+                        DatabaseError::Corrupted(format!(
+                            "Table {} is using a non-int Btree key with type {:#?}",
+                            self.name, self.schema.columns[0].data_type
+                        ))
+                    }),
+            },
         }
     }
 
@@ -201,6 +206,7 @@ impl Relation {
                                 bitmap_len,
                                 prefix_len: utf_8_length_bytes(*max),
                             }),
+                            Type::Text => BTreeKeyCmp::VarlenaCmp(VarlenaCmp),
                             _ => BTreeKeyCmp::MapMemCmp(BitMapSizedCmp {
                                 bitmap_len,
                                 key_size: byte_len_of_type(pk),

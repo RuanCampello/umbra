@@ -3295,7 +3295,7 @@ fn text_indexing() -> Result<()> {
     )?;
     db.exec(
         r#"
-    INSERT INTO ENROLLED (sid, cid, grade) VALUES
+    INSERT INTO enrolled (sid, cid, grade) VALUES
         (53666, '15-445', 'C'),
         (53688, '15-721', 'A'),
         (53688, '15-826', 'B'),
