@@ -2,6 +2,7 @@ use crate::core::{storage::mvcc::version::VisibilityChecker, HashMap};
 use std::{
     cell::RefCell,
     sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering},
+    time::{Duration, Instant},
 };
 
 #[derive(Default)]
@@ -150,6 +151,51 @@ impl TransactionRegistry {
         }
     }
 
+    /// Cleans the old transactions already committed.
+    ///
+    /// Returns the number of transactions cleaned.
+    pub fn cleanup_transactions(&self, max_age: Duration) -> i32 {
+        let level = self.isolation_level();
+
+        // we cannot clean READ COMMITTED ones
+        if matches!(level, IsolationLevel::ReadCommitted) {
+            return 0;
+        }
+
+        let cut = Instant::now()
+            .checked_add(max_age)
+            .map(|_| self.next_sequence.load(Ordering::Acquire) - (max_age.as_nanos() as i64))
+            .unwrap_or_default();
+
+        let to_be_removed = self
+            .transactions
+            .iter()
+            .filter(|entry| {
+                let id = *entry.0;
+                let state = entry.1;
+
+                if id < 0 {
+                    return false;
+                }
+
+                if state.status != TransactionStatus::Committed {
+                    return false;
+                }
+
+                state.commit < cut
+            })
+            .map(|entry| *entry.0)
+            .collect::<Vec<_>>();
+
+        let mut removed = 0;
+        for id in to_be_removed {
+            // self.transactions.remove(&id);
+            removed += 1;
+        }
+
+        removed
+    }
+
     #[inline]
     pub fn is_directly_visible(&self, version_txn_id: i64) -> bool {
         if version_txn_id == Self::RECOVERY_ID {
@@ -263,6 +309,7 @@ impl TransactionRegistry {
         self.transactions.remove(&txn_id);
     }
 
+    /// Returns the global [isolation level](self::IsolationLevel).
     pub fn isolation_level(&self) -> IsolationLevel {
         IsolationLevel::from(self.isolation_level.load(Ordering::Acquire))
     }

@@ -58,9 +58,16 @@ pub(crate) struct CleanUpConfig {
     interval: u64,
     /// Retation period for deleted rows in seconds
     /// Rows deleted after that period will be permanenly removed.
-    deleted_rows_retation: u64,
+    deleted_rows_retetion: u64,
     /// Retation period for old transactions in seconds
-    transaction_retation: u64,
+    transaction_retetion: u64,
+}
+
+/// This is a [JoinHandle](std::thread::JoinHandle) wrapper for stopping the
+/// clean-up thread internally.
+pub(in crate::core::storage::mvcc) struct CleanUpThread {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 /// Good ol' "styx"
@@ -126,12 +133,45 @@ impl Engine {
         }
 
         let interval = Duration::from_secs(config.cleanup.interval);
-        let deleted_retation = Duration::from_secs(config.cleanup.deleted_rows_retation);
-        let transaction_retation = Duration::from_secs(config.cleanup.transaction_retation);
+        let deleted_retetion = Duration::from_secs(config.cleanup.deleted_rows_retetion);
+        let transaction_retetion = Duration::from_secs(config.cleanup.transaction_retetion);
         drop(config);
 
         // TODO: internal cleanup
         todo!()
+    }
+
+    fn periodic_cleanup(
+        self: &Arc<Self>,
+        interval: Duration,
+        deleted_retetion: Duration,
+        transaction_retetion: Duration,
+    ) -> CleanUpThread {
+        use std::thread;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let engine = Arc::clone(&self);
+
+        let thread = Some(thread::spawn(move || {
+            while !stop_clone.load(Ordering::Acquire) {
+                let check_interval = Duration::from_millis(100);
+                let mut elapsed = Duration::ZERO;
+
+                while elapsed < interval && !stop_clone.load(Ordering::Acquire) {
+                    thread::sleep(check_interval);
+                    elapsed += check_interval;
+                }
+
+                if stop_clone.load(Ordering::Acquire) {
+                    break;
+                }
+
+                engine.registry.cleanup_transactions(transaction_retetion);
+            }
+        }));
+
+        CleanUpThread { stop, thread }
     }
 
     fn load_snapshots(&self) -> Result<u64> {
@@ -283,9 +323,25 @@ impl Default for CleanUpConfig {
         Self {
             enabled: true,
             interval: 60,
-            deleted_rows_retation: 300,
-            transaction_retation: 3600,
+            deleted_rows_retetion: 300,
+            transaction_retetion: 3600,
         }
+    }
+}
+
+impl CleanUpThread {
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for CleanUpThread {
+    fn drop(&mut self) {
+        self.stop()
     }
 }
 
