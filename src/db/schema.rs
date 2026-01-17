@@ -24,6 +24,7 @@ pub struct Schema {
 
 /// The representation of the table schema.
 #[derive(Debug, Default, Clone)]
+#[allow(unused)]
 pub struct SchemaNew {
     pub name: String,
     pub columns: Vec<Column>,
