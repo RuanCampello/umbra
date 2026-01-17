@@ -3258,3 +3258,60 @@ fn jsonb() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+/// example from: [https://youtu.be/MzigBKf84aY?si=dKouNwQgWb8cADWj&t=666]
+fn text_indexing() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        r#"
+    CREATE TABLE student (
+        sid   INT PRIMARY KEY,
+        name  TEXT,
+        login TEXT UNIQUE,
+        age   INT,
+        gpa   NUMERIC(2,1)
+    );"#,
+    )?;
+    db.exec("CREATE TABLE course (cid TEXT PRIMARY KEY, name TEXT);")?;
+    db.exec("CREATE TABLE enrolled (sid INT, cid TEXT, grade VARCHAR(1));")?;
+    db.exec(
+        r#"
+    INSERT INTO student (sid, name, login, age, gpa) VALUES
+        (53666, 'RZA',    'rza@cs',    55, 4.0),
+        (53688, 'Taylor', 'swift@cs',  27, 3.9),
+        (53655, 'Tupac',  'shakur@cs', 25, 3.5);
+    "#,
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO course (cid, name) VALUES
+        ('15-445', 'Database systems'),
+        ('15-721', 'Advanced database systems'),
+        ('15-826', 'Data mining'),
+        ('15-799', 'Special topics in databases');
+    "#,
+    )?;
+    db.exec(
+        r#"
+    INSERT INTO ENROLLED (sid, cid, grade) VALUES
+        (53666, '15-445', 'C'),
+        (53688, '15-721', 'A'),
+        (53688, '15-826', 'B'),
+        (53655, '15-445', 'B'),
+        (53666, '15-721', 'C');
+    "#,
+    )?;
+
+    let query = db.exec(
+        r#"
+        SELECT AVG(s.gpa), e.cid 
+        FROM enrolled AS e 
+        JOIN student AS s ON e.sid = s.sid;
+    "#,
+    );
+    assert!(query.is_err());
+
+    Ok(())
+}
