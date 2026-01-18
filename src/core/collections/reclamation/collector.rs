@@ -111,8 +111,11 @@ impl Collector {
             return;
         }
 
-        self.free_batch(batch);
+        // Clear BEFORE freeing to prevent re-entry - if the reclaim function
+        // calls retire again, it will allocate a new batch instead of pushing
+        // to the one we're currently freeing.
         local.batch = ptr::null_mut();
+        self.free_batch(batch);
     }
 
     unsafe fn free_batch(&self, batch: *mut Batch) {
