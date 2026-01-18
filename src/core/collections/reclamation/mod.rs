@@ -7,6 +7,8 @@
 //!
 //! Nikolaev & Ravindran, "Wait-Free Memory Reclamation", arXiv:2108.02763
 
+#![allow(unused)]
+
 mod batch;
 mod collector;
 mod node;
@@ -19,6 +21,10 @@ pub use thread::Thread;
 
 /// Era increment frequency — increment global era every N allocations.
 pub(crate) const ALLOC_FREQ: usize = 110;
+
+fn boxed<T>(value: T) -> *mut T {
+    Box::into_raw(Box::new(value))
+}
 
 #[cfg(test)]
 mod tests {
@@ -36,6 +42,37 @@ mod tests {
         for i in 0..10u64 {
             let ptr = Box::into_raw(Box::new(i));
             unsafe { guard.retire(ptr, reclaim_boxed) };
+        }
+    }
+
+    #[test]
+    fn recursive_retire() {
+        struct Recursive {
+            _v: usize,
+            ptrs: Vec<*mut usize>,
+        }
+
+        let collector = Collector::new().batch_size(1);
+        let ptr = boxed(Recursive {
+            _v: 0,
+            ptrs: (0..100).map(boxed).collect(),
+        });
+
+        unsafe {
+            collector.retire(ptr, |ptr, collector| {
+                let v = Box::from_raw(ptr);
+                for ptr in v.ptrs {
+                    collector.retire(ptr, reclaim_boxed);
+                    let mut guard = collector.pin();
+
+                    guard.flush();
+                    guard.refresh();
+
+                    drop(guard)
+                }
+            });
+
+            collector.pin().flush();
         }
     }
 

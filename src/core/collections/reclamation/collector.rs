@@ -38,6 +38,11 @@ impl Collector {
         }
     }
 
+    pub fn batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
     #[inline]
     pub fn id(&self) -> usize {
         self.id
@@ -172,6 +177,14 @@ impl Default for Collector {
         Self::new()
     }
 }
+
+impl PartialEq for Collector {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Collector {}
 
 impl Drop for Collector {
     fn drop(&mut self) {
