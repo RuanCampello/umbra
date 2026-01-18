@@ -297,7 +297,19 @@ Tools for introspection and survival.
 | `EXTRACT(field FROM source)` | Retrieves sub-fields such as year or date from date/time |
 
 
-### *✨ Just So You Know*
+---
+
+## 📜 Licensing
+
+Umbra is licensed under the **GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)**.
+
+This project includes portions of code derived from third-party projects licensed under the MIT License.
+Attributions and licence texts for those components are provided in the
+[`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES) file.
+
+---
+
+## *✨ Just So You Know*
 
 - **Documentation**: [Here be dragons](https://ruancampello.github.io/umbra-documentation/) (*and possibly bats*)
 - **Protocol**: If you're implementing a client, or are just curious how the shadowy bits work under the hood, check the binary wire format [here](./PROTOCOL.md).
