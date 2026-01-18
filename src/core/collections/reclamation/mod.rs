@@ -21,6 +21,9 @@ pub use thread::Thread;
 
 struct DropTracker(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
+struct UnsafeSend<T>(T);
+unsafe impl<T> Send for UnsafeSend<T> {}
+
 impl Drop for DropTracker {
     fn drop(&mut self) {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -191,5 +194,82 @@ mod tests {
             collector.reclaim_all();
             assert_eq!(dropped.load(Ordering::Relaxed), 1000);
         }
+    }
+
+    #[test]
+    fn reentrant() {
+        let collector = Arc::new(Collector::new().batch_size(5));
+        let dropped = Arc::new(AtomicUsize::new(0));
+
+        let objects: UnsafeSend<Vec<_>> = UnsafeSend(
+            (0..5)
+                .map(|_| boxed(DropTracker(dropped.clone())))
+                .collect(),
+        );
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+
+        let guard1 = collector.pin();
+        let guard2 = collector.pin();
+        let guard3 = collector.pin();
+
+        thread::spawn({
+            let collector = collector.clone();
+
+            move || {
+                let guard = collector.pin();
+                for object in { objects }.0 {
+                    unsafe { guard.retire(object, reclaim_boxed) }
+                }
+            }
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        drop(guard1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        drop(guard2);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        drop(guard3);
+        assert_eq!(dropped.load(Ordering::Relaxed), 5);
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+
+        let objects: UnsafeSend<Vec<_>> = UnsafeSend(
+            (0..5)
+                .map(|_| boxed(DropTracker(dropped.clone())))
+                .collect(),
+        );
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+
+        let mut guard1 = collector.pin();
+        let mut guard2 = collector.pin();
+        let mut guard3 = collector.pin();
+
+        thread::spawn({
+            let collector = collector.clone();
+
+            move || {
+                let guard = collector.pin();
+                for object in { objects }.0 {
+                    unsafe { guard.retire(object, reclaim_boxed) }
+                }
+            }
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        guard1.refresh();
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        drop(guard1);
+        guard2.refresh();
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        drop(guard2);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        guard3.refresh();
+        assert_eq!(dropped.load(Ordering::Relaxed), 5);
     }
 }

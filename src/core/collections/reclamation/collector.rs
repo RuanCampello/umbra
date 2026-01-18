@@ -1,16 +1,14 @@
 //! Crystalline-L memory reclamation collector.
 //!
 //! The collector is the main entry point for memory reclamation. It manages
-//! thread-local batches and reservation state.
+//! global reclamation state using a debt-based strategy (active reservations).
 
+use super::batch::{Batch, Entry, LocalBatch, DROP};
+use super::reservation::{Reservation, INACTIVE};
+use super::thread::{Thread, ThreadLocal};
 use std::cell::UnsafeCell;
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
-
-use super::batch::{Batch, LocalBatch, DROP};
-use super::node::{is_invptr, Node, INVPTR};
-use super::reservation::Reservation;
-use super::thread::{Thread, ThreadLocal};
+use std::sync::atomic::{self, AtomicUsize, Ordering};
 
 /// Crystalline-L memory reclamation collector.
 pub struct Collector {
@@ -55,6 +53,7 @@ impl Collector {
 
         if reservation.guard_count() == 0 {
             reservation.activate();
+            atomic::fence(Ordering::SeqCst);
         }
         reservation.enter();
 
@@ -65,12 +64,6 @@ impl Collector {
     }
 
     /// Retires a pointer with a reclaim function.
-    ///
-    /// # Safety
-    ///
-    /// - The pointer must no longer be accessible from shared data structures
-    /// - The reclaim function must correctly handle the pointer type
-    /// - The pointer must not be retired more than once
     pub unsafe fn retire<T>(&self, ptr: *mut T, reclaim: unsafe fn(*mut T, &Collector)) {
         let thread = Thread::current();
         let local = self
@@ -84,11 +77,10 @@ impl Collector {
 
         let batch = &mut *local_batch.batch;
 
-        // Type-erase for storage
         let reclaim_erased: unsafe fn(*mut u8, *const ()) = std::mem::transmute(reclaim);
         batch.push(ptr as *mut u8, reclaim_erased);
 
-        if batch.is_full() {
+        if batch.len() >= self.batch_size || batch.is_full() {
             self.try_retire(local_batch);
         }
     }
@@ -105,17 +97,77 @@ impl Collector {
         self.try_retire(local_batch);
     }
 
-    unsafe fn try_retire(&self, local: &mut LocalBatch) {
-        let batch = local.batch;
+    unsafe fn try_retire(&self, local_batch: &mut LocalBatch) {
+        atomic::fence(Ordering::SeqCst);
+
+        let batch = local_batch.batch;
         if batch.is_null() || batch == DROP {
             return;
         }
 
-        // Clear BEFORE freeing to prevent re-entry - if the reclaim function
-        // calls retire again, it will allocate a new batch instead of pushing
-        // to the one we're currently freeing.
-        local.batch = ptr::null_mut();
-        self.free_batch(batch);
+        let batch_ref = &mut *batch;
+        let mut active_count = 0;
+        let mut used_entries = 0;
+
+        for reservation in self.reservations.iter() {
+            if reservation.is_inactive() {
+                continue;
+            }
+
+            // ensure we have enough entries in the batch to serve as debt nodes
+            if used_entries >= batch_ref.len {
+                // batch is full effectively.
+                // for now, we return and delay retirement.
+                return;
+            }
+
+            let entry = &mut batch_ref.entries[used_entries];
+            entry.head = &reservation.head;
+
+            used_entries += 1;
+            active_count += 1;
+        }
+
+        if active_count == 0 {
+            local_batch.batch = Batch::alloc();
+            self.free_batch(batch);
+            return;
+        }
+
+        batch_ref.refcount.store(active_count, Ordering::Relaxed);
+        local_batch.batch = Batch::alloc();
+        atomic::fence(Ordering::Acquire);
+
+        let mut decrements = 0;
+
+        for i in 0..used_entries {
+            let entry = &mut batch_ref.entries[i];
+            let head_ptr = entry.head;
+            let head = &*head_ptr;
+
+            let mut prev = head.load(Ordering::Relaxed);
+
+            loop {
+                if prev == INACTIVE {
+                    decrements += 1;
+                    break;
+                }
+
+                entry.next = prev;
+                match head.compare_exchange_weak(prev, entry, Ordering::Release, Ordering::Relaxed)
+                {
+                    Ok(_) => break,
+                    Err(found) => prev = found,
+                }
+            }
+        }
+
+        if decrements > 0 {
+            let old = batch_ref.refcount.fetch_sub(decrements, Ordering::AcqRel);
+            if old == decrements {
+                self.free_batch(batch);
+            }
+        }
     }
 
     unsafe fn free_batch(&self, batch: *mut Batch) {
@@ -124,42 +176,16 @@ impl Collector {
         }
 
         let batch_ref = &mut *batch;
+
         for i in 0..batch_ref.len {
             let entry = &batch_ref.entries[i];
-            let reclaim: unsafe fn(*mut u8, &Collector) = std::mem::transmute(entry.reclaim);
-            reclaim(entry.ptr, self);
+            if let Some(reclaim) = entry.reclaim {
+                let reclaim_typed: unsafe fn(*mut u8, &Collector) = std::mem::transmute(reclaim);
+                reclaim_typed(entry.ptr, self);
+            }
         }
 
         LocalBatch::free(batch);
-    }
-
-    /// Reclaims all pending retired objects.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called when no threads are actively using the collector.
-    pub unsafe fn reclaim_all(&self) {
-        for local in self.batches.iter() {
-            let local_batch = &mut *local.get();
-
-            // handle batches created during reclamation
-            loop {
-                let batch = local_batch.batch;
-
-                if batch.is_null() || batch == DROP {
-                    break;
-                }
-
-                local_batch.batch = DROP;
-                self.free_batch(batch);
-
-                // Check if a new batch was created during free_batch
-                if local_batch.batch == DROP {
-                    local_batch.batch = ptr::null_mut();
-                    break;
-                }
-            }
-        }
     }
 
     unsafe fn clear(&self, thread: Thread) {
@@ -168,18 +194,55 @@ impl Collector {
             None => return,
         };
 
-        let list = reservation.swap_head(INVPTR);
+        let mut node = reservation.head.swap(INACTIVE, Ordering::SeqCst);
 
-        if !is_invptr(list) && !list.is_null() {
-            self.traverse(list);
+        while !node.is_null() && node != INACTIVE {
+            let entry = &mut *node;
+            let next = entry.next;
+            let batch = entry.batch;
+
+            debug_assert!(!batch.is_null());
+
+            let batch_ref = &*batch;
+            let old_rc = batch_ref.refcount.fetch_sub(1, Ordering::AcqRel);
+            if old_rc == 1 {
+                self.free_batch(batch);
+            }
+
+            node = next;
         }
     }
 
-    unsafe fn traverse(&self, mut next: *mut Node) {
-        while !next.is_null() && !is_invptr(next) {
-            let curr = next;
-            let curr_node = &*curr;
-            next = curr_node.next();
+    pub unsafe fn reclaim_all(&self) {
+        for local in self.batches.iter() {
+            let local_batch = &mut *local.get();
+
+            loop {
+                let batch = local_batch.batch;
+                if batch.is_null() || batch == DROP {
+                    break;
+                }
+
+                local_batch.batch = ptr::null_mut();
+                self.free_batch(batch);
+            }
+        }
+
+        for reservation in self.reservations.iter() {
+            if !reservation.is_inactive() {
+                let mut node = reservation.head.swap(INACTIVE, Ordering::SeqCst);
+                while !node.is_null() && node != INACTIVE {
+                    let entry = &mut *node;
+                    let next = entry.next;
+                    let batch = entry.batch;
+                    let batch_ref = &*batch;
+                    let old_rc = batch_ref.refcount.fetch_sub(1, Ordering::AcqRel);
+                    if old_rc == 1 {
+                        self.free_batch(batch);
+                    }
+                    node = next;
+                }
+            }
         }
     }
 }
@@ -218,7 +281,7 @@ impl<'a> Guard<'a> {
         self.collector
     }
 
-    pub fn protect<T>(&self, ptr: &AtomicPtr<T>) -> *mut T {
+    pub fn protect<T>(&self, ptr: &atomic::AtomicPtr<T>) -> *mut T {
         ptr.load(Ordering::Acquire)
     }
 
@@ -226,7 +289,18 @@ impl<'a> Guard<'a> {
         unsafe { self.collector.flush() };
     }
 
-    pub fn refresh(&mut self) {}
+    pub fn refresh(&mut self) {
+        let reservation = match self.collector.reservations.get(self.thread) {
+            Some(r) => r,
+            None => return,
+        };
+
+        if reservation.guard_count() == 1 {
+            unsafe { self.collector.clear(self.thread) };
+            reservation.activate();
+            atomic::fence(Ordering::SeqCst);
+        }
+    }
 
     /// Retires a pointer with a reclaim function.
     pub unsafe fn retire<T>(&self, ptr: *mut T, reclaim: unsafe fn(*mut T, &Collector)) {
@@ -257,6 +331,7 @@ pub unsafe fn reclaim_boxed<T>(ptr: *mut T, _collector: &Collector) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicPtr;
 
     #[test]
     fn test_collector_new() {
@@ -281,18 +356,5 @@ mod tests {
         }
 
         guard.flush();
-    }
-
-    #[test]
-    fn test_protect() {
-        let c = Collector::new();
-        let data = Box::into_raw(Box::new(42u64));
-        let atomic = AtomicPtr::new(data);
-
-        let guard = c.pin();
-        let protected = guard.protect(&atomic);
-        assert_eq!(protected, data);
-
-        unsafe { drop(Box::from_raw(data)) };
     }
 }

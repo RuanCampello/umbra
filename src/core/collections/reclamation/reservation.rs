@@ -5,84 +5,54 @@
 //! section and is cleared when it exits.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::ptr;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
-use super::node::{Node, INVPTR};
+use super::batch::Entry;
 
+/// Sentinel value indicating an inactive reservation.
+pub const INACTIVE: *mut Entry = usize::MAX as *mut Entry;
 
 /// Per-thread reservation state.
 ///
-/// Tracks a list of retired batches and the era when last updated.
-/// The `head` is [`INVPTR`] when inactive, `null` or a valid list when active.
+/// Tracks a list of debt nodes (Entries) from retired batches.
 pub struct Reservation {
-    head: AtomicPtr<Node>,
-    era: AtomicU64,
-    guards: Cell<u64>,
+    pub head: AtomicPtr<Entry>,
+    guards: Cell<usize>,
 }
-
 
 impl Reservation {
     #[inline]
     pub const fn new() -> Self {
         Self {
-            head: AtomicPtr::new(INVPTR),
-            era: AtomicU64::new(0),
+            head: AtomicPtr::new(INACTIVE),
             guards: Cell::new(0),
         }
     }
 
     #[inline]
     pub fn is_inactive(&self) -> bool {
-        self.head.load(Ordering::Acquire) == INVPTR
+        self.head.load(Ordering::Acquire) == INACTIVE
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.head.load(Ordering::Acquire).is_null()
+        let head = self.head.load(Ordering::Acquire);
+        head.is_null() || head == INACTIVE
     }
 
     #[inline]
     pub fn activate(&self) {
-        self.head.store(std::ptr::null_mut(), Ordering::Release);
+        self.head.store(ptr::null_mut(), Ordering::SeqCst);
     }
 
     #[inline]
     pub fn deactivate(&self) {
-        self.head.store(INVPTR, Ordering::Release);
+        self.head.store(INACTIVE, Ordering::SeqCst);
     }
 
     #[inline]
-    pub fn head(&self) -> *mut Node {
-        self.head.load(Ordering::Acquire)
-    }
-
-    #[inline]
-    pub fn swap_head(&self, new: *mut Node) -> *mut Node {
-        self.head.swap(new, Ordering::AcqRel)
-    }
-
-    #[inline]
-    pub fn compare_exchange_head(
-        &self,
-        current: *mut Node,
-        new: *mut Node,
-    ) -> Result<*mut Node, *mut Node> {
-        self.head
-            .compare_exchange(current, new, Ordering::AcqRel, Ordering::Acquire)
-    }
-
-    #[inline]
-    pub fn era(&self) -> u64 {
-        self.era.load(Ordering::Acquire)
-    }
-
-    #[inline]
-    pub fn set_era(&self, era: u64) {
-        self.era.store(era, Ordering::Release);
-    }
-
-    #[inline]
-    pub fn guard_count(&self) -> u64 {
+    pub fn guard_count(&self) -> usize {
         self.guards.get()
     }
 
@@ -115,8 +85,6 @@ mod tests {
     fn test_new_reservation() {
         let r = Reservation::new();
         assert!(r.is_inactive());
-        assert!(!r.is_empty());
-        assert_eq!(r.era(), 0);
         assert_eq!(r.guard_count(), 0);
     }
 
@@ -147,16 +115,5 @@ mod tests {
 
         r.exit();
         assert_eq!(r.guard_count(), 0);
-    }
-
-    #[test]
-    fn test_era() {
-        let r = Reservation::new();
-
-        r.set_era(42);
-        assert_eq!(r.era(), 42);
-
-        r.set_era(100);
-        assert_eq!(r.era(), 100);
     }
 }

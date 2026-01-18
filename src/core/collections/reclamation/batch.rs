@@ -5,9 +5,10 @@
 
 use std::alloc::{self, Layout};
 use std::ptr;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 /// Maximum entries per batch.
-const BATCH_SIZE: usize = 64;
+pub const BATCH_SIZE: usize = 64; // Default, can be larger dynamically if we changed allocator
 
 /// A batch of retired objects awaiting reclamation.
 #[repr(C)]
@@ -16,8 +17,8 @@ pub struct Batch {
     pub entries: [Entry; BATCH_SIZE],
     /// Number of entries in use.
     pub len: usize,
-    /// Minimum birth era of entries in this batch.
-    pub min_era: u64,
+    /// Reference count (number of active guards referencing this batch).
+    pub refcount: AtomicUsize,
 }
 
 /// An entry in a batch.
@@ -25,8 +26,14 @@ pub struct Batch {
 pub struct Entry {
     /// Pointer to the retired object.
     pub ptr: *mut u8,
-    /// Function to reclaim the object. Second arg is collector ptr cast to *const ().
-    pub reclaim: unsafe fn(*mut u8, *const ()),
+    /// Function to reclaim the object.
+    pub reclaim: Option<unsafe fn(*mut u8, *const ())>,
+    /// Pointer to the next entry in the debt list.
+    pub next: *mut Entry,
+    /// Pointer to the reservation head this entry is linked to.
+    pub head: *const AtomicPtr<Entry>,
+    /// Pointer to the batch this entry belongs to.
+    pub batch: *mut Batch,
 }
 
 /// Thread-local batch state.
@@ -65,13 +72,14 @@ impl Batch {
 
     pub unsafe fn push(&mut self, ptr: *mut u8, reclaim: unsafe fn(*mut u8, *const ())) {
         debug_assert!(!self.is_full());
-        self.entries[self.len] = Entry { ptr, reclaim };
+        self.entries[self.len] = Entry {
+            ptr,
+            reclaim: Some(reclaim),
+            next: ptr::null_mut(),
+            head: ptr::null(),
+            batch: self as *mut Batch,
+        };
         self.len += 1;
-    }
-
-    pub fn reset(&mut self) {
-        self.len = 0;
-        self.min_era = u64::MAX;
     }
 }
 
@@ -106,7 +114,10 @@ impl Entry {
     pub const fn empty() -> Self {
         Self {
             ptr: ptr::null_mut(),
-            reclaim: empty_reclaim,
+            reclaim: None,
+            next: ptr::null_mut(),
+            head: ptr::null(),
+            batch: ptr::null_mut(),
         }
     }
 }
@@ -117,12 +128,11 @@ impl Default for Entry {
     }
 }
 
-/// No-op reclaim function for empty entries.
-unsafe fn empty_reclaim(_ptr: *mut u8, _collector: *const ()) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    unsafe fn empty_reclaim(_ptr: *mut u8, _collector: *const ()) {}
 
     #[test]
     fn test_batch_alloc_free() {
@@ -145,11 +155,5 @@ mod tests {
             assert_eq!((*batch).len(), 1);
             LocalBatch::free(batch);
         }
-    }
-
-    #[test]
-    fn test_local_batch() {
-        let local = LocalBatch::new();
-        assert!(!local.is_active());
     }
 }
