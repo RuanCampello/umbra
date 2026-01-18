@@ -78,7 +78,7 @@ impl Collector {
             .get_or(thread, || UnsafeCell::new(LocalBatch::new()));
         let local_batch = &mut *local.get();
 
-        if local_batch.batch.is_null() {
+        if local_batch.batch.is_null() || local_batch.batch == DROP {
             local_batch.batch = Batch::alloc();
         }
 
@@ -141,15 +141,24 @@ impl Collector {
     pub unsafe fn reclaim_all(&self) {
         for local in self.batches.iter() {
             let local_batch = &mut *local.get();
-            let batch = local_batch.batch;
 
-            if batch.is_null() || batch == DROP {
-                continue;
+            // handle batches created during reclamation
+            loop {
+                let batch = local_batch.batch;
+
+                if batch.is_null() || batch == DROP {
+                    break;
+                }
+
+                local_batch.batch = DROP;
+                self.free_batch(batch);
+
+                // Check if a new batch was created during free_batch
+                if local_batch.batch == DROP {
+                    local_batch.batch = ptr::null_mut();
+                    break;
+                }
             }
-
-            local_batch.batch = DROP;
-            self.free_batch(batch);
-            local_batch.batch = ptr::null_mut();
         }
     }
 
