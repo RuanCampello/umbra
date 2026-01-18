@@ -272,4 +272,96 @@ mod tests {
         guard3.refresh();
         assert_eq!(dropped.load(Ordering::Relaxed), 5);
     }
+
+    /// this stack testing is directly from: [seize](https://github.com/ibraheemdev/seize/blob/master/tests/lib.rs)
+    mod stack {
+        use crate::core::collections::reclamation::{
+            boxed, reclaim_boxed, thread, Collector, Guard,
+        };
+        use std::{
+            mem::ManuallyDrop,
+            sync::{
+                atomic::{AtomicPtr, Ordering},
+                Arc,
+            },
+        };
+
+        #[derive(Debug)]
+        pub struct Stack<T> {
+            head: AtomicPtr<Node<T>>,
+            collector: Collector,
+        }
+
+        #[derive(Debug)]
+        struct Node<T> {
+            data: ManuallyDrop<T>,
+            next: *mut Node<T>,
+        }
+
+        impl<T> Stack<T> {
+            pub fn new(batch_size: usize) -> Stack<T> {
+                Stack {
+                    head: AtomicPtr::new(std::ptr::null_mut()),
+                    collector: Collector::new().batch_size(batch_size),
+                }
+            }
+
+            pub fn push(&self, value: T, guard: &Guard) {
+                let new = boxed(Node {
+                    data: ManuallyDrop::new(value),
+                    next: std::ptr::null_mut(),
+                });
+
+                loop {
+                    let head = guard.protect(&self.head);
+                    unsafe { (*new).next = head }
+
+                    if self
+                        .head
+                        .compare_exchange(head, new, Ordering::Release, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        break;
+                    }
+                }
+            }
+
+            pub fn pop(&self, guard: &Guard) -> Option<T> {
+                loop {
+                    let head = guard.protect(&self.head);
+
+                    if head.is_null() {
+                        return None;
+                    }
+
+                    let next = unsafe { (*head).next };
+
+                    if self
+                        .head
+                        .compare_exchange(head, next, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        unsafe {
+                            let data = std::ptr::read(&(*head).data);
+                            self.collector.retire(head, reclaim_boxed);
+                            return Some(ManuallyDrop::into_inner(data));
+                        }
+                    }
+                }
+            }
+
+            pub fn is_empty(&self) -> bool {
+                self.head.load(Ordering::Relaxed).is_null()
+            }
+        }
+
+        impl<T> Drop for Stack<T> {
+            fn drop(&mut self) {
+                let guard = self.collector.pin();
+                while self.pop(&guard).is_some() {}
+            }
+        }
+
+        // TODO: stress testing
+    }
 }
