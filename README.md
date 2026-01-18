@@ -305,7 +305,7 @@ Umbra is licensed under the **GNU Affero General Public License v3.0 or later (A
 
 This project includes portions of code derived from third-party projects licensed under the MIT License.
 Attributions and licence texts for those components are provided in the
-[`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES) file.
+[`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES.md) file.
 
 ---
 
