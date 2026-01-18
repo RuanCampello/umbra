@@ -261,6 +261,14 @@ impl PartialEq for Collector {
 
 impl Eq for Collector {}
 
+impl std::fmt::Debug for Collector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Collector")
+            .field("batch_size", &self.batch_size)
+            .finish()
+    }
+}
+
 impl Drop for Collector {
     fn drop(&mut self) {
         unsafe { self.reclaim_all() };
@@ -356,5 +364,21 @@ mod tests {
         }
 
         guard.flush();
+    }
+
+    #[test]
+    fn equality() {
+        let a = Collector::new();
+        let b = Collector::new();
+
+        assert_eq!(a, a);
+        assert_eq!(b, b);
+        assert_ne!(a, b);
+
+        assert_eq!(*a.pin().collector(), a);
+        assert_ne!(*a.pin().collector(), b);
+
+        assert_eq!(*b.pin().collector(), b);
+        assert_ne!(*b.pin().collector(), a);
     }
 }
