@@ -19,6 +19,14 @@ pub use collector::{reclaim_boxed, Collector, Guard};
 pub use node::Node;
 pub use thread::Thread;
 
+struct DropTracker(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for DropTracker {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Era increment frequency — increment global era every N allocations.
 pub(crate) const ALLOC_FREQ: usize = 110;
 
@@ -29,7 +37,7 @@ fn boxed<T>(value: T) -> *mut T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicPtr;
+    use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread;
 
@@ -130,5 +138,58 @@ mod tests {
 
         guard.flush();
         guard.refresh();
+    }
+
+    #[test]
+    fn reclaim_all() {
+        let collector = Collector::new().batch_size(2);
+
+        for _ in 0..100 {
+            let drop = Arc::new(AtomicUsize::new(0));
+
+            let items: Vec<_> = (0..1000)
+                .map(|_| AtomicPtr::new(boxed(DropTracker(drop.clone()))))
+                .collect();
+
+            items.iter().for_each(|item| unsafe {
+                collector.retire(item.load(Ordering::Relaxed), reclaim_boxed);
+            });
+
+            unsafe {
+                collector.reclaim_all();
+            }
+
+            assert_eq!(drop.load(Ordering::Relaxed), 1000);
+        }
+    }
+
+    #[test]
+    fn recursive_retire_reclaim_all() {
+        struct Recursive {
+            _v: usize,
+            pointers: Vec<*mut DropTracker>,
+        }
+
+        unsafe {
+            let collector = Collector::new().batch_size(1000 * 2);
+            let dropped = Arc::new(AtomicUsize::new(0));
+
+            let ptr = boxed(Recursive {
+                _v: 0,
+                pointers: (0..1000)
+                    .map(|_| boxed(DropTracker(dropped.clone())))
+                    .collect(),
+            });
+
+            collector.retire(ptr, |ptr: *mut Recursive, collector| {
+                let value = Box::from_raw(ptr);
+                for pointer in value.pointers {
+                    (*collector).retire(pointer, reclaim_boxed);
+                }
+            });
+
+            collector.reclaim_all();
+            assert_eq!(dropped.load(Ordering::Relaxed), 1000);
+        }
     }
 }
