@@ -1,7 +1,12 @@
-//! Hashing algorithm used in [rust-c](https://github.com/rust-lang/rustc-hash).
+//! Hashing algorithm.
 //!
-//! Code code is pratically copy-pasted from the source, so you might checkout it to
-//! read about the choices and primary references.
+//! This implementation is derived from `rustc-hash`
+//! (https://github.com/rust-lang/rustc-hash),
+//! licensed under the MIT License.
+//! Copyright © the Rust Project Developers.
+//!
+//! The original documentation explains the design trade-offs
+//! and references used.
 
 /// A speedy non-cryptographic hash.
 /// As we deal with trusted input (at least in the vast majority)

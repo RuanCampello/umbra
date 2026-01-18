@@ -1,7 +1,12 @@
-//! SmallVec it's mostly a small (what irony) and scoped version
-//! of [smallvec](https://docs.rs/smallvec/latest/smallvec/) to our needs.
+//! SmallVec implementation.
 //!
-//! Most of code it's straight from there, so all hail to them.
+//! This module contains code derived from the `smallvec` crate
+//! (https://docs.rs/smallvec/latest/smallvec/),
+//! which is licensed under the MIT License.
+//! Copyright © the smallvec contributors.
+//!
+//! The implementation has been trimmed and adapted to fit the
+//! specific requirements of this project.
 
 #![allow(unused)]
 
