@@ -9,6 +9,7 @@
 
 #![allow(unused)]
 
+mod barrier;
 mod batch;
 mod collector;
 mod node;

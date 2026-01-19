@@ -3,6 +3,7 @@
 //! The collector is the main entry point for memory reclamation. It manages
 //! global reclamation state using a debt-based strategy (active reservations).
 
+use super::barrier;
 use super::batch::{Batch, Entry, LocalBatch, DROP};
 use super::reservation::{Reservation, INACTIVE};
 use super::thread::{Thread, ThreadLocal};
@@ -193,7 +194,7 @@ impl Collector {
     }
 
     unsafe fn try_retire(&self, local_batch: &mut LocalBatch) {
-        atomic::fence(Ordering::SeqCst);
+        barrier::heavy();
 
         let batch = local_batch.batch;
         if batch.is_null() || batch == DROP {
