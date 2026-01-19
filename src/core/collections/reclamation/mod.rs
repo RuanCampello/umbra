@@ -408,4 +408,32 @@ mod tests {
             assert!(stack.is_empty());
         }
     }
+
+    #[test]
+    fn owned_stress() {
+        for _ in 0..ITER {
+            let stack = Arc::new(Stack::new(1));
+
+            thread::scope(|s| {
+                for i in 0..ITEMS {
+                    let guard = &stack.collector.pin_owned();
+                    stack.push(i, guard);
+                    stack.pop(guard);
+                }
+
+                for _ in 0..THREADS {
+                    s.spawn(|| {
+                        for i in 0..ITEMS {
+                            let guard = &stack.collector.pin_owned();
+                            stack.push(i, guard);
+                            stack.pop(guard);
+                        }
+                    });
+                }
+            });
+
+            assert!(stack.pop(&stack.collector.pin_owned()).is_none());
+            assert!(stack.is_empty());
+        }
+    }
 }
