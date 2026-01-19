@@ -39,10 +39,16 @@ fn boxed<T>(value: T) -> *mut T {
 
 #[cfg(test)]
 mod tests {
+    use super::Node as Entry;
     use super::*;
+    use std::mem::ManuallyDrop;
     use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread;
+
+    const ITER: usize = 50;
+    const ITEMS: usize = 10_000;
+    const THREADS: usize = 32;
 
     #[test]
     fn basic_retire() {
@@ -51,7 +57,7 @@ mod tests {
         let guard = collector.pin();
 
         for i in 0..10u64 {
-            let ptr = Box::into_raw(Box::new(i));
+            let ptr = boxed(i);
             unsafe { guard.retire(ptr, reclaim_boxed) };
         }
     }
@@ -66,7 +72,7 @@ mod tests {
         let collector = Collector::new().batch_size(1);
         let ptr = boxed(Recursive {
             _v: 0,
-            ptrs: (0..100).map(boxed).collect(),
+            ptrs: (0..ITEMS).map(boxed).collect(),
         });
 
         unsafe {
@@ -91,7 +97,7 @@ mod tests {
     fn protect() {
         let collector = Collector::new();
 
-        let node = Box::into_raw(Box::new(Node::new(1)));
+        let node = boxed(Entry::new(1));
         let atomic = AtomicPtr::new(node);
 
         let guard = collector.pin();
@@ -105,7 +111,7 @@ mod tests {
     #[test]
     fn concurrent_access() {
         let collector = Arc::new(Collector::new());
-        let node = Box::into_raw(Box::new(Node::new(1)));
+        let node = boxed(Entry::new(1));
         let atomic = Arc::new(AtomicPtr::new(node));
 
         let handles: Vec<_> = (0..4)
@@ -135,7 +141,7 @@ mod tests {
         let mut guard = collector.pin();
 
         for i in 0..10u64 {
-            let ptr = Box::into_raw(Box::new(i));
+            let ptr = boxed(i);
             unsafe { guard.retire(ptr, reclaim_boxed) };
         }
 
@@ -274,94 +280,105 @@ mod tests {
     }
 
     /// this stack testing is directly from: [seize](https://github.com/ibraheemdev/seize/blob/master/tests/lib.rs)
-    mod stack {
-        use crate::core::collections::reclamation::{
-            boxed, reclaim_boxed, thread, Collector, Guard,
-        };
-        use std::{
-            mem::ManuallyDrop,
-            sync::{
-                atomic::{AtomicPtr, Ordering},
-                Arc,
-            },
-        };
+    #[derive(Debug)]
+    pub struct Stack<T> {
+        head: AtomicPtr<Node<T>>,
+        collector: Collector,
+    }
 
-        #[derive(Debug)]
-        pub struct Stack<T> {
-            head: AtomicPtr<Node<T>>,
-            collector: Collector,
+    #[derive(Debug)]
+    struct Node<T> {
+        data: ManuallyDrop<T>,
+        next: *mut Node<T>,
+    }
+
+    impl<T> Stack<T> {
+        pub fn new(batch_size: usize) -> Stack<T> {
+            Stack {
+                head: AtomicPtr::new(std::ptr::null_mut()),
+                collector: Collector::new().batch_size(batch_size),
+            }
         }
 
-        #[derive(Debug)]
-        struct Node<T> {
-            data: ManuallyDrop<T>,
-            next: *mut Node<T>,
-        }
+        pub fn push(&self, value: T, guard: &Guard) {
+            let new = boxed(Node {
+                data: ManuallyDrop::new(value),
+                next: std::ptr::null_mut(),
+            });
 
-        impl<T> Stack<T> {
-            pub fn new(batch_size: usize) -> Stack<T> {
-                Stack {
-                    head: AtomicPtr::new(std::ptr::null_mut()),
-                    collector: Collector::new().batch_size(batch_size),
+            loop {
+                let head = guard.protect(&self.head);
+                unsafe { (*new).next = head }
+
+                if self
+                    .head
+                    .compare_exchange(head, new, Ordering::Release, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    break;
                 }
             }
+        }
 
-            pub fn push(&self, value: T, guard: &Guard) {
-                let new = boxed(Node {
-                    data: ManuallyDrop::new(value),
-                    next: std::ptr::null_mut(),
-                });
+        pub fn pop(&self, guard: &Guard) -> Option<T> {
+            loop {
+                let head = guard.protect(&self.head);
 
-                loop {
-                    let head = guard.protect(&self.head);
-                    unsafe { (*new).next = head }
+                if head.is_null() {
+                    return None;
+                }
 
-                    if self
-                        .head
-                        .compare_exchange(head, new, Ordering::Release, Ordering::Relaxed)
-                        .is_ok()
-                    {
-                        break;
+                let next = unsafe { (*head).next };
+
+                if self
+                    .head
+                    .compare_exchange(head, next, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    unsafe {
+                        let data = std::ptr::read(&(*head).data);
+                        self.collector.retire(head, reclaim_boxed);
+                        return Some(ManuallyDrop::into_inner(data));
                     }
                 }
             }
+        }
 
-            pub fn pop(&self, guard: &Guard) -> Option<T> {
-                loop {
-                    let head = guard.protect(&self.head);
+        pub fn is_empty(&self) -> bool {
+            self.head.load(Ordering::Relaxed).is_null()
+        }
+    }
 
-                    if head.is_null() {
-                        return None;
-                    }
+    impl<T> Drop for Stack<T> {
+        fn drop(&mut self) {
+            let guard = self.collector.pin();
+            while self.pop(&guard).is_some() {}
+        }
+    }
 
-                    let next = unsafe { (*head).next };
+    #[test]
+    fn stress() {
+        for _ in 0..ITER {
+            let stack = Arc::new(Stack::new(1));
 
-                    if self
-                        .head
-                        .compare_exchange(head, next, Ordering::Relaxed, Ordering::Relaxed)
-                        .is_ok()
-                    {
-                        unsafe {
-                            let data = std::ptr::read(&(*head).data);
-                            self.collector.retire(head, reclaim_boxed);
-                            return Some(ManuallyDrop::into_inner(data));
+            thread::scope(|s| {
+                for i in 0..ITEMS {
+                    stack.push(i, &&stack.collector.pin());
+                    stack.pop(&stack.collector.pin());
+                }
+
+                for _ in 0..THREADS {
+                    s.spawn(|| {
+                        for i in 0..ITEMS {
+                            stack.push(i, &stack.collector.pin());
+                            stack.pop(&stack.collector.pin());
                         }
-                    }
+                    });
                 }
-            }
+            });
 
-            pub fn is_empty(&self) -> bool {
-                self.head.load(Ordering::Relaxed).is_null()
-            }
+            assert!(stack.pop(&stack.collector.pin()).is_none());
+            assert!(stack.is_empty());
         }
-
-        impl<T> Drop for Stack<T> {
-            fn drop(&mut self) {
-                let guard = self.collector.pin();
-                while self.pop(&guard).is_some() {}
-            }
-        }
-
-        // TODO: stress testing
     }
 }
