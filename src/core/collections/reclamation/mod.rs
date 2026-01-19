@@ -381,4 +381,31 @@ mod tests {
             assert!(stack.is_empty());
         }
     }
+
+    #[test]
+    fn shared_stress() {
+        for _ in 0..ITER {
+            let stack = Arc::new(Stack::new(1));
+            let guard = &stack.collector.pin_owned();
+
+            thread::scope(|s| {
+                for i in 0..ITEMS {
+                    stack.push(i, guard);
+                    stack.pop(guard);
+                }
+
+                for _ in 0..THREADS {
+                    s.spawn(|| {
+                        for i in 0..ITEMS {
+                            stack.push(i, guard);
+                            stack.pop(guard);
+                        }
+                    });
+                }
+            });
+
+            assert!(stack.pop(guard).is_none());
+            assert!(stack.is_empty());
+        }
+    }
 }
