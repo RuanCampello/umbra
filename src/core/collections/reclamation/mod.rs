@@ -46,9 +46,19 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    const ITER: usize = 50;
-    const ITEMS: usize = 10_000;
-    const THREADS: usize = 32;
+    #[cfg(not(miri))]
+    mod var {
+        pub const ITER: usize = 50;
+        pub const ITEMS: usize = 10_000;
+        pub const THREADS: usize = 32;
+    }
+
+    #[cfg(miri)]
+    mod var {
+        pub const ITER: usize = 4;
+        pub const ITEMS: usize = 100;
+        pub const THREADS: usize = 4;
+    }
 
     #[test]
     fn basic_retire() {
@@ -72,7 +82,7 @@ mod tests {
         let collector = Collector::new().batch_size(1);
         let ptr = boxed(Recursive {
             _v: 0,
-            ptrs: (0..ITEMS).map(boxed).collect(),
+            ptrs: (0..var::ITEMS).map(boxed).collect(),
         });
 
         unsafe {
@@ -358,18 +368,18 @@ mod tests {
 
     #[test]
     fn stress() {
-        for _ in 0..ITER {
+        for _ in 0..var::ITER {
             let stack = Arc::new(Stack::new(1));
 
             thread::scope(|s| {
-                for i in 0..ITEMS {
+                for i in 0..var::ITEMS {
                     stack.push(i, &stack.collector.pin());
                     stack.pop(&stack.collector.pin());
                 }
 
-                for _ in 0..THREADS {
+                for _ in 0..var::THREADS {
                     s.spawn(|| {
-                        for i in 0..ITEMS {
+                        for i in 0..var::ITEMS {
                             stack.push(i, &stack.collector.pin());
                             stack.pop(&stack.collector.pin());
                         }
@@ -384,19 +394,19 @@ mod tests {
 
     #[test]
     fn shared_stress() {
-        for _ in 0..ITER {
+        for _ in 0..var::ITER {
             let stack = Arc::new(Stack::new(1));
             let guard = &stack.collector.pin_owned();
 
             thread::scope(|s| {
-                for i in 0..ITEMS {
+                for i in 0..var::ITEMS {
                     stack.push(i, guard);
                     stack.pop(guard);
                 }
 
-                for _ in 0..THREADS {
+                for _ in 0..var::THREADS {
                     s.spawn(|| {
-                        for i in 0..ITEMS {
+                        for i in 0..var::ITEMS {
                             stack.push(i, guard);
                             stack.pop(guard);
                         }
@@ -411,19 +421,19 @@ mod tests {
 
     #[test]
     fn owned_stress() {
-        for _ in 0..ITER {
+        for _ in 0..var::ITER {
             let stack = Arc::new(Stack::new(1));
 
             thread::scope(|s| {
-                for i in 0..ITEMS {
+                for i in 0..var::ITEMS {
                     let guard = &stack.collector.pin_owned();
                     stack.push(i, guard);
                     stack.pop(guard);
                 }
 
-                for _ in 0..THREADS {
+                for _ in 0..var::THREADS {
                     s.spawn(|| {
-                        for i in 0..ITEMS {
+                        for i in 0..var::ITEMS {
                             let guard = &stack.collector.pin_owned();
                             stack.push(i, guard);
                             stack.pop(guard);

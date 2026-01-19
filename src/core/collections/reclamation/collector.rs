@@ -154,19 +154,29 @@ impl Collector {
         let local = self
             .batches
             .get_or(thread, || UnsafeCell::new(LocalBatch::new()));
-        let local_batch = &mut *local.get();
+        let local_batch = local.get();
 
-        if local_batch.batch.is_null() || local_batch.batch == DROP {
-            local_batch.batch = Batch::alloc();
+        if (*local_batch).batch.is_null() || (*local_batch).batch == DROP {
+            (*local_batch).batch = Batch::alloc();
         }
 
-        let batch = &mut *local_batch.batch;
+        let batch = (*local_batch).batch;
 
         let reclaim_erased: unsafe fn(*mut u8, *const ()) = std::mem::transmute(reclaim);
-        batch.push(ptr as *mut u8, reclaim_erased);
 
-        if batch.len() >= self.batch_size || batch.is_full() {
-            self.try_retire(local_batch);
+        // use raw pointer access to avoid creating mutable reference
+        debug_assert!((*batch).len < super::batch::BATCH_SIZE);
+        (*batch).entries[(*batch).len] = Entry {
+            ptr: ptr as *mut u8,
+            reclaim: Some(reclaim_erased),
+            next: ptr::null_mut(),
+            head: ptr::null(),
+            batch,
+        };
+        (*batch).len += 1;
+
+        if (*batch).len >= self.batch_size || (*batch).len >= super::batch::BATCH_SIZE {
+            self.try_retire(&mut *local_batch);
         }
     }
 
@@ -190,7 +200,6 @@ impl Collector {
             return;
         }
 
-        let batch_ref = &mut *batch;
         let mut active_count = 0;
         let mut used_entries = 0;
 
@@ -200,14 +209,14 @@ impl Collector {
             }
 
             // ensure we have enough entries in the batch to serve as debt nodes
-            if used_entries >= batch_ref.len {
+            if used_entries >= (*batch).len {
                 // batch is full effectively.
                 // for now, we return and delay retirement.
                 return;
             }
 
-            let entry = &mut batch_ref.entries[used_entries];
-            entry.head = &reservation.head;
+            // Use raw pointer access
+            (*batch).entries[used_entries].head = &reservation.head;
 
             used_entries += 1;
             active_count += 1;
@@ -219,15 +228,15 @@ impl Collector {
             return;
         }
 
-        batch_ref.refcount.store(active_count, Ordering::Relaxed);
+        (*batch).refcount.store(active_count, Ordering::Relaxed);
         local_batch.batch = Batch::alloc();
         atomic::fence(Ordering::Acquire);
 
         let mut decrements = 0;
 
         for i in 0..used_entries {
-            let entry = &mut batch_ref.entries[i];
-            let head_ptr = entry.head;
+            let entry = (*batch).entries.as_mut_ptr().add(i);
+            let head_ptr = (*entry).head;
             let head = &*head_ptr;
 
             let mut prev = head.load(Ordering::Relaxed);
@@ -238,7 +247,7 @@ impl Collector {
                     break;
                 }
 
-                entry.next = prev;
+                (*entry).next = prev;
                 match head.compare_exchange_weak(prev, entry, Ordering::Release, Ordering::Relaxed)
                 {
                     Ok(_) => break,
@@ -248,7 +257,7 @@ impl Collector {
         }
 
         if decrements > 0 {
-            let old = batch_ref.refcount.fetch_sub(decrements, Ordering::AcqRel);
+            let old = (*batch).refcount.fetch_sub(decrements, Ordering::AcqRel);
             if old == decrements {
                 self.free_batch(batch);
             }
@@ -260,10 +269,8 @@ impl Collector {
             return;
         }
 
-        let batch_ref = &mut *batch;
-
-        for i in 0..batch_ref.len {
-            let entry = &batch_ref.entries[i];
+        for i in 0..(*batch).len {
+            let entry = &(*batch).entries[i];
             if let Some(reclaim) = entry.reclaim {
                 let reclaim_typed: unsafe fn(*mut u8, &Collector) = std::mem::transmute(reclaim);
                 reclaim_typed(entry.ptr, self);
@@ -282,14 +289,12 @@ impl Collector {
         let mut node = reservation.head.swap(INACTIVE, Ordering::SeqCst);
 
         while !node.is_null() && node != INACTIVE {
-            let entry = &mut *node;
-            let next = entry.next;
-            let batch = entry.batch;
+            let next = (*node).next;
+            let batch = (*node).batch;
 
             debug_assert!(!batch.is_null());
 
-            let batch_ref = &*batch;
-            let old_rc = batch_ref.refcount.fetch_sub(1, Ordering::AcqRel);
+            let old_rc = (*batch).refcount.fetch_sub(1, Ordering::AcqRel);
             if old_rc == 1 {
                 self.free_batch(batch);
             }
@@ -300,15 +305,15 @@ impl Collector {
 
     pub unsafe fn reclaim_all(&self) {
         for local in self.batches.iter() {
-            let local_batch = &mut *local.get();
+            let local_batch = local.get();
 
             loop {
-                let batch = local_batch.batch;
+                let batch = (*local_batch).batch;
                 if batch.is_null() || batch == DROP {
                     break;
                 }
 
-                local_batch.batch = ptr::null_mut();
+                (*local_batch).batch = ptr::null_mut();
                 self.free_batch(batch);
             }
         }
@@ -317,11 +322,9 @@ impl Collector {
             if !reservation.is_inactive() {
                 let mut node = reservation.head.swap(INACTIVE, Ordering::SeqCst);
                 while !node.is_null() && node != INACTIVE {
-                    let entry = &mut *node;
-                    let next = entry.next;
-                    let batch = entry.batch;
-                    let batch_ref = &*batch;
-                    let old_rc = batch_ref.refcount.fetch_sub(1, Ordering::AcqRel);
+                    let next = (*node).next;
+                    let batch = (*node).batch;
+                    let old_rc = (*batch).refcount.fetch_sub(1, Ordering::AcqRel);
                     if old_rc == 1 {
                         self.free_batch(batch);
                     }
