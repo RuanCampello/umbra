@@ -15,7 +15,7 @@ mod node;
 mod reservation;
 mod thread;
 
-pub use collector::{reclaim_boxed, Collector, Guard};
+pub use collector::{reclaim_boxed, Collector, Guard, LocalGuard, OwnedGuard};
 pub use node::Node;
 pub use thread::Thread;
 
@@ -300,7 +300,7 @@ mod tests {
             }
         }
 
-        pub fn push(&self, value: T, guard: &Guard) {
+        pub fn push<G: Guard>(&self, value: T, guard: &G) {
             let new = boxed(Node {
                 data: ManuallyDrop::new(value),
                 next: std::ptr::null_mut(),
@@ -320,7 +320,7 @@ mod tests {
             }
         }
 
-        pub fn pop(&self, guard: &Guard) -> Option<T> {
+        pub fn pop<G: Guard>(&self, guard: &G) -> Option<T> {
             loop {
                 let head = guard.protect(&self.head);
 
@@ -363,7 +363,7 @@ mod tests {
 
             thread::scope(|s| {
                 for i in 0..ITEMS {
-                    stack.push(i, &&stack.collector.pin());
+                    stack.push(i, &stack.collector.pin());
                     stack.pop(&stack.collector.pin());
                 }
 

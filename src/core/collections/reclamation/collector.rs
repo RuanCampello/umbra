@@ -7,6 +7,7 @@ use super::batch::{Batch, Entry, LocalBatch, DROP};
 use super::reservation::{Reservation, INACTIVE};
 use super::thread::{Thread, ThreadLocal};
 use std::cell::UnsafeCell;
+use std::marker::PhantomData;
 use std::ptr;
 use std::sync::atomic::{self, AtomicUsize, Ordering};
 
@@ -18,11 +19,68 @@ pub struct Collector {
     pub(crate) batch_size: usize,
 }
 
-/// RAII guard for a pinned critical section.
-pub struct Guard<'a> {
+/// A guard that protects objects for its lifetime.
+///
+/// This trait provides common functionality implemented by [`LocalGuard`] and
+/// [`OwnedGuard`].
+pub trait Guard {
+    /// Returns the collector this guard was created from.
+    fn collector(&self) -> &Collector;
+
+    /// Returns the thread handle for this guard.
+    fn thread(&self) -> Thread;
+
+    /// Protects the load of an atomic pointer.
+    fn protect<T>(&self, ptr: &atomic::AtomicPtr<T>) -> *mut T {
+        ptr.load(Ordering::Acquire)
+    }
+
+    /// Retires a pointer with a reclaim function.
+    ///
+    /// # Safety
+    ///
+    /// - The pointer must no longer be accessible from shared data structures
+    /// - The reclaim function must correctly handle the pointer type
+    unsafe fn retire<T>(&self, ptr: *mut T, reclaim: unsafe fn(*mut T, &Collector)) {
+        self.collector()
+            .retire_internal(self.thread(), ptr, reclaim);
+    }
+
+    /// Flushes the current thread's batch, attempting reclamation.
+    fn flush(&mut self);
+
+    /// Refreshes the guard, potentially allowing more reclamation.
+    fn refresh(&mut self);
+}
+
+/// A guard that keeps the current thread marked as active.
+///
+/// Local guards are created by calling [`Collector::pin`]. Unlike
+/// [`OwnedGuard`], a local guard is tied to the current thread and does not
+/// implement `Send`. This makes local guards relatively cheap to create and
+/// destroy.
+pub struct LocalGuard<'a> {
     collector: &'a Collector,
     thread: Thread,
+    reservation: *const Reservation,
+    _unsend: PhantomData<*mut ()>,
 }
+
+/// A guard that protects objects for its lifetime, independent of the current
+/// thread.
+///
+/// Unlike [`LocalGuard`], an owned guard is independent of the current thread,
+/// allowing it to implement `Send` and `Sync`. This is useful for holding
+/// guards across `.await` points in work-stealing schedulers.
+pub struct OwnedGuard<'a> {
+    collector: &'a Collector,
+    thread: Thread,
+    reservation: *const Reservation,
+}
+
+// OwnedGuard owns its thread slot and is not tied to any thread-locals.
+unsafe impl Send for OwnedGuard<'_> {}
+unsafe impl Sync for OwnedGuard<'_> {}
 
 impl Collector {
     pub fn new() -> Self {
@@ -46,8 +104,8 @@ impl Collector {
         self.id
     }
 
-    /// Pins the current thread, returning a guard for the critical section.
-    pub fn pin(&self) -> Guard<'_> {
+    /// Pins the current thread, returning a local guard.
+    pub fn pin(&self) -> LocalGuard<'_> {
         let thread = Thread::current();
         let reservation = self.reservations.get_or(thread, Reservation::new);
 
@@ -57,15 +115,42 @@ impl Collector {
         }
         reservation.enter();
 
-        Guard {
+        LocalGuard {
             collector: self,
             thread,
+            reservation,
+            _unsend: PhantomData,
         }
     }
 
-    /// Retires a pointer with a reclaim function.
+    /// Pins with an owned guard (independent thread ID).
+    pub fn pin_owned(&self) -> OwnedGuard<'_> {
+        let thread = Thread::create_owned();
+        let reservation = self.reservations.get_or(thread, Reservation::new);
+
+        reservation.activate();
+        atomic::fence(Ordering::SeqCst);
+        reservation.enter();
+
+        OwnedGuard {
+            collector: self,
+            thread,
+            reservation,
+        }
+    }
+
+    /// Retires a pointer with a reclaim function (uses current thread).
     pub unsafe fn retire<T>(&self, ptr: *mut T, reclaim: unsafe fn(*mut T, &Collector)) {
-        let thread = Thread::current();
+        self.retire_internal(Thread::current(), ptr, reclaim);
+    }
+
+    /// Internal retire with explicit thread.
+    unsafe fn retire_internal<T>(
+        &self,
+        thread: Thread,
+        ptr: *mut T,
+        reclaim: unsafe fn(*mut T, &Collector),
+    ) {
         let local = self
             .batches
             .get_or(thread, || UnsafeCell::new(LocalBatch::new()));
@@ -278,30 +363,23 @@ impl Drop for Collector {
 unsafe impl Send for Collector {}
 unsafe impl Sync for Collector {}
 
-impl<'a> Guard<'a> {
+impl Guard for LocalGuard<'_> {
     #[inline]
-    pub fn thread(&self) -> Thread {
-        self.thread
-    }
-
-    #[inline]
-    pub fn collector(&self) -> &'a Collector {
+    fn collector(&self) -> &Collector {
         self.collector
     }
 
-    pub fn protect<T>(&self, ptr: &atomic::AtomicPtr<T>) -> *mut T {
-        ptr.load(Ordering::Acquire)
+    #[inline]
+    fn thread(&self) -> Thread {
+        self.thread
     }
 
-    pub fn flush(&mut self) {
+    fn flush(&mut self) {
         unsafe { self.collector.flush() };
     }
 
-    pub fn refresh(&mut self) {
-        let reservation = match self.collector.reservations.get(self.thread) {
-            Some(r) => r,
-            None => return,
-        };
+    fn refresh(&mut self) {
+        let reservation = unsafe { &*self.reservation };
 
         if reservation.guard_count() == 1 {
             unsafe { self.collector.clear(self.thread) };
@@ -309,25 +387,49 @@ impl<'a> Guard<'a> {
             atomic::fence(Ordering::SeqCst);
         }
     }
-
-    /// Retires a pointer with a reclaim function.
-    pub unsafe fn retire<T>(&self, ptr: *mut T, reclaim: unsafe fn(*mut T, &Collector)) {
-        self.collector.retire(ptr, reclaim);
-    }
 }
 
-impl Drop for Guard<'_> {
+impl Drop for LocalGuard<'_> {
     fn drop(&mut self) {
-        let reservation = match self.collector.reservations.get(self.thread) {
-            Some(r) => r,
-            None => return,
-        };
+        let reservation = unsafe { &*self.reservation };
 
         reservation.exit();
 
         if reservation.guard_count() == 0 {
             unsafe { self.collector.clear(self.thread) };
         }
+    }
+}
+
+impl Guard for OwnedGuard<'_> {
+    #[inline]
+    fn collector(&self) -> &Collector {
+        self.collector
+    }
+
+    #[inline]
+    fn thread(&self) -> Thread {
+        self.thread
+    }
+
+    fn flush(&mut self) {
+        unsafe { self.collector.flush() };
+    }
+
+    fn refresh(&mut self) {
+        let reservation = unsafe { &*self.reservation };
+        unsafe { self.collector.clear(self.thread) };
+        reservation.activate();
+        atomic::fence(Ordering::SeqCst);
+    }
+}
+
+impl Drop for OwnedGuard<'_> {
+    fn drop(&mut self) {
+        let reservation = unsafe { &*self.reservation };
+
+        reservation.exit();
+        unsafe { self.collector.clear(self.thread) };
     }
 }
 

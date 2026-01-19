@@ -75,6 +75,13 @@ impl Thread {
         Self::new(id)
     }
 
+    /// Creates a new owned thread ID (not tied to TLS).
+    /// Used for `OwnedGuard` which owns its thread slot.
+    pub fn create_owned() -> Self {
+        let id = THREAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        Self::new(id)
+    }
+
     #[inline]
     pub fn new(id: usize) -> Self {
         Self {
