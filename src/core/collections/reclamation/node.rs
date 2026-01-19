@@ -138,7 +138,8 @@ pub fn encode_refs_link(ptr: *mut Node) -> *mut Node {
 
 #[inline]
 pub fn decode_refs_link(ptr: *mut Node) -> *mut Node {
-    ((ptr as usize) & !1) as *mut Node
+    let ptr_val = ptr as usize;
+    (ptr_val & !1) as *mut Node
 }
 
 #[inline]

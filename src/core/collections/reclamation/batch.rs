@@ -99,6 +99,7 @@ impl LocalBatch {
         if batch.is_null() || batch == DROP {
             return;
         }
+
         let layout = Layout::new::<Batch>();
         alloc::dealloc(batch as *mut u8, layout);
     }

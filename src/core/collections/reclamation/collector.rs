@@ -167,13 +167,21 @@ impl Collector {
 
         // use raw pointer access to avoid creating mutable reference
         debug_assert!((*batch).len < super::batch::BATCH_SIZE);
-        (*batch).entries[(*batch).len] = Entry {
-            ptr: ptr as *mut u8,
-            reclaim: Some(reclaim_erased),
-            next: ptr::null_mut(),
-            head: ptr::null(),
-            batch,
-        };
+
+        // strictly avoid creating reference to entries array
+        let entries_base = ptr::addr_of_mut!((*batch).entries) as *mut Entry;
+        let entry_ptr = entries_base.add((*batch).len);
+
+        ptr::write(
+            entry_ptr,
+            Entry {
+                ptr: ptr as *mut u8,
+                reclaim: Some(reclaim_erased),
+                next: ptr::null_mut(),
+                head: ptr::null(),
+                batch,
+            },
+        );
         (*batch).len += 1;
 
         if (*batch).len >= self.batch_size || (*batch).len >= super::batch::BATCH_SIZE {
@@ -204,20 +212,25 @@ impl Collector {
         let mut active_count = 0;
         let mut used_entries = 0;
 
+        // Strictly avoid creating reference to entries array
+        let entries_base = ptr::addr_of_mut!((*batch).entries) as *mut Entry;
+        let batch_len = (*batch).len;
+
         for reservation in self.reservations.iter() {
             if reservation.is_inactive() {
                 continue;
             }
 
             // ensure we have enough entries in the batch to serve as debt nodes
-            if used_entries >= (*batch).len {
+            if used_entries >= batch_len {
                 // batch is full effectively.
                 // for now, we return and delay retirement.
                 return;
             }
 
             // Use raw pointer access
-            (*batch).entries[used_entries].head = &reservation.head;
+            let entry = entries_base.add(used_entries);
+            (*entry).head = &reservation.head;
 
             used_entries += 1;
             active_count += 1;
@@ -236,7 +249,7 @@ impl Collector {
         let mut decrements = 0;
 
         for i in 0..used_entries {
-            let entry = (*batch).entries.as_mut_ptr().add(i);
+            let entry = entries_base.add(i);
             let head_ptr = (*entry).head;
             let head = &*head_ptr;
 
@@ -270,11 +283,14 @@ impl Collector {
             return;
         }
 
-        for i in 0..(*batch).len {
-            let entry = &(*batch).entries[i];
-            if let Some(reclaim) = entry.reclaim {
+        let entries_base = ptr::addr_of_mut!((*batch).entries) as *mut Entry;
+        let len = (*batch).len;
+
+        for i in 0..len {
+            let entry = entries_base.add(i);
+            if let Some(reclaim) = (*entry).reclaim {
                 let reclaim_typed: unsafe fn(*mut u8, &Collector) = std::mem::transmute(reclaim);
-                reclaim_typed(entry.ptr, self);
+                reclaim_typed((*entry).ptr, self);
             }
         }
 
