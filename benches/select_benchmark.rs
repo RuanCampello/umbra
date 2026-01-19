@@ -40,6 +40,9 @@ const SETUP_SQL: &str = r#"
     );
 "#;
 
+const SIZES: [usize; 3] = [100, 300, 500];
+
+#[inline]
 fn generate_test_data(num_customers: usize, num_products: usize, num_orders: usize) -> Vec<String> {
     let mut statements = Vec::new();
 
@@ -123,7 +126,7 @@ fn benchmark_simple_join(c: &mut Criterion) {
         ORDER BY o.total_amount DESC;
     "#;
 
-    for size in [100, 500, 1000].iter() {
+    for size in SIZES.iter() {
         let statements = generate_test_data(*size, 50, *size * 2);
 
         let _ = fs::remove_file("bench_umbra.db");
@@ -179,7 +182,7 @@ fn benchmark_complex_join_with_aggregation(c: &mut Criterion) {
         ORDER BY total_revenue DESC;
     "#;
 
-    for size in [100, 500, 1000].iter() {
+    for size in SIZES.iter() {
         let statements = generate_test_data(*size, 50, *size * 2);
 
         let _ = fs::remove_file("bench_umbra.db");
@@ -236,7 +239,7 @@ fn benchmark_multiple_joins(c: &mut Criterion) {
         ORDER BY o.order_date DESC;
     "#;
 
-    for size in [100, 500, 1000].iter() {
+    for size in SIZES.iter() {
         let statements = generate_test_data(*size, 50, *size * 2);
 
         let _ = fs::remove_file("bench_umbra.db");
@@ -289,7 +292,7 @@ fn benchmark_join_with_group_by(c: &mut Criterion) {
         ORDER BY total_revenue DESC;
     "#;
 
-    for size in [100, 500, 1000].iter() {
+    for size in SIZES.iter() {
         let statements = generate_test_data(*size, 50, *size * 2);
 
         let _ = fs::remove_file("bench_umbra.db");
