@@ -125,7 +125,7 @@ impl Collector {
 
     /// Pins with an owned guard (independent thread ID).
     pub fn pin_owned(&self) -> OwnedGuard<'_> {
-        let thread = Thread::create_owned();
+        let thread = Thread::create();
         let reservation = self.reservations.get_or(thread, Reservation::new);
 
         reservation.activate();
@@ -430,6 +430,9 @@ impl Drop for OwnedGuard<'_> {
 
         reservation.exit();
         unsafe { self.collector.clear(self.thread) };
+
+        // Release the thread ID for reuse
+        Thread::release(self.thread.id);
     }
 }
 

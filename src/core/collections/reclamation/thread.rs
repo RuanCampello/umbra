@@ -6,9 +6,12 @@
 
 use std::alloc::{self, Layout};
 use std::cell::{Cell, UnsafeCell};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::mem::MaybeUninit;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Thread-local storage container.
 ///
@@ -44,57 +47,30 @@ pub struct Iter<'a, T> {
     thread_local: &'a ThreadLocal<T>,
 }
 
+/// Manages thread ID allocation with freelist for efficient reuse.
+#[derive(Default)]
+struct ThreadIdManager {
+    free_from: usize,
+    free_list: BinaryHeap<Reverse<usize>>,
+}
+
+/// Guard to ensure thread ID is released when thread exits.
+struct ThreadGuard {
+    id: Cell<usize>,
+}
+
 const ENTRIES_PER_BUCKET: usize = 64;
 
 pub const BUCKETS: usize = 64;
 
-// Global thread ID counter
-static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+fn thread_id_manager() -> &'static Mutex<ThreadIdManager> {
+    static THREAD_ID_MANAGER: OnceLock<Mutex<ThreadIdManager>> = OnceLock::new();
+    THREAD_ID_MANAGER.get_or_init(Default::default)
+}
 
 thread_local! {
     static CURRENT_THREAD: Cell<Option<Thread>> = const { Cell::new(None) };
-}
-
-impl Thread {
-    /// Returns the current thread, initialising if necessary.
-    #[inline]
-    pub fn current() -> Self {
-        CURRENT_THREAD.with(|thread| {
-            if let Some(t) = thread.get() {
-                t
-            } else {
-                let t = Self::init();
-                thread.set(Some(t));
-                t
-            }
-        })
-    }
-
-    fn init() -> Self {
-        let id = THREAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-        Self::new(id)
-    }
-
-    /// Creates a new owned thread ID (not tied to TLS).
-    /// Used for `OwnedGuard` which owns its thread slot.
-    pub fn create_owned() -> Self {
-        let id = THREAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-        Self::new(id)
-    }
-
-    #[inline]
-    pub fn new(id: usize) -> Self {
-        Self {
-            id,
-            entry: id % ENTRIES_PER_BUCKET,
-            bucket: id / ENTRIES_PER_BUCKET,
-        }
-    }
-
-    #[inline]
-    pub fn bucket_capacity(_bucket: usize) -> usize {
-        ENTRIES_PER_BUCKET
-    }
+    static THREAD_GUARD: ThreadGuard = const { ThreadGuard { id: Cell::new(0) } };
 }
 
 impl<T> ThreadLocal<T> {
@@ -202,6 +178,53 @@ impl<T> Drop for ThreadLocal<T> {
 unsafe impl<T: Send> Send for ThreadLocal<T> {}
 unsafe impl<T: Send + Sync> Sync for ThreadLocal<T> {}
 
+impl Thread {
+    #[inline]
+    pub fn new(id: usize) -> Self {
+        Self {
+            id,
+            entry: id % ENTRIES_PER_BUCKET,
+            bucket: id / ENTRIES_PER_BUCKET,
+        }
+    }
+
+    /// Returns the current thread, initialising if necessary.
+    #[inline]
+    pub fn current() -> Self {
+        CURRENT_THREAD.with(|thread| {
+            if let Some(t) = thread.get() {
+                t
+            } else {
+                Self::init_slow(thread)
+            }
+        })
+    }
+
+    /// Creates a new thread ID.
+    pub fn create() -> Self {
+        Self::new(thread_id_manager().lock().unwrap().alloc())
+    }
+
+    /// Releases a thread ID for reuse.
+    pub fn release(id: usize) {
+        thread_id_manager().lock().unwrap().free(id);
+    }
+
+    #[inline]
+    pub fn bucket_capacity(_bucket: usize) -> usize {
+        ENTRIES_PER_BUCKET
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn init_slow(thread: &Cell<Option<Thread>>) -> Thread {
+        let new = Thread::create();
+        thread.set(Some(new));
+        THREAD_GUARD.with(|guard| guard.id.set(new.id));
+        new
+    }
+}
+
 impl<T> Entry<T> {
     const fn new() -> Self {
         Self {
@@ -246,6 +269,32 @@ impl<'a, T> Iterator for Iter<'a, T> {
         }
 
         None
+    }
+}
+
+impl ThreadIdManager {
+    fn alloc(&mut self) -> usize {
+        if let Some(id) = self.free_list.pop() {
+            id.0
+        } else {
+            let id = self.free_from;
+            self.free_from = self
+                .free_from
+                .checked_add(1)
+                .expect("Ran out of thread IDs");
+            id
+        }
+    }
+
+    fn free(&mut self, id: usize) {
+        self.free_list.push(Reverse(id));
+    }
+}
+
+impl Drop for ThreadGuard {
+    fn drop(&mut self) {
+        let _ = CURRENT_THREAD.try_with(|thread| thread.set(None));
+        Thread::release(self.id.get());
     }
 }
 
