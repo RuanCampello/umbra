@@ -93,7 +93,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                 })
             });
 
-            let source = optimiser::generate_seq_plan(&from.name, r#where, db)?;
+            let source = optimiser::generate_plan(&from.name, r#where, db)?;
             let mut builder = SelectBuilder::new(
                 source,
                 table_schema,
@@ -131,7 +131,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             r#where,
             returning,
         }) => {
-            let mut source = optimiser::generate_seq_plan(&table, r#where, db)?;
+            let mut source = optimiser::generate_plan(&table, r#where, db)?;
             let work_dir = db.work_dir.clone();
             let page_size = db.pager.borrow().page_size;
             let metadata = db.metadata(&table)?;
@@ -165,7 +165,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         }
 
         Statement::Delete(Delete { from, r#where }) => {
-            let mut source = optimiser::generate_seq_plan(&from, r#where, db)?;
+            let mut source = optimiser::generate_plan(&from, r#where, db)?;
 
             let work_dir = db.work_dir.clone();
             let page_size = db.pager.borrow().page_size;
@@ -425,7 +425,7 @@ mod tests {
 
     fn parse_expr(expr: &str) -> Expression {
         let mut expr = Parser::new(expr).parse_expr(None).unwrap();
-        sql::optimiser::simplify(&mut expr).unwrap();
+        sql::optimiser::simplify_recursively(&mut expr).unwrap();
 
         expr
     }

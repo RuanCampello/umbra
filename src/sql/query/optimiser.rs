@@ -20,7 +20,7 @@ use crate::{
 
 type IndexBounds<'value> = (Bound<&'value Value>, Bound<&'value Value>);
 
-pub(in crate::sql::query) fn generate_seq_plan<File: PlanExecutor>(
+pub(in crate::sql::query) fn generate_plan<File: PlanExecutor>(
     table: &str,
     mut filter: Option<Expression>,
     db: &mut Database<File>,

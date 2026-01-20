@@ -49,7 +49,7 @@ pub(crate) fn process_statement(
     db: &mut impl Ctx,
 ) -> Result<Statement, DatabaseError> {
     analyzer::analyze(&statement, db)?;
-    optimiser::optimise(&mut statement)?;
+    optimiser::simplify(&mut statement)?;
     prepare::prepare(&mut statement, db)?;
 
     Ok(statement)
