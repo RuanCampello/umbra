@@ -12,6 +12,8 @@
 //! [Andy Pavlo]: https://youtube.com/playlist?list=PLSE8ODhjZXjYCZfIbmEWH7f6MnYqyPwCE&si=VLrF3yUvfH5877Np
 //! [IBM]: https://courses.cs.duke.edu/spring03/cps216/papers/selinger-etal-1979.pdf
 
+use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
+
 /// Those are the constants for cost estimation.
 ///
 /// That's discussed on IBM paper's four chapter.
@@ -23,12 +25,22 @@ pub(crate) struct Constants {
     /// Cost of randomly scan a page.
     random: f64,
 
+    /// Size of a page in bytes.
+    page_size: usize,
+    btree_height: usize,
+
+    /// Cost of doing a index look-up, which should be O(1).
+    index_lookup: f64,
+
+    /// Threshold for the minimum cost.
+    min: f64,
+
     cpu: Cpu,
-    hash: Hash,
+    join: Join,
 }
 
-#[derive(Debug, PartialEq)]
 /// Cost constants CPU-related.
+#[derive(Debug, PartialEq)]
 pub(crate) struct Cpu {
     /// Cost to processe a tuple.
     tuple: f64,
@@ -38,8 +50,20 @@ pub(crate) struct Cpu {
     operation: f64,
 }
 
+/// Join algoritms related cost.
 #[derive(Debug, PartialEq)]
+pub(crate) struct Join {
+    /// Cost of comparing to merge join keys.
+    merge: f64,
+    /// Cost of sorting a row.
+    sort: f64,
+    /// Cost of comparsion in a nested loop join.
+    nested_loop: f64,
+    hash: Hash,
+}
+
 /// Cost constants related to hashing.
+#[derive(Debug, PartialEq)]
 pub(crate) struct Hash {
     /// Build cost of the hash.
     build: f64,
@@ -54,8 +78,12 @@ impl Default for Constants {
         Self {
             sequential: 1.0,
             random: 2.0,
+            page_size: DEFAULT_PAGE_SIZE,
+            index_lookup: 1.0,
+            btree_height: 3, // average b-tree height for indexes.
+            min: 0.0001,
             cpu: Cpu::default(),
-            hash: Hash::default(),
+            join: Join::default(),
         }
     }
 }
@@ -66,6 +94,17 @@ impl Default for Cpu {
             tuple: 0.01,
             tuple_index: 0.005,
             operation: 0.0025,
+        }
+    }
+}
+
+impl Default for Join {
+    fn default() -> Self {
+        Self {
+            merge: 0.005,
+            nested_loop: 0.01,
+            sort: 0.03,
+            hash: Hash::default(),
         }
     }
 }
