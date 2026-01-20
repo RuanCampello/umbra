@@ -14,6 +14,25 @@
 
 use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
 
+/// Query cost estimator derived from [constants](self::Constants)
+pub(crate) struct Estimator {
+    constants: Constants,
+}
+
+/// The estimation of a query plan cost.
+#[derive(PartialEq)]
+pub(crate) struct Cost {
+    total: f64,
+    /// The cost of each row.
+    per_row: f64,
+    /// The startup cost before yielding the first tuple.
+    startup: f64,
+
+    // rows and page estimated of being returned/accessed
+    rows: usize,
+    pages: usize,
+}
+
 /// Those are the constants for cost estimation.
 ///
 /// That's discussed on IBM paper's four chapter.
@@ -71,6 +90,46 @@ pub(crate) struct Hash {
     memory: f64,
     /// Cost of probing the hash table.
     probe: f64,
+}
+
+impl Cost {
+    pub const fn zero() -> Self {
+        Self {
+            total: 0.0,
+            per_row: 0.0,
+            startup: 0.0,
+            rows: 0,
+            pages: 0,
+        }
+    }
+
+    pub fn new(per_row: f64, startup: f64, rows: usize, pages: usize) -> Self {
+        let total = startup + (per_row * rows as f64);
+
+        Self {
+            total,
+            startup,
+            rows,
+            per_row,
+            pages,
+        }
+    }
+
+    pub fn with_total(total: f64, per_row: f64, startup: f64, rows: usize, pages: usize) -> Self {
+        Self {
+            total,
+            per_row,
+            startup,
+            rows,
+            pages,
+        }
+    }
+}
+
+impl PartialOrd for Cost {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.total.partial_cmp(&other.total)
+    }
 }
 
 impl Default for Constants {
