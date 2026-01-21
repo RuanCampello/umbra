@@ -691,4 +691,30 @@ mod tests {
         assert_eq!(cost.rows, 10000);
         assert!(cost.explanation.contains("Hash"));
     }
+
+    #[test]
+    fn join_with_limit() {
+        let estimator = Estimator::new();
+        let join = join_stats(10_000, 10_000, 10_000, 10_000);
+
+        let (algorithm, cost) = estimator.choose_join_with_limit(&join, true, None);
+        assert!(matches!(algorithm, JoinAlgorithm::Hash { .. }));
+        assert!(cost.total > 0.0);
+
+        let (algorithm, cost) = estimator.choose_join_with_limit(&join, true, Some(10));
+        assert!(matches!(algorithm, JoinAlgorithm::NestedLoop { .. }));
+        assert!(cost.total > 0.0);
+
+        let (algorithm, cost) = estimator.choose_join_with_limit(&join, true, Some(1 << 24));
+        assert!(matches!(algorithm, JoinAlgorithm::Hash { .. }));
+        assert!(cost.total > 0.0);
+
+        let (algorithm, cost) = estimator.choose_join_with_limit(&join, false, Some(10));
+        assert!(matches!(algorithm, JoinAlgorithm::NestedLoop { .. }));
+        assert!(cost.total > 0.0);
+
+        let (algorithm, cost) = estimator.choose_join_with_limit(&join, false, None);
+        assert!(matches!(algorithm, JoinAlgorithm::NestedLoop { .. }));
+        assert!(cost.total > 0.0);
+    }
 }
