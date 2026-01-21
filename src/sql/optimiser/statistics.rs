@@ -301,6 +301,7 @@ impl SelectivityEstimator {
         }
     }
 
+    #[inline(always)]
     pub fn overlap(
         left_low: &Value,
         left_high: &Value,
@@ -338,6 +339,45 @@ impl SelectivityEstimator {
         let right_ratio = overlap_width / right_width;
 
         (left_ratio * right_ratio).sqrt()
+    }
+
+    #[inline(always)]
+    pub fn range_by_histogram(column: &ColumnStatistics, value: &Value, cmp: Comparison) -> f64 {
+        if let Some(ref histogram) = column.histogram {
+            return histogram.selectivity(value, cmp);
+        }
+
+        if let (Some(max), Some(min)) = (&column.max, &column.min) {
+            let selection = Self::position(value, max, min);
+
+            return match cmp {
+                Comparison::Eq => 1.0 / column.distincts.max(1) as f64,
+                Comparison::Gt | Comparison::Ge => 1.0 - selection,
+                Comparison::Lt | Comparison::Le => selection,
+            };
+        }
+
+        match cmp {
+            Comparison::Eq => 1.0,
+            _ => 0.33,
+        }
+    }
+
+    #[inline(always)]
+    pub fn position(value: &Value, max: &Value, min: &Value) -> f64 {
+        match (value, max, min) {
+            (Value::Number(value), Value::Number(max), Value::Number(min)) => match max == min {
+                true => 0.5,
+                _ => ((*value - *min) as f64 / (*max - *min) as f64).clamp(0.0, 1.0),
+            },
+            (Value::Float(value), Value::Float(max), Value::Float(min)) => {
+                match (max - min).abs() < f64::EPSILON {
+                    true => 0.5,
+                    _ => ((value - min) / (max - min)).clamp(0.0, 1.0),
+                }
+            }
+            _ => 5.0,
+        }
     }
 }
 
