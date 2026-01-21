@@ -131,9 +131,9 @@ impl BloomFilter {
             unsafe {
                 *bits.add(word) |= 1usize << offset;
             };
-        }
 
-        index += 1;
+            index += 1;
+        }
     }
 
     #[inline(always)]
@@ -170,3 +170,14 @@ impl BloomFilter {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic() {
+        let mut bloom = BloomFilter::new(1_000, 0.01);
+        bloom.insert(&1.into());
+        assert!(bloom.contains(&1.into()));
+    }
+}
