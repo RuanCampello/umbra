@@ -71,6 +71,10 @@ impl BloomFilter {
         }
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self::new(capacity, 0.01)
+    }
+
     pub fn insert(&mut self, value: &Value) {
         self.add(self.hash(value));
         self.elements += 1;
@@ -80,6 +84,30 @@ impl BloomFilter {
     /// This function can return false positives, but not false negatives.
     pub fn contains(&self, value: &Value) -> bool {
         self.get(self.hash(value))
+    }
+
+    pub const fn len(&self) -> usize {
+        self.elements
+    }
+
+    #[inline(always)]
+    pub fn union(&mut self, other: &Self) {
+        if self.num_bits != other.num_bits || self.num_hashes != other.num_hashes {
+            panic!("Invalid Bloom filters for union: number of bits: ({}, {}) and number of hashes: ({}, {})",
+                self.num_hashes, other.num_hashes, self.num_hashes, other.num_hashes);
+        }
+
+        self.bits
+            .iter_mut()
+            .zip(other.bits.iter())
+            .for_each(|(w, w2)| *w |= *w2);
+        self.elements += other.elements;
+    }
+
+    #[inline(always)]
+    pub fn load_factor(&self) -> f64 {
+        let setted: usize = self.bits.iter().map(|b| b.count_ones() as usize).sum();
+        setted as f64 / self.num_bits as f64
     }
 
     #[inline(always)]
@@ -167,6 +195,12 @@ impl BloomFilter {
         }
 
         true
+    }
+}
+
+impl Default for BloomFilter {
+    fn default() -> Self {
+        Self::with_capacity(1 << 10)
     }
 }
 
