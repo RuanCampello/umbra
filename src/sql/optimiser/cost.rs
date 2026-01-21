@@ -149,6 +149,11 @@ pub(crate) enum Side {
 }
 
 impl Estimator {
+    /// Threshold for `LIMIT` clauses.
+    /// In cases where it's less or equal to this, the preference is a [nested
+    /// loop](self::JoinAlgorithm::NestedLoop)
+    const LIMIT: usize = 1 << 7;
+
     pub fn new() -> Self {
         Self {
             constants: Constants::default(),
@@ -417,6 +422,47 @@ impl Estimator {
                 (JoinAlgorithm::NestedLoop { outer, inner }, nested_loop)
             }
         }
+    }
+
+    pub fn choose_join_with_limit<'c>(
+        &self,
+        join: &JoinStatistics,
+        has_equality: bool,
+        limit: Option<usize>,
+    ) -> (JoinAlgorithm, Cost<'c>) {
+        let (left, right) = (join.left.rows, join.right.rows);
+
+        if !has_equality {
+            let cost = self.estimate_nested_loop(join);
+            let (outer, inner) = join.outer_and_inner();
+
+            return (JoinAlgorithm::NestedLoop { outer, inner }, cost);
+        }
+
+        let Some(limit) = limit else {
+            return self.choose_join_algorithm(join, has_equality);
+        };
+
+        if limit < Self::LIMIT {
+            let outer = limit.min(left.min(right));
+            let explanation = format!("Nested Join with Limit {limit}: {outer}");
+            let nested = Cost::with_total(
+                outer as f64 * self.constants.cpu.tuple,
+                self.constants.cpu.tuple,
+                0.0,
+                limit,
+                outer,
+                explanation,
+            );
+
+            let hash = self.estimate_hash(join);
+            if nested.total < (hash.total * 0.5) {
+                let (outer, inner) = join.outer_and_inner();
+                return (JoinAlgorithm::NestedLoop { outer, inner }, nested);
+            }
+        }
+
+        self.choose_join_algorithm(join, has_equality)
     }
 }
 
