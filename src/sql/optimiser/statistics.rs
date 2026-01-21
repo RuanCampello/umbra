@@ -32,6 +32,7 @@ use crate::sql::Value;
 /// This model is sufficient for coarse range selectivity estimation but is
 /// less accurate than full statistics models (e.g. histograms with per-bucket
 /// counts or most-common-value tracking).
+#[derive(Debug, PartialEq)]
 pub(crate) struct Histogram {
     /// Bucket boundaries (`n + 1` values).
     ///
@@ -58,7 +59,25 @@ pub(crate) struct TableStatistics {
     pub(super) row_size: usize,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct ColumnStatistics {
+    pub(super) nulls: usize,
+    pub(super) distincts: usize,
+    pub(super) min: Option<Value>,
+    pub(super) max: Option<Value>,
+
+    /// Average width in bytes.
+    pub(super) width: usize,
+    pub(super) histogram: Option<Histogram>,
+}
+
 pub(crate) struct SelectivityEstimator;
+
+impl ColumnStatistics {
+    pub fn is_empty(&self) -> bool {
+        self.distincts == 0 && self.min.is_none() && self.max.is_none()
+    }
+}
 
 impl SelectivityEstimator {
     pub fn join_cardinality(
