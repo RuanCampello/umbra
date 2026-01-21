@@ -214,4 +214,56 @@ mod tests {
         bloom.insert(&1.into());
         assert!(bloom.contains(&1.into()));
     }
+
+    #[test]
+    fn union() {
+        let mut bloom = BloomFilter::with_capacity(124);
+        let mut bloom_2 = BloomFilter::with_capacity(124);
+
+        bloom.insert(&1.into());
+        bloom.insert(&2.into());
+        bloom_2.insert(&3.into());
+
+        bloom.union(&bloom_2);
+
+        assert!(bloom.contains(&1.into()));
+        assert!(bloom.contains(&2.into()));
+        assert!(bloom.contains(&3.into()));
+    }
+
+    #[test]
+    fn false_positive() {
+        let mut bloom = BloomFilter::default();
+        let mut false_positives = 0;
+
+        for idx in 0..1024 {
+            bloom.insert(&idx.into());
+        }
+
+        /// none of this values is contained in the bloom filter, of course.
+        for idx in 10_000..15_000 {
+            if bloom.contains(&idx.into()) {
+                false_positives += 1;
+            }
+        }
+
+        let rate = false_positives as f64 / 5_000.0;
+        assert!(
+            rate < 0.05,
+            "False positive rate was to high: {false_positives:.2} expected ~0.01"
+        );
+    }
+
+    #[test]
+    fn load_factor() {
+        let mut bloom = BloomFilter::default();
+        assert!(bloom.load_factor() < 0.01);
+
+        for idx in 0..1024 {
+            bloom.insert(&idx.into());
+        }
+
+        let load_factor = bloom.load_factor();
+        assert!(load_factor > 0.3 && load_factor < 0.7);
+    }
 }
