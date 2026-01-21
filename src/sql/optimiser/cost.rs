@@ -61,6 +61,8 @@ pub(crate) struct Constants {
     join: Join,
 }
 
+pub(crate) struct SelectivityEstimator;
+
 #[derive(Debug, Default)]
 pub(crate) struct TableStatistics {
     rows: usize,
@@ -305,7 +307,11 @@ impl Estimator {
             _ => right.max(1),
         };
 
-        todo!()
+        let output =
+            SelectivityEstimator::join_cardinality(left, right, left_distinct, right_distinct);
+        let explanation = format!("Nested Loop: {outer} * {inner} = {comparisons} comparisons -> {output} output, cost {total:.2}");
+
+        Cost::with_total(total, comparison_cost, 0.0, output, inner, explanation)
     }
 
     pub fn choose_join_algorithm<'c>(
@@ -363,6 +369,25 @@ impl<'c> Cost<'c> {
             rows,
             pages,
             explanation: explanation.into(),
+        }
+    }
+}
+
+impl SelectivityEstimator {
+    pub fn join_cardinality(
+        left: usize,
+        right: usize,
+        left_distinct: usize,
+        right_distinct: usize,
+    ) -> usize {
+        let max = left_distinct.max(right_distinct).max(1);
+        (left as u128 * right as u128 / max as u128) as usize // we do that to prevent overflowing
+    }
+
+    pub const fn equality(distinct: usize) -> f64 {
+        match distinct > 0 {
+            true => 1.0 / distinct as f64,
+            _ => 0.1,
         }
     }
 }
