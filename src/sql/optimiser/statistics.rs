@@ -243,7 +243,7 @@ impl SelectivityEstimator {
         }
     }
 
-    pub fn join_histogram_cardinality(
+    pub fn join_cardinality_from_histogram(
         left_hist: &Histogram,
         right_hist: &Histogram,
         left: usize,
@@ -282,6 +282,23 @@ impl SelectivityEstimator {
         let cardinality = weighted.min(min * overlap * 1.5);
 
         (cardinality.ceil() as usize).max(1)
+    }
+
+    pub fn histogram_join_cardinality(
+        left_stats: &ColumnStatistics,
+        right_stats: &ColumnStatistics,
+        left: usize,
+        right: usize,
+    ) -> usize {
+        let left_hist = left_stats.histogram.as_ref();
+        let right_hist = right_stats.histogram.as_ref();
+
+        match (left_hist, right_hist) {
+            (Some(left_hist), Some(right_hist)) => {
+                Self::join_cardinality_from_histogram(left_hist, right_hist, left, right)
+            }
+            _ => unimplemented!(),
+        }
     }
 
     pub fn overlap(
@@ -333,18 +350,19 @@ mod tests {
         let left = (0..100).map(Value::Number).collect::<Vec<_>>();
         let right = (0..100).map(Value::Number).collect::<Vec<_>>();
 
-        let left_histogram = Histogram::from_values(&left, 10).unwrap();
-        let right_histogram = Histogram::from_values(&right, 10).unwrap();
+        let left_hist = Histogram::from_values(&left, 10).unwrap();
+        let right_hist = Histogram::from_values(&right, 10).unwrap();
 
         let left = ColumnStatistics::with_min_and_max(Value::Number(0), Value::Number(99));
         let right = ColumnStatistics::with_min_and_max(Value::Number(0), Value::Number(99));
 
-        let mut left = left.histogram(left_histogram);
-        let mut right = right.histogram(right_histogram);
+        let mut left = left.histogram(left_hist);
+        let mut right = right.histogram(right_hist);
 
         left.distincts = 100;
         right.distincts = 100;
 
-        todo!()
+        let cardinality = SelectivityEstimator::histogram_join_cardinality(&left, &right, 100, 100);
+        assert!((50..=200).contains(&cardinality))
     }
 }
