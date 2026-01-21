@@ -561,6 +561,32 @@ mod tests {
         }
     }
 
+    fn join_stats(
+        left: usize,
+        right: usize,
+        left_distinct: usize,
+        right_distinct: usize,
+    ) -> JoinStatistics {
+        let left = TableStatistics {
+            rows: left,
+            pages: (left / 100).max(1),
+            row_size: 1 << 7,
+        };
+
+        let right = TableStatistics {
+            rows: right,
+            pages: (right / 100).max(1),
+            row_size: 1 << 7,
+        };
+
+        JoinStatistics {
+            left,
+            right,
+            left_distinct,
+            right_distinct,
+        }
+    }
+
     #[test]
     fn sequential_scan() {
         let estimator = Estimator::new();
@@ -597,5 +623,26 @@ mod tests {
         let seq = estimator.estimate_sequential_scan_filtered(&table, selectivity);
         let idx = estimator.estimate_index_scan(&table, selectivity, "index");
         assert!(seq < idx);
+    }
+
+    #[test]
+    fn nested_loop_join() {
+        let estimator = Estimator::new();
+        let join = join_stats(100, 50, 100, 50);
+        let cost = estimator.estimate_nested_loop(&join);
+
+        assert!(cost.total > 0.0);
+        assert!(cost.explanation.contains("Nested Loop"));
+    }
+
+    #[test]
+    fn hash_join() {
+        let estimator = Estimator::new();
+        let join = join_stats(10000, 1000, 1000, 1000);
+        let cost = estimator.estimate_hash(&join);
+
+        assert!(cost.total > 0.0);
+        assert_eq!(cost.rows, 10000);
+        assert!(cost.explanation.contains("Hash"));
     }
 }
