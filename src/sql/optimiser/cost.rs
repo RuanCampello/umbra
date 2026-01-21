@@ -103,6 +103,58 @@ pub(crate) struct Hash {
     probe: f64,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) enum JoinAlgorithm {
+    /// Hash join: `O(N + M)`
+    Hash {
+        side: Side,
+        /// Estimated build rows from the build side.
+        rows: usize,
+        /// Estimated probe rows from the probing side.
+        probe: usize,
+    },
+
+    /// Sort-merge join: `O(N + M)`
+    /// with sorting: `O(N log N + M log M)`
+    SortMerge {
+        left: usize,
+        right: usize,
+        is_left_sorted: bool,
+        is_right_sorted: bool,
+    },
+
+    /// Nested loop join: `O(N * M)`
+    NestedLoop { outer: usize, inner: usize },
+
+    Anti {
+        join: Box<Self>,
+        left: usize,
+        selectivity: f64,
+    },
+
+    Semi {
+        join: Box<Self>,
+        left: usize,
+        selectivity: f64,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct JoinStatistics {
+    left: TableStatistics,
+    right: TableStatistics,
+
+    left_distinct: usize,
+    right_distinct: usize,
+}
+
+/// Side which the hash table is going to be constructed.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum Side {
+    Left,
+    Right,
+}
+
 impl Estimator {
     pub fn new() -> Self {
         Self {
@@ -223,6 +275,45 @@ impl Estimator {
                 self.constants.index_lookup
             ),
         )
+    }
+
+    pub fn estimate_nested_loop<'c>(&self, join: &JoinStatistics) -> Cost<'c> {
+        let (left, right) = (join.left.rows, join.right.rows);
+
+        // we wanna use the smaller as outer to
+        // have less possible iterations
+        let (outer, inner) = match left <= right {
+            true => (left, right),
+            _ => (right, left),
+        };
+
+        let comparisons = outer as u128 * inner as u128;
+        let comparison_cost = self.constants.cpu.tuple + self.constants.join.nested_loop;
+
+        let pages = join.right.pages.max(1);
+        let io = outer as f64 * pages as f64 * self.constants.sequential * 0.1;
+        let cpu = comparisons as f64 * comparison_cost;
+        let total = io + cpu;
+
+        let left_distinct = match join.left_distinct > 0 {
+            true => join.left_distinct,
+            _ => left.max(1),
+        };
+
+        let right_distinct = match join.right_distinct > 0 {
+            true => join.right_distinct,
+            _ => right.max(1),
+        };
+
+        todo!()
+    }
+
+    pub fn choose_join_algorithm<'c>(
+        &self,
+        join: &JoinStatistics,
+        has_equality: bool,
+    ) -> (JoinAlgorithm, Cost<'c>) {
+        todo!()
     }
 }
 
