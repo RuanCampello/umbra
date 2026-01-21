@@ -191,6 +191,35 @@ impl Histogram {
 }
 
 impl ColumnStatistics {
+    pub fn new() -> Self {
+        Self {
+            distincts: 0,
+            width: 0,
+            nulls: 0,
+
+            min: None,
+            max: None,
+            histogram: None,
+        }
+    }
+
+    pub fn with_min_and_max(min: Value, max: Value) -> Self {
+        Self {
+            distincts: 0,
+            width: 0,
+            nulls: 0,
+
+            min: Some(min),
+            max: Some(max),
+            histogram: None,
+        }
+    }
+
+    pub fn histogram(mut self, histogram: Histogram) -> Self {
+        self.histogram = Some(histogram);
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.distincts == 0 && self.min.is_none() && self.max.is_none()
     }
@@ -212,5 +241,110 @@ impl SelectivityEstimator {
             true => 1.0 / distinct as f64,
             _ => 0.1,
         }
+    }
+
+    pub fn join_histogram_cardinality(
+        left_hist: &Histogram,
+        right_hist: &Histogram,
+        left: usize,
+        right: usize,
+    ) -> usize {
+        if left_hist.boundaries.len() < 2 || right_hist.boundaries.len() < 2 {
+            return Self::join_cardinality(
+                left,
+                right,
+                left_hist.rows.max(1),
+                right_hist.rows.max(1),
+            );
+        }
+
+        let (left_min, left_max) = (
+            &left_hist.boundaries[0],
+            &left_hist.boundaries[left_hist.boundaries.len() - 1],
+        );
+
+        let (right_min, right_max) = (
+            &right_hist.boundaries[0],
+            &right_hist.boundaries[right_hist.boundaries.len() - 1],
+        );
+
+        let overlap = Self::overlap(left_min, left_max, right_min, right_max);
+        if overlap < 0.001 {
+            return 1;
+        }
+
+        let (left, right) = (left_hist.rows, right_hist.rows);
+        let max = left.max(right).min(1);
+        let base = (left as u128 * right as u128 / max as u128) as f64;
+        let weighted = base * overlap;
+
+        let min = left.min(right) as f64;
+        let cardinality = weighted.min(min * overlap * 1.5);
+
+        (cardinality.ceil() as usize).max(1)
+    }
+
+    pub fn overlap(
+        left_low: &Value,
+        left_high: &Value,
+        right_low: &Value,
+        right_high: &Value,
+    ) -> f64 {
+        let (left_low, left_high) = match (left_low, left_high) {
+            (Value::Number(a), Value::Number(b)) => (*a as f64, *b as f64),
+            (Value::Float(a), Value::Float(b)) => (*a, *b),
+            _ => return 0.5,
+        };
+
+        let (right_low, right_high) = match (right_low, right_high) {
+            (Value::Number(a), Value::Number(b)) => (*a as f64, *b as f64),
+            (Value::Float(a), Value::Float(b)) => (*a, *b),
+            _ => return 0.5,
+        };
+
+        if left_high < right_low || right_high < left_low {
+            return 0.0;
+        }
+
+        let overlap_low = left_low.max(right_low);
+        let overlap_high = left_high.min(right_high);
+
+        if overlap_high <= overlap_low {
+            return 0.0;
+        }
+
+        let left_width = (left_high - left_low).abs().max(1.0);
+        let right_width = (right_high - right_low).abs().max(1.0);
+        let overlap_width = overlap_high - overlap_low;
+
+        let left_ratio = overlap_width / left_width;
+        let right_ratio = overlap_width / right_width;
+
+        (left_ratio * right_ratio).sqrt()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn histogram_cardinality() {
+        let left = (0..100).map(Value::Number).collect::<Vec<_>>();
+        let right = (0..100).map(Value::Number).collect::<Vec<_>>();
+
+        let left_histogram = Histogram::from_values(&left, 10).unwrap();
+        let right_histogram = Histogram::from_values(&right, 10).unwrap();
+
+        let left = ColumnStatistics::with_min_and_max(Value::Number(0), Value::Number(99));
+        let right = ColumnStatistics::with_min_and_max(Value::Number(0), Value::Number(99));
+
+        let mut left = left.histogram(left_histogram);
+        let mut right = right.histogram(right_histogram);
+
+        left.distincts = 100;
+        right.distincts = 100;
+
+        todo!()
     }
 }

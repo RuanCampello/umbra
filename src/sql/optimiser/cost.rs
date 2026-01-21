@@ -464,6 +464,36 @@ impl Estimator {
 
         self.choose_join_algorithm(join, has_equality)
     }
+
+    pub fn choose_join_sorted_with_limit<'c>(
+        &self,
+        join: &JoinStatistics,
+        has_equality: bool,
+        limit: Option<usize>,
+        is_left_sorted: bool,
+        is_right_sorted: bool,
+    ) -> (JoinAlgorithm, Cost<'c>) {
+        if has_equality && is_left_sorted && is_right_sorted {
+            let merge = self.estimate_sort_merge(join, true, true);
+            let hash = self.estimate_hash(join);
+
+            if merge.total < hash.total * 1.2 {
+                let (left, right) = (join.left.rows, join.right.rows);
+
+                return (
+                    JoinAlgorithm::SortMerge {
+                        left,
+                        right,
+                        is_left_sorted: true,
+                        is_right_sorted: true,
+                    },
+                    merge,
+                );
+            }
+        }
+
+        self.choose_join_with_limit(join, has_equality, limit)
+    }
 }
 
 impl<'c> Cost<'c> {
@@ -716,5 +746,21 @@ mod tests {
         let (algorithm, cost) = estimator.choose_join_with_limit(&join, false, None);
         assert!(matches!(algorithm, JoinAlgorithm::NestedLoop { .. }));
         assert!(cost.total > 0.0);
+    }
+
+    #[test]
+    fn sort_merge_join() {
+        let estimator = Estimator::new();
+        let join = join_stats(1000, 1000, 100, 100);
+
+        let cost = estimator.estimate_sort_merge(&join, true, true);
+        assert!(cost.total > 0.0);
+        assert!(cost.explanation.contains("Sort Merge Join"));
+
+        let unsorted_cost = estimator.estimate_sort_merge(&join, false, false);
+        assert!(unsorted_cost.total > 0.0);
+        assert!(!unsorted_cost.explanation.contains("sort cost 0.00 + 0.00"));
+
+        assert!(unsorted_cost > cost);
     }
 }
