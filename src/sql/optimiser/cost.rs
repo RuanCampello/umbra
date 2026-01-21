@@ -275,11 +275,7 @@ impl Estimator {
 
         // we wanna use the smaller as outer to
         // have less possible iterations
-        let (outer, inner) = match left <= right {
-            true => (left, right),
-            _ => (right, left),
-        };
-
+        let (outer, inner) = join.outer_and_inner();
         let comparisons = outer as u128 * inner as u128;
         let comparison_cost = self.constants.cpu.tuple + self.constants.join.nested_loop;
 
@@ -308,11 +304,7 @@ impl Estimator {
     pub fn estimate_hash<'c>(&self, join: &JoinStatistics) -> Cost<'c> {
         let (left, right) = (join.left.rows, join.right.rows);
 
-        let (build, probe, side) = match left <= right {
-            true => (left, right, Side::Left),
-            _ => (right, left, Side::Right),
-        };
-
+        let (build, probe, side) = join.outer_and_inner_with_side();
         let build_cost = build as f64 * (self.constants.cpu.tuple + self.constants.join.hash.build);
         let probe_cost = probe as f64
             * (self.constants.cpu.tuple
@@ -391,12 +383,40 @@ impl Estimator {
             explanation,
         )
     }
+
     pub fn choose_join_algorithm<'c>(
         &self,
         join: &JoinStatistics,
         has_equality: bool,
     ) -> (JoinAlgorithm, Cost<'c>) {
-        todo!()
+        if !has_equality {
+            let cost = self.estimate_nested_loop(join);
+            let (outer, inner) = join.outer_and_inner();
+
+            return (JoinAlgorithm::NestedLoop { outer, inner }, cost);
+        }
+
+        let nested_loop = self.estimate_nested_loop(join);
+        let hash = self.estimate_hash(join);
+
+        match hash < nested_loop {
+            true => {
+                let (build, probe, side) = join.outer_and_inner_with_side();
+                (
+                    JoinAlgorithm::Hash {
+                        side,
+                        rows: build,
+                        probe,
+                    },
+                    hash,
+                )
+            }
+
+            _ => {
+                let (outer, inner) = join.outer_and_inner();
+                (JoinAlgorithm::NestedLoop { outer, inner }, nested_loop)
+            }
+        }
     }
 }
 
@@ -446,6 +466,24 @@ impl<'c> Cost<'c> {
             rows,
             pages,
             explanation: explanation.into(),
+        }
+    }
+}
+
+impl JoinStatistics {
+    const fn outer_and_inner(&self) -> (usize, usize) {
+        let (left, right) = (self.left.rows, self.right.rows);
+        match left <= right {
+            true => (left, right),
+            _ => (right, left),
+        }
+    }
+
+    const fn outer_and_inner_with_side(&self) -> (usize, usize, Side) {
+        let (left, right) = (self.left.rows, self.right.rows);
+        match left <= right {
+            true => (left, right, Side::Left),
+            _ => (right, left, Side::Right),
         }
     }
 }
