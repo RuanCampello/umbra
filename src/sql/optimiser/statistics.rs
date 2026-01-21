@@ -132,18 +132,17 @@ impl Histogram {
         match cmp {
             Comparison::Eq => 1.0 / self.rows_per_bucket.max(1) as f64,
             Comparison::Lt | Comparison::Le => {
-                let buckets = num_buckets as f64;
                 let selection = self.selection_in_bucket(value, bucket);
-                let total_buckets = buckets + selection;
+                let total_buckets = bucket as f64 + selection;
 
-                (total_buckets / buckets).clamp(0.0, 1.0)
+                (total_buckets / num_buckets as f64).clamp(0.0, 1.0)
             }
             Comparison::Gt | Comparison::Ge => {
                 let buckets = (num_buckets - bucket - 1) as f64;
                 let selection = 1.0 - self.selection_in_bucket(value, bucket);
                 let total_buckets = buckets + selection;
 
-                (total_buckets / buckets).clamp(0.0, 1.0)
+                (total_buckets / num_buckets as f64).clamp(0.0, 1.0)
             }
         }
     }
