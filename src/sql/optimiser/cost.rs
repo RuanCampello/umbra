@@ -159,16 +159,16 @@ impl Estimator {
     ) -> Cost<'c> {
         let (rows, pages) = (table.rows, table.pages);
         debug_assert!(
-            selectivity >= 1.0 && pages >= 1,
-            "The selectivity and the estimated page number should be non-zero positive"
+            pages >= 1,
+            "The estimated number of pages should be non-zero positive"
         );
-        let estimated_rows = (rows as f64 * selectivity) as usize;
+        let estimated_rows = (rows as f64 * selectivity).max(1.0) as usize;
 
         let (index_io, leaf_io) = {
             let height = self.constants.btree_height as f64;
             let btree_cost = height * self.constants.random;
 
-            let leaf = table.pages as f64 * selectivity;
+            let leaf = (table.pages as f64 * selectivity).max(1.0);
             let leaf_cost = leaf * self.constants.random;
             (btree_cost, leaf_cost)
         };
@@ -183,7 +183,7 @@ impl Estimator {
         let table_io = pages as f64 * self.constants.random;
 
         let total = index_io + leaf_io + index_cpu + table_io + table_cpu;
-        let leaf_pages = (table.pages as f64 * selectivity) as usize;
+        let leaf_pages = (table.pages as f64 * selectivity).max(1.0) as usize;
         let total_pages = leaf_pages + self.constants.btree_height + pages;
 
         let explanation = format!("Index Scan: {index}: selectivity {selectivity:.4} -> {estimated_rows} rows, cost {total:.2}");
@@ -310,5 +310,38 @@ impl Default for Hash {
             probe: 0.01,
             memory: 1.5,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const fn table_stats(rows: usize, pages: usize) -> TableStatistics {
+        TableStatistics {
+            pages,
+            rows,
+            row_size: 1 << 7,
+        }
+    }
+
+    #[test]
+    fn sequential_scan() {
+        let estimator = Estimator::new();
+        let table = table_stats(10000, 100);
+        let cost = estimator.estimate_sequential_scan(&table);
+
+        assert!(cost.total > 0.0);
+        assert_eq!((table.rows, table.pages), (cost.rows, cost.pages));
+    }
+
+    #[test]
+    fn index_scan() {
+        let estimator = Estimator::new();
+        let table = table_stats(10000, 100);
+        let cost = estimator.estimate_index_scan(&table, 0.01, "index");
+
+        assert!(cost.total > 0.0);
+        assert_eq!(cost.rows, 100);
     }
 }
