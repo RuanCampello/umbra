@@ -13,6 +13,7 @@
 //! [IBM]: https://courses.cs.duke.edu/spring03/cps216/papers/selinger-etal-1979.pdf
 
 use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
+use std::borrow::Cow;
 
 /// Query cost estimator derived from [constants](self::Constants)
 pub(crate) struct Estimator {
@@ -21,7 +22,7 @@ pub(crate) struct Estimator {
 
 /// The estimation of a query plan cost.
 #[derive(PartialEq)]
-pub(crate) struct Cost {
+pub(crate) struct Cost<'c> {
     total: f64,
     /// The cost of each row.
     per_row: f64,
@@ -31,6 +32,8 @@ pub(crate) struct Cost {
     // rows and page estimated of being returned/accessed
     rows: usize,
     pages: usize,
+
+    explanation: Cow<'c, str>,
 }
 
 /// Those are the constants for cost estimation.
@@ -56,6 +59,14 @@ pub(crate) struct Constants {
 
     cpu: Cpu,
     join: Join,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct TableStatistics {
+    rows: usize,
+    pages: usize,
+    /// Average size in bytes of a row.
+    row_size: usize,
 }
 
 /// Cost constants CPU-related.
@@ -92,7 +103,35 @@ pub(crate) struct Hash {
     probe: f64,
 }
 
-impl Cost {
+impl Estimator {
+    pub fn new() -> Self {
+        Self {
+            constants: Constants::default(),
+        }
+    }
+
+    pub fn estimate_sequential_scan<'c>(&'c self, table: &TableStatistics) -> Cost<'c> {
+        let rows = table.rows;
+        let pages = table.pages;
+        debug_assert!(
+            pages >= 1,
+            "The estimated number of pages should be non-zero positive"
+        );
+
+        let io = pages as f64 * self.constants.sequential;
+        let cpu = rows as f64 * self.constants.cpu.tuple;
+
+        let total = cpu + io;
+        let explanation = format!(
+            "Sequential Scan: {pages} * {:.2} + {rows} * {:.4} = {total:.2}",
+            self.constants.sequential, self.constants.cpu.tuple
+        );
+
+        Cost::new(self.constants.cpu.tuple, io, rows, pages, explanation)
+    }
+}
+
+impl<'c> Cost<'c> {
     pub const fn zero() -> Self {
         Self {
             total: 0.0,
@@ -100,10 +139,17 @@ impl Cost {
             startup: 0.0,
             rows: 0,
             pages: 0,
+            explanation: Cow::Borrowed(""),
         }
     }
 
-    pub fn new(per_row: f64, startup: f64, rows: usize, pages: usize) -> Self {
+    pub fn new(
+        per_row: f64,
+        startup: f64,
+        rows: usize,
+        pages: usize,
+        explanation: impl Into<Cow<'c, str>>,
+    ) -> Self {
         let total = startup + (per_row * rows as f64);
 
         Self {
@@ -112,21 +158,30 @@ impl Cost {
             rows,
             per_row,
             pages,
+            explanation: explanation.into(),
         }
     }
 
-    pub fn with_total(total: f64, per_row: f64, startup: f64, rows: usize, pages: usize) -> Self {
+    pub fn with_total(
+        total: f64,
+        per_row: f64,
+        startup: f64,
+        rows: usize,
+        pages: usize,
+        explanation: impl Into<Cow<'c, str>>,
+    ) -> Self {
         Self {
             total,
             per_row,
             startup,
             rows,
             pages,
+            explanation: explanation.into(),
         }
     }
 }
 
-impl PartialOrd for Cost {
+impl PartialOrd for Cost<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.total.partial_cmp(&other.total)
     }
