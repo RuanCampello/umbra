@@ -150,6 +150,65 @@ impl Estimator {
         let explanation = format!("Sequential Scan with Filter: {rows} rows * {selectivity:.2} selectivity = output {output} with cost {total:.2}");
         Cost::with_total(total, per_row, io, output, pages, explanation)
     }
+
+    pub fn estimate_index_scan<'c>(
+        &self,
+        table: &TableStatistics,
+        selectivity: f64,
+        index: &str,
+    ) -> Cost<'c> {
+        let (rows, pages) = (table.rows, table.pages);
+        debug_assert!(
+            selectivity >= 1.0 && pages >= 1,
+            "The selectivity and the estimated page number should be non-zero positive"
+        );
+        let estimated_rows = (rows as f64 * selectivity) as usize;
+
+        let (index_io, leaf_io) = {
+            let height = self.constants.btree_height as f64;
+            let btree_cost = height * self.constants.random;
+
+            let leaf = table.pages as f64 * selectivity;
+            let leaf_cost = leaf * self.constants.random;
+            (btree_cost, leaf_cost)
+        };
+
+        let index_cpu = estimated_rows as f64 * self.constants.cpu.tuple_index;
+        let pages = match estimated_rows >= table.pages {
+            true => table.pages,
+            _ => estimated_rows.min(table.pages),
+        };
+
+        let table_cpu = estimated_rows as f64 * self.constants.cpu.tuple;
+        let table_io = pages as f64 * self.constants.random;
+
+        let total = index_io + leaf_io + index_cpu + table_io + table_cpu;
+        let leaf_pages = (table.pages as f64 * selectivity) as usize;
+        let total_pages = leaf_pages + self.constants.btree_height + pages;
+
+        let explanation = format!("Index Scan: {index}: selectivity {selectivity:.4} -> {estimated_rows} rows, cost {total:.2}");
+        Cost::with_total(
+            total,
+            self.constants.cpu.tuple_index + self.constants.cpu.tuple,
+            index_io, // the startup is basically the traverse cost of the first leaf
+            estimated_rows,
+            total_pages,
+            explanation,
+        )
+    }
+
+    pub fn estimate_primary_key_lookup<'c>(&self) -> Cost<'c> {
+        Cost::new(
+            0.0,
+            self.constants.index_lookup,
+            1,
+            1,
+            format!(
+                "Primary key lookup: cost {:.2}",
+                self.constants.index_lookup
+            ),
+        )
+    }
 }
 
 impl<'c> Cost<'c> {
