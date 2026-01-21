@@ -300,11 +300,97 @@ impl Estimator {
 
         let output =
             SelectivityEstimator::join_cardinality(left, right, left_distinct, right_distinct);
-        let explanation = format!("Nested Loop: {outer} * {inner} = {comparisons} comparisons -> {output} output, cost {total:.2}");
+        let explanation = format!("Nested Loop: {outer} * {inner} = {comparisons} comparisons -> {output} rows, cost {total:.2}");
 
         Cost::with_total(total, comparison_cost, 0.0, output, inner, explanation)
     }
 
+    pub fn estimate_hash<'c>(&self, join: &JoinStatistics) -> Cost<'c> {
+        let (left, right) = (join.left.rows, join.right.rows);
+
+        let (build, probe, side) = match left <= right {
+            true => (left, right, Side::Left),
+            _ => (right, left, Side::Right),
+        };
+
+        let build_cost = build as f64 * (self.constants.cpu.tuple + self.constants.join.hash.build);
+        let probe_cost = probe as f64
+            * (self.constants.cpu.tuple
+                + self.constants.join.hash.probe
+                + self.constants.cpu.operation);
+
+        let row_size = join.left.row_size.max(32) as f64;
+        let table_size = build as f64 * row_size * self.constants.join.hash.memory;
+        let pages = (table_size / self.constants.page_size as f64).max(1.0) as usize;
+
+        let left_distinct = match join.left_distinct > 0 {
+            true => join.left_distinct,
+            _ => left.max(1),
+        };
+
+        let right_distinct = match join.right_distinct > 0 {
+            true => join.right_distinct,
+            _ => right.max(1),
+        };
+
+        let output =
+            SelectivityEstimator::join_cardinality(left, right, left_distinct, right_distinct);
+        let total = build_cost + probe_cost;
+
+        let explanation = format!(
+            "Hash Join: build from {} with rows {build}: probe {probe} rows -> {output} rows cost {total:.2}",
+            side.to_string(),
+        );
+
+        Cost::with_total(
+            total,
+            self.constants.cpu.tuple + self.constants.join.hash.probe,
+            build_cost,
+            output,
+            pages,
+            explanation,
+        )
+    }
+
+    pub fn estimate_sort_merge<'c>(
+        &self,
+        join: &JoinStatistics,
+        is_left_sorted: bool,
+        is_right_sorted: bool,
+    ) -> Cost<'c> {
+        let (left, right) = (join.left.rows, join.right.rows);
+
+        let left_cost = match is_left_sorted {
+            true => 0.0,
+            _ => left as f64 * (left as f64).log2().max(1.0) * self.constants.join.sort,
+        };
+
+        let right_cost = match is_right_sorted {
+            true => 0.0,
+            _ => right as f64 * (right as f64).log2().max(1.0) * self.constants.join.sort,
+        };
+
+        let merge_cost = (left + right) as f64 * self.constants.join.merge;
+        let cpu = (left + right) as f64 * self.constants.cpu.tuple;
+        let total = merge_cost + cpu + left_cost + right_cost;
+
+        let left_distinct = join.left_distinct.max(1);
+        let right_distinct = join.right_distinct.max(1);
+
+        let output =
+            SelectivityEstimator::join_cardinality(left, right, left_distinct, right_distinct);
+        let pages = join.left.pages + join.right.pages;
+        let explanation = format!("Sort Merge Join: {left} + {right}, sort cost: {left_cost:.2} + {right_cost:.2} merge cost: {merge_cost:.2} -> {output} rows total {total:.2}");
+
+        Cost::with_total(
+            total,
+            self.constants.join.merge,
+            left_cost + right_cost,
+            output,
+            pages,
+            explanation,
+        )
+    }
     pub fn choose_join_algorithm<'c>(
         &self,
         join: &JoinStatistics,
@@ -360,6 +446,15 @@ impl<'c> Cost<'c> {
             rows,
             pages,
             explanation: explanation.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for Side {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Left => f.write_str("left"),
+            Self::Right => f.write_str("right"),
         }
     }
 }
