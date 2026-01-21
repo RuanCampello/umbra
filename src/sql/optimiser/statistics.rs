@@ -358,7 +358,7 @@ impl SelectivityEstimator {
         }
 
         match cmp {
-            Comparison::Eq => 1.0,
+            Comparison::Eq => 0.1,
             _ => 0.33,
         }
     }
@@ -404,5 +404,22 @@ mod tests {
 
         let cardinality = SelectivityEstimator::histogram_join_cardinality(&left, &right, 100, 100);
         assert!((50..=200).contains(&cardinality))
+    }
+
+    #[test]
+    fn range_histogram_selectivity() {
+        let values = (0..100).map(Value::Number).collect::<Vec<_>>();
+        let hist = Histogram::from_values(&values, 10).unwrap();
+
+        let column = ColumnStatistics::with_min_and_max(Value::Number(0), Value::Number(99));
+        let mut column = column.histogram(hist);
+        column.distincts = values.len();
+
+        let selectivity =
+            SelectivityEstimator::range_by_histogram(&column, &Value::Number(50), Comparison::Lt);
+        assert!(
+            selectivity > 0.4 && selectivity < 0.6,
+            "Selectivity should be around 5, but got: {selectivity:.3}"
+        );
     }
 }
