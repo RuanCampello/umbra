@@ -335,8 +335,7 @@ impl Estimator {
         let total = build_cost + probe_cost;
 
         let explanation = format!(
-            "Hash Join: build from {} with rows {build}: probe {probe} rows -> {output} rows cost {total:.2}",
-            side.to_string(),
+            "Hash Join: build from {side} with rows {build}: probe {probe} rows -> {output} rows cost {total:.2}"
         );
 
         Cost::with_total(

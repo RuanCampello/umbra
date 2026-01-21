@@ -163,11 +163,14 @@ impl Value {
     pub const fn is_compatible(&self, other: &Self) -> bool {
         use self::Value::*;
 
-        match (self, other) {
-            (Float(_) | Number(_) | Numeric(_), Float(_) | Number(_) | Numeric(_)) => true,
-            (Temporal(_), Interval(_)) | (Interval(_), Temporal(_)) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (
+                Float(_) | Number(_) | Numeric(_),
+                Float(_) | Number(_) | Numeric(_)
+            ) | (Temporal(_), Interval(_))
+                | (Interval(_), Temporal(_))
+        )
     }
 
     /// Returns the type tag for binary serialisation.

@@ -78,7 +78,7 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
             };
 
             let col_position = table.schema.index_of(col).unwrap();
-            let r#type = table.schema.columns[col_position].data_type.clone();
+            let r#type = table.schema.columns[col_position].data_type;
 
             let bounds = ranges.iter().map(|range| {
                 let left = range
@@ -184,7 +184,7 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
     }
 
     Ok(Some(Planner::KeyScan(KeyScan {
-        comparator: table.comp()?.into(),
+        comparator: table.comp()?,
         pager: Rc::clone(&db.pager),
         source: Box::new(source),
         table,

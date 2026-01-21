@@ -84,10 +84,10 @@ macro_rules! impl_value_extractor {
     };
 }
 
-pub(crate) fn resolve_expression<'exp>(
+pub(crate) fn resolve_expression(
     val: &[Value],
     schema: &Schema,
-    expression: &'exp Expression,
+    expression: &Expression,
 ) -> Result<Value, SqlError> {
     match expression {
         Expression::Value(value) => Ok(value.clone()),
@@ -172,7 +172,7 @@ pub(crate) fn resolve_expression<'exp>(
         Expression::UnaryOperation { operator, expr } => {
             let value = resolve_expression(val, schema, expr)?;
             Ok(match operator {
-                UnaryOperator::Minus => value.neg()?.into(),
+                UnaryOperator::Minus => value.neg()?,
                 _ => value,
             })
         }
@@ -417,7 +417,7 @@ pub(crate) fn resolve_only_expression(expr: &Expression) -> Result<Value, SqlErr
 
 pub(crate) fn evaluate_where(
     schema: &Schema,
-    tuple: &Vec<Value>,
+    tuple: &[Value],
     expr: &Expression,
 ) -> Result<bool, SqlError> {
     match resolve_expression(tuple, schema, expr)? {
@@ -440,7 +440,7 @@ fn try_coerce_enum(
 ) -> Result<(Value, Value), SqlError> {
     let get_variants = |expr: &Expression| {
         let idx = match expr {
-            Expression::Identifier(column) => schema.index_of(&column),
+            Expression::Identifier(column) => schema.index_of(column),
             Expression::QualifiedIdentifier { table, column } => schema
                 .index_of(&format!("{table}.{column}"))
                 .or(schema.last_index_of(column)),

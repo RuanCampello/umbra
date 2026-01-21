@@ -415,9 +415,9 @@ impl Numeric {
             let weight = weight - (offset as i16) + if digits.len() > effective_digit_count { 1 } else { 0 };
 
             return Ok(Self::Long {
-                weight: weight,
+                weight,
                 sign_dscale: rscale & DSCALE_MASK,
-                digits: digits,
+                digits,
             });
         }
 

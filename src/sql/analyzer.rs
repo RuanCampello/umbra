@@ -162,10 +162,11 @@ pub(in crate::sql) fn analyze<'s>(
                         continue;
                     }
 
-                    if !col.is_nullable() && !col.data_type.can_be_autogen() {
-                        if !column_set.contains(col.name.as_str()) {
-                            return Err(AnalyzerError::MissingCols.into());
-                        }
+                    if !col.is_nullable()
+                        && !col.data_type.can_be_autogen()
+                        && !column_set.contains(col.name.as_str())
+                    {
+                        return Err(AnalyzerError::MissingCols.into());
                     }
                 }
 
@@ -235,7 +236,7 @@ pub(in crate::sql) fn analyze<'s>(
                     group
                         .as_identifier()
                         .and_then(|alias| aliases.get(alias))
-                        .map_or(false, |alias| alias.eq(&expr))
+                        .is_some_and(|alias| alias.eq(&expr))
                 });
 
                 let is_dependent = is_functionally_dependent(expr, group_by, &tables);
@@ -322,7 +323,7 @@ pub(in crate::sql) fn analyze<'s>(
     Ok(())
 }
 
-fn analyze_assignment<'exp, 'id>(
+fn analyze_assignment<'exp>(
     table: &'exp TableMetadata,
     column: &str,
     value: &'exp Expression,
@@ -491,7 +492,7 @@ impl<'s> AnalyzeCtx for JoinCtx<'s> {
 
     fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
         if let Some(schema) = self.tables.get(table) {
-            if let Some(_) = schema.index_of(column) {
+            if schema.index_of(column).is_some() {
                 return self
                     .schema
                     .last_index_of(column)
@@ -509,6 +510,7 @@ impl<'s> JoinCtx<'s> {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
     ctx: &Ctx,
     data_type: Option<&Type>,
@@ -572,14 +574,14 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 // null on left: get the right type, then analyze the left with that info
                 (true, false) => {
                     let right_type = analyze_expression(ctx, data_type, right)?;
-                    let left_type = analyze_expression(ctx, get_hint(ctx, &right), left)?;
+                    let left_type = analyze_expression(ctx, get_hint(ctx, right), left)?;
 
                     (left_type, right_type)
                 }
                 // null on right: get the left type, then analyze the right with that info
                 (false, true) => {
                     let left_type = analyze_expression(ctx, data_type, left)?;
-                    let right_type = analyze_expression(ctx, get_hint(ctx, &left), right)?;
+                    let right_type = analyze_expression(ctx, get_hint(ctx, left), right)?;
 
                     (left_type, right_type)
                 }
@@ -675,7 +677,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 }
             }
 
-            return Ok(func.return_type(&arg_types.first().unwrap_or(&VmType::Float)));
+            return Ok(func.return_type(arg_types.first().unwrap_or(&VmType::Float)));
         }
 
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
@@ -718,7 +720,7 @@ fn analyze_where_with_join<'exp>(
     .into())
 }
 
-fn analyze_value<'exp>(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
+fn analyze_value(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
     Ok(match (value, col_type) {
         (Value::Boolean(_), _) => VmType::Bool,
         (Value::Null, Some(t)) => t.into(),
@@ -768,7 +770,7 @@ fn analyze_where<'exp>(
     .into())
 }
 
-fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
+fn analyze_string(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
     match expected_type {
         Type::Date => {
             NaiveDate::parse_str(s)?;
@@ -787,7 +789,7 @@ fn analyze_string<'exp>(s: &str, expected_type: &Type) -> Result<VmType, SqlErro
             Ok(VmType::Number)
         }
         Type::Interval => {
-            Interval::from_str(s).map_err(|e| TypeError::InvalidInterval(e))?;
+            Interval::from_str(s).map_err(TypeError::InvalidInterval)?;
             Ok(VmType::Interval)
         }
         Type::Jsonb => {

@@ -382,7 +382,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
         }
 
         for (fun, name) in &aggr_exprs {
-            aggr_schema.push(Column::new(&name, resolve_type(&self.schema, fun)?));
+            aggr_schema.push(Column::new(name, resolve_type(&self.schema, fun)?));
         }
 
         if group_by.is_empty() && !order_by.is_empty() {
@@ -642,7 +642,7 @@ fn extract_order_indexes_and_directions(
                     .ok_or_else(|| {
                         DatabaseError::Sql(SqlError::Other(format!(
                             "ORDER BY expression `{}` not found in output columns",
-                            order.expr.to_string()
+                            order.expr
                         )))
                     })
                     .map(|idx| (idx, order.direction)),

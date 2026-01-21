@@ -60,7 +60,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             offset,
         }) => {
             let (r#where, join_where) = match !joins.is_empty() && r#where.is_some() {
-                true => split_where(r#where.as_ref().unwrap(), &from.key()),
+                true => split_where(r#where.as_ref().unwrap(), from.key()),
                 _ => (r#where.as_ref(), None),
             };
 
@@ -109,8 +109,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             }
 
             let output = builder.build_output_schema()?;
-            let has_aggregate =
-                !group_by.is_empty() || columns.iter().any(|expr| contains_aggregate(expr));
+            let has_aggregate = !group_by.is_empty() || columns.iter().any(contains_aggregate);
 
             match has_aggregate {
                 true => builder.apply_aggregation(group_by, &order_by, output)?,
@@ -205,7 +204,7 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
             let index = schema
                 .index_of(col)
                 .ok_or(SqlError::InvalidColumn(col.into()))?;
-            schema.columns[index].data_type.clone()
+            schema.columns[index].data_type
         }
         _ => match analyzer::analyze_expression(schema, None, expr)? {
             VmType::Float => Type::DoublePrecision,
