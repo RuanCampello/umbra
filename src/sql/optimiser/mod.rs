@@ -8,6 +8,7 @@ use crate::vm::expression::resolve_only_expression;
 use super::statement::{Delete, Insert, Select, Update};
 
 mod cost;
+mod statistics;
 
 /// Tries to simplify the given statement applying heuristic-based rules.
 pub(crate) fn simplify(statement: &mut Statement) -> Result<(), SqlError> {

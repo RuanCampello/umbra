@@ -12,6 +12,7 @@
 //! [Andy Pavlo]: https://youtube.com/playlist?list=PLSE8ODhjZXjYCZfIbmEWH7f6MnYqyPwCE&si=VLrF3yUvfH5877Np
 //! [IBM]: https://courses.cs.duke.edu/spring03/cps216/papers/selinger-etal-1979.pdf
 
+use super::statistics::{SelectivityEstimator, TableStatistics};
 use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
 use std::borrow::Cow;
 
@@ -59,16 +60,6 @@ pub(crate) struct Constants {
 
     cpu: Cpu,
     join: Join,
-}
-
-pub(crate) struct SelectivityEstimator;
-
-#[derive(Debug, Default)]
-pub(crate) struct TableStatistics {
-    rows: usize,
-    pages: usize,
-    /// Average size in bytes of a row.
-    row_size: usize,
 }
 
 /// Cost constants CPU-related.
@@ -369,25 +360,6 @@ impl<'c> Cost<'c> {
             rows,
             pages,
             explanation: explanation.into(),
-        }
-    }
-}
-
-impl SelectivityEstimator {
-    pub fn join_cardinality(
-        left: usize,
-        right: usize,
-        left_distinct: usize,
-        right_distinct: usize,
-    ) -> usize {
-        let max = left_distinct.max(right_distinct).max(1);
-        (left as u128 * right as u128 / max as u128) as usize // we do that to prevent overflowing
-    }
-
-    pub const fn equality(distinct: usize) -> f64 {
-        match distinct > 0 {
-            true => 1.0 / distinct as f64,
-            _ => 0.1,
         }
     }
 }
