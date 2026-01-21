@@ -110,9 +110,8 @@ impl Estimator {
         }
     }
 
-    pub fn estimate_sequential_scan<'c>(&'c self, table: &TableStatistics) -> Cost<'c> {
-        let rows = table.rows;
-        let pages = table.pages;
+    pub fn estimate_sequential_scan<'c>(&self, table: &TableStatistics) -> Cost<'c> {
+        let (rows, pages) = (table.rows, table.pages);
         debug_assert!(
             pages >= 1,
             "The estimated number of pages should be non-zero positive"
@@ -120,14 +119,36 @@ impl Estimator {
 
         let io = pages as f64 * self.constants.sequential;
         let cpu = rows as f64 * self.constants.cpu.tuple;
-
         let total = cpu + io;
+
         let explanation = format!(
             "Sequential Scan: {pages} * {:.2} + {rows} * {:.4} = {total:.2}",
             self.constants.sequential, self.constants.cpu.tuple
         );
 
         Cost::new(self.constants.cpu.tuple, io, rows, pages, explanation)
+    }
+
+    pub fn estimate_sequential_scan_filtered<'c>(
+        &self,
+        table: &TableStatistics,
+        selectivity: f64,
+    ) -> Cost<'c> {
+        let (rows, pages) = (table.rows, table.pages);
+        debug_assert!(
+            pages >= 1,
+            "The estimated number of pages should be non-zero positive"
+        );
+
+        let io = pages as f64 * self.constants.sequential;
+        let per_row = self.constants.cpu.tuple + self.constants.cpu.operation;
+        let cpu = rows as f64 * per_row;
+        let total = io + cpu;
+
+        let output = (rows as f64 * selectivity) as usize;
+
+        let explanation = format!("Sequential Scan with Filter: {rows} rows * {selectivity:.2} selectivity = output {output} with cost {total:.2}");
+        Cost::with_total(total, per_row, io, output, pages, explanation)
     }
 }
 
