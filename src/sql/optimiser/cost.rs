@@ -197,6 +197,21 @@ impl Estimator {
         )
     }
 
+    pub fn must_use_index(&self, table: &TableStatistics, selectivity: f64) -> bool {
+        if table.rows < 100 {
+            return false; // sequential will be always fast in small set due to locallity
+        }
+
+        if selectivity < 0.01 {
+            return true; // very selective, always use index
+        }
+
+        let sequential = self.estimate_sequential_scan_filtered(table, selectivity);
+        let index = self.estimate_index_scan(table, selectivity, "index");
+
+        index < sequential
+    }
+
     pub fn estimate_primary_key_lookup<'c>(&self) -> Cost<'c> {
         Cost::new(
             0.0,
@@ -343,5 +358,23 @@ mod tests {
 
         assert!(cost.total > 0.0);
         assert_eq!(cost.rows, 100);
+    }
+
+    #[test]
+    fn index_against_sequential_scan() {
+        let estimator = Estimator::new();
+        let table = table_stats(10000, 100);
+
+        // in high selectivity, index must always win
+        let selectivity = 0.001;
+        let seq = estimator.estimate_sequential_scan_filtered(&table, selectivity);
+        let idx = estimator.estimate_index_scan(&table, selectivity, "index");
+        assert!(seq > idx);
+
+        // low selectivity, sequential might win
+        let selectivity = 0.5;
+        let seq = estimator.estimate_sequential_scan_filtered(&table, selectivity);
+        let idx = estimator.estimate_index_scan(&table, selectivity, "index");
+        assert!(seq < idx);
     }
 }
