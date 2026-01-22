@@ -547,6 +547,36 @@ impl TryFrom<&Value> for Type {
     }
 }
 
+impl From<Type> for u8 {
+    #[inline]
+    fn from(value: Type) -> u8 {
+        match value {
+            Type::SmallInt => 0,
+            Type::UnsignedSmallInt => 1,
+            Type::Integer => 2,
+            Type::UnsignedInteger => 3,
+            Type::BigInteger => 4,
+            Type::UnsignedBigInteger => 5,
+            Type::SmallSerial => 6,
+            Type::Serial => 7,
+            Type::BigSerial => 8,
+            Type::Boolean => 9,
+            Type::Varchar(_) => 10,
+            Type::Text => 11,
+            Type::Real => 12,
+            Type::DoublePrecision => 13,
+            Type::Uuid => 14,
+            Type::Numeric(_, _) => 15,
+            Type::Date => 16,
+            Type::Time => 17,
+            Type::DateTime => 18,
+            Type::Interval => 19,
+            Type::Jsonb => 20,
+            Type::Enum(_) => 21,
+        }
+    }
+}
+
 impl PartialEq for VmType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {

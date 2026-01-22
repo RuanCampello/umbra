@@ -61,8 +61,10 @@ jobs:
         with:
           toolchain: ${{ env.NIGHTLY }}
           components: miri
-      - name: cargo miri test
+      - name: cargo miri test (storage)
         run: cargo miri test core::storage
+      - name: cargo miri test (memory reclamation)
+        run: cargo miri test core::collections::reclamation
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation"
   #loom:

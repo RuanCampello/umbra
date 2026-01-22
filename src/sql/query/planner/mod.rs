@@ -332,6 +332,7 @@ fn returning_schema(returning: &[Expression], schema: &Schema) -> Result<Option<
 
 #[cfg(test)]
 mod tests {
+    use crate::hash_set;
     use crate::{
         sql::statement::{Function, JoinType},
         vm::planner::{
@@ -1329,8 +1330,8 @@ mod tests {
                         column: "user_id".to_string(),
                     },
                     pager: db.pager(),
-                    left_tables: HashSet::from(["orders".to_string()]),
-                    right_tables: HashSet::from(["users".to_string()]),
+                    left_tables: hash_set!("orders".to_string()),
+                    right_tables: hash_set!("users".to_string()),
                     schema: joined_schema,
                 })),
             })
@@ -1403,8 +1404,8 @@ mod tests {
                         column: "id".to_string(),
                     },
                     pager: db.pager(),
-                    left_tables: HashSet::from(["customers".to_string()]),
-                    right_tables: HashSet::from(["orders".to_string()]),
+                    left_tables: hash_set!("customers".to_string()),
+                    right_tables: hash_set!("orders".to_string()),
                     schema: joined_schema,
                 })),
             })

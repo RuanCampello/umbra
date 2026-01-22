@@ -19,9 +19,11 @@
 //!    - Handles serialising Rust types (`Value`) into the compact binary format stored in Cells.
 
 pub(crate) mod btree;
+pub(crate) mod mvcc;
 pub(crate) mod page;
 pub(crate) mod pagination;
 pub(crate) mod tuple;
+pub(crate) mod wal;
 
 #[allow(unused)]
 pub(crate) use crate::core::storage::btree::MemoryBuffer;

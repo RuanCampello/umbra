@@ -8,9 +8,10 @@ use crate::core::storage::page::{
     Cell, MemoryPage, OverflowPage, Page, PageConversion, PageNumber, PageZero, SlotId,
     DATABASE_IDENTIFIER,
 };
+use crate::core::HashSet;
 use crate::db::DatabaseError;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::BinaryHeap;
 use std::fmt::{Debug, Formatter};
 use std::io::{self, Read, Seek, Write};
 use std::path::PathBuf;
@@ -89,8 +90,8 @@ impl Pager<io::Cursor<Vec<u8>>> {
                 DEFAULT_BUFFERED_PAGES,
                 PathBuf::default(),
             ),
-            dirty_pages: HashSet::new(),
-            journal_pages: HashSet::new(),
+            dirty_pages: HashSet::default(),
+            journal_pages: HashSet::default(),
             page_size: DEFAULT_PAGE_SIZE,
             block_size,
             cache,
@@ -110,8 +111,8 @@ impl<File> Pager<File> {
                 DEFAULT_BUFFERED_PAGES,
                 PathBuf::default(),
             ),
-            dirty_pages: HashSet::new(),
-            journal_pages: HashSet::new(),
+            dirty_pages: HashSet::default(),
+            journal_pages: HashSet::default(),
             page_size: DEFAULT_PAGE_SIZE,
             block_size,
             cache,

@@ -204,22 +204,28 @@ pub(in crate::sql) fn analyze<'s>(
                 schema.extend(join_metadata.schema.columns.clone());
             }
 
-            let aliases: HashMap<String, &Expression> = columns
-                .iter()
-                .filter_map(|column_expr| match column_expr {
-                    Expression::Alias { expr, alias } => Some((alias.clone(), expr.as_ref())),
-                    _ => None,
-                })
-                .collect();
+            let (aliases, columns): (HashMap<_, _>, Vec<_>) = columns.iter().fold(
+                (HashMap::new(), Vec::with_capacity(columns.len())),
+                |(mut aliases, mut cols), column_expr| {
+                    if let Expression::Alias { expr, alias } = column_expr {
+                        aliases.insert(alias.clone(), expr.as_ref());
+                    }
 
-            for expr in columns {
-                let expr = expr.unwrap_alias();
+                    let expr = column_expr.unwrap_alias();
+                    let is_aggr = !expr.eq(&Expression::Wildcard) && contains_aggregate(expr);
+                    cols.push((expr, is_aggr));
 
+                    (aliases, cols)
+                },
+            );
+
+            let has_aggregates = columns.iter().any(|(_, is_aggr)| *is_aggr);
+
+            for (expr, is_aggr) in columns {
                 if expr.eq(&Expression::Wildcard) {
                     continue;
                 }
 
-                let is_aggr = contains_aggregate(expr);
                 let in_group_by = group_by.iter().any(|group| {
                     // check if the expression match directly the group by expression
                     if group.eq(expr) {
@@ -233,7 +239,11 @@ pub(in crate::sql) fn analyze<'s>(
                 });
 
                 let is_dependent = is_functionally_dependent(expr, group_by, &tables);
-                if !group_by.is_empty() && !is_aggr && !in_group_by && !is_dependent {
+
+                // SQL standard: when aggregates are used, non-aggregate columns must be in group by
+                // this applies both when group by is present and when it's absent (implicit single-group)
+                let needs_group_by = has_aggregates && !is_aggr && !in_group_by && !is_dependent;
+                if needs_group_by {
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
                 }
 
@@ -434,7 +444,13 @@ fn is_functionally_dependent(
         .columns
         .iter()
         .filter(|c| c.constraints.contains(&Constraint::PrimaryKey))
-        .map(|c| c.name.as_str());
+        .map(|c| c.name.as_str())
+        .collect::<Vec<_>>();
+
+    // if there are no primary keys, there is no functional dependency
+    if keys.is_empty() {
+        return false;
+    }
 
     for key in keys {
         let key_in_group = group_by.iter().any(|g| match g {
@@ -1405,6 +1421,25 @@ mod tests {
             sql: "SELECT customer_id, SUM(amount) FROM payment GROUP BY customer_id;",
             ctx: &[context],
             expected: Ok(()),
+        }
+        .assert()?;
+
+        Analyze {
+            sql: "SELECT customer_id, SUM(amount) FROM payment;",
+            ctx: &[context],
+            expected: Err(SqlError::InvalidGroupBy("customer_id".into()).into()),
+        }
+        .assert()?;
+
+        let context_joined = &[
+            "CREATE TABLE student (sid INT PRIMARY KEY, name TEXT, gpa REAL);",
+            "CREATE TABLE enrolled (sid INT, cid TEXT, grade VARCHAR(1));",
+        ];
+
+        Analyze {
+            sql: "SELECT AVG(s.gpa), e.cid FROM enrolled AS e JOIN student AS s ON e.sid = s.sid;",
+            ctx: context_joined,
+            expected: Err(SqlError::InvalidGroupBy("e.cid".into()).into()),
         }
         .assert()
     }

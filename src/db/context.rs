@@ -1,6 +1,6 @@
+use crate::core::{BuildHasher, HashMap};
 use crate::db::DatabaseError;
 use crate::db::{Ctx, SqlError, TableMetadata};
-use std::collections::HashMap;
 
 #[derive(Debug)]
 pub(crate) struct Context {
@@ -37,7 +37,7 @@ impl Context {
 
     pub fn with_size(capacity: usize) -> Self {
         Self {
-            map: HashMap::with_capacity(capacity),
+            map: HashMap::with_capacity_and_hasher(capacity, BuildHasher),
             entries: Vec::with_capacity(capacity),
             head: None,
             tail: None,
@@ -196,7 +196,7 @@ impl TryFrom<&[&str]> for Context {
                         row_id: 1,
                         schema,
                         indexes: vec![],
-                        serials: HashMap::new(),
+                        serials: HashMap::default(),
                         count: 0,
                     };
                     root += 1;

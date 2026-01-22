@@ -1,5 +1,5 @@
 use crate::core::storage::page::{buffer::BufferWithHeader, Page, PageHeader, PageNumber};
-use std::collections::HashMap;
+use crate::core::HashMap;
 use std::mem::ManuallyDrop;
 use std::ptr;
 
@@ -125,7 +125,7 @@ impl<Header> From<BufferWithHeader<Header>> for PageZero {
 
         let page = ManuallyDrop::new(Page {
             buffer: page_buffer,
-            overflow: HashMap::new(),
+            overflow: HashMap::default(),
         });
 
         Self { buffer, page }

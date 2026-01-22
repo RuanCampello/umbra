@@ -9,7 +9,7 @@ pub use crate::core::numeric::Numeric;
 pub(crate) use context::Context;
 use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
-pub(crate) use schema::{has_btree_key, umbra_schema, Schema};
+pub(crate) use schema::{has_btree_key, umbra_schema, Schema, SchemaNew};
 
 use crate::core::date::{DateParseError, ExtractError};
 use crate::core::storage::btree::{BTree, FixedSizeCmp};
@@ -18,6 +18,7 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
 use crate::core::uuid::UuidError;
+use crate::core::HashMap;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
@@ -27,7 +28,7 @@ use crate::vm;
 use crate::vm::expression::{TypeError, VmError};
 use crate::vm::planner::{Execute, Planner, Tuple};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fmt::Display;
 use std::fs::File;
@@ -323,7 +324,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 name: String::from(table),
                 row_id,
                 indexes: vec![],
-                serials: HashMap::new(),
+                serials: HashMap::default(),
                 schema,
             });
         }
@@ -335,7 +336,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
             name: String::from(table),
             schema: Schema::empty(),
             indexes: Vec::new(),
-            serials: HashMap::new(),
+            serials: HashMap::default(),
         };
 
         let mut serials_to_load = Vec::new();

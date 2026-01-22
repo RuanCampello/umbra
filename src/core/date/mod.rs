@@ -115,7 +115,7 @@ pub trait Current {
 
 #[inline(always)]
 #[allow(unused)]
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("System time couldn't be acquired")

@@ -6,11 +6,13 @@ use super::page::{Cell, OverflowPage, Page, PageNumber, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
 use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
+use crate::core::HashSet;
 use crate::sql::statement::Type;
 use std::cmp::{min, Ordering, Reverse};
-use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, VecDeque};
 use std::io::{Read, Result as IOResult, Seek, Write};
 use std::mem;
+use std::str::from_utf8_unchecked;
 
 /// B-Tree data structure hardly inspired on SQLite B*-Tree.
 /// [This](https://www.youtube.com/watch?v=aZjYr87r1b8) video is a great introduction to B-trees and its idiosyncrasies and singularities.
@@ -65,9 +67,14 @@ struct Removal {
 #[derive(Debug, PartialEq, Default, Clone, Copy)]
 pub(crate) struct FixedSizeCmp(pub usize);
 
-/// Compares UTF-8 strings.
+/// Compares UTF-8 strings with fixed-size length prefix (for VARCHAR).
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StringCmp(pub usize);
+
+/// Compares UTF-8 strings with varlena encoding (for TEXT).
+/// Varlena format: if first byte < 0x7f, it's a 1-byte length; otherwise, 4-byte header.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct VarlenaCmp;
 
 /// Fixed-size comparator for nullable tuples with the bitmap header.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -88,6 +95,7 @@ pub(crate) struct BitMapStringCmp {
 pub(crate) enum BTreeKeyCmp {
     MemCmp(FixedSizeCmp),
     StrCmp(StringCmp),
+    VarlenaCmp(VarlenaCmp),
     MapMemCmp(BitMapSizedCmp),
     MapStrCmp(BitMapStringCmp),
 }
@@ -750,7 +758,7 @@ impl TryFrom<&Type> for FixedSizeCmp {
 
     fn try_from(data_type: &Type) -> Result<Self, Self::Error> {
         match data_type {
-            Type::Varchar(_) | Type::Boolean => Err(()),
+            Type::Varchar(_) | Type::Text | Type::Boolean => Err(()),
             fixed => Ok(Self(byte_len_of_type(fixed))),
         }
     }
@@ -778,10 +786,10 @@ impl BytesCmp for StringCmp {
         buffer[..self.0].copy_from_slice(&b[..self.0]);
         let len_b = usize::from_le_bytes(buffer);
 
-        // TODO: check those unwraps
-        std::str::from_utf8(&a[self.0..self.0 + len_a])
-            .unwrap()
-            .cmp(std::str::from_utf8(&b[self.0..self.0 + len_b]).unwrap())
+        unsafe {
+            from_utf8_unchecked(&a[self.0..self.0 + len_a])
+                .cmp(from_utf8_unchecked(&b[self.0..self.0 + len_b]))
+        }
     }
 }
 
@@ -802,8 +810,6 @@ impl BytesCmp for BitMapSizedCmp {
 
 impl BytesCmp for BitMapStringCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
-        use std::str::from_utf8;
-
         let a = &a[self.bitmap_len..];
         let b = &b[self.bitmap_len..];
 
@@ -816,9 +822,35 @@ impl BytesCmp for BitMapStringCmp {
         buff[..self.prefix_len].copy_from_slice(&b[..self.prefix_len]);
         let length_b = usize::from_le_bytes(buff);
 
-        from_utf8(&a[self.prefix_len..self.prefix_len + length_a])
-            .unwrap()
-            .cmp(from_utf8(&b[self.prefix_len..self.prefix_len + length_b]).unwrap())
+        unsafe {
+            from_utf8_unchecked(&a[self.prefix_len..self.prefix_len + length_a]).cmp(
+                from_utf8_unchecked(&b[self.prefix_len..self.prefix_len + length_b]),
+            )
+        }
+    }
+}
+
+/// Reads varlena length from the buffer.
+/// 
+/// Returns (header_len, string_len).
+#[inline]
+#[rustfmt::skip]
+const fn read_varlena_length(buf: &[u8]) -> (usize, usize) {
+    match buf[0] < 0x7f {
+        true => (1, buf[0] as usize),
+        false => (4, u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]) as usize),
+    }
+}
+
+impl BytesCmp for VarlenaCmp {
+    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+        let (header_a, len_a) = read_varlena_length(a);
+        let (header_b, len_b) = read_varlena_length(b);
+
+        unsafe {
+            from_utf8_unchecked(&a[header_a..header_a + len_a])
+                .cmp(from_utf8_unchecked(&b[header_b..header_b + len_b]))
+        }
     }
 }
 
@@ -826,6 +858,7 @@ impl From<&Type> for Box<dyn BytesCmp> {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Box::new(StringCmp(utf_8_length_bytes(*max))),
+            Type::Text => Box::new(VarlenaCmp),
             not_var_type => Box::new(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
@@ -841,6 +874,7 @@ impl From<&Type> for BTreeKeyCmp {
     fn from(value: &Type) -> Self {
         match value {
             Type::Varchar(max) => Self::StrCmp(StringCmp(utf_8_length_bytes(*max))),
+            Type::Text => Self::VarlenaCmp(VarlenaCmp),
             not_var_type => Self::MemCmp(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
@@ -851,6 +885,7 @@ impl BytesCmp for BTreeKeyCmp {
         match self {
             Self::MemCmp(mem) => mem.cmp(a, b),
             Self::StrCmp(str) => str.cmp(a, b),
+            Self::VarlenaCmp(var) => var.cmp(a, b),
             Self::MapMemCmp(mem) => mem.cmp(a, b),
             Self::MapStrCmp(str) => str.cmp(a, b),
         }

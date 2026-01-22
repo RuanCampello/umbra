@@ -8,8 +8,9 @@
 use crate::core::storage::page::MemoryPage;
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
+use crate::core::BuildHasher;
+use crate::core::HashMap;
 use crate::method_builder;
-use std::collections::HashMap;
 use std::mem;
 
 /// # Clock-Based Page Cache
@@ -128,7 +129,7 @@ impl Cache {
             max_size: DEFAULT_MAX,
             max_pinned_percentage: DEFAULT_MAX_PINNED_PERCENTAGE,
             buffer: Vec::with_capacity(DEFAULT_MAX),
-            pages: HashMap::with_capacity(DEFAULT_MAX),
+            pages: HashMap::with_capacity_and_hasher(DEFAULT_MAX, BuildHasher),
         }
     }
 
@@ -142,7 +143,7 @@ impl Cache {
             page_size: DEFAULT_PAGE_SIZE,
             max_size,
             buffer: Vec::with_capacity(max_size),
-            pages: HashMap::with_capacity(max_size),
+            pages: HashMap::with_capacity_and_hasher(max_size, BuildHasher),
             max_pinned_percentage: DEFAULT_MAX_PINNED_PERCENTAGE,
             pinned_pages: 0,
             clock: 0,

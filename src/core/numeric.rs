@@ -828,6 +828,61 @@ impl Numeric {
             _ => panic!("unpack_short called on non-Short variant"),
         }
     }
+
+    /// Deserialize a Numeric from bytes produced by `Serialize::serialize`.
+    ///
+    /// # Format
+    /// - Short format: 8 bytes (tag bits 00 in top 2 bits)
+    /// - Long format: 8 bytes header + 2 bytes len + 2 bytes weight + 2 bytes sign_dscale + N*2 bytes digits
+    /// - NaN format: 8 bytes (tag bits 10 in top 2 bits)
+    #[inline]
+    pub fn from_serialized_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() < 8 {
+            return Err("Numeric requires at least 8 bytes");
+        }
+
+        let packed = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let tag_bits = packed >> TAG_SHIFT;
+
+        match tag_bits {
+            0b00 => {
+                // Short format
+                Ok(Self::Short(packed))
+            }
+            0b10 => {
+                // NaN
+                Ok(Self::NaN)
+            }
+            0b01 => {
+                // Long format
+                if bytes.len() < 14 {
+                    return Err("Long numeric requires at least 14 bytes");
+                }
+                let ndigits = u16::from_le_bytes(bytes[8..10].try_into().unwrap()) as usize;
+                let weight = i16::from_le_bytes(bytes[10..12].try_into().unwrap());
+                let sign_dscale = u16::from_le_bytes(bytes[12..14].try_into().unwrap());
+
+                let expected_len = 14 + ndigits * 2;
+                if bytes.len() < expected_len {
+                    return Err("Truncated numeric digits");
+                }
+
+                let mut digits = Vec::with_capacity(ndigits);
+                for i in 0..ndigits {
+                    let offset = 14 + i * 2;
+                    let digit = i16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+                    digits.push(digit);
+                }
+
+                Ok(Self::Long {
+                    weight,
+                    sign_dscale,
+                    digits,
+                })
+            }
+            _ => Err("Invalid numeric tag"),
+        }
+    }
 }
 
 impl Serialize for Numeric {
