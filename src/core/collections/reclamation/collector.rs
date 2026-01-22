@@ -33,7 +33,7 @@ pub trait Guard {
 
     /// Protects the load of an atomic pointer.
     fn protect<T>(&self, ptr: &atomic::AtomicPtr<T>) -> *mut T {
-        ptr.load(Ordering::Acquire)
+        ptr.load(Ordering::SeqCst)
     }
 
     /// Retires a pointer with a reclaim function.
@@ -185,7 +185,7 @@ impl Collector {
         (*batch).len += 1;
 
         if (*batch).len >= self.batch_size || (*batch).len >= super::batch::BATCH_SIZE {
-            self.try_retire(&mut *local_batch);
+            self.try_retire(local_batch);
         }
     }
 
@@ -197,14 +197,13 @@ impl Collector {
             None => return,
         };
 
-        let local_batch = &mut *local.get();
-        self.try_retire(local_batch);
+        self.try_retire(local.get());
     }
 
-    unsafe fn try_retire(&self, local_batch: &mut LocalBatch) {
+    unsafe fn try_retire(&self, local_batch: *mut LocalBatch) {
         barrier::heavy();
 
-        let batch = local_batch.batch;
+        let batch = (*local_batch).batch;
         if batch.is_null() || batch == DROP {
             return;
         }
@@ -237,13 +236,13 @@ impl Collector {
         }
 
         if active_count == 0 {
-            local_batch.batch = Batch::alloc();
+            (*local_batch).batch = Batch::alloc();
             self.free_batch(batch);
             return;
         }
 
         (*batch).refcount.store(active_count, Ordering::Relaxed);
-        local_batch.batch = Batch::alloc();
+        (*local_batch).batch = Batch::alloc();
         atomic::fence(Ordering::Acquire);
 
         let mut decrements = 0;
@@ -303,20 +302,31 @@ impl Collector {
             None => return,
         };
 
-        let mut node = reservation.head.swap(INACTIVE, Ordering::SeqCst);
+        let mut node = reservation.head.swap(INACTIVE, Ordering::Release);
 
-        while !node.is_null() && node != INACTIVE {
-            let next = (*node).next;
-            let batch = (*node).batch;
+        if node.is_null() || node == INACTIVE {
+            return;
+        }
 
-            debug_assert!(!batch.is_null());
+        atomic::fence(Ordering::Acquire);
+        unsafe { self.traverse(node) }
+    }
 
-            let old_rc = (*batch).refcount.fetch_sub(1, Ordering::AcqRel);
-            if old_rc == 1 {
-                self.free_batch(batch);
+    #[inline(never)]
+    #[cold]
+    unsafe fn traverse(&self, mut entries: *mut Entry) {
+        while !entries.is_null() {
+            let current = entries;
+
+            entries = unsafe { (*current).next };
+            let batch = unsafe { (*current).batch };
+
+            unsafe {
+                if (*batch).refcount.fetch_sub(1, Ordering::Release) == 1 {
+                    atomic::fence(Ordering::Acquire);
+                    self.free_batch(batch);
+                }
             }
-
-            node = next;
         }
     }
 
