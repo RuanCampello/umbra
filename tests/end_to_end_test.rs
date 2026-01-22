@@ -503,6 +503,76 @@ fn jsonb_comprehensive() {
 }
 
 #[test]
+fn json_joins_and_filtering() {
+    let state = State::default();
+    let mut db = state.client();
+
+    db.exec(
+        r#"
+    CREATE TABLE agents (
+        id INTEGER,
+        name TEXT,
+        status TEXT,
+        metadata JSONB
+    );
+    "#,
+    );
+    db.exec(r#"CREATE TABLE assignments (agent_id INTEGER, role TEXT);"#);
+
+    db.exec(
+        r#"
+    INSERT INTO agents (id, name, status, metadata) VALUES
+        (1, 'Alice', 'active', {address: {city: "London"}, level: 5}),
+        (2, 'Bob', 'inactive', {address: {city: "Berlin"}, level: 2}),
+        (3, 'Eve', 'active', {address: {city: "Rome"}, level: 7});
+    "#,
+    );
+    db.exec(r#"INSERT INTO assignments (agent_id, role) VALUES (1, 'handler'), (2, 'observer');"#);
+
+    let query = db.exec(r#"SELECT name FROM agents WHERE status = 'active';"#);
+    assert_eq!(query.tuples, vec![vec!["Alice".into()], vec!["Eve".into()]]);
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        name, 
+        metadata.address.city AS city,
+        metadata.level AS level
+    FROM agents;
+    "#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "London".into(), 5.into()],
+            vec!["Bob".into(), "Berlin".into(), 2.into()],
+            vec!["Eve".into(), "Rome".into(), 7.into()],
+        ]
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT 
+        a.name AS agent_name,
+        b.role AS role
+    FROM agents AS a
+    LEFT JOIN assignments as b
+    ON a.id = b.agent_id;
+    "#,
+    );
+
+    let query = db.exec(
+        r#"
+    SELECT
+        metadata.address.city AS city,
+        COUNT(*) AS agents
+    FROM agents
+    GROUP BY metadata.address.city;
+    "#,
+    );
+}
+
+#[test]
 fn project_requests() {
     let server = State::new("sql/user-requests.sql");
     let mut db = server.client();
