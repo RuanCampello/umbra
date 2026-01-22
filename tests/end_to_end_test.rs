@@ -560,6 +560,14 @@ fn json_joins_and_filtering() {
     ON a.id = b.agent_id;
     "#,
     );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Alice".into(), "handler".into()],
+            vec!["Bob".into(), "observer".into()],
+            vec!["Eve".into(), Value::Null],
+        ]
+    );
 
     let query = db.exec(
         r#"
@@ -567,8 +575,17 @@ fn json_joins_and_filtering() {
         metadata.address.city AS city,
         COUNT(*) AS agents
     FROM agents
-    GROUP BY metadata.address.city;
+    GROUP BY city
+    ORDER BY city;
     "#,
+    );
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["Berlin".into(), 1.into()],
+            vec!["London".into(), 1.into()],
+            vec!["Rome".into(), 1.into()],
+        ]
     );
 }
 
