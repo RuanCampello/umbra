@@ -130,7 +130,7 @@ mod tests {
                 let c = Arc::clone(&collector);
                 let a = Arc::clone(&atomic);
                 thread::spawn(move || {
-                    for _ in 0..1000 {
+                    for _ in 0..var::ITEMS {
                         let guard = c.pin();
                         let _ptr = guard.protect(&a);
                     }
@@ -164,10 +164,10 @@ mod tests {
     fn reclaim_all() {
         let collector = Collector::new().batch_size(2);
 
-        for _ in 0..100 {
+        for _ in 0..var::ITER {
             let drop = Arc::new(AtomicUsize::new(0));
 
-            let items: Vec<_> = (0..1000)
+            let items: Vec<_> = (0..var::ITEMS)
                 .map(|_| AtomicPtr::new(boxed(DropTracker(drop.clone()))))
                 .collect();
 
@@ -179,7 +179,7 @@ mod tests {
                 collector.reclaim_all();
             }
 
-            assert_eq!(drop.load(Ordering::Relaxed), 1000);
+            assert_eq!(drop.load(Ordering::Relaxed), var::ITEMS);
         }
     }
 
@@ -191,12 +191,12 @@ mod tests {
         }
 
         unsafe {
-            let collector = Collector::new().batch_size(1000 * 2);
+            let collector = Collector::new().batch_size(var::ITEMS * 2);
             let dropped = Arc::new(AtomicUsize::new(0));
 
             let ptr = boxed(Recursive {
                 _v: 0,
-                pointers: (0..1000)
+                pointers: (0..var::ITEMS)
                     .map(|_| boxed(DropTracker(dropped.clone())))
                     .collect(),
             });
@@ -209,7 +209,7 @@ mod tests {
             });
 
             collector.reclaim_all();
-            assert_eq!(dropped.load(Ordering::Relaxed), 1000);
+            assert_eq!(dropped.load(Ordering::Relaxed), var::ITEMS);
         }
     }
 
