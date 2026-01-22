@@ -13,12 +13,12 @@ use crate::sql::Value;
 /// Example:
 /// Given the sorted values:
 ///
-///     [0, 0, 1, 1, 2, 2, 3, 4]
+///     `[0, 0, 1, 1, 2, 2, 3, 4]`
 ///
 /// With `n = 4` buckets, boundaries are chosen so that each bucket contains
 /// approximately the same number of rows:
 ///
-///     boundaries = [0, 1, 2, 3, 4]
+///     boundaries = `[0, 1, 2, 3, 4]`
 ///     rows_per_bucket ≈ 2
 ///
 /// Buckets:
