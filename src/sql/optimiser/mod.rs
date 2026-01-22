@@ -1,13 +1,20 @@
 //! That's the very last part before execution, right after [`super::analyzer`].
 //! Here, we try to minimise the operations of a given statement.
 
+#![allow(unused)]
+
 use crate::db::SqlError;
 use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
 use crate::vm::expression::resolve_only_expression;
 
 use super::statement::{Delete, Insert, Select, Update};
 
-pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
+mod bloom;
+mod cost;
+mod statistics;
+
+/// Tries to simplify the given statement applying heuristic-based rules.
+pub(crate) fn simplify(statement: &mut Statement) -> Result<(), SqlError> {
     match statement {
         Statement::Select(Select {
             columns,
@@ -26,7 +33,7 @@ pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
             simplify_iter(columns.iter_mut().map(|col| &mut col.value))?;
         }
         Statement::Delete(Delete { r#where, .. }) => simplify_where(r#where)?,
-        Statement::Explain(inner) => optimise(inner)?,
+        Statement::Explain(inner) => simplify(inner)?,
         Statement::Insert(Insert { values, .. }) => {
             let expr_iter = values.iter_mut().flat_map(|row| row.iter_mut());
             simplify_iter(expr_iter)?;
@@ -37,10 +44,10 @@ pub(crate) fn optimise(statement: &mut Statement) -> Result<(), SqlError> {
     Ok(())
 }
 
-pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
+pub(in crate::sql) fn simplify_recursively(expression: &mut Expression) -> Result<(), SqlError> {
     match expression {
         Expression::UnaryOperation { expr, .. } => {
-            simplify(expr)?;
+            simplify_recursively(expr)?;
             if let Expression::Value(_) = expr.as_ref() {
                 *expression = resolve_expression(expression)?
             }
@@ -51,8 +58,8 @@ pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
             right,
             ..
         } => {
-            simplify(left)?;
-            simplify(right)?;
+            simplify_recursively(left)?;
+            simplify_recursively(right)?;
 
             match (left.as_mut(), operator, right.as_mut()) {
                 // if both sides are literal values, evaluate the whole expression
@@ -141,7 +148,7 @@ pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
 
         //FIXME: that's going to be a pain in the ass
         Expression::Nested(nested) => {
-            simplify(nested.as_mut())?;
+            simplify_recursively(nested.as_mut())?;
             *expression = std::mem::replace(nested.as_mut(), Expression::Wildcard);
         }
         _ => {}
@@ -153,11 +160,11 @@ pub(crate) fn simplify(expression: &mut Expression) -> Result<(), SqlError> {
 fn simplify_iter<'exp>(
     mut expression: impl Iterator<Item = &'exp mut Expression>,
 ) -> Result<(), SqlError> {
-    expression.try_for_each(simplify)
+    expression.try_for_each(simplify_recursively)
 }
 
 fn simplify_where(r#where: &mut Option<Expression>) -> Result<(), SqlError> {
-    r#where.as_mut().map(simplify).unwrap_or(Ok(()))
+    r#where.as_mut().map(simplify_recursively).unwrap_or(Ok(()))
 }
 
 fn resolve_expression(expression: &Expression) -> Result<Expression, SqlError> {
@@ -180,7 +187,7 @@ mod tests {
     impl<'op> Optimiser<'op> {
         fn assert(&self) -> OptimiserResult {
             let mut statement = Parser::new(self.input).parse_statement()?;
-            optimise(&mut statement)?;
+            simplify(&mut statement)?;
 
             assert_eq!(Parser::new(self.optimised).parse_statement()?, statement);
             Ok(())
@@ -188,7 +195,7 @@ mod tests {
 
         fn assert_expression(&self) -> OptimiserResult {
             let mut expression = Parser::new(self.input).parse_expr(None)?;
-            simplify(&mut expression)?;
+            simplify_recursively(&mut expression)?;
 
             assert_eq!(Parser::new(self.optimised).parse_expr(None)?, expression);
             Ok(())

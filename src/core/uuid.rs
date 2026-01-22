@@ -222,9 +222,7 @@ const fn parse_hyphenated(string: &[u8]) -> Result<[u8; 16], UuidError> {
 impl PartialEq for Uuid {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        unsafe {
-            return eq_sse2(self.0.as_ptr(), other.0.as_ptr());
-        }
+        unsafe { eq_sse2(self.0.as_ptr(), other.0.as_ptr()) }
     }
 }
 

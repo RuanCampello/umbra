@@ -214,7 +214,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                 autocommit: false,
             };
 
-            while let Some(_) = prepared.try_next()? {}
+            while prepared.try_next()?.is_some() {}
         }
 
         Ok(())
@@ -415,7 +415,7 @@ impl<File: Seek + Read + Write + FileOperations> Database<File> {
                                 root,
                                 name: name.clone(),
                                 value: AtomicU64::new(0),
-                                data_type: r#type.clone(),
+                                data_type: r#type,
                             },
                         );
 

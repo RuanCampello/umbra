@@ -122,7 +122,7 @@ pub(crate) enum Drop {
     Database(String),
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Clone)]
 pub enum Expression {
     Identifier(String),
     QualifiedIdentifier {
@@ -134,6 +134,7 @@ pub enum Expression {
         segments: Vec<PathSegment>,
     },
     Value(Value),
+    #[default]
     Wildcard,
     UnaryOperation {
         operator: UnaryOperator,
@@ -425,17 +426,11 @@ impl Type {
     }
 
     pub const fn is_serial(&self) -> bool {
-        match self {
-            Self::SmallSerial | Self::Serial | Self::BigSerial => true,
-            _ => false,
-        }
+        matches!(self, Self::SmallSerial | Self::Serial | Self::BigSerial)
     }
 
     pub const fn is_float(&self) -> bool {
-        match self {
-            Self::Real | Self::DoublePrecision => true,
-            _ => false,
-        }
+        matches!(self, Self::Real | Self::DoublePrecision)
     }
 
     /// Returns true if is any numeric type.
@@ -601,14 +596,14 @@ impl Display for Statement {
 impl Expression {
     pub(in crate::sql) fn unwrap_alias(&self) -> &Self {
         match self {
-            Expression::Alias { ref expr, .. } => &**expr,
+            Expression::Alias { ref expr, .. } => expr,
             _ => self,
         }
     }
 
     pub(in crate::sql) fn unwrap_name(&self) -> Cow<'_, str> {
         match self {
-            Expression::Alias { alias, .. } => Cow::Borrowed(&alias),
+            Expression::Alias { alias, .. } => Cow::Borrowed(alias),
             Expression::Nested(expr) => expr.unwrap_name(),
             expr => Cow::Owned(expr.to_string()),
         }
@@ -676,12 +671,6 @@ impl Expression {
     }
 }
 
-impl Default for Expression {
-    fn default() -> Self {
-        Expression::Wildcard
-    }
-}
-
 impl JoinClause {
     pub(in crate::sql) fn index_cadidate(
         &self,
@@ -694,8 +683,8 @@ impl JoinClause {
                 right: r,
             } => {
                 let (right_key_expr, left_key_expr) = match (
-                    Self::is_col_of_table(l, &self.table.key()),
-                    Self::is_col_of_table(r, &self.table.key()),
+                    Self::is_col_of_table(l, self.table.key()),
+                    Self::is_col_of_table(r, self.table.key()),
                 ) {
                     (true, _) => (Some(l.as_ref()), r.as_ref()),
                     (_, true) => (Some(r.as_ref()), l.as_ref()),
@@ -948,10 +937,10 @@ impl Function {
     }
 
     pub const fn is_math(&self) -> bool {
-        return matches!(
+        matches!(
             self,
             Self::Trunc | Self::Abs | Self::Sqrt | Self::Sign | Self::Power
-        );
+        )
     }
 
     pub const fn is_aggr(&self) -> bool {

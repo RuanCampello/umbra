@@ -73,7 +73,7 @@ impl WalManager {
         fs::create_dir_all(path)?;
 
         let wal_path = path.join("wal");
-        let wal = Wal::with_config(&wal_path, config.sync, &config)?;
+        let wal = Wal::with_config(&wal_path, config.sync, config)?;
         let lsn = wal.lsn();
 
         let interval = match config.interval > 0 {

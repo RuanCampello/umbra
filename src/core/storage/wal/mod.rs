@@ -260,7 +260,7 @@ impl Wal {
         let mut buff = self.buffer.lock().unwrap();
         buff.extend_from_slice(&encoded);
 
-        let needs_flush = buff.len() >= self.flush_trigger as usize;
+        let needs_flush = buff.len() >= self.flush_trigger;
 
         if needs_flush || self.must_sync(entry.operation) {
             let mut buffer = std::mem::take(&mut *buff);
@@ -570,9 +570,8 @@ impl Wal {
 
         loop {
             let mut header = [0u8; WAL_HEADER_SIZE as usize];
-            match file.read_exact(&mut header) {
-                Err(_) => break,
-                Ok(()) => {}
+            if file.read_exact(&mut header).is_err() {
+                break;
             };
 
             let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
@@ -633,10 +632,8 @@ impl Wal {
                     }
                     _ => break,
                 };
-            } else {
-                if file.seek(SeekFrom::Current(header_size as _)).is_err() {
-                    break;
-                }
+            } else if file.seek(SeekFrom::Current(header_size as _)).is_err() {
+                break;
             }
 
             if lsn > *last_lsn {

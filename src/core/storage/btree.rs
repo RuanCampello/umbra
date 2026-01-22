@@ -93,11 +93,11 @@ pub(crate) struct BitMapStringCmp {
 /// No allocations comparing to [`Box`].
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum BTreeKeyCmp {
-    MemCmp(FixedSizeCmp),
-    StrCmp(StringCmp),
-    VarlenaCmp(VarlenaCmp),
-    MapMemCmp(BitMapSizedCmp),
-    MapStrCmp(BitMapStringCmp),
+    Mem(FixedSizeCmp),
+    Str(StringCmp),
+    Varlena(VarlenaCmp),
+    MapMem(BitMapSizedCmp),
+    MapStr(BitMapStringCmp),
 }
 
 /// Represents the result of reading content from the [`BTree`].
@@ -766,7 +766,7 @@ impl TryFrom<&Type> for FixedSizeCmp {
 
 impl From<FixedSizeCmp> for BTreeKeyCmp {
     fn from(value: FixedSizeCmp) -> Self {
-        Self::MemCmp(value)
+        Self::Mem(value)
     }
 }
 
@@ -873,9 +873,9 @@ impl BytesCmp for &Box<dyn BytesCmp> {
 impl From<&Type> for BTreeKeyCmp {
     fn from(value: &Type) -> Self {
         match value {
-            Type::Varchar(max) => Self::StrCmp(StringCmp(utf_8_length_bytes(*max))),
-            Type::Text => Self::VarlenaCmp(VarlenaCmp),
-            not_var_type => Self::MemCmp(FixedSizeCmp(byte_len_of_type(not_var_type))),
+            Type::Varchar(max) => Self::Str(StringCmp(utf_8_length_bytes(*max))),
+            Type::Text => Self::Varlena(VarlenaCmp),
+            not_var_type => Self::Mem(FixedSizeCmp(byte_len_of_type(not_var_type))),
         }
     }
 }
@@ -883,11 +883,11 @@ impl From<&Type> for BTreeKeyCmp {
 impl BytesCmp for BTreeKeyCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
         match self {
-            Self::MemCmp(mem) => mem.cmp(a, b),
-            Self::StrCmp(str) => str.cmp(a, b),
-            Self::VarlenaCmp(var) => var.cmp(a, b),
-            Self::MapMemCmp(mem) => mem.cmp(a, b),
-            Self::MapStrCmp(str) => str.cmp(a, b),
+            Self::Mem(mem) => mem.cmp(a, b),
+            Self::Str(str) => str.cmp(a, b),
+            Self::Varlena(var) => var.cmp(a, b),
+            Self::MapMem(mem) => mem.cmp(a, b),
+            Self::MapStr(str) => str.cmp(a, b),
         }
     }
 }

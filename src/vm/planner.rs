@@ -561,7 +561,7 @@ impl<File: PlanExecutor> RangeScan<File> {
         };
 
         let mut descent = Vec::new();
-        let mut btree = BTree::new(&mut pager, self.root, self.comparator.clone());
+        let mut btree = BTree::new(&mut pager, self.root, self.comparator);
         let search = btree.search(self.root, key, &mut descent)?;
 
         match search.index {
@@ -668,7 +668,7 @@ impl<File: PlanExecutor> Execute for KeyScan<File> {
         );
 
         let mut pager = self.pager.borrow_mut();
-        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator.clone());
+        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator);
 
         let entry = btree
             .get(&tuple::serialize(
@@ -1004,7 +1004,7 @@ impl<File: PlanExecutor> Execute for Insert<File> {
 
         let mut pager = self.pager.borrow_mut();
 
-        BTree::new(&mut pager, self.table.root, self.comparator.clone())
+        BTree::new(&mut pager, self.table.root, self.comparator)
             .try_insert(tuple::serialize_tuple(&self.table.schema, &tuple))?
             .map_err(|_| SqlError::DuplicatedKey(tuple.swap_remove(0)))?;
 
@@ -1079,7 +1079,7 @@ impl<File: PlanExecutor> Execute for Update<File> {
         }
 
         let mut pager = self.pager.borrow_mut();
-        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator.clone());
+        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator);
 
         let updated_entry = tuple::serialize_tuple(&self.table.schema, &tuple);
 
@@ -1128,7 +1128,7 @@ impl<File: PlanExecutor> Execute for Update<File> {
             let input_schema = self.table.schema.update_returning_input();
             let mut old_tuple = tuple.clone();
 
-            for (_, (old_value, column_idx)) in &updated_cols {
+            for (old_value, column_idx) in updated_cols.values() {
                 old_tuple[*column_idx] = old_value.clone();
             }
 
@@ -1153,7 +1153,7 @@ impl<File: PlanExecutor> Execute for Delete<File> {
         };
 
         let mut pager = self.pager.borrow_mut();
-        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator.clone());
+        let mut btree = BTree::new(&mut pager, self.table.root, self.comparator);
 
         btree.remove(&tuple::serialize(
             &self.table.schema.columns[0].data_type,
@@ -1321,7 +1321,7 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
             self.filled = true;
 
             let is_count = |expr: &Expression| matches!(expr, Expression::Function { func, .. } if *func == Function::Count);
-            if self.group_by.is_empty() && self.aggr_exprs.iter().all(|expr| is_count(expr)) {
+            if self.group_by.is_empty() && self.aggr_exprs.iter().all(is_count) {
                 return Ok(Some(vec![Value::Number(0); self.aggr_exprs.len()]));
             }
             return Ok(None);
@@ -1639,7 +1639,7 @@ impl<File: PlanExecutor> Execute for Limit<File> {
             true => match self.source.try_next()? {
                 Some(tuple) => {
                     self.count += 1;
-                    return Ok(Some(tuple));
+                    Ok(Some(tuple))
                 }
                 _ => Ok(None),
             },
@@ -1991,7 +1991,7 @@ impl Index<usize> for TupleBuffer {
 impl<File: PlanExecutor> FileFifo<File> {
     fn new(page_size: usize, work_dir: &Path) -> Self {
         debug_assert!(
-            page_size % std::mem::size_of::<u32>() == 0,
+            page_size.is_multiple_of(std::mem::size_of::<u32>()),
             "Page size must be a multiple of 4: {page_size}"
         );
 

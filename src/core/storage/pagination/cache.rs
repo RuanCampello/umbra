@@ -245,7 +245,7 @@ impl Cache {
     }
 
     fn unset_flags(&mut self, page_number: PageNumber, flags: u8) -> bool {
-        self.pages.get(&page_number).map_or(false, |frame_id| {
+        self.pages.get(&page_number).is_some_and(|frame_id| {
             self.buffer[*frame_id].unset(flags);
 
             true
@@ -253,7 +253,7 @@ impl Cache {
     }
 
     fn set_flags(&mut self, page_number: PageNumber, flags: u8) -> bool {
-        self.pages.get(&page_number).map_or(false, |id| {
+        self.pages.get(&page_number).is_some_and(|id| {
             self.buffer[*id].set(PINNED_FLAG);
             true
         })
