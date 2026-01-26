@@ -62,6 +62,15 @@ impl<T> Table<T> {
         }
     }
 
+    pub unsafe fn dealloc(table: Table<T>) {
+        let layout = Self::layout(table.len());
+
+        unsafe {
+            std::ptr::drop_in_place(table.raw.cast::<TableLayout<T>>());
+            alloc::dealloc(table.raw.cast::<u8>(), layout);
+        }
+    }
+
     #[inline]
     pub fn next(&self) -> Option<Self> {
         let next = self.state().next.load(Ordering::Acquire);

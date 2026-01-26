@@ -1,4 +1,4 @@
-use crate::collections::chash::utils::{unpack, CheckedPin};
+use crate::collections::chash::utils::{unpack, untagged, CheckedPin};
 use crate::collections::reclamation::{Collector, OwnedGuard};
 use crate::collections::{
     chash::{
@@ -46,6 +46,21 @@ pub struct State<T> {
 pub enum Resize {
     Incremental(usize),
     Blocking,
+}
+
+pub enum InsertResult<'p, V> {
+    Inserted(&'p V),
+    Replaced(&'p V),
+    Error { current: &'p V, non_inserted: V },
+}
+
+enum RawInsertResult<'g, K, V> {
+    Inserted(&'g V),
+    Replaced(&'g V),
+    Error {
+        current: &'g V,
+        not_inserted: *mut Entry<K, V>,
+    },
 }
 
 mod metadata {
@@ -128,6 +143,73 @@ where
             }
 
             return None;
+        }
+    }
+
+    fn wrapping_insert<'p>(
+        &self,
+        key: K,
+        value: V,
+        replace: bool,
+        pin: &'p impl CheckedPin,
+    ) -> InsertResult<'p, V> {
+        todo!()
+    }
+
+    fn raw_insert<'p>(
+        &self,
+        key: K,
+        value: V,
+        replace: bool,
+        pin: &'p impl CheckedPin,
+    ) -> RawInsertResult<'p, K, V> {
+        let new = untagged(Box::into_raw(Box::new(Entry { key, value })));
+        let new_ref = unsafe { &(*new.ptr) };
+        let mut table = self.root(pin);
+
+        if table.raw.is_null() {
+            table = self.init(None);
+        }
+
+        let (h1, h2) = self.hash(&new_ref.key);
+        let mut copy = true;
+
+        loop {
+            let mut probe = Probe::new(h1, table.mask);
+
+            let copying = 'p: loop {
+                if probe.len > table.limit {
+                    break None;
+                }
+
+                let metadata = unsafe { table.metadata(probe.i) }.load(Ordering::Acquire);
+                let entry = if metadata == metadata::EMPTY {};
+            };
+
+            todo!()
+        }
+        todo!()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn init(&self, capacity: Option<usize>) -> Table<Entry<K, V>> {
+        const CAPACITY: usize = 1 << 5;
+
+        let mut new = Table::alloc(capacity.unwrap_or(CAPACITY));
+        *new.mut_state().status.get_mut() = State::PROMOTED;
+
+        match self.table.compare_exchange(
+            std::ptr::null_mut(),
+            new.raw,
+            Ordering::Release,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => new,
+            Err(found) => {
+                unsafe { Table::dealloc(new) }
+                unsafe { Table::from(found) }
+            }
         }
     }
 
