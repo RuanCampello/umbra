@@ -1,4 +1,5 @@
-use crate::core::{storage::mvcc::version::VisibilityChecker, HashMap};
+use crate::collections::hash::HashMap;
+use crate::core::storage::mvcc::version::VisibilityChecker;
 use std::{
     cell::RefCell,
     sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering},

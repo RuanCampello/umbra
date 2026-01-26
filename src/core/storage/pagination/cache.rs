@@ -5,11 +5,10 @@
 
 #![allow(private_interfaces, unused)]
 
+use crate::collections::hash::{BuildHasher, HashMap};
 use crate::core::storage::page::MemoryPage;
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
-use crate::core::BuildHasher;
-use crate::core::HashMap;
 use crate::method_builder;
 use std::mem;
 

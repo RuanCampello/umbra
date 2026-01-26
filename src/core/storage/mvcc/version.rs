@@ -1,9 +1,6 @@
 use crate::{
-    core::{
-        smallvec::SmallVec,
-        storage::mvcc::{arena::TupleArena, get_timestamp, registry::TransactionRegistry},
-        HashMap,
-    },
+    collections::{hash::HashMap, smallvec::SmallVec},
+    core::storage::mvcc::{arena::TupleArena, get_timestamp, registry::TransactionRegistry},
     db::SchemaNew as Schema,
     sql::Value,
     vm::planner::Tuple,

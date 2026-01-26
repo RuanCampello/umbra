@@ -1,11 +1,10 @@
+use crate::collections::chash::{map::State, utils::Probe};
 use std::{
     alloc::{self, Layout},
     marker::PhantomData,
     mem,
     sync::atomic::{AtomicPtr, AtomicU8},
 };
-
-use crate::core::collections::chash::{map::State, utils::Probe};
 
 #[repr(transparent)]
 /// From:

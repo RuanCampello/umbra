@@ -1,11 +1,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::collections::hash::HashMap;
 use crate::core::storage::btree::{
     BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp, VarlenaCmp,
 };
 use crate::core::storage::page::PageNumber;
 use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
-use crate::core::HashMap;
 use crate::db::{DatabaseError, RowId, Schema};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::statement::{Column, Type};

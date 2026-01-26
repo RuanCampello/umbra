@@ -1,16 +1,14 @@
 use super::FileLock;
 use crate::{
-    core::{
-        storage::{
-            mvcc::{
-                registry::TransactionRegistry,
-                version::{TupleVersion, VersionStorage},
-                wal::WalManager,
-                MvccError,
-            },
-            wal::{WalConfig, WalEntry},
+    collections::hash::HashMap,
+    core::storage::{
+        mvcc::{
+            registry::TransactionRegistry,
+            version::{TupleVersion, VersionStorage},
+            wal::WalManager,
+            MvccError,
         },
-        HashMap,
+        wal::{WalConfig, WalEntry},
     },
     db::SchemaNew as Schema,
 };

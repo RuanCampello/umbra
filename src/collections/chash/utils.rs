@@ -1,4 +1,4 @@
-use crate::core::HashMap;
+use crate::collections::hash::HashMap;
 use std::{
     sync::{
         atomic::{AtomicIsize, AtomicPtr, AtomicUsize},

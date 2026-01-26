@@ -11,6 +11,7 @@ use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema, SchemaNew};
 
+use crate::collections::hash::HashMap;
 use crate::core::date::{DateParseError, ExtractError};
 use crate::core::storage::btree::{BTree, FixedSizeCmp};
 use crate::core::storage::page::PageNumber;
@@ -18,7 +19,6 @@ use crate::core::storage::pagination::io::FileOperations;
 use crate::core::storage::pagination::pager::Pager;
 use crate::core::storage::tuple;
 use crate::core::uuid::UuidError;
-use crate::core::HashMap;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};

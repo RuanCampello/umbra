@@ -11,8 +11,8 @@ pub(in crate::core::storage) use overflow::{OverflowPage, OverflowPageHeader};
 pub(in crate::core) use zero::DATABASE_IDENTIFIER;
 pub(in crate::core::storage) use zero::{DatabaseHeader, PageZero};
 
+use crate::collections::hash::HashMap;
 use crate::core::storage::page::buffer::BufferWithHeader;
-use crate::core::HashMap;
 use std::collections::BinaryHeap;
 use std::fmt::{Debug, Formatter};
 use std::ops::Bound;

@@ -15,11 +15,10 @@ use std::{
 mod checkpoint;
 mod entry;
 
-use crate::core::{
-    storage::{mvcc::MvccError, wal::entry::WalFlags},
-    HashSet,
-};
+use crate::collections::hash::HashSet;
+use crate::core::storage::{mvcc::MvccError, wal::entry::WalFlags};
 use checkpoint::CheckpointMetadata;
+
 pub(super) use entry::WalEntry;
 pub(super) use entry::WalOperation;
 

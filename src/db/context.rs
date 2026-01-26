@@ -1,4 +1,4 @@
-use crate::core::{BuildHasher, HashMap};
+use crate::collections::hash::{BuildHasher, HashMap};
 use crate::db::DatabaseError;
 use crate::db::{Ctx, SqlError, TableMetadata};
 

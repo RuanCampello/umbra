@@ -1,5 +1,5 @@
+use crate::collections::hash::HashMap;
 use crate::core::storage::page::{buffer::BufferWithHeader, Page, PageHeader, PageNumber};
-use crate::core::HashMap;
 use std::mem::ManuallyDrop;
 use std::ptr;
 

@@ -1,5 +1,5 @@
 use super::{allocation, utils};
-use crate::core::collections::chash::{
+use crate::collections::chash::{
     allocation::RawTable,
     utils::{Counter, Parker, Stack},
 };
