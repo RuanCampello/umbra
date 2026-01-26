@@ -1,3 +1,4 @@
+use crate::collections::chash::utils::{unpack, CheckedPin};
 use crate::collections::reclamation::{Collector, OwnedGuard};
 use crate::collections::{
     chash::{
@@ -6,6 +7,8 @@ use crate::collections::{
     },
     reclamation::LocalGuard,
 };
+use std::hash::{BuildHasher, Hash};
+use std::sync::atomic::Ordering;
 use std::sync::{
     atomic::{AtomicPtr, AtomicU8, AtomicUsize},
     Mutex,
@@ -45,6 +48,75 @@ pub enum Resize {
     Blocking,
 }
 
+mod metadata {
+    use std::mem;
+
+    pub const EMPTY: u8 = 0x80;
+    pub const TOMBSTONE: u8 = u8::MAX;
+
+    #[inline]
+    pub fn first(hash: u64) -> usize {
+        hash as usize
+    }
+
+    #[inline]
+    pub fn second(hash: u64) -> u8 {
+        const MIN_HASH_LEN: usize = match mem::size_of::<usize>() < mem::size_of::<u64>() {
+            true => mem::size_of::<usize>(),
+            _ => mem::size_of::<u64>(),
+        };
+
+        let top = hash >> (MIN_HASH_LEN * 8 - 7);
+        (top & 0x7f) as u8
+    }
+}
+
+impl<K, V, S> HashMap<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
+    #[inline]
+    pub fn get<'p, Q>(&self, key: &Q, pin: &'p impl CheckedPin) -> Option<(&'p K, &'p V)>
+    where
+        Q: Eq + Hash + ?Sized,
+    {
+        let mut table = self.root(pin);
+        if table.raw.is_null() {
+            return None;
+        }
+
+        let (h1, h2) = self.hash(key);
+
+        loop {
+            let mut probe = Probe::new(h1, table.mask);
+
+            'p: while probe.len <= table.limit {
+                let metadata = unsafe { table.metadata(probe.i).load(Ordering::Acquire) };
+
+                if metadata == metadata::EMPTY {
+                    return None;
+                }
+
+                if metadata == h2 {
+                    let entry = unpack(pin.protect(unsafe { table.entry(probe.i) }));
+                    todo!()
+                }
+
+                probe.next(table.mask)
+            }
+        }
+
+        todo!()
+    }
+
+    #[inline]
+    fn hash<Q: Hash + ?Sized>(&self, key: &Q) -> (usize, u8) {
+        let hash = self.hasher.hash_one(key);
+        (metadata::first(hash), metadata::second(hash))
+    }
+}
+
 impl<K, V, S> HashMap<K, V, S> {
     #[inline]
     pub fn new(capacity: usize, collector: Collector, hasher: S, resize: Resize) -> Self {
@@ -77,6 +149,12 @@ impl<K, V, S> HashMap<K, V, S> {
         self.counter.sum()
     }
 
+    #[inline]
+    pub fn root(&self, pin: &impl CheckedPin) -> Table<Entry<K, V>> {
+        let raw = pin.protect(&self.table);
+        unsafe { Table::from(raw) }
+    }
+
     pub fn pin(&self) -> Pin<LocalGuard<'_>> {
         unsafe { Pin::new(self.collector.pin()) }
     }
@@ -84,6 +162,16 @@ impl<K, V, S> HashMap<K, V, S> {
     pub fn pin_owned(&self) -> Pin<OwnedGuard<'_>> {
         unsafe { Pin::new(self.collector.pin_owned()) }
     }
+}
+
+impl<K, V> super::utils::Unpack for Entry<K, V> {
+    const MASK: usize = !(Entry::COPYING | Entry::COPIED | Entry::BORROWED);
+}
+
+impl Entry<(), ()> {
+    const COPYING: usize = 0b001;
+    const COPIED: usize = 0b010;
+    const BORROWED: usize = 0b100;
 }
 
 impl State<()> {

@@ -20,6 +20,7 @@ pub struct Stack<T> {
     head: AtomicPtr<Node<T>>,
 }
 
+#[repr(transparent)]
 pub struct Pin<P>(P);
 
 #[derive(Default)]
@@ -35,8 +36,19 @@ struct Node<T> {
 
 #[derive(Default)]
 pub struct Probe {
-    i: usize,
-    len: usize,
+    pub(super) i: usize,
+    pub(super) len: usize,
+}
+
+pub struct Tagged<T> {
+    pub raw: *mut T,
+    pub ptr: *mut T,
+}
+
+pub trait CheckedPin: reclamation::Guard {}
+pub trait Unpack: Sized {
+    const MASK: usize;
+    const ALIGNMENT: () = assert!(align_of::<Self>() > !Self::MASK);
 }
 
 impl<T> Stack<T> {
@@ -145,5 +157,46 @@ impl Default for Counter {
             .collect();
 
         Counter(shards)
+    }
+}
+
+impl<T: Unpack> Tagged<T> {
+    #[inline]
+    pub fn tag(self) -> usize {
+        self.raw.addr() & !T::MASK
+    }
+
+    #[inline]
+    pub fn map_tag(self, f: impl FnOnce(usize) -> usize) -> Self {
+        Tagged {
+            raw: self.raw.map_addr(f),
+            ptr: self.ptr,
+        }
+    }
+}
+
+impl<T> Copy for Tagged<T> {}
+
+impl<T> Clone for Tagged<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+#[inline]
+pub fn untagged<T>(value: *mut T) -> Tagged<T> {
+    Tagged {
+        ptr: value,
+        raw: value,
+    }
+}
+
+#[inline(always)]
+pub fn unpack<T: Unpack>(ptr: *mut T) -> Tagged<T> {
+    let () = T::ALIGNMENT;
+
+    Tagged {
+        raw: ptr,
+        ptr: ptr.map_addr(|addr| addr & T::MASK),
     }
 }

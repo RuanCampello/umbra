@@ -22,8 +22,8 @@ struct TableLayout<T> {
 
 #[repr(C)]
 pub struct Table<T> {
-    mask: usize,
-    limit: usize,
+    pub(in crate::collections::chash) mask: usize,
+    pub(in crate::collections::chash) limit: usize,
     pub(in crate::collections::chash) raw: *mut RawTable<T>,
 }
 
@@ -63,6 +63,32 @@ impl<T> Table<T> {
     }
 
     #[inline]
+    pub unsafe fn metadata(&self, i: usize) -> &AtomicU8 {
+        debug_assert!(i < self.len());
+
+        unsafe {
+            let metadata = self.raw.add(mem::size_of::<TableLayout<T>>());
+            &*metadata.cast::<AtomicU8>().add(i)
+        }
+    }
+
+    #[inline]
+    pub unsafe fn entry(&self, i: usize) -> &AtomicPtr<T> {
+        debug_assert!(i < self.len());
+
+        unsafe {
+            let metadata = self.raw.add(mem::size_of::<TableLayout<T>>());
+            let entries = metadata.add(self.len()).cast::<AtomicPtr<T>>();
+            &*entries.add(i)
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.mask + 1
+    }
+
+    #[inline]
     pub fn mut_state(&mut self) -> &mut State<T> {
         unsafe { &mut (*self.raw.cast::<TableLayout<T>>()).state }
     }
@@ -73,6 +99,25 @@ impl<T> Table<T> {
             + (mem::size_of::<AtomicPtr<T>>() * len);
 
         Layout::from_size_align(size, mem::size_of::<TableLayout<T>>()).unwrap()
+    }
+}
+
+impl<T> From<*mut RawTable<T>> for Table<T> {
+    fn from(raw: *mut RawTable<T>) -> Self {
+        if raw.is_null() {
+            return Table {
+                raw,
+                mask: 0,
+                limit: 0,
+            };
+        }
+
+        let layout = unsafe { &*raw.cast::<TableLayout<T>>() };
+        Table {
+            raw,
+            limit: layout.mask,
+            mask: layout.mask,
+        }
     }
 }
 
