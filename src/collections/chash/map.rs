@@ -1,4 +1,4 @@
-use crate::collections::reclamation::Collector;
+use crate::collections::reclamation::{Collector, OwnedGuard};
 use crate::collections::{
     chash::{
         allocation::{RawTable, Table},
@@ -72,8 +72,17 @@ impl<K, V, S> HashMap<K, V, S> {
         }
     }
 
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.counter.sum()
+    }
+
     pub fn pin(&self) -> Pin<LocalGuard<'_>> {
-        todo!()
+        unsafe { Pin::new(self.collector.pin()) }
+    }
+
+    pub fn pin_owned(&self) -> Pin<OwnedGuard<'_>> {
+        unsafe { Pin::new(self.collector.pin_owned()) }
     }
 }
 

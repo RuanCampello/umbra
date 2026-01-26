@@ -2,7 +2,7 @@ use crate::collections::hash::HashMap;
 use crate::collections::reclamation;
 use std::{
     sync::{
-        atomic::{AtomicIsize, AtomicPtr, AtomicUsize},
+        atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering},
         Mutex, OnceLock,
     },
     thread::Thread,
@@ -109,6 +109,25 @@ impl Probe {
     #[inline]
     pub fn entries_for(capacity: usize) -> usize {
         (capacity.checked_mul(8).expect("capacity must not overflow") / 6).next_power_of_two()
+    }
+}
+
+impl Counter {
+    #[inline]
+    pub fn sum(&self) -> usize {
+        self.0
+            .iter()
+            .map(|x| x.load(Ordering::Relaxed))
+            .sum::<isize>()
+            .try_into()
+            .unwrap_or(0)
+    }
+
+    #[inline]
+    pub fn get(&self, guard: &impl reclamation::Guard) -> &AtomicIsize {
+        let i = guard.thread().id & (self.0.len() - 1);
+
+        &self.0[i]
     }
 }
 
