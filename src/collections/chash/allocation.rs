@@ -3,7 +3,7 @@ use std::{
     alloc::{self, Layout},
     marker::PhantomData,
     mem,
-    sync::atomic::{AtomicPtr, AtomicU8},
+    sync::atomic::{AtomicPtr, AtomicU8, Ordering},
 };
 
 #[repr(transparent)]
@@ -63,6 +63,17 @@ impl<T> Table<T> {
     }
 
     #[inline]
+    pub fn next(&self) -> Option<Self> {
+        let next = self.state().next.load(Ordering::Acquire);
+
+        if !next.is_null() {
+            return unsafe { Some(Table::from(next)) };
+        }
+
+        None
+    }
+
+    #[inline]
     pub unsafe fn metadata(&self, i: usize) -> &AtomicU8 {
         debug_assert!(i < self.len());
 
@@ -91,6 +102,11 @@ impl<T> Table<T> {
     #[inline]
     pub fn mut_state(&mut self) -> &mut State<T> {
         unsafe { &mut (*self.raw.cast::<TableLayout<T>>()).state }
+    }
+
+    #[inline]
+    pub fn state(&self) -> &State<T> {
+        unsafe { &(*self.raw.cast::<TableLayout<T>>()).state }
     }
 
     fn layout(len: usize) -> Layout {

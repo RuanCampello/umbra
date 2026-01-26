@@ -32,7 +32,7 @@ pub struct Entry<K, V> {
 }
 
 pub struct State<T> {
-    next: AtomicPtr<RawTable<T>>,
+    pub(super) next: AtomicPtr<RawTable<T>>,
     allocating: Mutex<()>,
     copied: AtomicUsize,
     claim: AtomicUsize,
@@ -79,6 +79,7 @@ where
     #[inline]
     pub fn get<'p, Q>(&self, key: &Q, pin: &'p impl CheckedPin) -> Option<(&'p K, &'p V)>
     where
+        K: std::borrow::Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
         let mut table = self.root(pin);
@@ -100,14 +101,34 @@ where
 
                 if metadata == h2 {
                     let entry = unpack(pin.protect(unsafe { table.entry(probe.i) }));
-                    todo!()
+
+                    if entry.ptr.is_null() {
+                        probe.next(table.mask);
+                        continue 'p;
+                    }
+
+                    let entry_ref = unsafe { &(*entry.ptr) };
+                    if key == entry_ref.key.borrow() {
+                        if entry.tag() & Entry::COPIED != 0 {
+                            break 'p;
+                        }
+
+                        return Some((&entry_ref.key, &entry_ref.value));
+                    }
                 }
 
                 probe.next(table.mask)
             }
-        }
 
-        todo!()
+            if matches!(self.resize, Resize::Incremental(_)) {
+                if let Some(next) = table.next() {
+                    table = next;
+                    continue;
+                }
+            }
+
+            return None;
+        }
     }
 
     #[inline]
