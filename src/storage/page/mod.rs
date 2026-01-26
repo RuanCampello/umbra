@@ -7,12 +7,13 @@ mod buffer;
 mod overflow;
 mod zero;
 
-pub(in crate::core::storage) use overflow::{OverflowPage, OverflowPageHeader};
-pub(in crate::core) use zero::DATABASE_IDENTIFIER;
-pub(in crate::core::storage) use zero::{DatabaseHeader, PageZero};
+pub(in crate::storage) use overflow::{OverflowPage, OverflowPageHeader};
+pub(in crate::storage) use zero::{DatabaseHeader, PageZero};
+
+pub(in crate::storage) use zero::DATABASE_IDENTIFIER;
 
 use crate::collections::hash::HashMap;
-use crate::core::storage::page::buffer::BufferWithHeader;
+use crate::storage::page::buffer::BufferWithHeader;
 use std::collections::BinaryHeap;
 use std::fmt::{Debug, Formatter};
 use std::ops::Bound;
@@ -55,7 +56,7 @@ pub(crate) struct Page {
 ///                                     PAGE
 /// ```
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub(in crate::core) struct PageHeader {
+pub(in crate::storage) struct PageHeader {
     /// The Page's free space available.
     pub free_space: u16,
     /// Number of entries in the slot array.
@@ -74,15 +75,15 @@ pub(in crate::core) struct PageHeader {
 /// This uses a DST (Dynamically Sized Type), which is complex, but improves efficiency when working with references and ownership.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Cell {
-    pub(in crate::core) header: CellHeader,
+    pub(in crate::storage) header: CellHeader,
 
     /// When `header.is_overflow` is true, those last four bytes are going to point to an overflow page.
-    pub(in crate::core) content: [u8],
+    pub(in crate::storage) content: [u8],
 }
 
 #[derive(Debug, PartialEq)]
 #[repr(C, align(8))]
-pub(in crate::core) struct CellHeader {
+pub(in crate::storage) struct CellHeader {
     pub is_overflow: bool,
     /// Padding bytes to ensure correct alignment and avoid undefined behaviour.
     padding: u8,
@@ -101,18 +102,18 @@ pub(crate) enum MemoryPage {
 }
 
 /// The slot array will never be greater than [`MAX_PAGE_SIZE`], therefore, can be indexed with two bytes.
-pub(in crate::core) type SlotId = u16;
+pub(in crate::storage) type SlotId = u16;
 pub(crate) type PageNumber = u32;
 
-pub(in crate::core::storage) const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
-pub(in crate::core::storage) const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
-pub(in crate::core::storage) const SLOT_SIZE: u16 = size_of::<u16>() as u16;
-pub(in crate::core::storage) const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
+pub(in crate::storage) const CELL_HEADER_SIZE: u16 = size_of::<CellHeader>() as u16;
+pub(in crate::storage) const CELL_ALIGNMENT: usize = align_of::<CellHeader>();
+pub(in crate::storage) const SLOT_SIZE: u16 = size_of::<u16>() as u16;
+pub(in crate::storage) const PAGE_HEADER_SIZE: u16 = size_of::<PageHeader>() as u16;
 const PAGE_ALIGNMENT: usize = 4096;
 const MIN_PAGE_SIZE: usize = 32;
 const MAX_PAGE_SIZE: usize = 64 << 10;
 
-pub(in crate::core::storage) trait PageConversion:
+pub(in crate::storage) trait PageConversion:
     From<BufferWithHeader<PageHeader>>
     + From<BufferWithHeader<OverflowPageHeader>>
     + From<BufferWithHeader<DatabaseHeader>>
@@ -831,8 +832,8 @@ impl<'p> TryFrom<&'p mut MemoryPage> for &'p mut OverflowPage {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::storage::page::zero::{DatabaseHeader, PageZero};
-    use crate::core::storage::page::{overflow::*, *};
+    use crate::storage::page::zero::{DatabaseHeader, PageZero};
+    use crate::storage::page::{overflow::*, *};
     use std::slice;
 
     impl Page {

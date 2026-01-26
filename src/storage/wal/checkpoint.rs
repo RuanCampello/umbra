@@ -1,4 +1,4 @@
-use crate::core::storage::{mvcc::fnv1a, wal::WalError};
+use crate::storage::{mvcc::fnv1a, wal::WalError};
 use std::{
     fs::{self, File},
     io::Write,

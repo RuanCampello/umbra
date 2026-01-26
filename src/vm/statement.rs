@@ -4,12 +4,6 @@ use std::{
 };
 
 use crate::{
-    core::storage::{
-        btree::{BTree, BytesCmp, Cursor, FixedSizeCmp},
-        page::{Page, PageNumber},
-        pagination::io::FileOperations,
-        tuple::{self, serialize_tuple},
-    },
     db::{
         has_btree_key, umbra_schema, Ctx, Database, DatabaseError, IndexMetadata, RowId, Schema,
         SqlError, DB_METADATA,
@@ -18,6 +12,12 @@ use crate::{
     sql::{
         parser::Parser,
         statement::{Constraint, Create, Drop, Statement, Value},
+    },
+    storage::{
+        btree::{BTree, BytesCmp, Cursor, FixedSizeCmp},
+        page::{Page, PageNumber},
+        pagination::io::FileOperations,
+        tuple::{self, serialize_tuple},
     },
     vm::planner::{CollectBuilder, Execute, Filter, Planner, SeqScan},
 };

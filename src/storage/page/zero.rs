@@ -1,5 +1,5 @@
 use crate::collections::hash::HashMap;
-use crate::core::storage::page::{buffer::BufferWithHeader, Page, PageHeader, PageNumber};
+use crate::storage::page::{buffer::BufferWithHeader, Page, PageHeader, PageNumber};
 use std::mem::ManuallyDrop;
 use std::ptr;
 
@@ -14,9 +14,9 @@ use std::ptr;
 /// any significant issues, especially with reasonable page sizes (e.g., 4096 bytes or larger).
 /// Using an entire page solely for the [`DatabaseHeader`] would be inefficient in such cases.
 #[derive(Debug, PartialEq, Clone)]
-pub(in crate::core::storage) struct PageZero {
+pub(in crate::storage) struct PageZero {
     /// Page buffer, including the [`DatabaseHeader`].
-    pub(in crate::core::storage) buffer: ManuallyDrop<BufferWithHeader<DatabaseHeader>>,
+    pub(in crate::storage) buffer: ManuallyDrop<BufferWithHeader<DatabaseHeader>>,
     /// Inner B-Tree slotted page.
     page: ManuallyDrop<Page>,
 }
@@ -28,7 +28,7 @@ pub(in crate::core::storage) struct PageZero {
 /// managing pages and free space within the database.
 #[derive(Debug, PartialEq, Clone, Copy)]
 #[repr(C, align(8))]
-pub(in crate::core) struct DatabaseHeader {
+pub(in crate::storage) struct DatabaseHeader {
     pub identifier: u32,
     pub page_size: u16,
     pub total_pages: u32,
@@ -38,7 +38,7 @@ pub(in crate::core) struct DatabaseHeader {
 }
 
 /// This means literally "dusk", because "umbra" wouldn't fit in an [`core::u32`].
-pub(in crate::core) const DATABASE_IDENTIFIER: u32 = 0x6475736b;
+pub(in crate::storage) const DATABASE_IDENTIFIER: u32 = 0x6475736b;
 
 impl PageZero {
     pub fn alloc(size: usize) -> Self {

@@ -1,4 +1,4 @@
-use crate::core::storage::page::{CELL_ALIGNMENT, MAX_PAGE_SIZE, MIN_PAGE_SIZE, PAGE_ALIGNMENT};
+use crate::storage::page::{CELL_ALIGNMENT, MAX_PAGE_SIZE, MIN_PAGE_SIZE, PAGE_ALIGNMENT};
 use std::any::type_name;
 use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
@@ -9,7 +9,7 @@ use std::{alloc, mem};
 /// Represents a buffer split into a header and content.
 /// Header size is determined by the generic type `Header`.
 /// Provides methods for accessing header and content directly.
-pub(in crate::core) struct BufferWithHeader<Header> {
+pub(crate) struct BufferWithHeader<Header> {
     /// Total size of the buffer in bytes.
     pub size: usize,
     /// Pointer to the content.
@@ -213,7 +213,7 @@ impl<Header> Clone for BufferWithHeader<Header> {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::storage::page::*;
+    use crate::storage::page::*;
 
     #[test]
     fn test_buffer_allocation_size() {

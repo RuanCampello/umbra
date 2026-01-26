@@ -4,12 +4,12 @@ use super::cache::{Cache, FrameId};
 use super::io::{BlockIo, FileOperations};
 use crate::collections::hash::HashSet;
 use crate::core::random::Rng;
-use crate::core::storage::btree::Content;
-use crate::core::storage::page::{
+use crate::db::DatabaseError;
+use crate::storage::btree::Content;
+use crate::storage::page::{
     Cell, MemoryPage, OverflowPage, Page, PageConversion, PageNumber, PageZero, SlotId,
     DATABASE_IDENTIFIER,
 };
-use crate::db::DatabaseError;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fmt::{Debug, Formatter};

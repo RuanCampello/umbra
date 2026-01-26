@@ -383,7 +383,7 @@ fn slice_to_json(slice: &[u8], conversion: Conv) -> Result<Jsonb> {
     Jsonb::from_str_with_mode(str, conversion).map_err(Into::into)
 }
 
-pub(in crate::core) fn from_json_to_value(
+pub(crate) fn from_json_to_value(
     json: Jsonb,
     element_type: ElementType,
     flag: OutputFlag,

@@ -6,7 +6,7 @@ use super::page::{Cell, OverflowPage, Page, PageNumber, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
 use crate::collections::hash::HashSet;
-use crate::core::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
+use crate::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
 use crate::sql::statement::Type;
 use std::cmp::{min, Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
@@ -903,8 +903,8 @@ impl<'a> AsRef<[u8]> for Content<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::storage::btree::*;
-    use crate::core::storage::page::*;
+    use crate::storage::btree::*;
+    use crate::storage::page::*;
     use crate::method_builder;
     use std::alloc::Layout;
     use std::fmt::Debug;

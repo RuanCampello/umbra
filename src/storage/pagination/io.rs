@@ -1,13 +1,13 @@
 //! IO operations based on "blocks" to suit a database.
 
-use crate::core::storage::page::PageNumber;
+use crate::storage::page::PageNumber;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::{fs, io};
 
 #[derive(Debug, PartialEq)]
-pub(in crate::core::storage::pagination) struct BlockIo<IO> {
+pub(in crate::storage::pagination) struct BlockIo<IO> {
     /// Wrapped I/O operator.
     io: IO,
     pub block_size: usize,

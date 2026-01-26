@@ -1,7 +1,8 @@
 use super::FileLock;
 use crate::{
     collections::hash::HashMap,
-    core::storage::{
+    db::SchemaNew as Schema,
+    storage::{
         mvcc::{
             registry::TransactionRegistry,
             version::{TupleVersion, VersionStorage},
@@ -10,7 +11,6 @@ use crate::{
         },
         wal::{WalConfig, WalEntry},
     },
-    db::SchemaNew as Schema,
 };
 use std::{
     collections::BinaryHeap,
@@ -63,7 +63,7 @@ pub(crate) struct CleanUpConfig {
 
 /// This is a [JoinHandle](std::thread::JoinHandle) wrapper for stopping the
 /// clean-up thread internally.
-pub(in crate::core::storage::mvcc) struct CleanUpThread {
+pub(in crate::storage::mvcc) struct CleanUpThread {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -243,7 +243,7 @@ impl Engine {
     }
 
     fn apply_entry(&self, entry: WalEntry) -> Result<()> {
-        use crate::core::storage::wal::WalOperation;
+        use crate::storage::wal::WalOperation;
 
         Ok(match entry.operation {
             WalOperation::CreateTable => {

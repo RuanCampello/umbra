@@ -13,17 +13,17 @@ pub(crate) use schema::{has_btree_key, umbra_schema, Schema, SchemaNew};
 
 use crate::collections::hash::HashMap;
 use crate::core::date::{DateParseError, ExtractError};
-use crate::core::storage::btree::{BTree, FixedSizeCmp};
-use crate::core::storage::page::PageNumber;
-use crate::core::storage::pagination::io::FileOperations;
-use crate::core::storage::pagination::pager::Pager;
-use crate::core::storage::tuple;
 use crate::core::uuid::UuidError;
 use crate::os::{self, FileSystemBlockSize, Open};
 use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::{Parser, ParserError};
 use crate::sql::query;
 use crate::sql::statement::{Column, Create, Statement, Type, Value};
+use crate::storage::btree::{BTree, FixedSizeCmp};
+use crate::storage::page::PageNumber;
+use crate::storage::pagination::io::FileOperations;
+use crate::storage::pagination::pager::Pager;
+use crate::storage::tuple;
 use crate::vm;
 use crate::vm::expression::{TypeError, VmError};
 use crate::vm::planner::{Execute, Planner, Tuple};
@@ -885,18 +885,16 @@ impl PartialEq for DatabaseError {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{
-        storage::{
-            btree::Cursor,
-            pagination::{
-                pager::{reassemble_content, DEFAULT_PAGE_SIZE},
-                Cache,
-            },
-            MemoryBuffer,
-        },
-        uuid::Uuid,
-    };
+    use crate::core::uuid::Uuid;
     use crate::index;
+    use crate::storage::{
+        btree::Cursor,
+        pagination::{
+            pager::{reassemble_content, DEFAULT_PAGE_SIZE},
+            Cache,
+        },
+        MemoryBuffer,
+    };
     use std::str::FromStr;
 
     use super::*;
