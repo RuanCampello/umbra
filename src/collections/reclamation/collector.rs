@@ -10,7 +10,7 @@ use super::thread::{Thread, ThreadLocal};
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::ptr;
-use std::sync::atomic::{self, AtomicUsize, Ordering};
+use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 
 /// Crystalline-L memory reclamation collector.
 pub struct Collector {

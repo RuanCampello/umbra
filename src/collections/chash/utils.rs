@@ -1,5 +1,6 @@
-use crate::collections::hash::HashMap;
+use crate::collections::chash::map::EntryStatus;
 use crate::collections::reclamation;
+use crate::collections::{chash::map::Entry, hash::HashMap};
 use std::{
     sync::{
         atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering},
@@ -180,6 +181,19 @@ impl<T> Copy for Tagged<T> {}
 impl<T> Clone for Tagged<T> {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl<K, V> From<Tagged<Entry<K, V>>> for EntryStatus<K, V> {
+    #[inline]
+    fn from(value: Tagged<Entry<K, V>>) -> Self {
+        return (if value.ptr.is_null() {
+            Self::Null
+        } else if value.tag() & Entry::COPYING != 0 {
+            Self::Copied(value)
+        } else {
+            Self::Value(value)
+        });
     }
 }
 

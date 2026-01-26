@@ -1,4 +1,4 @@
-use crate::collections::chash::utils::{unpack, untagged, CheckedPin};
+use crate::collections::chash::utils::{unpack, untagged, CheckedPin, Tagged};
 use crate::collections::reclamation::{Collector, OwnedGuard};
 use crate::collections::{
     chash::{
@@ -61,6 +61,17 @@ enum RawInsertResult<'g, K, V> {
         current: &'g V,
         not_inserted: *mut Entry<K, V>,
     },
+}
+
+pub(super) enum EntryStatus<K, V> {
+    Null,
+    Copied(Tagged<Entry<K, V>>),
+    Value(Tagged<Entry<K, V>>),
+}
+
+enum InsertStatus<K, V> {
+    Inserted,
+    Found(EntryStatus<K, V>),
 }
 
 mod metadata {
@@ -191,6 +202,22 @@ where
         todo!()
     }
 
+    #[inline]
+    fn insert_at(
+        &self,
+        i: usize,
+        metadata: u8,
+        entry: *mut Entry<K, V>,
+        table: Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> InsertStatus<K, V> {
+        let entry = unsafe { table.entry(i) };
+        let metadata = unsafe { table.metadata(i) };
+
+        // let found = match pin;
+        todo!()
+    }
+
     #[cold]
     #[inline(never)]
     fn init(&self, capacity: Option<usize>) -> Table<Entry<K, V>> {
@@ -272,9 +299,9 @@ impl<K, V> super::utils::Unpack for Entry<K, V> {
 }
 
 impl Entry<(), ()> {
-    const COPYING: usize = 0b001;
-    const COPIED: usize = 0b010;
-    const BORROWED: usize = 0b100;
+    pub(super) const COPYING: usize = 0b001;
+    pub(super) const COPIED: usize = 0b010;
+    pub(super) const BORROWED: usize = 0b100;
 }
 
 impl State<()> {
