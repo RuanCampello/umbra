@@ -24,7 +24,7 @@ struct TableLayout<T> {
 pub struct Table<T> {
     mask: usize,
     limit: usize,
-    raw: *mut RawTable<T>,
+    pub(in crate::collections::chash) raw: *mut RawTable<T>,
 }
 
 impl<T> Table<T> {
@@ -60,6 +60,11 @@ impl<T> Table<T> {
             limit,
             raw: ptr.cast::<RawTable<T>>(),
         }
+    }
+
+    #[inline]
+    pub fn mut_state(&mut self) -> &mut State<T> {
+        unsafe { &mut (*self.raw.cast::<TableLayout<T>>()).state }
     }
 
     fn layout(len: usize) -> Layout {

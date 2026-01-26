@@ -1,4 +1,5 @@
 use crate::collections::hash::HashMap;
+use crate::collections::reclamation;
 use std::{
     sync::{
         atomic::{AtomicIsize, AtomicPtr, AtomicUsize},
@@ -18,6 +19,8 @@ pub struct Parker {
 pub struct Stack<T> {
     head: AtomicPtr<Node<T>>,
 }
+
+pub struct Pin<P>(P);
 
 #[derive(Default)]
 struct State {
@@ -41,6 +44,45 @@ impl<T> Stack<T> {
         Self {
             head: AtomicPtr::new(std::ptr::null_mut()),
         }
+    }
+}
+
+impl<P> Pin<P> {
+    pub unsafe fn new(pin: P) -> Pin<P> {
+        Pin(pin)
+    }
+
+    pub unsafe fn from_ref(pin: &P) -> &Pin<P> {
+        unsafe { &*(pin as *const P as *const Pin<P>) }
+    }
+}
+
+impl<P> reclamation::Guard for Pin<P>
+where
+    P: reclamation::Guard,
+{
+    fn collector(&self) -> &reclamation::Collector {
+        self.0.collector()
+    }
+
+    fn thread(&self) -> reclamation::Thread {
+        self.0.thread()
+    }
+
+    fn protect<T>(&self, ptr: &std::sync::atomic::AtomicPtr<T>) -> *mut T {
+        self.0.protect(ptr)
+    }
+
+    unsafe fn retire<T>(&self, ptr: *mut T, reclaim: unsafe fn(*mut T, &reclamation::Collector)) {
+        self.0.retire(ptr, reclaim);
+    }
+
+    fn refresh(&mut self) {
+        self.0.refresh();
+    }
+
+    fn flush(&mut self) {
+        self.0.flush();
     }
 }
 

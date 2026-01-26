@@ -1,7 +1,10 @@
-use super::{allocation, utils};
-use crate::collections::chash::{
-    allocation::RawTable,
-    utils::{Counter, Parker, Stack},
+use crate::collections::reclamation::Collector;
+use crate::collections::{
+    chash::{
+        allocation::{RawTable, Table},
+        utils::{self, Counter, Parker, Pin, Probe, Stack},
+    },
+    reclamation::LocalGuard,
 };
 use std::sync::{
     atomic::{AtomicPtr, AtomicU8, AtomicUsize},
@@ -13,6 +16,8 @@ pub struct HashMap<K, V, S> {
     counter: utils::Counter,
     resize: Resize,
     capacity: usize,
+
+    collector: Collector,
 
     hasher: S,
 }
@@ -42,17 +47,32 @@ pub enum Resize {
 
 impl<K, V, S> HashMap<K, V, S> {
     #[inline]
-    pub fn new(capacity: usize, hasher: S, resize: Resize) -> Self {
+    pub fn new(capacity: usize, collector: Collector, hasher: S, resize: Resize) -> Self {
         if capacity == 0 {
             return Self {
                 table: AtomicPtr::new(std::ptr::null_mut()),
                 counter: Counter::default(),
+                collector,
                 resize,
                 capacity,
                 hasher,
             };
         };
 
+        let mut table = Table::alloc(Probe::entries_for(capacity));
+        *table.mut_state().status.get_mut() = State::PROMOTED;
+
+        HashMap {
+            hasher,
+            resize,
+            capacity,
+            collector,
+            counter: Counter::default(),
+            table: AtomicPtr::new(table.raw),
+        }
+    }
+
+    pub fn pin(&self) -> Pin<LocalGuard<'_>> {
         todo!()
     }
 }
