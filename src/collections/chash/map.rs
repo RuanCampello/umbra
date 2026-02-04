@@ -74,6 +74,11 @@ enum InsertStatus<K, V> {
     Found(EntryStatus<K, V>),
 }
 
+enum UpdateStatus<K, V> {
+    Replace(Tagged<Entry<K, V>>),
+    Found(EntryStatus<K, V>),
+}
+
 mod metadata {
     use std::mem;
 
@@ -164,7 +169,25 @@ where
         replace: bool,
         pin: &'p impl CheckedPin,
     ) -> InsertResult<'p, V> {
-        todo!()
+        let raw = self.raw_insert(key, value, replace, pin);
+
+        match raw {
+            RawInsertResult::Replaced(value) => InsertResult::Replaced(value),
+            RawInsertResult::Inserted(value) => {
+                self.counter.get(pin).fetch_add(1, Ordering::Relaxed);
+                InsertResult::Inserted(value)
+            }
+            RawInsertResult::Error {
+                current,
+                not_inserted,
+            } => {
+                let non_inserted = unsafe { Box::from_raw(not_inserted) }.value;
+                InsertResult::Error {
+                    current,
+                    non_inserted,
+                }
+            }
+        }
     }
 
     fn raw_insert<'p>(
@@ -194,7 +217,46 @@ where
                 }
 
                 let metadata = unsafe { table.metadata(probe.i) }.load(Ordering::Acquire);
-                let entry = if metadata == metadata::EMPTY {};
+                let entry = if metadata == metadata::EMPTY {
+                    match unsafe { self.insert_at(probe.i, h2, new.raw, table, pin) } {
+                        InsertStatus::Inserted => return RawInsertResult::Inserted(&new_ref.value),
+                        InsertStatus::Found(EntryStatus::Value(found))
+                        | InsertStatus::Found(EntryStatus::Copied(found)) => found,
+                        InsertStatus::Found(EntryStatus::Null) => {
+                            probe.next(table.mask);
+                            continue 'p;
+                        }
+                    }
+                } else if metadata == h2 {
+                    let entry = unpack(pin.protect(unsafe { table.entry(probe.i) }));
+
+                    if entry.ptr.is_null() {
+                        probe.next(table.mask);
+                        continue 'p;
+                    }
+
+                    entry
+                } else {
+                    probe.next(table.mask);
+                    continue 'p;
+                };
+
+                let entry_ref = unsafe { &(*entry.ptr) };
+                if entry_ref.key != new_ref.key {
+                    probe.next(table.mask);
+                    continue 'p;
+                }
+
+                if entry.tag() & Entry::COPYING != 0 {
+                    break 'p Some(probe.i);
+                }
+
+                if !replace {
+                    return RawInsertResult::Error {
+                        current: &entry_ref.value,
+                        not_inserted: new.ptr,
+                    };
+                }
             };
 
             todo!()
@@ -207,14 +269,93 @@ where
         &self,
         i: usize,
         metadata: u8,
-        entry: *mut Entry<K, V>,
+        new_entry: *mut Entry<K, V>,
         table: Table<Entry<K, V>>,
         pin: &impl CheckedPin,
     ) -> InsertStatus<K, V> {
         let entry = unsafe { table.entry(i) };
-        let metadata = unsafe { table.metadata(i) };
+        let metadata_store = unsafe { table.metadata(i) };
 
-        // let found = match pin;
+        let found = match pin.compare_exchange(
+            entry,
+            std::ptr::null_mut(),
+            new_entry,
+            Ordering::Release,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                metadata_store.store(metadata, Ordering::Release);
+                return InsertStatus::Inserted;
+            }
+            Err(found) => unpack(found),
+        };
+
+        let (metadata, status) = match EntryStatus::from(found) {
+            EntryStatus::Value(_) | EntryStatus::Copied(_) => {
+                let key = unsafe { &(*found.ptr).key };
+                let hash = self.hasher.hash_one(key);
+
+                (metadata::second(hash), EntryStatus::Value(found))
+            }
+            EntryStatus::Null => (metadata::TOMBSTONE, EntryStatus::Null),
+        };
+
+        if metadata_store.load(Ordering::Relaxed) == metadata::EMPTY {
+            metadata_store.store(metadata, Ordering::Release);
+        }
+
+        InsertStatus::Found(status)
+    }
+
+    #[inline]
+    unsafe fn update_at(
+        &self,
+        i: usize,
+        current: Tagged<Entry<K, V>>,
+        new_entry: *mut Entry<K, V>,
+        table: Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> UpdateStatus<K, V> {
+        let entry = unsafe { table.entry(i) };
+
+        let found = match pin.compare_exchange(
+            entry,
+            current.raw,
+            new_entry,
+            Ordering::Release,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => unsafe {
+                self.defer_retire(current, &table, pin);
+
+                return UpdateStatus::Replace(current);
+            },
+            Err(found) => unpack(found),
+        };
+
+        UpdateStatus::Found(EntryStatus::from(found))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn insert_slow(
+        &self,
+        i: usize,
+        mut entry: Tagged<Entry<K, V>>,
+        new_entry: *mut Entry<K, V>,
+        table: Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) {
+        todo!()
+    }
+
+    #[inline]
+    unsafe fn defer_retire(
+        &self,
+        entry: Tagged<Entry<K, V>>,
+        table: &Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) {
         todo!()
     }
 
