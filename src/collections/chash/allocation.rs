@@ -151,4 +151,5 @@ impl<T> Clone for Table<T> {
         *self
     }
 }
+
 impl<T> Copy for Table<T> {}

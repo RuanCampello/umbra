@@ -1,5 +1,5 @@
 use crate::collections::chash::utils::{unpack, untagged, CheckedPin, Tagged};
-use crate::collections::reclamation::{Collector, OwnedGuard};
+use crate::collections::reclamation::{self, Collector, OwnedGuard};
 use crate::collections::{
     chash::{
         allocation::{RawTable, Table},
@@ -326,7 +326,7 @@ where
             Ordering::Acquire,
         ) {
             Ok(_) => unsafe {
-                self.defer_retire(current, &table, pin);
+                self.retire(current, &table, pin);
 
                 return UpdateStatus::Replace(current);
             },
@@ -350,13 +350,45 @@ where
     }
 
     #[inline]
-    unsafe fn defer_retire(
+    unsafe fn retire(
         &self,
         entry: Tagged<Entry<K, V>>,
         table: &Table<Entry<K, V>>,
         pin: &impl CheckedPin,
     ) {
-        todo!()
+        match self.resize {
+            Resize::Blocking => pin.retire(entry.ptr, reclamation::reclaim_boxed),
+            Resize::Incremental(_) => {
+                if entry.tag() & Entry::BORROWED == 0 {
+                    unsafe { pin.retire(entry.ptr, reclamation::reclaim_boxed) };
+                    return;
+                }
+
+                let root = self.root(pin);
+
+                let mut next = Some(*table);
+                while let Some(table) = next {
+                    if table.raw == root.raw {
+                        unsafe { pin.retire(entry.ptr, reclamation::reclaim_boxed) };
+                        return;
+                    }
+
+                    next = table.next();
+                }
+
+                let mut previous = root;
+
+                loop {
+                    let next = previous.next().unwrap();
+                    if next.raw == table.raw {
+                        previous.state().deffered.push(entry.ptr);
+                        return;
+                    }
+
+                    previous = next;
+                }
+            }
+        }
     }
 
     #[cold]

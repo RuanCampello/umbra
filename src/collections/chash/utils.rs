@@ -58,6 +58,10 @@ impl<T> Stack<T> {
             head: AtomicPtr::new(std::ptr::null_mut()),
         }
     }
+
+    pub fn push(&self, value: T) {
+        todo!()
+    }
 }
 
 impl<P> Pin<P> {
