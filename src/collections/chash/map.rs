@@ -257,6 +257,19 @@ where
                         not_inserted: new.ptr,
                     };
                 }
+
+                match unsafe { self.insert_slow(probe.i, entry, new.raw, table, pin) } {
+                    UpdateStatus::Replace(entry) => {
+                        let value = unsafe { &(*entry.ptr).value };
+                        return RawInsertResult::Replaced(value);
+                    }
+                    UpdateStatus::Found(EntryStatus::Copied(_)) => break 'p Some(probe.i),
+                    UpdateStatus::Found(EntryStatus::Null) => {
+                        probe.next(table.mask);
+                        continue 'p;
+                    }
+                    UpdateStatus::Found(EntryStatus::Value(_)) => {}
+                }
             };
 
             todo!()
@@ -345,8 +358,13 @@ where
         new_entry: *mut Entry<K, V>,
         table: Table<Entry<K, V>>,
         pin: &impl CheckedPin,
-    ) {
-        todo!()
+    ) -> UpdateStatus<K, V> {
+        loop {
+            match unsafe { self.update_at(i, entry, new_entry, table, pin) } {
+                UpdateStatus::Found(EntryStatus::Value(found)) => entry = found,
+                status => return status,
+            }
+        }
     }
 
     #[inline]
