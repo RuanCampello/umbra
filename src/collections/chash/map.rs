@@ -367,6 +367,185 @@ where
         }
     }
 
+    #[cold]
+    #[inline(never)]
+    fn retry_insert(
+        &self,
+        copying: Option<usize>,
+        copy: &mut bool,
+        table: Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> Table<Entry<K, V>> {
+        let mut next = self.get_or_alloc(None, table);
+
+        let next = match self.resize {
+            Resize::Blocking => self.copying(true, &table, pin),
+            _ => todo!(),
+        };
+
+        todo!()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn get_or_alloc(
+        &self,
+        capacity: Option<usize>,
+        table: Table<Entry<K, V>>,
+    ) -> Table<Entry<K, V>> {
+        const SPIN: usize = match cfg!(any(test, debug_assertions)) {
+            true => 1,
+            _ => 7,
+        };
+
+        if let Some(next) = table.next() {
+            return next;
+        }
+
+        let state = table.state();
+
+        let allocating = match state.allocating.try_lock() {
+            Ok(lock) => lock,
+            Err(_) => {
+                let mut spun = 0;
+
+                while spun <= SPIN {
+                    for _ in 0..(spun * spun) {
+                        std::hint::spin_loop();
+                    }
+
+                    if let Some(next) = table.next() {
+                        return next;
+                    }
+
+                    spun += 1;
+                }
+
+                state.allocating.lock().unwrap()
+            }
+        };
+
+        if let Some(table) = table.next() {
+            return table;
+        }
+
+        let current_capacity = table.len();
+        let active_entries = self.len();
+
+        #[allow(unexpected_cfgs)]
+        let next_capacity = match cfg!(stress) {
+            true => current_capacity,
+            false if active_entries >= (current_capacity >> 1) => current_capacity << 1,
+            false if active_entries <= (current_capacity >> 3) => {
+                self.capacity.max(current_capacity >> 1)
+            }
+            false => current_capacity,
+        };
+
+        let capacity = capacity.unwrap_or(next_capacity);
+        assert!(
+            next_capacity <= isize::MAX as usize,
+            "HashMap exceeded maximum capacity"
+        );
+
+        let next = Table::alloc(next_capacity);
+        state.next.store(next.raw, Ordering::Release);
+        drop(allocating);
+
+        next
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn copying(
+        &self,
+        copy: bool,
+        table: &Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> Table<Entry<K, V>> {
+        match self.resize {
+            Resize::Blocking => self.copy_blocking(table, pin),
+            _ => todo!(),
+        }
+    }
+
+    fn copy_blocking(
+        &self,
+        table: &Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> Table<Entry<K, V>> {
+        let mut next = table.next().unwrap();
+
+        'copy: loop {
+            while next.state().status.load(Ordering::Relaxed) == State::ABORTED {
+                next = self.get_or_alloc(None, next);
+            }
+
+            if self.promote(table, &next, 0, pin) {
+                return next;
+            }
+
+            let chunk = table.len().min(1 << 12);
+
+            loop {
+                if next.state().claim.load(Ordering::Relaxed) >= table.len() {
+                    break;
+                }
+
+                let start = next.state().claim.fetch_add(chunk, Ordering::Relaxed);
+                let mut copied = 0;
+
+                for idx in 0..chunk {
+                    let idx = start + idx;
+                    if idx > table.len() {
+                        break;
+                    }
+                }
+            }
+        }
+        todo!()
+    }
+
+    fn promote(
+        &self,
+        table: &Table<Entry<K, V>>,
+        next: &Table<Entry<K, V>>,
+        copied: usize,
+        pin: &impl CheckedPin,
+    ) -> bool {
+        let state = next.state();
+
+        let copied = match copied > 0 {
+            true => state.copied.fetch_add(copied, Ordering::AcqRel) + copied,
+            _ => state.copied.load(Ordering::Acquire),
+        };
+
+        if copied == table.len() {
+            let root = self.table.load(Ordering::Relaxed);
+
+            if table.raw == root {
+                if self
+                    .table
+                    .compare_exchange(table.raw, next.raw, Ordering::Release, Ordering::Acquire)
+                    .is_ok()
+                {
+                    state.status.store(State::PROMOTED, Ordering::SeqCst);
+
+                    unsafe {
+                        pin.retire(table.raw, |table, collector| {
+                            drop_table(Table::from(table), collector)
+                        });
+                    }
+                }
+            }
+
+            state.parker.unpark(&state.status);
+            return true;
+        }
+
+        false
+    }
+
     #[inline]
     unsafe fn retire(
         &self,
@@ -519,4 +698,13 @@ impl Default for Resize {
     fn default() -> Self {
         Self::Incremental(1 << 6)
     }
+}
+
+unsafe fn drop_table<K, V>(mut table: Table<Entry<K, V>>, collector: &Collector) {
+    table
+        .mut_state()
+        .deffered
+        .drain(|entry| unsafe { collector.retire(entry, reclamation::reclaim_boxed) });
+
+    unsafe { Table::dealloc(table) };
 }

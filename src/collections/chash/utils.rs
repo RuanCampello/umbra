@@ -1,6 +1,7 @@
 use crate::collections::chash::map::EntryStatus;
 use crate::collections::reclamation;
 use crate::collections::{chash::map::Entry, hash::HashMap};
+use std::sync::atomic::AtomicU8;
 use std::{
     sync::{
         atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering},
@@ -47,9 +48,33 @@ pub struct Tagged<T> {
 }
 
 pub trait CheckedPin: reclamation::Guard {}
+pub trait Atomic<T> {
+    fn load(&self, ordering: Ordering) -> T;
+}
 pub trait Unpack: Sized {
     const MASK: usize;
     const ALIGNMENT: () = assert!(align_of::<Self>() > !Self::MASK);
+}
+
+impl Parker {
+    pub fn unpark<T>(&self, atomic: &impl Atomic<T>) {
+        let key = atomic as *const _ as usize;
+
+        if self.pending.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+
+        let threads = {
+            let mut state = self.state.lock().unwrap();
+            state.threads.remove(&key)
+        };
+
+        if let Some(threads) = threads {
+            self.pending.fetch_sub(threads.len(), Ordering::Relaxed);
+
+            threads.iter().for_each(|(_, thread)| thread.unpark());
+        }
+    }
 }
 
 impl<T> Stack<T> {
@@ -61,6 +86,17 @@ impl<T> Stack<T> {
 
     pub fn push(&self, value: T) {
         todo!()
+    }
+
+    pub fn drain(&mut self, mut f: impl FnMut(T)) {
+        let mut head = *self.head.get_mut();
+
+        while !head.is_null() {
+            let owned = unsafe { Box::from_raw(head) };
+            f(owned.value);
+
+            head = owned.next;
+        }
     }
 }
 
@@ -198,6 +234,12 @@ impl<K, V> From<Tagged<Entry<K, V>>> for EntryStatus<K, V> {
         } else {
             Self::Value(value)
         });
+    }
+}
+
+impl Atomic<u8> for AtomicU8 {
+    fn load(&self, ordering: Ordering) -> u8 {
+        self.load(ordering)
     }
 }
 
