@@ -162,6 +162,29 @@ where
         }
     }
 
+    #[inline]
+    pub fn insert<'p>(&self, key: K, value: V, pin: &'p impl CheckedPin) -> Option<&'p V> {
+        match self.wrapping_insert(key, value, true, self.verify(pin)) {
+            InsertResult::Inserted(_) => None,
+            InsertResult::Replaced(value) => Some(value),
+            InsertResult::Error { .. } => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn verify<'p, P>(&self, pin: &'p P) -> &'p Pin<P>
+    where
+        P: reclamation::Guard,
+    {
+        assert_eq!(
+            *pin.collector(),
+            self.collector,
+            "Tried to access map with incompatible guard"
+        );
+
+        unsafe { Pin::from_ref(pin) }
+    }
+
     fn wrapping_insert<'p>(
         &self,
         key: K,

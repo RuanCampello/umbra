@@ -136,7 +136,23 @@ impl<T> Stack<T> {
     }
 
     pub fn push(&self, value: T) {
-        todo!()
+        let node = Box::into_raw(Box::new(Node {
+            value,
+            next: std::ptr::null_mut(),
+        }));
+
+        loop {
+            let head = self.head.load(Ordering::Relaxed);
+            unsafe { (*node).next = head }
+
+            if self
+                .head
+                .compare_exchange(head, node, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            };
+        }
     }
 
     pub fn drain(&mut self, mut f: impl FnMut(T)) {
@@ -158,35 +174,6 @@ impl<P> Pin<P> {
 
     pub unsafe fn from_ref(pin: &P) -> &Pin<P> {
         unsafe { &*(pin as *const P as *const Pin<P>) }
-    }
-}
-
-impl<P> reclamation::Guard for Pin<P>
-where
-    P: reclamation::Guard,
-{
-    fn collector(&self) -> &reclamation::Collector {
-        self.0.collector()
-    }
-
-    fn thread(&self) -> reclamation::Thread {
-        self.0.thread()
-    }
-
-    fn protect<T>(&self, ptr: &std::sync::atomic::AtomicPtr<T>) -> *mut T {
-        self.0.protect(ptr)
-    }
-
-    unsafe fn retire<T>(&self, ptr: *mut T, reclaim: unsafe fn(*mut T, &reclamation::Collector)) {
-        self.0.retire(ptr, reclaim);
-    }
-
-    fn refresh(&mut self) {
-        self.0.refresh();
-    }
-
-    fn flush(&mut self) {
-        self.0.flush();
     }
 }
 
@@ -285,6 +272,43 @@ impl<K, V> From<Tagged<Entry<K, V>>> for EntryStatus<K, V> {
         } else {
             Self::Value(value)
         });
+    }
+}
+
+impl<P> CheckedPin for Pin<P> where P: reclamation::Guard {}
+
+impl<P> reclamation::Guard for Pin<P>
+where
+    P: reclamation::Guard,
+{
+    #[inline]
+    fn collector(&self) -> &reclamation::Collector {
+        self.0.collector()
+    }
+
+    #[inline]
+    fn thread(&self) -> reclamation::Thread {
+        self.0.thread()
+    }
+
+    #[inline]
+    fn protect<T>(&self, ptr: &std::sync::atomic::AtomicPtr<T>) -> *mut T {
+        self.0.protect(ptr)
+    }
+
+    #[inline]
+    unsafe fn retire<T>(&self, ptr: *mut T, reclaim: unsafe fn(*mut T, &reclamation::Collector)) {
+        unsafe { self.0.retire(ptr, reclaim) };
+    }
+
+    #[inline]
+    fn flush(&mut self) {
+        self.0.flush();
+    }
+
+    #[inline]
+    fn refresh(&mut self) {
+        self.0.refresh();
     }
 }
 
