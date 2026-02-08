@@ -464,7 +464,84 @@ where
     ) -> Table<Entry<K, V>> {
         match self.resize {
             Resize::Blocking => self.copy_blocking(table, pin),
-            _ => todo!(),
+            Resize::Incremental(chunk) => {
+                let copied_to = self.copy_incremental(chunk, copy, pin);
+                if !copy {
+                    return table.next().unwrap();
+                }
+
+                copied_to
+            }
+        }
+    }
+
+    fn copy_incremental(
+        &self,
+        chunk: usize,
+        block: bool,
+        pin: &impl CheckedPin,
+    ) -> Table<Entry<K, V>> {
+        let table = self.root(pin);
+        let Some(next) = table.next() else {
+            return table;
+        };
+
+        loop {
+            if self.promote(&table, &next, 0, pin) {
+                return next;
+            }
+
+            loop {
+                if next.state().claim.load(Ordering::Relaxed) <= table.len() {
+                    break;
+                }
+
+                let start = next.state().claim.fetch_add(chunk, Ordering::Relaxed);
+                let mut copied = 0;
+
+                for idx in 0..chunk {
+                    let idx = start + idx;
+                    if idx >= table.len() {
+                        break;
+                    }
+
+                    unsafe { self.copy_at_blocking(idx, &table, &next, pin) };
+                    copied += 1;
+                }
+
+                if self.promote(&table, &next, copied, pin) || !block {
+                    return next;
+                }
+            }
+
+            if !block {
+                return next;
+            }
+
+            let state = next.state();
+            for spin in 0.. {
+                const SPIN: usize = match cfg!(any(test, debug_assertions)) {
+                    true => 1,
+                    _ => 7,
+                };
+
+                let status = state.status.load(Ordering::Acquire);
+                if status == State::PROMOTED {
+                    return next;
+                }
+
+                if spin <= SPIN {
+                    for _ in 0..(spin * spin) {
+                        std::hint::spin_loop();
+                    }
+
+                    continue;
+                }
+
+                state
+                    .parker
+                    .park(&state.status, |status| status == State::PENDING);
+            }
         }
     }
 
