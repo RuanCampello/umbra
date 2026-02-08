@@ -379,10 +379,46 @@ where
 
         let next = match self.resize {
             Resize::Blocking => self.copying(true, &table, pin),
-            _ => todo!(),
+            Resize::Incremental(_) => {
+                if *copy {
+                    next = self.copying(false, &table, pin);
+                }
+
+                if let Some(idx) = copying {
+                    self.wait_copy(idx, &table);
+                }
+
+                next
+            }
         };
 
-        todo!()
+        *copy = false;
+        next
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn wait_copy(&self, idx: usize, table: &Table<Entry<K, V>>) {
+        const SPIN: usize = match cfg!(any(test, debug_assertions)) {
+            true => 1,
+            _ => 5,
+        };
+
+        let entry = unsafe { table.entry(idx) };
+
+        for spin in 0..SPIN {
+            let entry = unpack(entry.load(Ordering::Acquire));
+            if entry.tag() & Entry::COPIED != 0 {
+                return;
+            }
+
+            for _ in 0..(spin * spin) {
+                std::hint::spin_loop();
+            }
+        }
+
+        let parker = &table.state().parker;
+        parker.park(entry, |entry| entry.addr() & Entry::COPIED == 0);
     }
 
     #[cold]

@@ -294,6 +294,12 @@ impl Atomic<u8> for AtomicU8 {
     }
 }
 
+impl<T> Atomic<*mut T> for AtomicPtr<T> {
+    fn load(&self, ordering: Ordering) -> *mut T {
+        self.load(ordering)
+    }
+}
+
 #[inline]
 pub fn untagged<T>(value: *mut T) -> Tagged<T> {
     Tagged {
