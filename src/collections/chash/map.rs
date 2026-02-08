@@ -7,14 +7,15 @@ use crate::collections::{
     },
     reclamation::LocalGuard,
 };
-use std::hash::{BuildHasher, Hash};
+use std::hash::{BuildHasher, Hash, RandomState};
+use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::{
     atomic::{AtomicPtr, AtomicU8, AtomicUsize},
     Mutex,
 };
 
-pub struct HashMap<K, V, S> {
+pub struct HashMap<K, V, S = RandomState> {
     table: AtomicPtr<RawTable<Entry<K, V>>>,
     counter: utils::Counter,
     resize: Resize,
@@ -23,6 +24,14 @@ pub struct HashMap<K, V, S> {
     collector: Collector,
 
     hasher: S,
+}
+
+pub struct HashMapBuilder<K, V, S = RandomState> {
+    hasher: S,
+    capacity: usize,
+    collector: Collector,
+    _kv: PhantomData<(K, V)>,
+    resize: Resize,
 }
 
 #[repr(C, align(8))]
@@ -931,6 +940,54 @@ impl<K, V, S> HashMap<K, V, S> {
     }
 }
 
+impl<K, V> HashMap<K, V> {
+    pub fn builder() -> HashMapBuilder<K, V> {
+        HashMapBuilder {
+            capacity: 0,
+            hasher: RandomState::default(),
+            collector: Collector::new(),
+            _kv: PhantomData::default(),
+            resize: Resize::default(),
+        }
+    }
+}
+
+impl<K, V, S> HashMapBuilder<K, V, S> {
+    pub fn build(self) -> HashMap<K, V, S> {
+        HashMap::new(self.capacity, self.collector, self.hasher, self.resize)
+    }
+
+    pub fn collector(self, collector: Collector) -> Self {
+        HashMapBuilder {
+            collector,
+            hasher: self.hasher,
+            capacity: self.capacity,
+            resize: self.resize,
+            _kv: PhantomData,
+        }
+    }
+
+    pub fn capacity(self, capacity: usize) -> HashMapBuilder<K, V, S> {
+        HashMapBuilder {
+            capacity,
+            hasher: self.hasher,
+            collector: self.collector,
+            resize: self.resize,
+            _kv: PhantomData,
+        }
+    }
+
+    pub fn resize(self, resize: Resize) -> Self {
+        Self {
+            resize,
+            hasher: self.hasher,
+            capacity: self.capacity,
+            collector: self.collector,
+            _kv: PhantomData,
+        }
+    }
+}
+
 impl<K, V> super::utils::Unpack for Entry<K, V> {
     const MASK: usize = !(Entry::COPYING | Entry::COPIED | Entry::BORROWED);
 }
@@ -978,4 +1035,54 @@ unsafe fn drop_table<K, V>(mut table: Table<Entry<K, V>>, collector: &Collector)
         .drain(|entry| unsafe { collector.retire(entry, reclamation::reclaim_boxed) });
 
     unsafe { Table::dealloc(table) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_map<K, V>(mut test: impl FnMut(&dyn Fn() -> HashMap<K, V>)) {
+        let collector = || Collector::new().batch_size(128);
+
+        #[allow(unexpected_cfgs)]
+        if !cfg!(stress) {
+            test(
+                &(|| {
+                    HashMap::builder()
+                        .collector(collector())
+                        .resize(Resize::Blocking)
+                        .build()
+                }),
+            )
+        }
+
+        test(
+            &(|| {
+                HashMap::builder()
+                    .collector(collector())
+                    .resize(Resize::Incremental(1))
+                    .build()
+            }),
+        );
+
+        test(
+            &(|| {
+                HashMap::builder()
+                    .collector(collector())
+                    .resize(Resize::Incremental(128))
+                    .build()
+            }),
+        );
+    }
+
+    #[test]
+    fn insert() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            let pin = map.pin();
+            let old = map.insert(69, 0, &pin);
+
+            assert!(old.is_none());
+        });
+    }
 }
