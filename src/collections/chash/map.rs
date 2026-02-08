@@ -272,9 +272,8 @@ where
                 }
             };
 
-            todo!()
+            table = self.retry_insert(copying, &mut copy, table, pin)
         }
-        todo!()
     }
 
     #[inline]
@@ -500,10 +499,58 @@ where
                     if idx > table.len() {
                         break;
                     }
+
+                    if unsafe { !self.copy_at_blocking(idx, table, &next, pin) } {
+                        next.state().status.store(State::ABORTED, Ordering::SeqCst);
+                        let alloc = self.get_or_alloc(None, next);
+                        let state = table.state();
+                        state.parker.unpark(&state.status);
+
+                        next = alloc;
+                        continue 'copy;
+                    }
+
+                    copied += 1;
+                }
+
+                if self.promote(table, &next, copied, pin) {
+                    return next;
+                }
+
+                if next.state().status.load(Ordering::Relaxed) == State::ABORTED {
+                    continue 'copy;
                 }
             }
+
+            let state = next.state();
+            for spun in 0.. {
+                const SPIN: usize = match cfg!(any(test, debug_assertions)) {
+                    true => 1,
+                    _ => 7,
+                };
+
+                let status = state.status.load(Ordering::Acquire);
+                if status == State::ABORTED {
+                    continue 'copy;
+                }
+
+                if status == State::PROMOTED {
+                    return next;
+                }
+
+                if spun <= SPIN {
+                    for _ in 0..(spun * spun) {
+                        std::hint::spin_loop();
+                    }
+
+                    continue;
+                }
+
+                state
+                    .parker
+                    .park(&state.status, |status| status == State::PENDING)
+            }
         }
-        todo!()
     }
 
     fn promote(
@@ -544,6 +591,90 @@ where
         }
 
         false
+    }
+
+    unsafe fn copy_at_blocking(
+        &self,
+        idx: usize,
+        table: &Table<Entry<K, V>>,
+        next: &Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> bool {
+        let entry = unpack(unsafe { table.entry(idx) }.fetch_or(Entry::COPYING, Ordering::AcqRel));
+        if entry.raw == Entry::TOMBSTONE {
+            return true;
+        }
+
+        if entry.ptr.is_null() {
+            unsafe { table.metadata(idx) }.store(metadata::TOMBSTONE, Ordering::Release);
+            return true;
+        }
+
+        unsafe {
+            self.insert_copying(unpack(entry.ptr), false, next, pin)
+                .is_some()
+        }
+    }
+
+    unsafe fn insert_copying(
+        &self,
+        new_entry: Tagged<Entry<K, V>>,
+        resize: bool,
+        table: &Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> Option<(Table<Entry<K, V>>, usize)> {
+        let key = unsafe { &(*new_entry.ptr).key };
+        let mut table = *table;
+        let (h1, h2) = self.hash(key);
+
+        loop {
+            let mut probe = Probe::new(h1, table.mask);
+
+            while probe.len <= table.limit {
+                let metadata_entry = unsafe { table.metadata(probe.i) };
+                let metadata = metadata_entry.load(Ordering::Acquire);
+
+                if metadata == metadata::EMPTY {
+                    let entry = unsafe { table.entry(probe.i) };
+                    match pin.compare_exchange(
+                        entry,
+                        std::ptr::null_mut(),
+                        new_entry.raw,
+                        Ordering::Release,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => {
+                            metadata_entry.store(h2, Ordering::Release);
+                            return Some((table, probe.i));
+                        }
+                        Err(found) => {
+                            let found = unpack(found);
+                            let metadata = match found.ptr.is_null() {
+                                true => metadata::TOMBSTONE,
+                                _ => {
+                                    let found_ref = unsafe { &(*found.ptr) };
+                                    let hash = self.hasher.hash_one(&found_ref.key);
+
+                                    metadata::second(hash)
+                                }
+                            };
+
+                            if metadata_entry.load(Ordering::Relaxed) == metadata::EMPTY {
+                                metadata_entry.store(metadata, Ordering::Release);
+                            }
+                        }
+                    }
+                }
+
+                probe.next(table.mask);
+            }
+
+            if !resize {
+                return None;
+            }
+
+            table = self.get_or_alloc(None, table)
+        }
     }
 
     #[inline]
@@ -672,6 +803,10 @@ impl Entry<(), ()> {
     pub(super) const COPYING: usize = 0b001;
     pub(super) const COPIED: usize = 0b010;
     pub(super) const BORROWED: usize = 0b100;
+}
+
+impl<K, V> Entry<K, V> {
+    const TOMBSTONE: *mut Entry<K, V> = Entry::COPIED as _;
 }
 
 impl State<()> {

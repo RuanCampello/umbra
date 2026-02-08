@@ -75,6 +75,57 @@ impl Parker {
             threads.iter().for_each(|(_, thread)| thread.unpark());
         }
     }
+
+    pub fn park<T>(&self, atomic: &impl Atomic<T>, must_park: impl Fn(T) -> bool) {
+        let key = atomic as *const _ as usize;
+
+        loop {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+
+            let id = {
+                let state = &mut *self.state.lock().unwrap();
+                state.count += 1;
+
+                let threads = state.threads.entry(key).or_default();
+                threads.insert(state.count as u64, std::thread::current());
+
+                state.count
+            };
+
+            if !must_park(atomic.load(Ordering::SeqCst)) {
+                let thread = {
+                    let mut state = self.state.lock().unwrap();
+                    state
+                        .threads
+                        .get_mut(&key)
+                        .and_then(|threads| threads.remove(&(id as u64)))
+                };
+
+                if thread.is_some() {
+                    self.pending.fetch_sub(1, Ordering::Relaxed);
+                }
+
+                return;
+            }
+
+            loop {
+                std::thread::park();
+
+                let mut state = self.state.lock().unwrap();
+                if !state
+                    .threads
+                    .get_mut(&key)
+                    .is_some_and(|threads| threads.contains_key(&(id as u64)))
+                {
+                    break;
+                }
+            }
+
+            if !must_park(atomic.load(Ordering::Acquire)) {
+                return;
+            }
+        }
+    }
 }
 
 impl<T> Stack<T> {
