@@ -88,7 +88,7 @@ enum UpdateStatus<K, V> {
     Found(EntryStatus<K, V>),
 }
 
-mod metadata {
+pub(in crate::collections::chash) mod metadata {
     use std::mem;
 
     pub const EMPTY: u8 = 0x80;

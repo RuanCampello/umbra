@@ -54,7 +54,7 @@ impl<T> Table<T> {
 
             ptr.add(mem::size_of::<TableLayout<T>>())
                 .cast::<u8>()
-                .write_bytes(0, len);
+                .write_bytes(super::map::metadata::EMPTY, len);
         }
 
         Self {
@@ -142,7 +142,7 @@ impl<T> From<*mut RawTable<T>> for Table<T> {
         let layout = unsafe { &*raw.cast::<TableLayout<T>>() };
         Table {
             raw,
-            limit: layout.mask,
+            limit: layout.limit,
             mask: layout.mask,
         }
     }
