@@ -206,6 +206,89 @@ where
         unsafe { Pin::from_ref(pin) }
     }
 
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline]
+    pub fn clear(&self, pin: &impl reclamation::Guard) {
+        self.raw_clear(self.verify(pin));
+    }
+
+    #[inline]
+    fn raw_clear(&self, pin: &impl CheckedPin) {
+        let mut table = self.root(pin);
+        if table.raw.is_null() {
+            return;
+        }
+
+        loop {
+            table = self.linearise(table, pin);
+            let mut copying = false;
+
+            'p: for idx in 0..table.len() {
+                let mut entry = unpack(pin.protect(unsafe { table.entry(idx) }));
+
+                loop {
+                    if entry.ptr.is_null() {
+                        continue 'p;
+                    }
+
+                    if entry.tag() & Entry::COPYING != 0 {
+                        copying = true;
+                        continue 'p;
+                    }
+
+                    let result = unsafe {
+                        table.entry(idx).compare_exchange(
+                            entry.raw,
+                            Entry::TOMBSTONE,
+                            Ordering::Release,
+                            Ordering::Acquire,
+                        )
+                    };
+
+                    match result {
+                        Ok(_) => {
+                            unsafe {
+                                table
+                                    .metadata(idx)
+                                    .store(metadata::TOMBSTONE, Ordering::Release)
+                            };
+
+                            self.counter.get(pin).fetch_sub(1, Ordering::Relaxed);
+                            unsafe { self.retire(entry, &table, pin) };
+                            continue 'p;
+                        }
+                        Err(found) => entry = unpack(found),
+                    }
+                }
+            }
+
+            if !copying {
+                break;
+            }
+
+            table = self.copying(true, &table, pin);
+        }
+    }
+
+    #[inline]
+    fn linearise(
+        &self,
+        mut table: Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> Table<Entry<K, V>> {
+        if matches!(self.resize, Resize::Incremental(_)) {
+            while table.next().is_some() {
+                table = self.copying(true, &table, pin);
+            }
+        }
+
+        table
+    }
+
     fn wrapping_insert<'p>(
         &self,
         key: K,
@@ -1107,5 +1190,23 @@ mod tests {
 
             assert!(i.is_none())
         });
+    }
+
+    #[test]
+    fn clear() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            let pin = map.pin();
+            {
+                map.insert(0, 1, &pin);
+                map.insert(1, 1, &pin);
+                map.insert(2, 1, &pin);
+                map.insert(3, 1, &pin);
+                map.insert(4, 1, &pin);
+            }
+
+            map.clear(&pin);
+            assert!(map.is_empty());
+        })
     }
 }
