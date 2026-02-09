@@ -51,6 +51,17 @@ pub struct State<T> {
     deffered: Stack<*mut T>,
 }
 
+struct ComputeState<F, K, V, T> {
+    compute: F,
+    insert: Option<V>,
+    update: Option<CachedUpdate<K, V, T>>,
+}
+
+struct CachedUpdate<K, V, T> {
+    input: *mut Entry<K, V>,
+    output: Operation<V, T>,
+}
+
 #[derive(Debug)]
 /// [https://github.com/ibraheemdev/papaya/blob/58dac23f2d93a0764bf37dd890fa0ef892f48c0f/src/map.rs#L155]
 pub enum Resize {
@@ -617,7 +628,7 @@ where
             Some((_, value)) => Operation::Insert(update(value)),
         };
 
-        match self.compute(key, compute, pin) {
+        match self.raw_compute(key, compute, pin) {
             Compute::Updated {
                 new: (_, value), ..
             } => Some(value),
@@ -627,7 +638,7 @@ where
     }
 
     #[inline]
-    fn compute<'p, F, T>(
+    fn raw_compute<'p, F, T>(
         &self,
         key: K,
         compute: F,
@@ -636,6 +647,95 @@ where
     where
         F: FnMut(Option<(&'p K, &'p V)>) -> Operation<V, T>,
     {
+        todo!()
+    }
+
+    #[inline]
+    fn compute_with<'p, F, T>(
+        &self,
+        new_entry: &mut LazyEntry<K, V>,
+        mut state: ComputeState<F, K, V, T>,
+        pin: &'p impl CheckedPin,
+    ) -> Compute<'p, K, V, T>
+    where
+        F: FnMut(Option<(&'p K, &'p V)>) -> Operation<V, T>,
+    {
+        let mut table = self.root(pin);
+        if table.raw.is_null() {
+            match unsafe { state.next(None) } {
+                operation @ Operation::Insert(_) => todo!(),
+                Operation::Remove => panic!("cannot remove `None`"),
+                Operation::Abort(value) => return Compute::Aborted(value),
+            }
+
+            table = self.init(None);
+        }
+
+        let (h1, h2) = self.hash(new_entry.key());
+        let mut copy = false;
+
+        loop {
+            let mut probe = Probe::new(h1, table.mask);
+
+            let copying = 'p: loop {
+                if probe.len > table.limit {
+                    break 'p None;
+                }
+
+                let metadata = unsafe { table.metadata(probe.i) }.load(Ordering::Acquire);
+
+                let mut entry = if metadata == metadata::EMPTY {
+                    let value = match unsafe { state.next(None) } {
+                        Operation::Insert(value) => value,
+                        Operation::Abort(value) => return Compute::Aborted(value),
+                        Operation::Remove => panic!("cannot remove `None`"),
+                    };
+
+                    let new_entry = new_entry.init();
+                    unsafe { (*new_entry).value = MaybeUninit::new(value) }
+
+                    match unsafe { self.insert_at(probe.i, h2, new_entry.cast(), table, pin) } {
+                        InsertStatus::Inserted => {
+                            self.counter.get(pin).fetch_add(1, Ordering::Relaxed);
+
+                            let new_ref = unsafe { &*new_entry.cast::<Entry<K, V>>() };
+                            return Compute::Inserted(&new_ref.key, &new_ref.value);
+                        }
+
+                        InsertStatus::Found(EntryStatus::Value(found))
+                        | InsertStatus::Found(EntryStatus::Copied(found)) => {
+                            todo!()
+                        }
+
+                        InsertStatus::Found(EntryStatus::Null) => todo!(),
+                    }
+                } else if metadata == h2 {
+                    let found = unpack(pin.protect(unsafe { table.entry(probe.i) }));
+
+                    if found.ptr.is_null() {
+                        probe.next(table.mask);
+                        continue 'p;
+                    }
+
+                    found
+                } else {
+                    probe.next(table.mask);
+                    continue 'p;
+                };
+
+                if unsafe { (*entry.ptr).key != *new_entry.key() } {
+                    probe.next(table.mask);
+                    continue 'p;
+                }
+
+                if entry.tag() & Entry::COPYING != 0 {
+                    break 'p Some(probe.i);
+                }
+
+                todo!()
+            };
+        }
+
         todo!()
     }
 
@@ -1369,6 +1469,40 @@ impl<T> Default for State<T> {
             status: AtomicU8::new(State::PENDING),
             parker: Parker::default(),
             deffered: Stack::new(),
+        }
+    }
+}
+
+impl<'p, F, K, V, T> ComputeState<F, K, V, T>
+where
+    F: FnMut(Option<(&'p K, &'p V)>) -> Operation<V, T>,
+    K: 'p,
+    V: 'p,
+{
+    #[inline]
+    fn new(compute: F) -> Self {
+        Self {
+            compute,
+            insert: None,
+            update: None,
+        }
+    }
+
+    #[inline]
+    unsafe fn next(&mut self, entry: Option<*mut Entry<K, V>>) -> Operation<V, T> {
+        let Some(entry) = entry else {
+            return match self.insert.take() {
+                Some(value) => Operation::Insert(value),
+                _ => (self.compute)(None),
+            };
+        };
+
+        match self.update.take() {
+            Some(CachedUpdate { input, output }) if input == entry => output,
+            _ => {
+                let entry_ref = unsafe { &*entry };
+                (self.compute)(Some((&entry_ref.key, &entry_ref.value)))
+            }
         }
     }
 }
