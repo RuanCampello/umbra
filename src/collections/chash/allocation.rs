@@ -12,6 +12,7 @@ use std::{
 pub struct RawTable<T>(u8, PhantomData<T>);
 
 #[repr(C)]
+/// Layout of a [table](self::Table) allocation.
 struct TableLayout<T> {
     mask: usize,
     limit: usize,
@@ -22,9 +23,9 @@ struct TableLayout<T> {
 
 #[repr(C)]
 pub struct Table<T> {
-    pub(in crate::collections::chash) mask: usize,
-    pub(in crate::collections::chash) limit: usize,
-    pub(in crate::collections::chash) raw: *mut RawTable<T>,
+    pub(super) mask: usize,
+    pub(super) limit: usize,
+    pub(super) raw: *mut RawTable<T>,
 }
 
 impl<T> Table<T> {
@@ -34,6 +35,7 @@ impl<T> Table<T> {
         let len = len.max(mem::align_of::<AtomicPtr<T>>());
         let mask = len - 1;
         let limit = Probe::limit(len);
+        println!("mask: {mask} \nlimit: {limit}\n len: {len}");
         let layout = Table::<T>::layout(len);
 
         let ptr = unsafe { alloc::alloc_zeroed(layout) };
@@ -123,7 +125,7 @@ impl<T> Table<T> {
             + (mem::size_of::<u8>() * len)
             + (mem::size_of::<AtomicPtr<T>>() * len);
 
-        Layout::from_size_align(size, mem::size_of::<TableLayout<T>>()).unwrap()
+        Layout::from_size_align(size, mem::align_of::<TableLayout<T>>()).unwrap()
     }
 }
 
@@ -153,3 +155,20 @@ impl<T> Clone for Table<T> {
 }
 
 impl<T> Copy for Table<T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout() {
+        unsafe {
+            let table = Table::<usize>::alloc(4);
+            let table = Table::<usize>::from(table.raw);
+
+            assert_eq!(table.mask, 7);
+            assert_eq!(table.len(), 8);
+            Table::dealloc(table);
+        }
+    }
+}
