@@ -704,10 +704,19 @@ where
 
                         InsertStatus::Found(EntryStatus::Value(found))
                         | InsertStatus::Found(EntryStatus::Copied(found)) => {
-                            todo!()
+                            let value = unsafe { (*new_entry).value.assume_init_read() };
+                            state.restore(None, Operation::Insert(value));
+
+                            found
                         }
 
-                        InsertStatus::Found(EntryStatus::Null) => todo!(),
+                        InsertStatus::Found(EntryStatus::Null) => {
+                            let value = unsafe { (*new_entry).value.assume_init_read() };
+                            state.restore(None, Operation::Insert(value));
+                            probe.next(table.mask);
+
+                            continue 'p;
+                        }
                     }
                 } else if metadata == h2 {
                     let found = unpack(pin.protect(unsafe { table.entry(probe.i) }));
@@ -732,11 +741,97 @@ where
                     break 'p Some(probe.i);
                 }
 
-                todo!()
-            };
-        }
+                loop {
+                    let failure = match unsafe { state.next(Some(entry.ptr)) } {
+                        Operation::Abort(value) => return Compute::Aborted(value),
+                        Operation::Insert(value) => {
+                            let new_entry = new_entry.init();
+                            unsafe { (*new_entry).value = MaybeUninit::new(value) };
 
-        todo!()
+                            let status = unsafe {
+                                self.update_at(probe.i, entry, new_entry.cast(), table, pin)
+                            };
+
+                            match status {
+                                UpdateStatus::Replace(entry) => {
+                                    let entry_ref = unsafe { &(*entry.ptr) };
+                                    let new_ref = unsafe { &*new_entry.cast::<Entry<K, V>>() };
+
+                                    return Compute::Updated {
+                                        old: (&entry_ref.key, &entry_ref.value),
+                                        new: (&new_ref.key, &new_ref.value),
+                                    };
+                                }
+
+                                failure => {
+                                    let value = unsafe { (*new_entry).value.assume_init_read() };
+                                    state.restore(Some(entry.ptr), Operation::Insert(value));
+
+                                    failure
+                                }
+                            }
+                        }
+                        Operation::Remove => {
+                            let status = unsafe {
+                                self.update_at(probe.i, entry, Entry::TOMBSTONE, table, pin)
+                            };
+
+                            match status {
+                                UpdateStatus::Replace(entry) => {
+                                    unsafe {
+                                        table
+                                            .metadata(probe.i)
+                                            .store(metadata::TOMBSTONE, Ordering::Release)
+                                    };
+
+                                    self.counter.get(pin).fetch_sub(1, Ordering::Relaxed);
+
+                                    let entry_ref = unsafe { &(*entry.ptr) };
+                                    return Compute::Removed(&entry_ref.key, &entry_ref.value);
+                                }
+
+                                failure => {
+                                    state.restore(Some(entry.ptr), Operation::Remove);
+                                    failure
+                                }
+                            }
+                        }
+                    };
+
+                    match failure {
+                        UpdateStatus::Found(EntryStatus::Copied(_)) => break 'p Some(probe.i),
+                        UpdateStatus::Found(EntryStatus::Null) => match unsafe { state.next(None) }
+                        {
+                            Operation::Insert(value) => {
+                                state.restore(None, Operation::Insert(value));
+                                probe.next(table.mask);
+
+                                continue 'p;
+                            }
+                            Operation::Remove => panic!("cannot remove `None`"),
+                            Operation::Abort(value) => return Compute::Aborted(value),
+                        },
+                        UpdateStatus::Found(EntryStatus::Value(found)) => entry = found,
+
+                        _ => unreachable!(),
+                    }
+                }
+            };
+
+            if let Some(next) = self.retry(copying, &mut copy, table, pin) {
+                table = next;
+                continue;
+            }
+
+            match unsafe { state.next(None) } {
+                operation @ Operation::Insert(_) => {
+                    table = self.retry_insert(None, &mut copy, table, pin);
+                    state.restore(None, operation);
+                }
+                Operation::Abort(value) => return Compute::Aborted(value),
+                Operation::Remove => panic!("cannot remove `None`"),
+            }
+        }
     }
 
     #[inline]
@@ -1503,6 +1598,17 @@ where
                 let entry_ref = unsafe { &*entry };
                 (self.compute)(Some((&entry_ref.key, &entry_ref.value)))
             }
+        }
+    }
+
+    #[inline]
+    fn restore(&mut self, input: Option<*mut Entry<K, V>>, output: Operation<V, T>) {
+        match input {
+            Some(input) => self.update = Some(CachedUpdate { input, output }),
+            _ => match output {
+                Operation::Insert(value) => self.insert = Some(value),
+                _ => unreachable!(),
+            },
         }
     }
 }
