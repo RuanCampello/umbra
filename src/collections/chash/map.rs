@@ -1378,4 +1378,30 @@ mod tests {
             }
         });
     }
+
+    #[test]
+    fn remove_none() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            let pin = map.pin();
+            let old = map.remove(&69, &pin);
+
+            assert!(old.is_none());
+        });
+    }
+
+    #[test]
+    fn insert_and_remove() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            let pin = map.pin();
+
+            map.insert(69, 0, &pin);
+
+            let old = map.remove(&69, &pin).unwrap();
+
+            assert_eq!(old, &0);
+            assert!(map.get(&69, &pin).is_none());
+        });
+    }
 }
