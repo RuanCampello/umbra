@@ -195,7 +195,7 @@ where
     #[inline]
     pub fn remove<'p, Q>(&self, key: &Q, pin: &'p impl reclamation::Guard) -> Option<&'p V>
     where
-        K: 'p,
+        K: 'p + std::borrow::Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
         match self.raw_remove(key, self.verify(pin)) {
@@ -231,9 +231,10 @@ where
     #[inline]
     fn raw_remove<'p, Q>(&self, key: &Q, pin: &'p impl CheckedPin) -> Option<(&'p K, &'p V)>
     where
+        K: 'p + std::borrow::Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        todo!()
+        unsafe { self.remove_if(key, |_, _| true, pin).unwrap_unchecked() }
     }
 
     #[inline]
