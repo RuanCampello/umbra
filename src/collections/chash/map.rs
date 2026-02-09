@@ -9,6 +9,7 @@ use crate::collections::{
 };
 use std::hash::{BuildHasher, Hash, RandomState};
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
 use std::sync::atomic::Ordering;
 use std::sync::{
     atomic::{AtomicPtr, AtomicU8, AtomicUsize},
@@ -102,6 +103,11 @@ enum Compute<'p, K, V, T> {
     },
     Removed(&'p K, &'p V),
     Aborted(T),
+}
+
+enum LazyEntry<K, V> {
+    Uninit(K),
+    Init(*mut Entry<K, MaybeUninit<V>>),
 }
 
 pub(in crate::collections::chash) mod metadata {
@@ -1319,6 +1325,38 @@ impl State<()> {
     const PENDING: u8 = 0;
     const ABORTED: u8 = 1;
     const PROMOTED: u8 = 2;
+}
+
+impl<K, V> LazyEntry<K, V> {
+    #[inline]
+    fn init(&mut self) -> *mut Entry<K, MaybeUninit<V>> {
+        use std::{panic, ptr};
+
+        match self {
+            LazyEntry::Init(entry) => *entry,
+            LazyEntry::Uninit(key) => unsafe {
+                let key = ptr::read(key);
+                let entry = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    Box::into_raw(Box::new(Entry {
+                        value: MaybeUninit::uninit(),
+                        key,
+                    }))
+                }))
+                .unwrap_or(std::process::abort());
+
+                ptr::write(self, LazyEntry::Init(entry));
+                entry
+            },
+        }
+    }
+
+    #[inline]
+    const fn key(&self) -> &K {
+        match self {
+            LazyEntry::Init(entry) => unsafe { &(**entry).key },
+            LazyEntry::Uninit(key) => key,
+        }
+    }
 }
 
 impl<T> Default for State<T> {
