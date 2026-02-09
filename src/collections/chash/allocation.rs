@@ -35,7 +35,6 @@ impl<T> Table<T> {
         let len = len.max(mem::align_of::<AtomicPtr<T>>());
         let mask = len - 1;
         let limit = Probe::limit(len);
-        println!("mask: {mask} \nlimit: {limit}\n len: {len}");
         let layout = Table::<T>::layout(len);
 
         let ptr = unsafe { alloc::alloc_zeroed(layout) };

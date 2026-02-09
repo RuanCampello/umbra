@@ -694,7 +694,7 @@ where
         }
 
         let (h1, h2) = self.hash(new_entry.key());
-        let mut copy = false;
+        let mut copy = true;
 
         loop {
             let mut probe = Probe::new(h1, table.mask);
@@ -1559,7 +1559,7 @@ impl<K, V> LazyEntry<K, V> {
                         key,
                     }))
                 }))
-                .unwrap_or(std::process::abort());
+                .unwrap_or_else(|_| std::process::abort());
 
                 ptr::write(self, LazyEntry::Init(entry));
                 entry
