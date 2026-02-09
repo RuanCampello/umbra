@@ -150,7 +150,7 @@ where
     S: BuildHasher,
 {
     #[inline]
-    fn get<'p, Q>(&self, key: &Q, pin: &'p impl reclamation::Guard) -> Option<&'p V>
+    pub fn get<'p, Q>(&self, key: &Q, pin: &'p impl reclamation::Guard) -> Option<&'p V>
     where
         K: 'p + std::borrow::Borrow<Q>,
         Q: Eq + Hash + ?Sized,
@@ -159,6 +159,19 @@ where
             Some((_, value)) => Some(value),
             _ => None,
         }
+    }
+
+    #[inline]
+    pub fn get_key_value<'p, Q>(
+        &self,
+        key: &Q,
+        pin: &'p impl reclamation::Guard,
+    ) -> Option<(&'p K, &'p V)>
+    where
+        Q: Eq + Hash + ?Sized,
+        K: 'p + std::borrow::Borrow<Q>,
+    {
+        self.raw_get(key, self.verify(pin))
     }
 
     #[inline]
@@ -1852,8 +1865,8 @@ mod tests {
                 let v = map.get(&i, &pin).unwrap();
                 assert!(v == &0 || v == &1);
 
-                // let kv = map.get_key_value(&i, &pin).unwrap();
-                // assert!(kv == (&i, &0) || kv == (&i, &1));
+                let kv = map.get_key_value(&i, &pin).unwrap();
+                assert!(kv == (&i, &0) || kv == (&i, &1));
             }
         });
     }
