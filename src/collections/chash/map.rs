@@ -129,6 +129,64 @@ where
     }
 
     #[inline]
+    pub fn insert<'p>(&self, key: K, value: V, pin: &'p impl reclamation::Guard) -> Option<&'p V> {
+        match self.wrapping_insert(key, value, true, self.verify(pin)) {
+            InsertResult::Inserted(_) => None,
+            InsertResult::Replaced(value) => Some(value),
+            InsertResult::Error { .. } => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn remove<'p, Q>(&self, key: &Q, pin: &'p impl reclamation::Guard) -> Option<&'p V>
+    where
+        K: 'p + std::borrow::Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        match self.raw_remove(key, self.verify(pin)) {
+            Some((_, value)) => Some(value),
+            None => None,
+        }
+    }
+
+    #[inline]
+    pub fn remove_entry<'p, Q>(
+        &self,
+        key: &Q,
+        pin: &'p impl reclamation::Guard,
+    ) -> Option<(&'p K, &'p V)>
+    where
+        K: 'p + std::borrow::Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        self.raw_remove(key, self.verify(pin))
+    }
+
+    #[inline]
+    pub fn verify<'p, P>(&self, pin: &'p P) -> &'p Pin<P>
+    where
+        P: reclamation::Guard,
+    {
+        assert_eq!(
+            *pin.collector(),
+            self.collector,
+            "Tried to access map with incompatible guard"
+        );
+
+        unsafe { Pin::from_ref(pin) }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline]
+    pub fn clear(&self, pin: &impl reclamation::Guard) {
+        self.raw_clear(self.verify(pin));
+    }
+
+    #[inline]
     fn raw_get<'p, Q>(&self, key: &Q, pin: &'p impl CheckedPin) -> Option<(&'p K, &'p V)>
     where
         K: std::borrow::Borrow<Q>,
@@ -181,51 +239,6 @@ where
 
             return None;
         }
-    }
-
-    #[inline]
-    pub fn insert<'p>(&self, key: K, value: V, pin: &'p impl reclamation::Guard) -> Option<&'p V> {
-        match self.wrapping_insert(key, value, true, self.verify(pin)) {
-            InsertResult::Inserted(_) => None,
-            InsertResult::Replaced(value) => Some(value),
-            InsertResult::Error { .. } => unreachable!(),
-        }
-    }
-
-    #[inline]
-    pub fn remove<'p, Q>(&self, key: &Q, pin: &'p impl reclamation::Guard) -> Option<&'p V>
-    where
-        K: 'p + std::borrow::Borrow<Q>,
-        Q: Eq + Hash + ?Sized,
-    {
-        match self.raw_remove(key, self.verify(pin)) {
-            Some((_, value)) => Some(value),
-            None => None,
-        }
-    }
-
-    #[inline]
-    pub fn verify<'p, P>(&self, pin: &'p P) -> &'p Pin<P>
-    where
-        P: reclamation::Guard,
-    {
-        assert_eq!(
-            *pin.collector(),
-            self.collector,
-            "Tried to access map with incompatible guard"
-        );
-
-        unsafe { Pin::from_ref(pin) }
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    #[inline]
-    pub fn clear(&self, pin: &impl reclamation::Guard) {
-        self.raw_clear(self.verify(pin));
     }
 
     #[inline]
