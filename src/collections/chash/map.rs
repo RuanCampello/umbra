@@ -1807,4 +1807,54 @@ mod tests {
             }
         });
     }
+
+    #[test]
+    fn update_none() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            let pin = map.pin();
+            let new = map.update(69, |value| value + 1, &pin);
+            assert!(new.is_none());
+
+            {
+                let pin = map.pin();
+                assert!(map.get(&69, &pin).is_none());
+            }
+        })
+    }
+
+    #[test]
+    fn concurrent_insert() {
+        with_map::<usize, usize>(|map| {
+            use std::sync::Arc;
+
+            let map = map();
+            let map = Arc::new(map);
+
+            let map1 = map.clone();
+            let t1 = std::thread::spawn(move || {
+                for i in 0..64 {
+                    map1.insert(i, 0, &map1.pin());
+                }
+            });
+            let map2 = map.clone();
+            let t2 = std::thread::spawn(move || {
+                for i in 0..64 {
+                    map2.insert(i, 1, &map2.pin());
+                }
+            });
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+
+            let pin = map.pin();
+            for i in 0..64 {
+                let v = map.get(&i, &pin).unwrap();
+                assert!(v == &0 || v == &1);
+
+                // let kv = map.get_key_value(&i, &pin).unwrap();
+                // assert!(kv == (&i, &0) || kv == (&i, &1));
+            }
+        });
+    }
 }
