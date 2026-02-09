@@ -1786,4 +1786,25 @@ mod tests {
             }
         });
     }
+
+    #[test]
+    fn update() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            let pin = map.pin();
+
+            map.insert(69, 0, &pin);
+            assert_eq!(map.len(), 1);
+
+            let new = map.update(69, |value| value + 1, &pin).unwrap();
+            assert_eq!(map.len(), 1);
+            assert_eq!(new, &1);
+
+            {
+                let pin = map.pin();
+                let i = map.get(&69, &pin).unwrap();
+                assert_eq!(i, &1);
+            }
+        });
+    }
 }
