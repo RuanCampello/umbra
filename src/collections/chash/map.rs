@@ -100,13 +100,13 @@ enum UpdateStatus<K, V> {
     Found(EntryStatus<K, V>),
 }
 
-enum Operation<V, T> {
+pub(crate) enum Operation<V, T> {
     Insert(V),
     Remove,
     Abort(T),
 }
 
-enum Compute<'p, K, V, T> {
+pub(crate) enum Compute<'p, K, V, T> {
     Inserted(&'p K, &'p V),
     Updated {
         old: (&'p K, &'p V),
@@ -618,6 +618,19 @@ where
     }
 
     #[inline]
+    pub fn compute<'p, F, T>(
+        &self,
+        key: K,
+        compute: F,
+        pin: &'p impl reclamation::Guard,
+    ) -> Compute<'p, K, V, T>
+    where
+        F: FnMut(Option<(&'p K, &'p V)>) -> Operation<V, T>,
+    {
+        self.raw_compute(key, compute, self.verify(pin))
+    }
+
+    #[inline]
     fn raw_update<'p, F>(&self, key: K, mut update: F, pin: &'p impl CheckedPin) -> Option<&'p V>
     where
         K: 'p,
@@ -647,7 +660,16 @@ where
     where
         F: FnMut(Option<(&'p K, &'p V)>) -> Operation<V, T>,
     {
-        todo!()
+        let mut entry = LazyEntry::Uninit(key);
+        let result = unsafe { self.compute_with(&mut entry, ComputeState::new(compute), pin) };
+
+        if matches!(result, Compute::Removed(..) | Compute::Aborted(..)) {
+            if let LazyEntry::Init(entry) = entry {
+                let _ = unsafe { Box::from_raw(entry) };
+            }
+        }
+
+        result
     }
 
     #[inline]
