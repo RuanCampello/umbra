@@ -1870,4 +1870,51 @@ mod tests {
             }
         });
     }
+
+    #[test]
+    /// <https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.get_key_value>
+    fn get_key_value() {
+        #[derive(Debug, Clone, Copy, Eq)]
+        struct S {
+            id: u32,
+            name: &'static str,
+        }
+
+        impl PartialEq for S {
+            fn eq(&self, other: &Self) -> bool {
+                self.id == other.id
+            }
+        }
+
+        impl Hash for S {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                self.id.hash(state)
+            }
+        }
+
+        let j_a = S {
+            id: 1,
+            name: "Jessica",
+        };
+        let j_b = S {
+            id: 1,
+            name: "Jess",
+        };
+        let p = S {
+            id: 2,
+            name: "Paul",
+        };
+
+        let map = HashMap::builder()
+            .collector(Collector::new().batch_size(128))
+            .resize(Resize::Incremental(128))
+            .build();
+        let pin = map.pin();
+
+        map.insert(j_a, "Paris", &pin);
+
+        assert_eq!(map.get_key_value(&j_a, &pin), Some((&j_a, &"Paris")));
+        assert_eq!(map.get_key_value(&j_b, &pin), Some((&j_a, &"Paris")));
+        assert_eq!(map.get_key_value(&p, &pin), None);
+    }
 }
