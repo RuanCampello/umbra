@@ -1404,4 +1404,23 @@ mod tests {
             assert!(map.get(&69, &pin).is_none());
         });
     }
+
+    #[test]
+    fn re_insert() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            let pin = map.pin();
+
+            map.insert(69, 0, &pin);
+
+            let old = map.insert(69, 1, &pin).unwrap();
+            assert_eq!(old, &0);
+
+            {
+                let pin = map.pin();
+                let i = map.get(&69, &pin).unwrap();
+                assert_eq!(i, &1);
+            }
+        });
+    }
 }
