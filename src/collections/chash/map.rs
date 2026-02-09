@@ -685,7 +685,7 @@ where
         let mut table = self.root(pin);
         if table.raw.is_null() {
             match unsafe { state.next(None) } {
-                operation @ Operation::Insert(_) => todo!(),
+                operation @ Operation::Insert(_) => state.restore(None, operation),
                 Operation::Remove => panic!("cannot remove `None`"),
                 Operation::Abort(value) => return Compute::Aborted(value),
             }
