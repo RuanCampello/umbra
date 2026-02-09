@@ -117,7 +117,19 @@ where
     S: BuildHasher,
 {
     #[inline]
-    pub fn get<'p, Q>(&self, key: &Q, pin: &'p impl CheckedPin) -> Option<(&'p K, &'p V)>
+    fn get<'p, Q>(&self, key: &Q, pin: &'p impl reclamation::Guard) -> Option<&'p V>
+    where
+        K: 'p + std::borrow::Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        match self.raw_get(key, self.verify(pin)) {
+            Some((_, value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn raw_get<'p, Q>(&self, key: &Q, pin: &'p impl CheckedPin) -> Option<(&'p K, &'p V)>
     where
         K: std::borrow::Borrow<Q>,
         Q: Eq + Hash + ?Sized,
@@ -1083,6 +1095,17 @@ mod tests {
             let old = map.insert(69, 0, &pin);
 
             assert!(old.is_none());
+        });
+    }
+
+    #[test]
+    fn get_none() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            let pin = map.pin();
+            let i = map.get(&69, &pin);
+
+            assert!(i.is_none())
         });
     }
 }
