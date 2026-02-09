@@ -88,6 +88,22 @@ enum UpdateStatus<K, V> {
     Found(EntryStatus<K, V>),
 }
 
+enum Operation<V, T> {
+    Insert(V),
+    Remove,
+    Abort(T),
+}
+
+enum Compute<'p, K, V, T> {
+    Inserted(&'p K, &'p V),
+    Updated {
+        old: (&'p K, &'p V),
+        new: (&'p K, &'p V),
+    },
+    Removed(&'p K, &'p V),
+    Aborted(T),
+}
+
 pub(in crate::collections::chash) mod metadata {
     use std::mem;
 
@@ -568,6 +584,53 @@ where
         }
 
         InsertStatus::Found(status)
+    }
+
+    #[inline]
+    pub fn update<'p, F>(
+        &self,
+        key: K,
+        update: F,
+        pin: &'p impl reclamation::Guard,
+    ) -> Option<&'p V>
+    where
+        K: 'p,
+        F: Fn(&V) -> V,
+    {
+        self.raw_update(key, update, self.verify(pin))
+    }
+
+    #[inline]
+    fn raw_update<'p, F>(&self, key: K, mut update: F, pin: &'p impl CheckedPin) -> Option<&'p V>
+    where
+        K: 'p,
+        F: FnMut(&V) -> V,
+    {
+        let compute = |entry| match entry {
+            None => Operation::Abort(()),
+            Some((_, value)) => Operation::Insert(update(value)),
+        };
+
+        match self.compute(key, compute, pin) {
+            Compute::Updated {
+                new: (_, value), ..
+            } => Some(value),
+            Compute::Aborted(_) => None,
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn compute<'p, F, T>(
+        &self,
+        key: K,
+        compute: F,
+        pin: &'p impl CheckedPin,
+    ) -> Compute<'p, K, V, T>
+    where
+        F: FnMut(Option<(&'p K, &'p V)>) -> Operation<V, T>,
+    {
+        todo!()
     }
 
     #[inline]
