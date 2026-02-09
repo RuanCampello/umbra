@@ -184,11 +184,23 @@ where
     }
 
     #[inline]
-    pub fn insert<'p>(&self, key: K, value: V, pin: &'p impl CheckedPin) -> Option<&'p V> {
+    pub fn insert<'p>(&self, key: K, value: V, pin: &'p impl reclamation::Guard) -> Option<&'p V> {
         match self.wrapping_insert(key, value, true, self.verify(pin)) {
             InsertResult::Inserted(_) => None,
             InsertResult::Replaced(value) => Some(value),
             InsertResult::Error { .. } => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn remove<'p, Q>(&self, key: &Q, pin: &'p impl reclamation::Guard) -> Option<&'p V>
+    where
+        K: 'p,
+        Q: Eq + Hash + ?Sized,
+    {
+        match self.raw_remove(key, self.verify(pin)) {
+            Some((_, value)) => Some(value),
+            None => None,
         }
     }
 
@@ -214,6 +226,104 @@ where
     #[inline]
     pub fn clear(&self, pin: &impl reclamation::Guard) {
         self.raw_clear(self.verify(pin));
+    }
+
+    #[inline]
+    fn raw_remove<'p, Q>(&self, key: &Q, pin: &'p impl CheckedPin) -> Option<(&'p K, &'p V)>
+    where
+        Q: Eq + Hash + ?Sized,
+    {
+        todo!()
+    }
+
+    #[inline]
+    fn remove_if<'p, Q, F>(
+        &self,
+        key: &Q,
+        mut must_remove: F,
+        pin: &'p impl CheckedPin,
+    ) -> Result<Option<(&'p K, &'p V)>, (&'p K, &'p V)>
+    where
+        K: 'p + std::borrow::Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+        F: FnMut(&K, &V) -> bool,
+    {
+        let mut table = self.root(pin);
+        if table.raw.is_null() {
+            return Ok(None);
+        }
+
+        let (h1, h2) = self.hash(key);
+        let mut copy = true;
+
+        loop {
+            let mut probe = Probe::new(h1, table.mask);
+
+            let copying = 'p: loop {
+                if probe.len > table.limit {
+                    break None;
+                }
+
+                let metadata = unsafe { table.metadata(probe.i).load(Ordering::Acquire) };
+                if metadata == metadata::EMPTY {
+                    return Ok(None);
+                }
+
+                if metadata != h2 {
+                    probe.next(table.mask);
+                    continue 'p;
+                }
+
+                let mut entry = unpack(pin.protect(unsafe { table.entry(probe.i) }));
+
+                if entry.ptr.is_null() {
+                    probe.next(table.mask);
+                    continue 'p;
+                }
+
+                if &key != unsafe { &(*entry.ptr).key.borrow() } {
+                    probe.next(table.mask);
+                    continue 'p;
+                }
+
+                if entry.tag() & Entry::COPYING != 0 {
+                    break 'p Some(probe.i);
+                }
+
+                loop {
+                    let entry_ref = unsafe { &(*entry.ptr) };
+                    if !must_remove(&entry_ref.key, &entry_ref.value) {
+                        return Err((&entry_ref.key, &entry_ref.value));
+                    }
+
+                    let status =
+                        unsafe { self.update_at(probe.i, entry, Entry::TOMBSTONE, table, pin) };
+
+                    match status {
+                        UpdateStatus::Replace(_) => {
+                            unsafe {
+                                table
+                                    .metadata(probe.i)
+                                    .store(metadata::TOMBSTONE, Ordering::Release)
+                            };
+
+                            self.counter.get(pin).fetch_sub(1, Ordering::Relaxed);
+
+                            return Ok(Some((&entry_ref.key, &entry_ref.value)));
+                        }
+
+                        UpdateStatus::Found(EntryStatus::Copied(_)) => break 'p Some(probe.i),
+                        UpdateStatus::Found(EntryStatus::Null) => return Ok(None),
+                        UpdateStatus::Found(EntryStatus::Value(found)) => entry = found,
+                    }
+                }
+            };
+
+            table = match self.retry(copying, &mut copy, table, pin) {
+                Some(table) => table,
+                None => return Ok(None),
+            }
+        }
     }
 
     #[inline]
@@ -521,6 +631,37 @@ where
 
         *copy = false;
         next
+    }
+
+    #[cold]
+    fn retry(
+        &self,
+        copying: Option<usize>,
+        copy: &mut bool,
+        table: Table<Entry<K, V>>,
+        pin: &impl CheckedPin,
+    ) -> Option<Table<Entry<K, V>>> {
+        let table = match self.resize {
+            Resize::Blocking => match copying {
+                Some(_) => self.copying(true, &table, pin),
+                _ => return None,
+            },
+            Resize::Incremental(_) => {
+                let next = table.next()?;
+                if *copy {
+                    self.copying(false, &table, pin);
+                }
+
+                if let Some(idx) = copying {
+                    self.wait_copy(idx, &table);
+                }
+
+                next
+            }
+        };
+
+        *copy = false;
+        Some(table)
     }
 
     #[cold]
@@ -1208,5 +1349,19 @@ mod tests {
             map.clear(&pin);
             assert!(map.is_empty());
         })
+    }
+
+    #[test]
+    fn insert_and_get() {
+        with_map::<usize, usize>(|map| {
+            let map = map();
+            map.insert(69, 0, &map.pin());
+
+            {
+                let pin = map.pin();
+                let i = map.get(&69, &pin).unwrap();
+                assert_eq!(i, &0);
+            }
+        });
     }
 }
