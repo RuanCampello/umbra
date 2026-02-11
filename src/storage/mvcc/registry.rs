@@ -29,7 +29,6 @@ pub struct TransactionRegistry {
 
 #[derive(Clone, Copy)]
 pub struct TransactionState {
-    status: TransactionStatus,
     begin: i64,
     commit: i64,
 }
@@ -43,7 +42,7 @@ struct CommittedCache {
 pub enum TransactionStatus {
     Active,
     Committing,
-    Committed,
+    Aborted,
 }
 
 #[derive(Default, PartialEq, Eq)]
@@ -463,10 +462,26 @@ impl TransactionState {
     const SHIFT: u32 = 62;
 
     const fn new(begin: i64) -> Self {
+        Self { begin, commit: 0 }
+    }
+
+    const fn new_aborted() -> Self {
         Self {
-            begin,
-            status: TransactionStatus::Active,
-            commit: 0,
+            begin: Self::ABORTED,
+            commit: (TransactionStatus::Aborted as i64) << Self::SHIFT,
+        }
+    }
+
+    #[inline(always)]
+    const fn status(&self) -> TransactionStatus {
+        if self.begin == Self::ABORTED {
+            return TransactionStatus::Aborted;
+        }
+
+        match (self.commit >> Self::SHIFT) as u8 {
+            0 => TransactionStatus::Active,
+            1 => TransactionStatus::Committing,
+            _ => TransactionStatus::Aborted,
         }
     }
 
