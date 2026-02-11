@@ -12,3 +12,5 @@
 mod allocation;
 mod map;
 mod utils;
+
+pub use map::{HashMap, HashMapBuilder};

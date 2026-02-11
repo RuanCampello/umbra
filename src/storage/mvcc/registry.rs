@@ -1,3 +1,4 @@
+use crate::collections::chash;
 use crate::collections::hash::HashMap;
 use crate::storage::mvcc::version::VisibilityChecker;
 use std::{

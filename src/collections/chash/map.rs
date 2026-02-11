@@ -1487,6 +1487,19 @@ impl<K, V, S> HashMap<K, V, S> {
     pub fn pin_owned(&self) -> Pin<OwnedGuard<'_>> {
         unsafe { Pin::new(self.collector.pin_owned()) }
     }
+
+    pub fn with_hasher(hash_builder: S) -> Self {
+        Self::with_capacity_and_hasher(0, hash_builder)
+    }
+
+    pub fn with_capacity_and_hasher(capacity: usize, hash_builder: S) -> Self {
+        Self::new(
+            capacity,
+            Collector::default(),
+            hash_builder,
+            Resize::default(),
+        )
+    }
 }
 
 impl<K, V> HashMap<K, V> {
@@ -1498,6 +1511,15 @@ impl<K, V> HashMap<K, V> {
             _kv: PhantomData::default(),
             resize: Resize::default(),
         }
+    }
+}
+
+impl<K, V, S> Default for HashMap<K, V, S>
+where
+    S: Default,
+{
+    fn default() -> Self {
+        HashMap::with_hasher(S::default())
     }
 }
 
