@@ -262,27 +262,68 @@ impl TransactionRegistry {
         self.accepting.store(true, Ordering::Release)
     }
 
+    #[cold]
     #[inline(never)]
     fn is_snapshot_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool {
-        if self.transaction_isolation_level(view_txn_id) == IsolationLevel::ReadCommitted {
-            return self.is_directly_visible(version_txn_id);
-        }
+        let (version_state, view_sequence) = {
+            let transactions = self.transactions.lock().unwrap();
 
-        let version_state = match self.transactions.lock().unwrap().get(&version_txn_id) {
-            Some(entry) => *entry,
-            None => return false,
+            let version_sequence = match transactions.get(&version_txn_id) {
+                Some(entry) if entry.is_active_or_commiting() => entry.begin(),
+                _ => {
+                    drop(transactions);
+                    return self.check_committed(version_txn_id);
+                }
+            };
+
+            let version_state = transactions.get(&version_txn_id).copied();
+
+            (version_state, version_sequence)
         };
 
-        if version_state.status != TransactionStatus::Committed {
-            return false;
+        match version_state {
+            Some(state) => todo!(),
+            None => {
+                let next = self.next_txn_id.load(Ordering::Acquire);
+
+                if version_txn_id <= 0 || version_txn_id > next {
+                    return false;
+                }
+
+                let commit_sequence = self
+                    .snapshot_sequences
+                    .lock()
+                    .unwrap()
+                    .get(&version_txn_id)
+                    .copied();
+
+                if let Some(sequence) = commit_sequence {
+                    return sequence <= view_sequence;
+                }
+
+                true
+            }
+        }
+    }
+
+    #[inline(always)]
+    /// Checks if a transaction is committed.
+    fn check_committed(&self, txn_id: i64) -> bool {
+        if COMMITTED_CACHE.with(|cache| cache.borrow().contains(txn_id)) {
+            return true;
         }
 
-        let view_begin = match self.transactions.lock().unwrap().get(&view_txn_id) {
-            Some(entry) => entry.begin,
-            None => return false,
-        };
+        if self.transactions.lock().unwrap().contains_key(&txn_id) {
+            return true;
+        }
 
-        version_state.commit <= view_begin
+        let next = self.next_txn_id.load(Ordering::Acquire);
+        if txn_id > 0 && txn_id <= next {
+            COMMITTED_CACHE.with(|cache| cache.borrow_mut().insert(txn_id));
+            return true;
+        }
+
+        false
     }
 
     fn get_sequence(&self) -> i64 {
@@ -395,11 +436,26 @@ impl CommittedCache {
 }
 
 impl TransactionState {
+    const ABORTED: i64 = -1;
+
     const fn new(begin: i64) -> Self {
         Self {
             begin,
             status: TransactionStatus::Active,
             commit: 0,
+        }
+    }
+
+    #[inline(always)]
+    const fn is_active_or_commiting(&self) -> bool {
+        self.begin != Self::ABORTED
+    }
+
+    #[inline(always)]
+    const fn begin(&self) -> i64 {
+        match self.begin == Self::ABORTED {
+            true => 0,
+            _ => self.begin,
         }
     }
 }
