@@ -3,18 +3,22 @@ use crate::collections::hash::HashMap;
 use crate::storage::mvcc::version::VisibilityChecker;
 use std::{
     cell::RefCell,
-    sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
 
 #[derive(Default)]
 pub struct TransactionRegistry {
     next_txn_id: AtomicI64,
-    transactions: HashMap<i64, TransactionState>,
+    transactions: Mutex<HashMap<i64, TransactionState>>,
+    snapshot_sequences: Mutex<HashMap<i64, i64>>,
     /// 0: Read Committed
     /// 1: Snapshot
     isolation_level: AtomicU8,
-    transaction_isolation_levels: HashMap<i64, u8>,
+    transaction_isolation_levels: chash::HashMap<i64, u8>,
     isolation_override_count: AtomicUsize,
     /// whether we should accept new transactions.
     accepting: AtomicBool,
@@ -65,7 +69,7 @@ impl TransactionRegistry {
         }
     }
 
-    pub fn begin(&mut self) -> (i64, i64) {
+    pub fn begin(&self) -> (i64, i64) {
         if !self.accepting.load(Ordering::Acquire) {
             return (Self::INVALID_ID, 0);
         }
@@ -74,15 +78,17 @@ impl TransactionRegistry {
         let begin_id = self.next_sequence.fetch_add(1, Ordering::AcqRel) + 1;
 
         self.transactions
+            .lock()
+            .unwrap()
             .insert(txn_id, TransactionState::new(begin_id));
 
         (txn_id, begin_id)
     }
 
-    pub fn start_commit(&mut self, txn_id: i64) -> i64 {
+    pub fn start_commit(&self, txn_id: i64) -> i64 {
         let commit = self.next_sequence.fetch_add(1, Ordering::AcqRel) + 1;
 
-        if let Some(mut entry) = self.transactions.get_mut(&txn_id) {
+        if let Some(mut entry) = self.transactions.lock().unwrap().get_mut(&txn_id) {
             entry.status = TransactionStatus::Committing;
             entry.commit = commit;
         }
@@ -90,16 +96,16 @@ impl TransactionRegistry {
         commit
     }
 
-    pub fn complete_commit(&mut self, txn_id: i64) {
-        if let Some(mut entry) = self.transactions.get_mut(&txn_id) {
+    pub fn complete_commit(&self, txn_id: i64) {
+        if let Some(mut entry) = self.transactions.lock().unwrap().get_mut(&txn_id) {
             entry.status = TransactionStatus::Committed;
         }
     }
 
-    pub fn commit_transaction(&mut self, txn_id: i64) -> i64 {
+    pub fn commit_transaction(&self, txn_id: i64) -> i64 {
         let commit = self.next_sequence.fetch_add(1, Ordering::AcqRel) + 1;
 
-        if let Some(mut entry) = self.transactions.get_mut(&txn_id) {
+        if let Some(mut entry) = self.transactions.lock().unwrap().get_mut(&txn_id) {
             entry.status = TransactionStatus::Committed;
             entry.commit = commit;
         }
@@ -107,15 +113,11 @@ impl TransactionRegistry {
         commit
     }
 
-    pub fn recover_committed_transaction(&mut self, txn_id: i64, commit: i64) {
-        self.transactions.insert(
-            txn_id,
-            TransactionState {
-                commit,
-                begin: commit,
-                status: TransactionStatus::Committed,
-            },
-        );
+    pub fn recover_committed_transaction(&self, txn_id: i64, commit: i64) {
+        self.snapshot_sequences
+            .lock()
+            .unwrap()
+            .insert(txn_id, commit);
 
         self.recover_aborted_transaction(txn_id);
 
@@ -136,7 +138,7 @@ impl TransactionRegistry {
         }
     }
 
-    pub fn recover_aborted_transaction(&mut self, txn_id: i64) {
+    pub fn recover_aborted_transaction(&self, txn_id: i64) {
         loop {
             let current = self.next_txn_id.load(Ordering::Acquire);
             match txn_id >= current {
@@ -171,6 +173,8 @@ impl TransactionRegistry {
 
         let to_be_removed = self
             .transactions
+            .lock()
+            .unwrap()
             .iter()
             .filter(|entry| {
                 let id = *entry.0;
@@ -209,7 +213,7 @@ impl TransactionRegistry {
             return true;
         }
 
-        if let Some(entry) = self.transactions.get(&version_txn_id) {
+        if let Some(entry) = self.transactions.lock().unwrap().get(&version_txn_id) {
             if matches!(entry.status, TransactionStatus::Committed) {
                 COMMITTED_CACHE.with(|cache| cache.borrow_mut().insert(version_txn_id));
                 return true;
@@ -234,11 +238,16 @@ impl TransactionRegistry {
                 return self.is_directly_visible(version_txn_id);
             }
 
-            if !self.transaction_isolation_levels.contains_key(&view_txn_id) {
+            let pin = self.transaction_isolation_levels.pin();
+
+            if !self
+                .transaction_isolation_levels
+                .contains_key(&view_txn_id, &pin)
+            {
                 return self.is_directly_visible(version_txn_id);
             }
 
-            if let Some(level) = self.transaction_isolation_levels.get(&view_txn_id) {
+            if let Some(level) = self.transaction_isolation_levels.get(&view_txn_id, &pin) {
                 if *level == 0 {
                     return self.is_directly_visible(version_txn_id);
                 }
@@ -259,7 +268,7 @@ impl TransactionRegistry {
             return self.is_directly_visible(version_txn_id);
         }
 
-        let version_state = match self.transactions.get(&version_txn_id) {
+        let version_state = match self.transactions.lock().unwrap().get(&version_txn_id) {
             Some(entry) => *entry,
             None => return false,
         };
@@ -268,7 +277,7 @@ impl TransactionRegistry {
             return false;
         }
 
-        let view_begin = match self.transactions.get(&view_txn_id) {
+        let view_begin = match self.transactions.lock().unwrap().get(&view_txn_id) {
             Some(entry) => entry.begin,
             None => return false,
         };
@@ -285,7 +294,7 @@ impl TransactionRegistry {
             return true;
         }
 
-        if let Some(entry) = self.transactions.get(&txn_id) {
+        if let Some(entry) = self.transactions.lock().unwrap().get(&txn_id) {
             if entry.status == TransactionStatus::Committed {
                 return entry.commit <= cut_off;
             }
@@ -296,10 +305,14 @@ impl TransactionRegistry {
         true
     }
 
-    pub fn set_transaction_isolation_level(&mut self, txn_id: i64, level: IsolationLevel) {
-        let is_new = !self.transaction_isolation_levels.contains_key(&txn_id);
+    pub fn set_transaction_isolation_level(&self, txn_id: i64, level: IsolationLevel) {
+        let pin = self.transaction_isolation_levels.pin();
+
+        let is_new = !self
+            .transaction_isolation_levels
+            .contains_key(&txn_id, &pin);
         self.transaction_isolation_levels
-            .insert(txn_id, level as u8);
+            .insert(txn_id, level as u8, &pin);
 
         if is_new {
             self.isolation_override_count
@@ -307,8 +320,8 @@ impl TransactionRegistry {
         }
     }
 
-    pub fn abort_transaction(&mut self, txn_id: i64) {
-        self.transactions.remove(&txn_id);
+    pub fn abort_transaction(&self, txn_id: i64) {
+        self.transactions.lock().unwrap().remove(&txn_id);
     }
 
     /// Returns the global [isolation level](self::IsolationLevel).
@@ -317,15 +330,23 @@ impl TransactionRegistry {
     }
 
     pub fn transaction_isolation_level(&self, txn_id: i64) -> IsolationLevel {
-        if let Some(level) = self.transaction_isolation_levels.get(&txn_id) {
+        let pin = self.transaction_isolation_levels.pin();
+
+        if let Some(level) = self.transaction_isolation_levels.get(&txn_id, &pin) {
             return IsolationLevel::from(*level);
         }
 
         self.isolation_level()
     }
 
-    pub fn remove_transaction_isolation_level(&mut self, txn_id: i64) {
-        if self.transaction_isolation_levels.remove(&txn_id).is_some() {
+    pub fn remove_transaction_isolation_level(&self, txn_id: i64) {
+        let pin = self.transaction_isolation_levels.pin();
+
+        if self
+            .transaction_isolation_levels
+            .remove(&txn_id, &pin)
+            .is_some()
+        {
             self.isolation_level.fetch_sub(1, Ordering::Relaxed);
         }
     }
@@ -342,6 +363,8 @@ impl VisibilityChecker for TransactionRegistry {
 
     fn get_active_transactions(&self) -> Vec<i64> {
         self.transactions
+            .lock()
+            .unwrap()
             .iter()
             .filter(|entry| entry.1.status == TransactionStatus::Active)
             .map(|entry| *entry.0)
