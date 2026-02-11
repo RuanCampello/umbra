@@ -175,6 +175,15 @@ where
     }
 
     #[inline]
+    pub fn contains_key<Q>(&self, key: &Q, pin: &impl reclamation::Guard) -> bool
+    where
+        Q: Eq + Hash + ?Sized,
+        K: std::borrow::Borrow<Q>,
+    {
+        self.get(key, self.verify(pin)).is_some()
+    }
+
+    #[inline]
     pub fn insert<'p>(&self, key: K, value: V, pin: &'p impl reclamation::Guard) -> Option<&'p V> {
         match self.wrapping_insert(key, value, true, self.verify(pin)) {
             InsertResult::Inserted(_) => None,
