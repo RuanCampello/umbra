@@ -14,6 +14,8 @@ use std::{
 pub struct TransactionRegistry {
     next_txn_id: AtomicI64,
     transactions: Mutex<HashMap<i64, TransactionState>>,
+    /// current number of active transactions for fast look-up
+    active_transactions: AtomicUsize,
     snapshot_sequences: Mutex<HashMap<i64, i64>>,
     /// 0: Read Committed
     /// 1: Snapshot
@@ -27,9 +29,9 @@ pub struct TransactionRegistry {
 
 #[derive(Clone, Copy)]
 pub struct TransactionState {
-    pub status: TransactionStatus,
-    pub begin: i64,
-    pub commit: i64,
+    status: TransactionStatus,
+    begin: i64,
+    commit: i64,
 }
 
 struct CommittedCache {
@@ -96,10 +98,28 @@ impl TransactionRegistry {
         commit
     }
 
+    #[inline]
     pub fn complete_commit(&self, txn_id: i64) {
-        if let Some(mut entry) = self.transactions.lock().unwrap().get_mut(&txn_id) {
-            entry.status = TransactionStatus::Committed;
+        {
+            let mut transactions = self.transactions.lock().unwrap();
+            let sequence = transactions
+                .get(&txn_id)
+                .map(|state| state.commit())
+                .unwrap_or(0);
+
+            if self.isolation_level.load(Ordering::Relaxed) == 1
+                || self.isolation_override_count.load(Ordering::Relaxed) > 1
+            {
+                self.snapshot_sequences
+                    .lock()
+                    .unwrap()
+                    .insert(txn_id, sequence);
+            }
+
+            transactions.remove(&txn_id);
         }
+
+        self.active_transactions.fetch_sub(1, Ordering::Relaxed);
     }
 
     pub fn commit_transaction(&self, txn_id: i64) -> i64 {
@@ -439,6 +459,8 @@ impl CommittedCache {
 
 impl TransactionState {
     const ABORTED: i64 = -1;
+    const SEQUENCE_MASK: i64 = (1 << Self::SHIFT) - 1;
+    const SHIFT: u32 = 62;
 
     const fn new(begin: i64) -> Self {
         Self {
@@ -459,6 +481,11 @@ impl TransactionState {
             true => 0,
             _ => self.begin,
         }
+    }
+
+    #[inline(always)]
+    const fn commit(&self) -> i64 {
+        self.commit & Self::SEQUENCE_MASK
     }
 }
 
