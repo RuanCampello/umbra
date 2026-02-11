@@ -18,7 +18,7 @@ pub struct TransactionRegistry {
     /// 0: Read Committed
     /// 1: Snapshot
     isolation_level: AtomicU8,
-    transaction_isolation_levels: chash::HashMap<i64, u8>,
+    transaction_isolation_levels: Mutex<HashMap<i64, u8>>,
     isolation_override_count: AtomicUsize,
     /// whether we should accept new transactions.
     accepting: AtomicBool,
@@ -223,7 +223,7 @@ impl TransactionRegistry {
         false
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool {
         if version_txn_id == view_txn_id {
             return true;
@@ -233,33 +233,36 @@ impl TransactionRegistry {
             return true;
         }
 
-        if self.isolation_level.load(Ordering::Relaxed) == 0 {
-            if self.isolation_override_count.load(Ordering::Relaxed) == 0 {
-                return self.is_directly_visible(version_txn_id);
-            }
-
-            let pin = self.transaction_isolation_levels.pin();
-
-            if !self
-                .transaction_isolation_levels
-                .contains_key(&view_txn_id, &pin)
-            {
-                return self.is_directly_visible(version_txn_id);
-            }
-
-            if let Some(level) = self.transaction_isolation_levels.get(&view_txn_id, &pin) {
-                if *level == 0 {
-                    return self.is_directly_visible(version_txn_id);
-                }
-            }
+        match self.needs_snapshot_isolation(view_txn_id) {
+            true => self.is_snapshot_visible(version_txn_id, view_txn_id),
+            _ => self.check_committed(version_txn_id),
         }
-
-        self.is_snapshot_visible(version_txn_id, view_txn_id)
     }
 
     /// Start accepting new transactions
     pub fn accept_transactions(&self) {
         self.accepting.store(true, Ordering::Release)
+    }
+
+    #[inline(always)]
+    fn needs_snapshot_isolation(&self, txn_id: i64) -> bool {
+        let isolation_level = self.isolation_level.load(Ordering::Relaxed);
+        if isolation_level == 1 {
+            return true;
+        }
+
+        if self.isolation_override_count.load(Ordering::Relaxed) > 0 {
+            if let Some(&level) = self
+                .transaction_isolation_levels
+                .lock()
+                .unwrap()
+                .get(&txn_id)
+            {
+                return level == 1;
+            }
+        }
+
+        false
     }
 
     #[cold]
@@ -347,13 +350,9 @@ impl TransactionRegistry {
     }
 
     pub fn set_transaction_isolation_level(&self, txn_id: i64, level: IsolationLevel) {
-        let pin = self.transaction_isolation_levels.pin();
-
-        let is_new = !self
-            .transaction_isolation_levels
-            .contains_key(&txn_id, &pin);
-        self.transaction_isolation_levels
-            .insert(txn_id, level as u8, &pin);
+        let mut transactions = self.transaction_isolation_levels.lock().unwrap();
+        let is_new = transactions.contains_key(&txn_id);
+        transactions.insert(txn_id, level as u8);
 
         if is_new {
             self.isolation_override_count
@@ -371,9 +370,12 @@ impl TransactionRegistry {
     }
 
     pub fn transaction_isolation_level(&self, txn_id: i64) -> IsolationLevel {
-        let pin = self.transaction_isolation_levels.pin();
-
-        if let Some(level) = self.transaction_isolation_levels.get(&txn_id, &pin) {
+        if let Some(level) = self
+            .transaction_isolation_levels
+            .lock()
+            .unwrap()
+            .get(&txn_id)
+        {
             return IsolationLevel::from(*level);
         }
 
@@ -381,11 +383,11 @@ impl TransactionRegistry {
     }
 
     pub fn remove_transaction_isolation_level(&self, txn_id: i64) {
-        let pin = self.transaction_isolation_levels.pin();
-
         if self
             .transaction_isolation_levels
-            .remove(&txn_id, &pin)
+            .lock()
+            .unwrap()
+            .remove(&txn_id)
             .is_some()
         {
             self.isolation_level.fetch_sub(1, Ordering::Relaxed);
