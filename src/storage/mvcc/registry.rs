@@ -90,8 +90,7 @@ impl TransactionRegistry {
         let commit = self.next_sequence.fetch_add(1, Ordering::AcqRel) + 1;
 
         if let Some(mut entry) = self.transactions.lock().unwrap().get_mut(&txn_id) {
-            entry.status = TransactionStatus::Committing;
-            entry.commit = commit;
+            entry.set_committing(commit);
         }
 
         commit
@@ -124,10 +123,22 @@ impl TransactionRegistry {
     pub fn commit_transaction(&self, txn_id: i64) -> i64 {
         let commit = self.next_sequence.fetch_add(1, Ordering::AcqRel) + 1;
 
-        if let Some(mut entry) = self.transactions.lock().unwrap().get_mut(&txn_id) {
-            entry.status = TransactionStatus::Committed;
-            entry.commit = commit;
+        {
+            let mut transactions = self.transactions.lock().unwrap();
+
+            if self.isolation_level.load(Ordering::Relaxed) == 1
+                || self.isolation_override_count.load(Ordering::Relaxed) > 0
+            {
+                self.snapshot_sequences
+                    .lock()
+                    .unwrap()
+                    .insert(txn_id, commit);
+            }
+
+            transactions.remove(&txn_id);
         }
+
+        self.active_transactions.fetch_sub(1, Ordering::Relaxed);
 
         commit
     }
@@ -178,68 +189,16 @@ impl TransactionRegistry {
     ///
     /// Returns the number of transactions cleaned.
     pub fn cleanup_transactions(&self, max_age: Duration) -> i32 {
-        let level = self.isolation_level();
-
-        // we cannot clean READ COMMITTED ones
-        if matches!(level, IsolationLevel::ReadCommitted) {
-            return 0;
-        }
-
-        let cut = Instant::now()
-            .checked_add(max_age)
-            .map(|_| self.next_sequence.load(Ordering::Acquire) - (max_age.as_nanos() as i64))
-            .unwrap_or_default();
-
-        let to_be_removed = self
-            .transactions
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|entry| {
-                let id = *entry.0;
-                let state = entry.1;
-
-                if id < 0 {
-                    return false;
-                }
-
-                if state.status != TransactionStatus::Committed {
-                    return false;
-                }
-
-                state.commit < cut
-            })
-            .map(|entry| *entry.0)
-            .collect::<Vec<_>>();
-
-        let mut removed = 0;
-        for id in to_be_removed {
-            // self.transactions.remove(&id);
-            removed += 1;
-        }
-
-        removed
+        todo!("garbage collection")
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_directly_visible(&self, version_txn_id: i64) -> bool {
         if version_txn_id == Self::RECOVERY_ID {
             return true;
         }
 
-        let cached = COMMITTED_CACHE.with(|cache| cache.borrow().contains(version_txn_id));
-        if cached {
-            return true;
-        }
-
-        if let Some(entry) = self.transactions.lock().unwrap().get(&version_txn_id) {
-            if matches!(entry.status, TransactionStatus::Committed) {
-                COMMITTED_CACHE.with(|cache| cache.borrow_mut().insert(version_txn_id));
-                return true;
-            }
-        }
-
-        false
+        self.check_committed(version_txn_id)
     }
 
     #[inline(always)]
@@ -357,15 +316,16 @@ impl TransactionRegistry {
             return true;
         }
 
-        if let Some(entry) = self.transactions.lock().unwrap().get(&txn_id) {
-            if entry.status == TransactionStatus::Committed {
-                return entry.commit <= cut_off;
-            }
-
+        if self.transactions.lock().unwrap().contains_key(&txn_id) {
             return false;
         }
 
-        true
+        if let Some(&commit) = self.snapshot_sequences.lock().unwrap().get(&txn_id) {
+            return commit <= cut_off;
+        }
+
+        let next = self.next_txn_id.load(Ordering::Acquire);
+        txn_id > 0 && txn_id <= next
     }
 
     pub fn set_transaction_isolation_level(&self, txn_id: i64, level: IsolationLevel) {
@@ -428,7 +388,7 @@ impl VisibilityChecker for TransactionRegistry {
             .lock()
             .unwrap()
             .iter()
-            .filter(|entry| entry.1.status == TransactionStatus::Active)
+            .filter(|(_, state)| state.status() == TransactionStatus::Active)
             .map(|entry| *entry.0)
             .collect()
     }
@@ -461,10 +421,12 @@ impl TransactionState {
     const SEQUENCE_MASK: i64 = (1 << Self::SHIFT) - 1;
     const SHIFT: u32 = 62;
 
+    #[inline(always)]
     const fn new(begin: i64) -> Self {
         Self { begin, commit: 0 }
     }
 
+    #[inline(always)]
     const fn new_aborted() -> Self {
         Self {
             begin: Self::ABORTED,
@@ -496,6 +458,11 @@ impl TransactionState {
             true => 0,
             _ => self.begin,
         }
+    }
+
+    #[inline(always)]
+    const fn set_committing(&mut self, commit: i64) {
+        self.commit = commit | (1i64 << Self::SHIFT);
     }
 
     #[inline(always)]
