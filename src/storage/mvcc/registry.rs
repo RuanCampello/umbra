@@ -342,8 +342,27 @@ impl TransactionRegistry {
         false
     }
 
-    fn get_sequence(&self) -> i64 {
+    fn sequence(&self) -> i64 {
         self.next_sequence.load(Ordering::Acquire)
+    }
+
+    fn commit_sequence(&self, txn_id: i64) -> Option<i64> {
+        if let Some(&sequence) = self.snapshot_sequences.lock().unwrap().get(&txn_id) {
+            return Some(sequence);
+        }
+
+        if let Some(state) = self.transactions.lock().unwrap().get(&txn_id) {
+            if state.is_aborted() || state.is_active_or_commiting() {
+                return None;
+            }
+        }
+
+        let next = self.next_txn_id.load(Ordering::Acquire);
+        if txn_id > 0 && txn_id <= next {
+            return Some(0);
+        }
+
+        None
     }
 
     fn is_committed_before(&self, txn_id: i64, cut_off: i64) -> bool {
@@ -442,7 +461,7 @@ impl VisibilityChecker for TransactionRegistry {
     }
 
     fn get_sequence(&self) -> i64 {
-        TransactionRegistry::get_sequence(&self)
+        TransactionRegistry::sequence(&self)
     }
 
     fn get_active_transactions(&self) -> Vec<i64> {
@@ -688,5 +707,17 @@ mod tests {
             registry.transaction_isolation_level(transaction),
             IsolationLevel::ReadCommitted
         ); // falls back to the global
+    }
+
+    #[test]
+    fn commit_sequence() {
+        let registry = TransactionRegistry::new();
+        registry.set_isolation_level(IsolationLevel::Snapshot);
+
+        let (txn_id, _) = registry.begin();
+        assert!(registry.commit_sequence(txn_id).is_none());
+
+        let sequence = registry.commit_transaction(txn_id);
+        assert_eq!(registry.commit_sequence(txn_id), Some(sequence));
     }
 }
