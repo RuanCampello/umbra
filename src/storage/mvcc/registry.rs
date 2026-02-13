@@ -28,7 +28,7 @@ pub struct TransactionRegistry {
     next_sequence: AtomicI64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct TransactionState {
     begin: i64,
     commit: i64,
@@ -271,7 +271,7 @@ impl TransactionRegistry {
         let (version_state, view_sequence) = {
             let transactions = self.transactions.lock().unwrap();
 
-            let version_sequence = match transactions.get(&version_txn_id) {
+            let version_sequence = match transactions.get(&view_txn_id) {
                 Some(entry) if entry.is_active_or_commiting() => entry.begin(),
                 _ => {
                     drop(transactions);
@@ -280,12 +280,17 @@ impl TransactionRegistry {
             };
 
             let version_state = transactions.get(&version_txn_id).copied();
-
             (version_state, version_sequence)
         };
 
         match version_state {
-            Some(state) => todo!(),
+            Some(state) => {
+                if state.is_aborted() {
+                    return false;
+                }
+
+                false
+            }
             None => {
                 let next = self.next_txn_id.load(Ordering::Acquire);
 
@@ -607,5 +612,21 @@ mod tests {
 
         registry.commit_transaction(txn_1);
         assert!(registry.is_visible(txn_1, txn_2));
+    }
+
+    #[test]
+    fn snapshot_isolation() {
+        let registry = TransactionRegistry::new();
+        registry.set_isolation_level(IsolationLevel::Snapshot);
+
+        let (txn_1, _) = registry.begin();
+        registry.commit_transaction(txn_1);
+        let (txn_2, _) = registry.begin();
+
+        assert!(registry.is_visible(txn_1, txn_2));
+
+        let (txn_3, _) = registry.begin();
+        registry.commit_transaction(txn_3);
+        assert!(!registry.is_visible(txn_3, txn_2));
     }
 }
