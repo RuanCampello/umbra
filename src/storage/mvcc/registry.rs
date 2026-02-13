@@ -231,8 +231,6 @@ impl TransactionRegistry {
             return true;
         }
 
-        println!("{}", self.needs_snapshot_isolation(view_txn_id));
-
         match self.needs_snapshot_isolation(view_txn_id) {
             true => self.is_snapshot_visible(version_txn_id, view_txn_id),
             _ => self.check_committed(version_txn_id),
@@ -242,6 +240,15 @@ impl TransactionRegistry {
     /// Start accepting new transactions
     pub fn accept_transactions(&self) {
         self.accepting.store(true, Ordering::Release)
+    }
+
+    pub fn is_accepting(&self) -> bool {
+        self.accepting.load(Ordering::Acquire)
+    }
+
+    /// Stops accepting new transactions
+    pub fn deny_transactions(&self) {
+        self.accepting.store(false, Ordering::Release)
     }
 
     #[inline(always)]
@@ -628,5 +635,17 @@ mod tests {
         let (txn_3, _) = registry.begin();
         registry.commit_transaction(txn_3);
         assert!(!registry.is_visible(txn_3, txn_2));
+    }
+
+    #[test]
+    fn deny() {
+        let registry = TransactionRegistry::new();
+        assert!(registry.is_accepting());
+
+        registry.deny_transactions();
+        assert!(!registry.is_accepting());
+
+        let (transaction, _) = registry.begin();
+        assert_eq!(transaction, TransactionRegistry::INVALID_ID);
     }
 }
