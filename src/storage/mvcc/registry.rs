@@ -381,6 +381,11 @@ impl TransactionRegistry {
         IsolationLevel::from(self.isolation_level.load(Ordering::Acquire))
     }
 
+    /// Sets the global isolation level.
+    pub fn set_isolation_level(&self, level: IsolationLevel) {
+        self.isolation_level.store(level as u8, Ordering::Release)
+    }
+
     pub fn transaction_isolation_level(&self, txn_id: i64) -> IsolationLevel {
         if let Some(level) = self
             .transaction_isolation_levels
@@ -568,5 +573,35 @@ mod tests {
             .get(&transaction)
             .copied();
         assert!(state.map(|state| state.is_aborted()).unwrap_or(false));
+    }
+
+    #[test]
+    fn writes_visibility() {
+        let registry = TransactionRegistry::new();
+        let (transaction, _) = registry.begin();
+
+        assert!(registry.is_visible(transaction, transaction));
+    }
+
+    #[test]
+    fn recover_visibility() {
+        let registry = TransactionRegistry::new();
+        let (transaction, _) = registry.begin();
+
+        assert!(registry.is_visible(TransactionRegistry::RECOVERY_ID, transaction));
+    }
+
+    #[test]
+    fn read_committed_visibility() {
+        let registry = TransactionRegistry::new();
+        registry.set_isolation_level(IsolationLevel::ReadCommitted);
+
+        let (txn_1, _) = registry.begin();
+        let (txn_2, _) = registry.begin();
+
+        assert!(!registry.is_visible(txn_1, txn_2));
+
+        registry.commit_transaction(txn_1);
+        assert!(registry.is_visible(txn_1, txn_2));
     }
 }
