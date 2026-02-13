@@ -357,8 +357,23 @@ impl TransactionRegistry {
         }
     }
 
+    #[inline]
     pub fn abort_transaction(&self, txn_id: i64) {
-        self.transactions.lock().unwrap().remove(&txn_id);
+        let needs_decrement = {
+            let mut transactions = self.transactions.lock().unwrap();
+            match transactions.get_mut(&txn_id) {
+                Some(state) => {
+                    let was_active = state.is_active_or_commiting();
+                    *state = TransactionState::new_aborted();
+                    was_active
+                }
+                _ => false,
+            }
+        };
+
+        if needs_decrement {
+            self.active_transactions.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 
     /// Returns the global [isolation level](self::IsolationLevel).
