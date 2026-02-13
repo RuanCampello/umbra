@@ -46,7 +46,7 @@ pub enum TransactionStatus {
     Aborted,
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum IsolationLevel {
     #[default]
@@ -71,6 +71,7 @@ impl TransactionRegistry {
         }
     }
 
+    /// Tries to start a new transaction and returns its id and begin sequence
     pub fn begin(&self) -> (i64, i64) {
         if !self.accepting.load(Ordering::Acquire) {
             return (Self::INVALID_ID, 0);
@@ -364,7 +365,9 @@ impl TransactionRegistry {
 
     pub fn set_transaction_isolation_level(&self, txn_id: i64, level: IsolationLevel) {
         let mut transactions = self.transaction_isolation_levels.lock().unwrap();
-        let is_new = transactions.contains_key(&txn_id);
+        let is_new = !transactions.contains_key(&txn_id);
+
+        println!("level: {}", level as u8);
         transactions.insert(txn_id, level as u8);
 
         if is_new {
@@ -394,6 +397,7 @@ impl TransactionRegistry {
 
     /// Returns the global [isolation level](self::IsolationLevel).
     pub fn isolation_level(&self) -> IsolationLevel {
+        println!("{}", self.isolation_level.load(Ordering::Relaxed));
         IsolationLevel::from(self.isolation_level.load(Ordering::Acquire))
     }
 
@@ -402,14 +406,17 @@ impl TransactionRegistry {
         self.isolation_level.store(level as u8, Ordering::Release)
     }
 
+    #[inline(always)]
     pub fn transaction_isolation_level(&self, txn_id: i64) -> IsolationLevel {
-        if let Some(level) = self
-            .transaction_isolation_levels
-            .lock()
-            .unwrap()
-            .get(&txn_id)
-        {
-            return IsolationLevel::from(*level);
+        if self.isolation_override_count.load(Ordering::Relaxed) > 0 {
+            if let Some(&level) = self
+                .transaction_isolation_levels
+                .lock()
+                .unwrap()
+                .get(&txn_id)
+            {
+                return IsolationLevel::from(level);
+            }
         }
 
         self.isolation_level()
@@ -423,7 +430,8 @@ impl TransactionRegistry {
             .remove(&txn_id)
             .is_some()
         {
-            self.isolation_level.fetch_sub(1, Ordering::Relaxed);
+            self.isolation_override_count
+                .fetch_sub(1, Ordering::Relaxed);
         }
     }
 }
@@ -541,6 +549,15 @@ impl From<u8> for IsolationLevel {
     }
 }
 
+impl std::fmt::Display for IsolationLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ReadCommitted => f.write_str("READ COMMITTED"),
+            Self::Snapshot => f.write_str("SNAPSHOT ISOLATION"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,5 +664,29 @@ mod tests {
 
         let (transaction, _) = registry.begin();
         assert_eq!(transaction, TransactionRegistry::INVALID_ID);
+    }
+
+    #[test]
+    fn isolation_override() {
+        let registry = TransactionRegistry::new();
+        registry.set_isolation_level(IsolationLevel::ReadCommitted);
+
+        let (transaction, _) = registry.begin();
+        assert_eq!(
+            registry.transaction_isolation_level(transaction),
+            IsolationLevel::ReadCommitted
+        );
+
+        registry.set_transaction_isolation_level(transaction, IsolationLevel::Snapshot);
+        assert_eq!(
+            registry.transaction_isolation_level(transaction),
+            IsolationLevel::Snapshot
+        );
+
+        registry.remove_transaction_isolation_level(transaction);
+        assert_eq!(
+            registry.transaction_isolation_level(transaction),
+            IsolationLevel::ReadCommitted
+        ); // falls back to the global
     }
 }
