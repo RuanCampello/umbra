@@ -20,6 +20,7 @@ pub struct TransactionRegistry {
     /// 0: Read Committed
     /// 1: Snapshot
     isolation_level: AtomicU8,
+    /// per transaction isolation level
     transaction_isolation_levels: Mutex<HashMap<i64, u8>>,
     isolation_override_count: AtomicUsize,
     /// whether we should accept new transactions.
@@ -82,6 +83,7 @@ impl TransactionRegistry {
             .lock()
             .unwrap()
             .insert(txn_id, TransactionState::new(begin_id));
+        self.active_transactions.fetch_add(1, Ordering::Relaxed);
 
         (txn_id, begin_id)
     }
@@ -229,6 +231,8 @@ impl TransactionRegistry {
             return true;
         }
 
+        println!("{}", self.needs_snapshot_isolation(view_txn_id));
+
         match self.needs_snapshot_isolation(view_txn_id) {
             true => self.is_snapshot_visible(version_txn_id, view_txn_id),
             _ => self.check_committed(version_txn_id),
@@ -313,7 +317,7 @@ impl TransactionRegistry {
         }
 
         if self.transactions.lock().unwrap().contains_key(&txn_id) {
-            return true;
+            return false;
         }
 
         let next = self.next_txn_id.load(Ordering::Acquire);
