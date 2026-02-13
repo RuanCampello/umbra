@@ -454,7 +454,7 @@ impl TransactionState {
 
     #[inline(always)]
     const fn status(&self) -> TransactionStatus {
-        if self.begin == Self::ABORTED {
+        if self.is_aborted() {
             return TransactionStatus::Aborted;
         }
 
@@ -467,12 +467,17 @@ impl TransactionState {
 
     #[inline(always)]
     const fn is_active_or_commiting(&self) -> bool {
-        self.begin != Self::ABORTED
+        !self.is_aborted()
+    }
+
+    #[inline(always)]
+    const fn is_aborted(&self) -> bool {
+        self.begin == Self::ABORTED
     }
 
     #[inline(always)]
     const fn begin(&self) -> i64 {
-        match self.begin == Self::ABORTED {
+        match self.is_aborted() {
             true => 0,
             _ => self.begin,
         }
@@ -528,5 +533,25 @@ mod tests {
         registry.commit_transaction(transaction);
         assert!(!registry.is_active(transaction));
         assert!(registry.is_committed(transaction));
+    }
+
+    #[test]
+    fn abort_transaction() {
+        let registry = TransactionRegistry::new();
+
+        let (transaction, _) = registry.begin();
+        assert!(registry.is_active(transaction));
+
+        registry.abort_transaction(transaction);
+        assert!(!registry.is_active(transaction));
+        assert!(!registry.is_committed(transaction));
+
+        let state = registry
+            .transactions
+            .lock()
+            .unwrap()
+            .get(&transaction)
+            .copied();
+        assert!(state.map(|state| state.is_aborted()).unwrap_or(false));
     }
 }
