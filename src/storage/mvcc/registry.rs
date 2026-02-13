@@ -720,4 +720,16 @@ mod tests {
         let sequence = registry.commit_transaction(txn_id);
         assert_eq!(registry.commit_sequence(txn_id), Some(sequence));
     }
+
+    #[test]
+    fn recover_committed_transaction() {
+        let registry = TransactionRegistry::new();
+        registry.recover_committed_transaction(1000, 500);
+
+        assert!(registry.is_committed(1000));
+        assert_eq!(registry.commit_sequence(1000), Some(500));
+
+        let (transaction, _) = registry.begin();
+        assert!(transaction > 1000);
+    }
 }
