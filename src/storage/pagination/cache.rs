@@ -5,11 +5,10 @@
 
 #![allow(private_interfaces, unused)]
 
-use crate::core::storage::page::MemoryPage;
-use crate::core::storage::page::PageNumber;
-use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
-use crate::core::BuildHasher;
-use crate::core::HashMap;
+use crate::collections::hash::{BuildHasher, HashMap};
+use crate::storage::page::MemoryPage;
+use crate::storage::page::PageNumber;
+use crate::storage::pagination::pager::DEFAULT_PAGE_SIZE;
 use crate::method_builder;
 use std::mem;
 
@@ -110,7 +109,7 @@ struct Frame {
     page: MemoryPage,
 }
 
-pub(in crate::core::storage) type FrameId = usize;
+pub(in crate::storage) type FrameId = usize;
 
 const REFERENCE_FLAG: u8 = 0b001;
 const DIRTY_FLAG: u8 = 0b010;
@@ -352,7 +351,7 @@ impl std::ops::IndexMut<FrameId> for Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::storage::page::*;
+    use crate::storage::page::*;
 
     enum Fetch {
         All,

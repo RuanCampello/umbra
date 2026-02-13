@@ -15,11 +15,10 @@ use std::{
 mod checkpoint;
 mod entry;
 
-use crate::core::{
-    storage::{mvcc::MvccError, wal::entry::WalFlags},
-    HashSet,
-};
+use crate::collections::hash::HashSet;
+use crate::storage::{mvcc::MvccError, wal::entry::WalFlags};
 use checkpoint::CheckpointMetadata;
+
 pub(super) use entry::WalEntry;
 pub(super) use entry::WalOperation;
 
@@ -130,8 +129,8 @@ const WAL_BINARY_VERSION: u8 = 1;
 /// Header size of a WAL entry.
 const WAL_HEADER_SIZE: isize = 1 << 5;
 
-pub(in crate::core::storage) const SNAPSHOT_INTERVAL: usize = 300;
-pub(in crate::core::storage) const SNAPSHOT_COUNT: usize = 5;
+pub(in crate::storage) const SNAPSHOT_INTERVAL: usize = 300;
+pub(in crate::storage) const SNAPSHOT_COUNT: usize = 5;
 
 impl Wal {
     pub fn new(path: impl AsRef<Path>, sync: Sync) -> Result<Self, WalError> {

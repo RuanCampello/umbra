@@ -1,5 +1,5 @@
 use crate::{
-    core::storage::pagination::io::FileOperations,
+    storage::pagination::io::FileOperations,
     vm::planner::{
         Aggregate, ExactMatch, Filter, HashJoin, IndexNestedLoopJoin, Limit, Planner, Project,
         RangeScan, SeqScan, Sort, Values,

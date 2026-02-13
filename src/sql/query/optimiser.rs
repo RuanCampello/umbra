@@ -6,12 +6,12 @@ use std::{
 };
 
 use crate::{
-    core::storage::{btree::Cursor, tuple},
     db::{Ctx, Database, DatabaseError, IndexMetadata, Relation},
     sql::{
         parser::Parser,
         statement::{BinaryOperator, Expression, OrderDirection, Value},
     },
+    storage::{btree::Cursor, tuple},
     vm::planner::{
         Collect, CollectBuilder, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner,
         RangeScan, SeqScan, Sort, SortBuilder, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,

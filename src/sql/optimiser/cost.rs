@@ -13,7 +13,7 @@
 //! [IBM]: https://courses.cs.duke.edu/spring03/cps216/papers/selinger-etal-1979.pdf
 
 use super::statistics::{SelectivityEstimator, TableStatistics};
-use crate::core::storage::pagination::pager::DEFAULT_PAGE_SIZE;
+use crate::storage::pagination::pager::DEFAULT_PAGE_SIZE;
 use std::borrow::Cow;
 
 /// Query cost estimator derived from [constants](self::Constants)

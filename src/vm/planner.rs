@@ -2,14 +2,14 @@
 
 #![allow(dead_code)]
 
+use crate::collections::hash::{BuildHasher, HashMap, HashSet};
+use crate::core::json;
 use crate::core::random::Rng;
-use crate::core::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
-use crate::core::storage::page::PageNumber;
-use crate::core::storage::pagination::io::FileOperations;
-use crate::core::storage::pagination::pager::{reassemble_content, Pager};
-use crate::core::storage::tuple::{self, deserialize};
-use crate::core::{json, BuildHasher};
-use crate::core::{HashMap, HashSet};
+use crate::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
+use crate::storage::page::PageNumber;
+use crate::storage::pagination::io::FileOperations;
+use crate::storage::pagination::pager::{reassemble_content, Pager};
+use crate::storage::tuple::{self, deserialize};
 use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{
     join, Assignment, Expression, Function, JoinType, OrderDirection, Type, Value,

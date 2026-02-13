@@ -5,8 +5,7 @@ use std::{
 };
 
 use crate::{
-    core::storage::pagination::io::FileOperations,
-    core::{HashMap, HashSet},
+    collections::hash::{HashMap, HashSet},
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
     hash_map, hash_set,
     sql::{
@@ -16,6 +15,7 @@ use crate::{
             Column, Constraint, Expression, JoinClause, JoinType, OrderBy, OrderDirection, TableRef,
         },
     },
+    storage::pagination::io::FileOperations,
     vm::{
         cost::{Cost, CostEstimator},
         expression::VmType,

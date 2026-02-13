@@ -1,4 +1,4 @@
-use crate::core::storage::wal::WalError;
+use crate::storage::wal::WalError;
 
 /// Write-Ahead Logging entry format (V1, 32 bytes)
 ///
@@ -32,15 +32,15 @@ use crate::core::storage::wal::WalError;
 ///
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct WalEntry {
-    pub(in crate::core::storage) table: String,
+    pub(in crate::storage) table: String,
     /// Log Sequence Number
-    pub(in crate::core::storage) lsn: u64,
+    pub(in crate::storage) lsn: u64,
     pub(super) previous_lsn: u64,
     flags: WalFlags,
-    pub(in crate::core::storage) txn_id: i64,
+    pub(in crate::storage) txn_id: i64,
     row_id: i64,
-    pub(in crate::core::storage) operation: WalOperation,
-    pub(in crate::core::storage) data: Vec<u8>,
+    pub(in crate::storage) operation: WalOperation,
+    pub(in crate::storage) data: Vec<u8>,
     timestamp: i64,
 }
 
@@ -112,7 +112,7 @@ impl WalEntry {
     #[inline(always)]
     pub fn encode(&self) -> Vec<u8> {
         use super::{WAL_BINARY_VERSION, WAL_HEADER_SIZE, WAL_MAGIC};
-        use crate::core::storage::mvcc::fnv1a;
+        use crate::storage::mvcc::fnv1a;
 
         // txn_id + name length + name + row_id + operation + timestamp + data length + data
         let size = 8 + 2 + self.table.len() + 8 + 1 + 8 + 4 + self.data.len();
@@ -152,7 +152,7 @@ impl WalEntry {
         flags: WalFlags,
         data: &[u8],
     ) -> Result<Self, WalError> {
-        use crate::core::storage::mvcc::fnv1a;
+        use crate::storage::mvcc::fnv1a;
 
         if data.len() < 35 {
             return Err(WalError::InvalidSize(data.len()));

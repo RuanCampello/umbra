@@ -112,7 +112,7 @@ impl BloomFilter {
 
     #[inline(always)]
     fn hash(&self, value: &Value) -> u64 {
-        use crate::core::BuildHasher;
+        use crate::collections::hash::BuildHasher;
         use std::hash::{BuildHasher as Build, Hash, Hasher};
 
         let hasher = &mut BuildHasher::default().build_hasher();

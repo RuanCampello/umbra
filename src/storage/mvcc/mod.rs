@@ -1,8 +1,8 @@
 #![allow(unused)]
 
 use crate::{
-    core::storage::wal::WalError,
     os::{Fs, Open},
+    storage::wal::WalError,
 };
 use std::{
     fmt::Display,
@@ -93,7 +93,7 @@ pub(self) fn get_timestamp() -> i64 {
 /// That can be done in the future thou :D
 ///
 /// For the interesed ones: [https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function].
-pub(in crate::core::storage) const fn fnv1a(bytes: &[u8]) -> u32 {
+pub(in crate::storage) const fn fnv1a(bytes: &[u8]) -> u32 {
     let mut hash = 0x811c9dc5u32;
     let mut idx = 0;
 

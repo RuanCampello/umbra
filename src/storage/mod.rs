@@ -26,4 +26,4 @@ pub(crate) mod tuple;
 pub(crate) mod wal;
 
 #[allow(unused)]
-pub(crate) use crate::core::storage::btree::MemoryBuffer;
+pub(crate) use crate::storage::btree::MemoryBuffer;

@@ -1,11 +1,8 @@
 use crate::{
-    core::{
-        smallvec::SmallVec,
-        storage::mvcc::{arena::TupleArena, get_timestamp, registry::TransactionRegistry},
-        HashMap,
-    },
+    collections::{hash::HashMap, smallvec::SmallVec},
     db::SchemaNew as Schema,
     sql::Value,
+    storage::mvcc::{arena::TupleArena, get_timestamp, registry::TransactionRegistry},
     vm::planner::Tuple,
 };
 use std::{

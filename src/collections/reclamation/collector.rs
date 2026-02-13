@@ -10,7 +10,7 @@ use super::thread::{Thread, ThreadLocal};
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::ptr;
-use std::sync::atomic::{self, AtomicUsize, Ordering};
+use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 
 /// Crystalline-L memory reclamation collector.
 pub struct Collector {
@@ -52,6 +52,22 @@ pub trait Guard {
 
     /// Refreshes the guard, potentially allowing more reclamation.
     fn refresh(&mut self);
+
+    fn compare_exchange<T>(
+        &self,
+        ptr: &AtomicPtr<T>,
+        current: *mut T,
+        new: *mut T,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<*mut T, *mut T> {
+        ptr.compare_exchange(
+            current,
+            new,
+            super::Collector::protect(success),
+            super::Collector::protect(failure),
+        )
+    }
 }
 
 /// A guard that keeps the current thread marked as active.
@@ -103,6 +119,11 @@ impl Collector {
     #[inline]
     pub fn id(&self) -> usize {
         self.id
+    }
+
+    #[inline]
+    pub fn protect(_order: Ordering) -> Ordering {
+        Ordering::SeqCst
     }
 
     /// Pins the current thread, returning a local guard.

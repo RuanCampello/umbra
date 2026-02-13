@@ -1,5 +1,4 @@
 use crate::{
-    core::storage::pagination::io::FileOperations,
     db::{Ctx, Database, DatabaseError, Schema, SqlError},
     sql::{
         analyzer::{self, contains_aggregate},
@@ -7,6 +6,7 @@ use crate::{
         statement::{Column, Delete, Expression, Insert, Select, Type, Update, NUMERIC_ANY},
         Statement,
     },
+    storage::pagination::io::FileOperations,
     vm::{
         expression::VmType,
         planner::{
@@ -348,18 +348,18 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::storage::{
-            btree::{Cursor, FixedSizeCmp},
-            pagination::pager::Pager,
-            tuple::{byte_len_of_type, serialize},
-            MemoryBuffer,
-        },
         db::{Ctx as DbCtx, IndexMetadata, Relation, TableMetadata},
         index,
         sql::{
             self,
             parser::Parser,
             statement::{Create, Value},
+        },
+        storage::{
+            btree::{Cursor, FixedSizeCmp},
+            pagination::pager::Pager,
+            tuple::{byte_len_of_type, serialize},
+            MemoryBuffer,
         },
         vm::planner::{
             CollectBuilder, ExactMatch, Filter, KeyScan, RangeScan, RangeScanBuilder, SeqScan,

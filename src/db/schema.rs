@@ -1,5 +1,5 @@
 use crate::{
-    core::HashMap,
+    collections::hash::HashMap,
     sql::{
         statement::{Constraint, JoinType, Type},
         Value,

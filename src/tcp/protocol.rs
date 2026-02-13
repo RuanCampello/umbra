@@ -16,9 +16,9 @@
 use std::{array::TryFromSliceError, fmt::Display, num::TryFromIntError};
 
 use crate::{
-    core::storage::tuple,
     db::{DatabaseError, QuerySet},
     sql::statement::{Column, Type, Value, NUMERIC_ANY},
+    storage::tuple,
 };
 
 #[derive(Debug, PartialEq)]

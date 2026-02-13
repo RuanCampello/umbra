@@ -1,0 +1,7 @@
+# LeakSanitizer suppressions for known false positives.
+#
+# The thread-local storage in the reclamation module uses alloc_zeroed
+# to allocate bucket arrays and batches. These are intentionally long-lived
+# global structures that may not be freed before process exit.
+# This is expected behaviour for epoch-based memory reclamation systems.
+leak:alloc::alloc::alloc_zeroed

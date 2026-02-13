@@ -25,13 +25,14 @@
 
 use db::DatabaseError;
 
+mod collections;
 mod core;
 pub mod db;
 pub(crate) mod os;
 pub mod sql;
+pub(crate) mod storage;
 pub mod tcp;
 mod vm;
 
-pub use crate::core::uuid::{Uuid, UuidError};
-
 pub type Result<T> = std::result::Result<T, DatabaseError>;
+pub use core::uuid::Uuid;

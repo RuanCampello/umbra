@@ -1,18 +1,16 @@
 //! Deals with the persistence of WAL for the engine.
 
 use crate::{
-    core::{
-        storage::{
-            mvcc::{version::TupleVersion, MvccError},
-            wal::{
-                TwoPhaseRecovery, Wal, WalConfig, WalEntry, WalError, WalOperation, SNAPSHOT_COUNT,
-                SNAPSHOT_INTERVAL,
-            },
-        },
-        HashMap,
-    },
+    collections::hash::HashMap,
     db::Schema,
     sql::statement::Value,
+    storage::{
+        mvcc::{version::TupleVersion, MvccError},
+        wal::{
+            TwoPhaseRecovery, Wal, WalConfig, WalEntry, WalError, WalOperation, SNAPSHOT_COUNT,
+            SNAPSHOT_INTERVAL,
+        },
+    },
 };
 use std::{
     fs,
