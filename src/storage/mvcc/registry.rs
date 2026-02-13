@@ -252,6 +252,84 @@ impl TransactionRegistry {
         self.accepting.store(false, Ordering::Release)
     }
 
+    /// Runs the garbage collection.
+    ///
+    ///
+    fn garbage_collection(&self) -> usize {
+        let mut retired = 0;
+
+        let keys = match self.isolation_override_count.load(Ordering::Relaxed) > 0 {
+            true => self
+                .transaction_isolation_levels
+                .lock()
+                .unwrap()
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+
+        let (min, invalid) = {
+            let mut transactions = self.transactions.lock().unwrap();
+            let mut begin = i64::MAX;
+            let mut min_id = i64::MAX;
+
+            for (&id, state) in transactions.iter() {
+                if state.is_active_or_commiting() {
+                    begin = begin.min(state.begin());
+                    min_id = min_id.min(id);
+                }
+            }
+
+            if min_id == i64::MAX {
+                min_id = self.next_txn_id.load(Ordering::Acquire);
+            }
+
+            let cutoff = min_id.saturating_sub(10000);
+            if cutoff > 0 {
+                let len = transactions.len();
+                transactions.retain(|id, state| !state.is_aborted() || id >= &cutoff);
+                retired += len - transactions.len();
+            }
+
+            let invalid = keys
+                .iter()
+                .filter(|&txn_id| match transactions.get(txn_id) {
+                    Some(state) => state.is_aborted(),
+                    _ => true,
+                })
+                .collect::<Vec<_>>();
+
+            (begin, invalid)
+        };
+
+        {
+            let mut sequences = self.snapshot_sequences.lock().unwrap();
+            let len = sequences.len();
+            sequences.retain(|_, &mut commit| commit >= min);
+            retired += len - sequences.len();
+        }
+
+        if !invalid.is_empty() {
+            let mut overried = self.transaction_isolation_levels.lock().unwrap();
+            let mut removals = 0;
+
+            for transaction in &invalid {
+                if overried.remove(*transaction).is_some() {
+                    retired += 1;
+                    removals += 1;
+                }
+            }
+
+            if removals > 0 {
+                self.isolation_override_count
+                    .fetch_sub(removals, Ordering::Relaxed);
+            }
+        }
+
+        retired
+    }
+
     #[inline(always)]
     fn needs_snapshot_isolation(&self, txn_id: i64) -> bool {
         let isolation_level = self.isolation_level.load(Ordering::Relaxed);
