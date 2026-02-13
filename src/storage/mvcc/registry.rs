@@ -192,6 +192,24 @@ impl TransactionRegistry {
         todo!("garbage collection")
     }
 
+    pub fn is_active(&self, txn_id: i64) -> bool {
+        self.transactions
+            .lock()
+            .unwrap()
+            .get(&txn_id)
+            .map(|state| state.status() == TransactionStatus::Active)
+            .unwrap_or(false)
+    }
+
+    pub fn is_committed(&self, txn_id: i64) -> bool {
+        if self.transactions.lock().unwrap().contains_key(&txn_id) {
+            return false;
+        }
+
+        let next = self.next_txn_id.load(Ordering::Acquire);
+        txn_id > 0 && txn_id <= next
+    }
+
     #[inline(always)]
     pub fn is_directly_visible(&self, version_txn_id: i64) -> bool {
         if version_txn_id == Self::RECOVERY_ID {
@@ -479,5 +497,36 @@ impl From<u8> for IsolationLevel {
             1 => IsolationLevel::Snapshot,
             _ => unsafe { std::hint::unreachable_unchecked() },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn begin_transaction() {
+        let registry = TransactionRegistry::new();
+
+        let (transaction, sequence) = registry.begin();
+        assert!(transaction > 0);
+        assert!(sequence > 0);
+
+        let (transaction_2, sequence_2) = registry.begin();
+        assert!(transaction_2 > transaction);
+        assert!(sequence_2 > sequence);
+    }
+
+    #[test]
+    fn commit_transaction() {
+        let registry = TransactionRegistry::new();
+
+        let (transaction, _) = registry.begin();
+        assert!(registry.is_active(transaction));
+        assert!(!registry.is_committed(transaction));
+
+        registry.commit_transaction(transaction);
+        assert!(!registry.is_active(transaction));
+        assert!(registry.is_committed(transaction));
     }
 }
