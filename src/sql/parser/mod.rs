@@ -817,12 +817,12 @@ impl<'input> Parser<'input> {
             )))
         })?;
 
-        let valid_for_keyword = match (keyword, parsed) {
-            (Keyword::Date, Temporal::Date(_)) => true,
-            (Keyword::Time, Temporal::Time(_)) => true,
-            (Keyword::Timestamp, Temporal::DateTime(_)) => true,
-            _ => false,
-        };
+        let valid_for_keyword = matches!(
+            (keyword, parsed),
+            (Keyword::Date, Temporal::Date(_))
+                | (Keyword::Time, Temporal::Time(_))
+                | (Keyword::Timestamp, Temporal::DateTime(_))
+        );
 
         if !valid_for_keyword {
             return Err(self.error(ErrorKind::FormatError(format!(
@@ -1082,16 +1082,16 @@ impl<'input> Parser<'input> {
     }
 
     const fn is_integer(keyword: &Keyword) -> bool {
-        match keyword {
+        matches!(
+            keyword,
             Keyword::SmallInt
-            | Keyword::Int
-            | Keyword::BigInt
-            | Keyword::SmallSerial
-            | Keyword::Serial
-            | Keyword::BigSerial
-            | Keyword::Uuid => true,
-            _ => false,
-        }
+                | Keyword::Int
+                | Keyword::BigInt
+                | Keyword::SmallSerial
+                | Keyword::Serial
+                | Keyword::BigSerial
+                | Keyword::Uuid
+        )
     }
 }
 
@@ -1153,7 +1153,7 @@ impl Display for ErrorKind {
 
                 if expected.len() > 1 {
                     one_of.push_str(" or ");
-                    one_of.push_str(&&ErrorKind::expected_token_str(
+                    one_of.push_str(&ErrorKind::expected_token_str(
                         &expected[expected.len() - 1],
                     ));
                 }

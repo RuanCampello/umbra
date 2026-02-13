@@ -2625,7 +2625,7 @@ fn unescape_string(input: &str) -> String {
 pub(crate) fn parse_error(msg: &str, location: Option<usize>) -> super::JsonError {
     super::JsonError::Message {
         msg: msg.to_string(),
-        location: location,
+        location,
     }
 }
 

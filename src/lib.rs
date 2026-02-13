@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 //! # Umbra Database Architecture
 //!
 //! Umbra is an embeddable, relational database built from scratch in Rust. It follows a classic

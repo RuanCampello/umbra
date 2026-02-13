@@ -133,12 +133,12 @@ impl TableMetadata {
             true => {
                 let bitmap_len = self.schema.null_bitmap_len();
                 match pk {
-                    Type::Varchar(max) => Ok(BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                    Type::Varchar(max) => Ok(BTreeKeyCmp::MapStr(BitMapStringCmp {
                         bitmap_len,
                         prefix_len: max,
                     })),
-                    Type::Text => Ok(BTreeKeyCmp::VarlenaCmp(VarlenaCmp)),
-                    _ => Ok(BTreeKeyCmp::MapMemCmp(BitMapSizedCmp {
+                    Type::Text => Ok(BTreeKeyCmp::Varlena(VarlenaCmp)),
+                    _ => Ok(BTreeKeyCmp::MapMem(BitMapSizedCmp {
                         bitmap_len,
                         key_size: byte_len_of_type(&pk),
                     })),
@@ -146,9 +146,9 @@ impl TableMetadata {
             }
 
             _ => match self.schema.columns[0].data_type {
-                Type::Text => Ok(BTreeKeyCmp::VarlenaCmp(VarlenaCmp)),
+                Type::Text => Ok(BTreeKeyCmp::Varlena(VarlenaCmp)),
                 _ => FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
-                    .map(BTreeKeyCmp::MemCmp)
+                    .map(BTreeKeyCmp::Mem)
                     .map_err(|_| {
                         DatabaseError::Corrupted(format!(
                             "Table {} is using a non-int Btree key with type {:#?}",
@@ -184,7 +184,7 @@ impl Relation {
                         false => BTreeKeyCmp::from(first),
                         true => {
                             let bitmap_len = idx.schema.null_bitmap_len();
-                            BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                            BTreeKeyCmp::MapStr(BitMapStringCmp {
                                 bitmap_len,
                                 prefix_len: utf_8_length_bytes(*max),
                             })
@@ -202,12 +202,12 @@ impl Relation {
                         let bitmap_len = table.schema.null_bitmap_len();
 
                         match pk {
-                            Type::Varchar(max) => BTreeKeyCmp::MapStrCmp(BitMapStringCmp {
+                            Type::Varchar(max) => BTreeKeyCmp::MapStr(BitMapStringCmp {
                                 bitmap_len,
                                 prefix_len: utf_8_length_bytes(*max),
                             }),
-                            Type::Text => BTreeKeyCmp::VarlenaCmp(VarlenaCmp),
-                            _ => BTreeKeyCmp::MapMemCmp(BitMapSizedCmp {
+                            Type::Text => BTreeKeyCmp::Varlena(VarlenaCmp),
+                            _ => BTreeKeyCmp::MapMem(BitMapSizedCmp {
                                 bitmap_len,
                                 key_size: byte_len_of_type(pk),
                             }),
@@ -266,7 +266,7 @@ impl Clone for SequenceMetadata {
             data_type: self.data_type.clone(),
             name: self.name.clone(),
             value: AtomicU64::new(self.value.load(Ordering::Relaxed)),
-            root: self.root.clone(),
+            root: self.root,
         }
     }
 }

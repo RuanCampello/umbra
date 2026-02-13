@@ -76,11 +76,11 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
     match value {
         Value::String(string) => match r#type {
             Type::Varchar(max) => {
-                if string.as_bytes().len() > u32::MAX as usize {
+                if string.len() > u32::MAX as usize {
                     todo!("Strings too long are not supported {}", u32::MAX);
                 }
 
-                let b_len = string.as_bytes().len().to_le_bytes();
+                let b_len = string.len().to_le_bytes();
                 let len_prefix = utf_8_length_bytes(*max);
 
                 buff.extend_from_slice(&b_len[..len_prefix]);
@@ -126,7 +126,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
     }
 }
 
-pub(crate) fn deserialize_row_id<'value>(buff: &[u8]) -> RowId {
+pub(crate) fn deserialize_row_id(buff: &[u8]) -> RowId {
     RowId::from_be_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
 }
 
@@ -183,7 +183,7 @@ pub(crate) fn serialize_tuple<'value>(
 // FIXME: use of sorting with different type from schema
 pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
     let bitmap_size = match schema.has_nullable() {
-        true => (schema.columns.len() + 7) / 8,
+        true => schema.columns.len().div_ceil(8),
         _ => 0,
     };
 
@@ -206,9 +206,9 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
 
                 Some(match &tuple[idx] {
                     Value::String(str) => match col.data_type {
-                        Type::Varchar(max) => utf_8_length_bytes(max) + str.as_bytes().len(),
+                        Type::Varchar(max) => utf_8_length_bytes(max) + str.len(),
                         Type::Text => {
-                            let len = str.as_bytes().len();
+                            let len = str.len();
                             let header_len = if len < 127 { 1 } else { 4 };
                             header_len + len
                         }
@@ -232,7 +232,7 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                     }
                     _ => match &col.data_type {
                         Type::Text => {
-                            let len = tuple[idx].to_string().as_bytes().len();
+                            let len = tuple[idx].to_string().len();
                             match len < 127 {
                                 true => 1 + len,
                                 _ => 4 + len,
@@ -260,7 +260,7 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
     let values = schema.columns.iter().enumerate().map(|(i, col)| {
         if bitmap
             .as_ref()
-            .map_or(false, |b| (b[i / 8] & (1 << (i % 8))) != 0)
+            .is_some_and(|b| (b[i / 8] & (1 << (i % 8))) != 0)
         {
             return Ok(Value::Null);
         }
@@ -333,7 +333,7 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
 
             let tag = (u64::from_le_bytes(header) >> 62) & 0b11;
             match tag {
-                0b00 | 0b10 => Ok(Value::Numeric(Numeric::try_from(header).unwrap())),
+                0b00 | 0b10 => Ok(Value::Numeric(Numeric::from(header))),
                 0b01 => {
                     let mut meta = [0; 6];
                     reader.read_exact(&mut meta)?;
@@ -472,7 +472,7 @@ fn null_bitmap<'value, V>(schema_length: usize, values: V) -> Vec<u8>
 where
     V: IntoIterator<Item = &'value Value>,
 {
-    let size = (schema_length + 7) / 8;
+    let size = schema_length.div_ceil(8);
     let mut bitmap = vec![0u8; size];
 
     values

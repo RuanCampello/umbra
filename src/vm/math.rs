@@ -189,12 +189,10 @@ pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, Sql
                 let factor = 10f64.powi(decimals as i32);
                 Ok(value.mul_add(factor, 0f64).trunc().div(factor).into())
             }
-            _ => {
-                return Err(SqlError::Type(TypeError::ExpectedType {
-                    expected: VmType::Number,
-                    found: Expression::Value(decimals.clone()),
-                }));
-            }
+            _ => Err(SqlError::Type(TypeError::ExpectedType {
+                expected: VmType::Number,
+                found: Expression::Value(decimals.clone()),
+            })),
         },
         (Value::Numeric(value), decimals) => {
             let decimals = match decimals {

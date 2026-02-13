@@ -133,7 +133,7 @@ impl Column {
 
 impl Display for Schema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let headers = vec!["Column", "Type", "Nullable"];
+        let headers = ["Column", "Type", "Nullable"];
 
         let rows: Vec<Vec<String>> = self
             .columns
@@ -211,13 +211,13 @@ impl From<&SchemaNew> for Vec<u8> {
         let mut buff = Vec::new();
 
         buff.extend_from_slice(&(value.name.len() as u16).to_le_bytes());
-        buff.extend_from_slice(&value.name.as_bytes());
+        buff.extend_from_slice(value.name.as_bytes());
 
         buff.extend_from_slice(&(value.columns.len() as u16).to_le_bytes());
 
         for column in &value.columns {
             buff.extend_from_slice(&(column.name.len() as u16).to_le_bytes());
-            buff.extend_from_slice(&column.name.as_bytes());
+            buff.extend_from_slice(column.name.as_bytes());
 
             buff.push(column.r#type.into());
             buff.push(if column.primary_key { 1 } else { 0 });
@@ -491,7 +491,7 @@ impl Schema {
     }
 
     pub const fn null_bitmap_len(&self) -> usize {
-        (self.len() + 7) / 8
+        self.len().div_ceil(8)
     }
 
     pub fn empty() -> Self {

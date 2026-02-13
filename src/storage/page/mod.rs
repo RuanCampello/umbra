@@ -149,7 +149,7 @@ impl Page {
 
     /// Adds a given [`Cell`] to the page, which can possibly overflow it.
     pub fn push(&mut self, cell: Box<Cell>) {
-        let idx = self.len() as u16;
+        let idx = self.len();
 
         self.insert(idx, cell)
     }

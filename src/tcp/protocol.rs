@@ -122,7 +122,7 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                 cursor += name_len;
 
                 let data_type = match content[cursor] {
-                    byte if byte == STRING_CATEGORY | 0x0 => {
+                    byte if byte == STRING_CATEGORY => {
                         let mut buff = [0; 4];
                         buff.copy_from_slice(&content[cursor + 1..cursor + 5]);
                         let max_chars = u32::from_le_bytes(buff) as usize;
@@ -220,9 +220,9 @@ impl Display for EncodingError {
 impl From<&Type> for u8 {
     fn from(r#type: &Type) -> Self {
         match r#type {
-            Type::Boolean => BOOLEAN_CATEGORY | 0x0,
+            Type::Boolean => BOOLEAN_CATEGORY,
 
-            Type::SmallInt => INTEGER_CATEGORY | 0x0,
+            Type::SmallInt => INTEGER_CATEGORY,
             Type::UnsignedSmallInt => INTEGER_CATEGORY | 0x1,
             Type::Integer => INTEGER_CATEGORY | 0x2,
             Type::UnsignedInteger => INTEGER_CATEGORY | 0x3,
@@ -233,16 +233,16 @@ impl From<&Type> for u8 {
             Type::BigSerial => INTEGER_CATEGORY | 0x08,
             Type::Uuid => INTEGER_CATEGORY | 0x10,
 
-            Type::Real => FLOAT_CATEGORY | 0x0,
+            Type::Real => FLOAT_CATEGORY,
             Type::DoublePrecision => FLOAT_CATEGORY | 0x1,
             Type::Numeric(_, _) => FLOAT_CATEGORY | 0x2,
 
-            Type::Varchar(_) => STRING_CATEGORY | 0x0,
+            Type::Varchar(_) => STRING_CATEGORY,
             Type::Text => STRING_CATEGORY | 0x1,
             Type::Enum(_) => STRING_CATEGORY | 0x2,
             Type::Jsonb => STRING_CATEGORY | 0x3,
 
-            Type::Date => TEMPORAL_CATEGORY | 0x0,
+            Type::Date => TEMPORAL_CATEGORY,
             Type::Time => TEMPORAL_CATEGORY | 0x1,
             Type::DateTime => TEMPORAL_CATEGORY | 0x2,
             Type::Interval => TEMPORAL_CATEGORY | 0x3,
