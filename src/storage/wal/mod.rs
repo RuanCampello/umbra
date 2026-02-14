@@ -463,7 +463,7 @@ impl Wal {
                 let mut header = [0u8; 32];
                 match file.read_exact(&mut header) {
                     Ok(_) => {}
-                    Err(_) => continue,
+                    Err(_) => break,
                 };
 
                 let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
