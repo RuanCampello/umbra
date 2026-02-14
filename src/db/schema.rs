@@ -39,6 +39,11 @@ pub struct SchemaNew {
     column_index: OnceLock<HashMap<String, usize>>,
 }
 
+pub struct SchemaBuilder {
+    table: String,
+    columns: Vec<Column>,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Column {
     id: usize, // TODO: SUPPORT OTHER TYPES OF ID
@@ -77,6 +82,47 @@ impl SchemaNew {
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+#[allow(unused)]
+impl SchemaBuilder {
+    pub fn new(table: impl Into<String>) -> Self {
+        Self {
+            table: table.into(),
+            columns: Vec::new(),
+        }
+    }
+
+    pub fn column(
+        mut self,
+        name: impl Into<String>,
+        r#type: Type,
+        nullable: bool,
+        primary: bool,
+    ) -> Self {
+        let idx = self.columns.len();
+
+        self.columns
+            .push(Column::new(idx, name, r#type, nullable, primary));
+
+        self
+    }
+
+    pub fn add(self, name: impl Into<String>, r#type: Type) -> Self {
+        self.column(name, r#type, false, false)
+    }
+
+    pub fn nullable(self, name: impl Into<String>, r#type: Type) -> Self {
+        self.column(name, r#type, true, false)
+    }
+
+    pub fn primary(self, name: impl Into<String>, r#type: Type) -> Self {
+        self.column(name, r#type, false, true)
+    }
+
+    pub fn build(self) -> SchemaNew {
+        SchemaNew::new(self.table, self.columns)
     }
 }
 

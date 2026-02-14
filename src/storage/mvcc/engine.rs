@@ -179,6 +179,14 @@ impl Engine {
         self.is_open.load(Ordering::Acquire)
     }
 
+    pub fn create_table(&self, schema: Schema) -> Result<Schema> {
+        todo!()
+    }
+
+    pub fn does_table_exists(&self, name: &str) -> Result<bool> {
+        todo!()
+    }
+
     pub fn cleanup(self: &Arc<Self>) {
         let config = self.config.read().unwrap();
         if !config.cleanup.enabled {
@@ -507,6 +515,8 @@ fn deserialise_snapshot_header(path: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::SchemaBuilder;
+    use crate::sql::statement::Type;
 
     #[test]
     fn create() {
@@ -524,5 +534,22 @@ mod tests {
 
         engine.close().unwrap();
         assert!(!engine.is_open());
+    }
+
+    #[test]
+    fn create_table() {
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("users")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+
+        let created = engine.create_table(schema).unwrap();
+        assert_eq!(created.name, "users");
+        assert!(engine.does_table_exists("users").unwrap());
+
+        engine.close().unwrap();
     }
 }

@@ -9,7 +9,7 @@ pub use crate::core::numeric::Numeric;
 pub(crate) use context::Context;
 use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
-pub(crate) use schema::{has_btree_key, umbra_schema, Schema, SchemaNew};
+pub(crate) use schema::{has_btree_key, umbra_schema, Schema, SchemaBuilder, SchemaNew};
 
 use crate::collections::hash::HashMap;
 use crate::core::date::{DateParseError, ExtractError};
