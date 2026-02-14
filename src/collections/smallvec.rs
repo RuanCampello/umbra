@@ -187,6 +187,37 @@ impl<T, const S: usize> SmallVec<T, S> {
         }
     }
 
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.retain_mut(|element| f(element));
+    }
+
+    #[inline]
+    pub fn retain_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let mut deleted = 0;
+        let mut len = self.len();
+        let ptr = self.as_mut_ptr();
+
+        for i in 0..len {
+            unsafe {
+                if !f(&mut *ptr.add(i)) {
+                    deleted += 1;
+                } else if deleted > 0 {
+                    core::ptr::swap(ptr.add(i), ptr.add(i - deleted));
+                }
+            }
+        }
+
+        if deleted > 0 {
+            unsafe { self.set_len(len - deleted) };
+        }
+    }
+
     #[inline]
     pub const fn as_slice(&self) -> &[T] {
         let len = self.len();

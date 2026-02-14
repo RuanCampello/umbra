@@ -2,7 +2,9 @@ use crate::{
     collections::{hash::HashMap, smallvec::SmallVec},
     db::SchemaNew as Schema,
     sql::Value,
-    storage::mvcc::{arena::TupleArena, get_timestamp, registry::TransactionRegistry},
+    storage::mvcc::{
+        arena::TupleArena, get_timestamp, index::Index, registry::TransactionRegistry,
+    },
     vm::planner::Tuple,
 };
 use std::{
@@ -28,6 +30,8 @@ pub(crate) struct VersionStorage {
     max_version_history: usize,
     visibility_checker: Option<Arc<TransactionRegistry>>,
     arena: TupleArena,
+    /// Registered indexes, keyed by index name.
+    indexes: RwLock<HashMap<String, Arc<dyn Index>>>,
 }
 
 pub(crate) struct TransationVersionStorage {
@@ -101,6 +105,7 @@ impl VersionStorage {
             open: AtomicBool::new(true),
             uncommited_writes: RwLock::new(HashMap::default()),
             max_version_history: 10,
+            indexes: RwLock::new(HashMap::default()),
         }
     }
 
@@ -119,6 +124,57 @@ impl VersionStorage {
     /// Recover a version from WAL replay.
     pub fn recover_version(&self, version: TupleVersion) {
         self.add_version(version.row_id, version);
+    }
+
+    /// Register an index for this table.
+    pub fn add_index(&self, name: String, index: Arc<dyn Index>) {
+        self.indexes.write().unwrap().insert(name, index);
+    }
+
+    /// Returns a snapshot of all registered indexes.
+    pub fn get_indexes(&self) -> Vec<Arc<dyn Index>> {
+        self.indexes.read().unwrap().values().cloned().collect()
+    }
+
+    /// Returns a specific index by name.
+    pub fn get_index(&self, name: &str) -> Option<Arc<dyn Index>> {
+        self.indexes.read().unwrap().get(name).cloned()
+    }
+
+    /// Update all indexes after an `INSERT`.
+    pub fn update_indexes_on_insert(&self, row_id: i64, data: &[Value]) {
+        let indexes = self.indexes.read().unwrap();
+        for index in indexes.values() {
+            let col = index.column_index();
+            if col < data.len() {
+                let _ = index.add(&data[col], row_id);
+            }
+        }
+    }
+
+    /// Update all indexes after a `DELETE`.
+    pub fn update_indexes_on_delete(&self, row_id: i64, data: &[Value]) {
+        let indexes = self.indexes.read().unwrap();
+        for index in indexes.values() {
+            let col = index.column_index();
+            if col < data.len() {
+                index.remove(&data[col], row_id);
+            }
+        }
+    }
+
+    /// Update all indexes after an `UPDATE`.
+    pub fn update_indexes_on_update(&self, row_id: i64, old: &[Value], new: &[Value]) {
+        let indexes = self.indexes.read().unwrap();
+        for index in indexes.values() {
+            let col = index.column_index();
+            if col < old.len() {
+                index.remove(&old[col], row_id);
+            }
+            if col < new.len() {
+                let _ = index.add(&new[col], row_id);
+            }
+        }
     }
 
     /// Adds a committed version into the global store.

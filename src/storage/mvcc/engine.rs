@@ -2,8 +2,10 @@ use super::FileLock;
 use crate::{
     collections::hash::HashMap,
     db::SchemaNew as Schema,
+    sql::Value,
     storage::{
         mvcc::{
+            index::Index,
             registry::TransactionRegistry,
             version::{TupleVersion, VersionEntry, VersionStorage},
             wal::WalManager,
@@ -470,6 +472,7 @@ impl Engine {
         let storage = self.version_storage(table)?;
         let version = TupleVersion::new(txn_id, row_id, data);
 
+        storage.update_indexes_on_insert(row_id, &version.data);
         storage.add_version(row_id, version.clone());
 
         if !self.must_skip_wal() {
@@ -484,8 +487,13 @@ impl Engine {
     /// Update a row in a table.
     pub fn update(&self, txn_id: i64, table: &str, row_id: i64, data: Tuple) -> Result<()> {
         let storage = self.version_storage(table)?;
-        let version = TupleVersion::new(txn_id, row_id, data);
 
+        // Fetch old version for index removal before overwriting.
+        if let Some(old_version) = storage.get_visible_version(row_id, txn_id) {
+            storage.update_indexes_on_update(row_id, &old_version.data, &data);
+        }
+
+        let version = TupleVersion::new(txn_id, row_id, data);
         storage.add_version(row_id, version.clone());
 
         if !self.must_skip_wal() {
@@ -500,6 +508,10 @@ impl Engine {
     /// Delete a row from a table.
     pub fn delete(&self, txn_id: i64, table: &str, row_id: i64) -> Result<()> {
         let storage = self.version_storage(table)?;
+
+        if let Some(old_version) = storage.get_visible_version(row_id, txn_id) {
+            storage.update_indexes_on_delete(row_id, &old_version.data);
+        }
 
         let mut version = TupleVersion::new(txn_id, row_id, Vec::new());
         version.deleted_at_txn_id = txn_id;
@@ -537,6 +549,42 @@ impl Engine {
         }
         self.registry.abort_transaction(txn_id);
         Ok(())
+    }
+
+    pub fn create_index(&self, table: &str, index: Arc<dyn Index>) -> Result<()> {
+        let storage = self.version_storage(table)?;
+        let name = index.name().to_string();
+        storage.add_index(name, index);
+
+        Ok(())
+    }
+
+    /// Scan an index for rows matching a specific value, filtering by MVCC visibility.
+    pub fn scan_index(
+        &self,
+        txn_id: i64,
+        table: &str,
+        index_name: &str,
+        value: &Value,
+    ) -> Result<Vec<Tuple>> {
+        let storage = self.version_storage(table)?;
+
+        let index = storage
+            .get_index(index_name)
+            .ok_or(MvccError::TableNotFound)?;
+
+        let row_ids = index.find(value);
+
+        let mut results = Vec::with_capacity(row_ids.len());
+        for row_id in row_ids {
+            if let Some(version) = storage.get_visible_version(row_id, txn_id) {
+                if !version.is_deleted() {
+                    results.push(version.data);
+                }
+            }
+        }
+
+        Ok(results)
     }
 }
 

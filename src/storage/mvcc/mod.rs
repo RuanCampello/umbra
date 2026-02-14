@@ -14,6 +14,7 @@ use std::{
 
 pub(self) mod arena;
 pub(crate) mod engine;
+pub(crate) mod index;
 pub(crate) mod registry;
 pub(in crate::storage::mvcc) mod version;
 pub(crate) mod wal;
