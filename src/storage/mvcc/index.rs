@@ -9,34 +9,6 @@ use std::{
     sync::RwLock,
 };
 
-/// In-memory B-tree index backed by `BTreeMap<Value, SmallVec<i64, 1>>`.
-///
-/// Uses `Value::Ord` for key ordering, which correctly handles all SQL types.
-/// Both the forward map (`entries`) and reverse map (`row_to_value`) share a
-/// single `RwLock` to avoid split-brain inconsistency.
-pub(crate) struct BTreeIndex {
-    name: String,
-    column_index: usize,
-    unique: bool,
-    data: RwLock<IndexData>,
-}
-
-impl BTreeIndex {
-    pub fn new(name: impl Into<String>, column_index: usize, unique: bool) -> Self {
-        Self {
-            name: name.into(),
-            column_index,
-            unique,
-            data: RwLock::new(IndexData {
-                entries: BTreeMap::new(),
-                row_to_value: HashMap::default(),
-            }),
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, Error>;
-
 /// MVCC-aware index trait.
 ///
 /// Implementations must be `Send + Sync` for concurrent access from
@@ -69,12 +41,58 @@ pub(crate) trait Index: Send + Sync {
     fn clear(&self);
 }
 
+/// In-memory B-tree index backed by `BTreeMap<Value, SmallVec<i64, 1>>`.
+///
+/// Uses `Value::Ord` for key ordering, which correctly handles all SQL types.
+/// Both the forward map (`entries`) and reverse map (`row_to_value`) share a
+/// single `RwLock` to avoid split-brain inconsistency.
+pub(crate) struct BTreeIndex {
+    name: String,
+    column_index: usize,
+    unique: bool,
+    data: RwLock<IndexData>,
+}
+
 /// Combined entries + reverse map under a single lock.
 struct IndexData {
     /// Ordered mapping from column value to row IDs.
     entries: BTreeMap<Value, SmallVec<i64, 1>>,
     /// Reverse mapping for efficient removal during UPDATE/DELETE.
     row_to_value: HashMap<i64, Value>,
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
+impl BTreeIndex {
+    pub fn new(name: impl Into<String>, column_index: usize, unique: bool) -> Self {
+        Self {
+            name: name.into(),
+            column_index,
+            unique,
+            data: RwLock::new(IndexData {
+                entries: BTreeMap::new(),
+                row_to_value: HashMap::default(),
+            }),
+        }
+    }
+
+    /// Removes a row_id from the index using the reverse map to find the key.
+    ///
+    /// Useful when the caller doesn't have the old value (e.g. blind deletes).
+    pub fn remove_by_row_id(&self, row_id: i64) {
+        let mut data = self.data.write().unwrap();
+
+        let Some(value) = data.row_to_value.remove(&row_id) else {
+            return;
+        };
+
+        if let Some(row_ids) = data.entries.get_mut(&value) {
+            row_ids.retain(|&id| id != row_id);
+            if row_ids.is_empty() {
+                data.entries.remove(&value);
+            }
+        }
+    }
 }
 
 impl Index for BTreeIndex {
@@ -159,26 +177,6 @@ impl IndexData {
     /// Lookup the value associated with a row ID via the reverse map.
     fn value_for_row(&self, row_id: i64) -> Option<&Value> {
         self.row_to_value.get(&row_id)
-    }
-}
-
-// The `BTreeIndex` can also remove by row_id alone (useful when caller
-// doesn't have the old value, e.g. during blind deletes).
-impl BTreeIndex {
-    /// Removes a row_id from the index using the reverse map to find the key.
-    pub fn remove_by_row_id(&self, row_id: i64) {
-        let mut data = self.data.write().unwrap();
-
-        let Some(value) = data.row_to_value.remove(&row_id) else {
-            return;
-        };
-
-        if let Some(row_ids) = data.entries.get_mut(&value) {
-            row_ids.retain(|&id| id != row_id);
-            if row_ids.is_empty() {
-                data.entries.remove(&value);
-            }
-        }
     }
 }
 
