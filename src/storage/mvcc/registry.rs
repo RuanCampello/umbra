@@ -192,7 +192,7 @@ impl TransactionRegistry {
     ///
     /// Returns the number of transactions cleaned.
     pub fn cleanup_transactions(&self, max_age: Duration) -> i32 {
-        todo!("garbage collection")
+        self.garbage_collection() as i32
     }
 
     pub fn is_active(&self, txn_id: i64) -> bool {
@@ -253,8 +253,6 @@ impl TransactionRegistry {
     }
 
     /// Runs the garbage collection.
-    ///
-    ///
     fn garbage_collection(&self) -> usize {
         let mut retired = 0;
 
@@ -809,5 +807,29 @@ mod tests {
 
         let (transaction, _) = registry.begin();
         assert!(transaction > 1000);
+    }
+
+    #[test]
+    fn garbage_collection() {
+        let registry = TransactionRegistry::new();
+        registry.set_isolation_level(IsolationLevel::Snapshot);
+
+        for _ in 0..10 {
+            let (transaction, _) = registry.begin();
+            registry.commit_transaction(transaction);
+        }
+
+        assert_eq!(registry.snapshot_sequences.lock().unwrap().len(), 10);
+        let (active, _) = registry.begin();
+
+        for _ in 0..5 {
+            let (transaction, _) = registry.begin();
+            registry.commit_transaction(transaction);
+        }
+
+        let retired = registry.garbage_collection();
+        assert!(retired > 0);
+
+        registry.commit_transaction(active);
     }
 }
