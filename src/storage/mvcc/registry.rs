@@ -655,6 +655,8 @@ impl std::fmt::Display for IsolationLevel {
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::mvcc::registry;
+
     use super::*;
 
     #[test]
@@ -844,5 +846,27 @@ mod tests {
 
         assert!(!registry.is_visible(txn_1, txn_2));
         assert!(!registry.is_committed(txn_1));
+    }
+
+    #[test]
+    fn per_transaction_isolation() {
+        let registry = TransactionRegistry::new();
+        registry.set_isolation_level(IsolationLevel::ReadCommitted);
+
+        let (txn_1, _) = registry.begin();
+        registry.commit_transaction(txn_1);
+
+        let (txn_2, _) = registry.begin();
+        registry.set_transaction_isolation_level(txn_2, IsolationLevel::Snapshot);
+
+        assert!(registry.is_visible(txn_1, txn_2));
+
+        let (txn_3, _) = registry.begin();
+        registry.commit_transaction(txn_3);
+
+        assert!(!registry.is_visible(txn_3, txn_2));
+
+        let (txn_4, _) = registry.begin();
+        assert!(registry.is_visible(txn_3, txn_4));
     }
 }
