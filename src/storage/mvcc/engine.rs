@@ -5,11 +5,11 @@ use crate::{
     storage::{
         mvcc::{
             registry::TransactionRegistry,
-            version::{TupleVersion, VersionStorage},
+            version::{TupleVersion, VersionEntry, VersionStorage},
             wal::WalManager,
             MvccError,
         },
-        wal::{WalConfig, WalEntry},
+        wal::{WalConfig, WalEntry, WalOperation},
     },
 };
 use std::{
@@ -180,11 +180,61 @@ impl Engine {
     }
 
     pub fn create_table(&self, schema: Schema) -> Result<Schema> {
-        todo!()
+        if !self.is_open() {
+            return Err(MvccError::NotOpen);
+        }
+
+        let name = schema.name.to_string();
+
+        let version = Arc::new(VersionStorage::with_checker(
+            schema.name.clone(),
+            schema.clone(),
+            self.registry.clone(),
+        ));
+
+        let data = Vec::from(&schema);
+        let returned = schema.clone();
+
+        {
+            let mut schemas = self.schemas.write().unwrap();
+            schemas.insert(name.clone(), Arc::new(schema));
+        }
+
+        {
+            let mut storage = self.versions.write().unwrap();
+            storage.insert(name, version);
+        }
+
+        self.record_ddl(&returned.name, WalOperation::CreateTable, &data)?;
+        self.epoch.fetch_add(1, Ordering::Release);
+
+        Ok(returned)
     }
 
     pub fn does_table_exists(&self, name: &str) -> Result<bool> {
-        todo!()
+        if !self.is_open() {
+            return Err(MvccError::NotOpen);
+        }
+
+        let schemas = self.schemas.read().unwrap();
+        Ok(schemas.contains_key(name))
+    }
+
+    fn record_ddl(&self, name: &str, operation: WalOperation, schema: &[u8]) -> Result<()> {
+        if self.must_skip_wal() {
+            return Ok(());
+        }
+
+        if let Some(ref wal) = *self.wal {
+            wal.record_ddl(name, operation, schema)?;
+        }
+
+        Ok(())
+    }
+
+    /// Check if we can't write to WAL (that's during reply recovery phase)
+    fn must_skip_wal(&self) -> bool {
+        self.fetching_disk.load(Ordering::Acquire)
     }
 
     pub fn cleanup(self: &Arc<Self>) {
