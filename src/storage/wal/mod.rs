@@ -624,7 +624,7 @@ impl Wal {
                             _ => aborted.insert(txn_id),
                         };
 
-                        let rest = header_size - 8;
+                        let rest = header_size.saturating_sub(8);
                         if file.seek(SeekFrom::Current(rest as _)).is_err() {
                             break;
                         }
