@@ -832,4 +832,17 @@ mod tests {
 
         registry.commit_transaction(active);
     }
+
+    #[test]
+    fn aborted_not_visible() {
+        let registry = TransactionRegistry::new();
+
+        let (txn_1, _) = registry.begin();
+        let (txn_2, _) = registry.begin();
+
+        registry.abort_transaction(txn_1);
+
+        assert!(!registry.is_visible(txn_1, txn_2));
+        assert!(!registry.is_committed(txn_1));
+    }
 }
