@@ -27,7 +27,7 @@ use std::{
 /// MVCC storage engine.
 /// This provides snapshot isolation with a multi-version concurrency control.
 pub(crate) struct Engine {
-    path: PathBuf,
+    path: String,
     schemas: Arc<RwLock<HashMap<String, Arc<Schema>>>>,
     versions: Arc<RwLock<HashMap<String, Arc<VersionStorage>>>>,
     registry: Arc<TransactionRegistry>,
@@ -43,7 +43,7 @@ pub(crate) struct Engine {
     clean_up_handle: Mutex<Option<CleanUpThread>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct Config {
     path: String,
     wal: WalConfig,
@@ -76,6 +76,8 @@ const SNAPSHOT_VERSION: u32 = 1;
 /// magic (4) + version(4) + lsn(8) + time(8) + hash(4)
 const SNAPSHOT_HEADER_SIZE: usize = 28;
 
+const IN_MEMORY_PATH: &str = "memory://";
+
 type Result<T> = std::result::Result<T, MvccError>;
 
 impl Engine {
@@ -85,8 +87,13 @@ impl Engine {
                 .expect("wal manager not to fail"),
         );
 
+        let path = match config.path.is_empty() {
+            true => IN_MEMORY_PATH.to_string(),
+            _ => config.path.clone(),
+        };
+
         Self {
-            path: config.path.clone().into(),
+            path,
             is_open: AtomicBool::new(false),
             schemas: Arc::new(RwLock::new(HashMap::default())),
             versions: Arc::new(RwLock::new(HashMap::default())),
@@ -100,14 +107,20 @@ impl Engine {
         }
     }
 
+    pub fn in_memory() -> Self {
+        Self::new(Config::default())
+    }
+
     pub fn open(&self) -> Result<()> {
         if self.is_open.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
 
-        let lock = FileLock::acquire(&self.path)?;
-        let mut file = self.file.lock().unwrap();
-        *file = Some(lock);
+        if self.path != IN_MEMORY_PATH {
+            let lock = FileLock::acquire(&self.path)?;
+            let mut file = self.file.lock().unwrap();
+            *file = Some(lock);
+        }
 
         self.registry.accept_transactions();
 
@@ -489,4 +502,9 @@ fn deserialise_snapshot_header(path: &Path) -> u64 {
     }
 
     u64::from_le_bytes(data[8..16].try_into().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 }
