@@ -124,6 +124,10 @@ impl Engine {
         Ok(())
     }
 
+    pub fn is_open(&self) -> bool {
+        self.is_open.load(Ordering::Acquire)
+    }
+
     pub fn cleanup(self: &Arc<Self>) {
         let config = self.config.read().unwrap();
         if !config.cleanup.enabled {
@@ -165,11 +169,25 @@ impl Engine {
                     break;
                 }
 
-                engine.registry.cleanup_transactions(transaction_retetion);
+                let _ = engine.registry.cleanup_transactions(transaction_retetion);
+                let _ = engine.cleanup_deleted_rows(transaction_retetion);
             }
         }));
 
         CleanUpThread { stop, thread }
+    }
+
+    fn cleanup_deleted_rows(&self, max_age: Duration) -> i32 {
+        if !self.is_open() {
+            return 0;
+        }
+
+        let mut storage = self.versions.read().unwrap();
+        let mut deleted = 0;
+
+        storage.values().for_each(|storage| deleted += 1);
+
+        deleted
     }
 
     fn load_snapshots(&self) -> Result<u64> {

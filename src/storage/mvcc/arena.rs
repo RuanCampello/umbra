@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::sql::statement::Value;
 
@@ -6,6 +6,9 @@ use crate::sql::statement::Value;
 /// This way we get O(1) clone on write with `Arc` and zero-clone on read.
 pub struct TupleArena {
     arena: RwLock<Arena>,
+    /// Free list of cleared slot indexes to be reused.
+    /// This is to prevent unbounded arena growth during `INSERT`/`DELETE` cycles.
+    free_list: Mutex<Vec<usize>>,
 }
 
 pub struct Arena {
@@ -18,7 +21,6 @@ pub struct ArenaMetadata {
     row_id: i64,
     txn_id: i64,
     deleted_at_txn_id: i64,
-    created_at: i64,
 }
 
 impl TupleArena {
@@ -30,6 +32,7 @@ impl TupleArena {
                 data: Vec::with_capacity(Self::DEFAULT_CAPACITY),
                 metadata: Vec::with_capacity(Self::DEFAULT_CAPACITY),
             }),
+            free_list: Mutex::new(Vec::new()),
         }
     }
 
@@ -39,25 +42,37 @@ impl TupleArena {
                 data: Vec::with_capacity(capacity),
                 metadata: Vec::with_capacity(capacity),
             }),
+            free_list: Mutex::new(Vec::new()),
         }
     }
 
     #[inline]
-    pub fn insert(&self, id: i64, txn_id: i64, created_at: i64, values: &[Value]) -> usize {
+    pub fn insert(&self, id: i64, txn_id: i64, values: &[Value]) -> usize {
+        let free_list_top = self.free_list.lock().unwrap().pop();
         let mut arena = self.arena.write().expect("lock poisoned");
 
-        let values: Vec<Arc<Value>> = values.iter().map(|v| Arc::new(v.clone())).collect();
+        let values: Arc<[Arc<Value>]> = values.iter().map(|v| Arc::new(v.clone())).collect();
         let metadata = ArenaMetadata {
             txn_id,
-            created_at,
             row_id: id,
             deleted_at_txn_id: 0,
         };
 
-        let idx = arena.metadata.len();
-        arena.metadata.push(metadata);
+        match free_list_top {
+            Some(index) => {
+                arena.data[index] = values;
+                arena.metadata[index] = metadata;
 
-        idx
+                index
+            }
+            _ => {
+                arena.data.push(values);
+                let idx = arena.metadata.len();
+                arena.metadata.push(metadata);
+
+                idx
+            }
+        }
     }
 
     #[inline]
@@ -67,6 +82,42 @@ impl TupleArena {
         if (id as usize) < arena.metadata.len() {
             arena.metadata[id as usize].deleted_at_txn_id = deleted_at_txn_id
         }
+    }
+
+    #[inline]
+    pub fn clear(&self, indexes: &[usize]) -> usize {
+        let mut cleared = Vec::with_capacity(indexes.len());
+
+        {
+            let mut arena = self.arena.write().unwrap();
+            let empty = Arc::new([]);
+
+            let metadata = ArenaMetadata {
+                row_id: 0,
+                txn_id: 0,
+                deleted_at_txn_id: 0,
+            };
+
+            for &index in indexes {
+                if index < arena.metadata.len() {
+                    arena.data[index] = empty.clone();
+                    arena.metadata[index] = metadata;
+
+                    cleared.push(index);
+                }
+            }
+        }
+
+        let count = cleared.len();
+        // update the current state of the free list to include the
+        // now cleared ones
+        if count > 0 {
+            let mut free = self.free_list.lock().unwrap();
+            free.reserve(count);
+            free.extend(cleared);
+        }
+
+        count
     }
 
     pub fn len(&self) -> usize {

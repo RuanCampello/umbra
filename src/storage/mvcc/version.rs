@@ -9,6 +9,7 @@ use std::{
     collections::BTreeMap,
     fmt::Debug,
     io::{Error, ErrorKind},
+    num::NonZeroU64,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, RwLock,
@@ -35,11 +36,13 @@ pub(crate) struct TransationVersionStorage {
     write_set: Option<HashMap<i64, WriteSet>>,
 }
 
+/// Entry of the linked list version chain.
 pub(crate) struct VersionEntry {
     version: TupleVersion,
     prev: Option<Arc<VersionEntry>>,
-    arena_idx: Option<usize>,
-    chain_depth: usize,
+    /// Index into the arena for non-copying access.
+    /// Stored as `idx + 1` for optimisation.
+    arena_idx: Option<NonZeroU64>,
 }
 
 #[derive(Clone)]
@@ -131,6 +134,82 @@ impl VersionStorage {
         }
 
         // TODO: add version && update indexes
+    }
+
+    pub fn cleanup(&self, retention: std::time::Duration) -> i32 {
+        if !self.open.load(Ordering::Acquire) {
+            return 0;
+        }
+
+        let now = self::get_timestamp();
+        let cutoff = now - retention.as_nanos() as i64;
+
+        let mut to_be_deleted = Vec::new();
+        let versions = self.versions.read().unwrap();
+
+        for (&id, chain) in versions.iter() {
+            let version = &chain.version;
+
+            if version.is_deleted() && version.created_at < cutoff {
+                if self.can_be_safely_removed(version) {
+                    to_be_deleted.push(id);
+                }
+            }
+        }
+
+        if to_be_deleted.is_empty() {
+            return 0;
+        }
+
+        let mut deleted = Vec::with_capacity(to_be_deleted.len());
+        let mut indices = Vec::with_capacity(to_be_deleted.len());
+
+        {
+            let mut versions = self.versions.write().unwrap();
+            for id in &to_be_deleted {
+                if let Some(entry) = versions.get(id) {
+                    if entry.version.is_deleted() {
+                        if let Some(idx) = unpack_index(entry.arena_idx) {
+                            indices.push(idx);
+                        }
+
+                        versions.remove(id);
+                        deleted.push(id);
+                    }
+                }
+            }
+        }
+
+        if deleted.is_empty() {
+            return 0;
+        }
+
+        // TODO: we need to remove the indexes using batches
+        // after the version store removal
+
+        todo!()
+    }
+
+    /// Checks if a version can be safely removed, which means that's not
+    /// visible to any active transaction.
+    pub fn can_be_safely_removed(&self, version: &TupleVersion) -> bool {
+        let checker = match self.visibility_checker.as_ref() {
+            Some(checker) => checker,
+            None => return true,
+        };
+
+        let transactions = checker.get_active_transactions();
+        if transactions.is_empty() {
+            return true;
+        }
+
+        for transaction in transactions {
+            if checker.is_visible(version.txn_id, transaction) {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -311,4 +390,9 @@ fn return_write_set_map(mut map: HashMap<i64, WriteSet>) {
     if pool.len() < MAX_POOL_SIZE {
         pool.push(map);
     }
+}
+
+#[inline(always)]
+fn unpack_index(packed: Option<NonZeroU64>) -> Option<usize> {
+    packed.map(|non_zero| (non_zero.get() - 1) as usize)
 }
