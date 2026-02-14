@@ -171,6 +171,7 @@ impl Engine {
 
                 let _ = engine.cleanup_transactions(transaction_retetion);
                 let _ = engine.cleanup_deleted_rows(transaction_retetion);
+                let _ = engine.cleanup_old_versions(transaction_retetion);
             }
         }));
 
@@ -200,7 +201,7 @@ impl Engine {
         deleted
     }
 
-    fn cleanup_old_versions(&self) -> i32 {
+    fn cleanup_old_versions(&self, max_age: Duration) -> i32 {
         if !self.is_open() {
             return 0;
         }
@@ -208,7 +209,9 @@ impl Engine {
         let mut storage = self.versions.read().unwrap();
         let mut total = 0;
 
-        storage.values().for_each(|storage| total += 1);
+        storage
+            .values()
+            .for_each(|storage| total += storage.cleanup_versions(max_age));
 
         total
     }
