@@ -116,25 +116,186 @@ impl VersionStorage {
         self.open.store(false, Ordering::Release)
     }
 
+    /// Recover a version from WAL replay.
     pub fn recover_version(&self, version: TupleVersion) {
-        let row_id = version.row_id;
+        self.add_version(version.row_id, version);
+    }
+
+    /// Adds a committed version into the global store.
+    ///
+    /// Manages the version chain, stores data in the
+    /// `TupleArena`, and trims history beyond `max_version_history`.
+    pub fn add_version(&self, row_id: i64, version: TupleVersion) {
+        use std::collections::btree_map::Entry;
+
+        if !self.open.load(Ordering::Acquire) {
+            return;
+        }
+
         let is_deleted = version.is_deleted();
-        let data = version.data;
+        let mut versions = self.versions.write().unwrap();
 
-        let versions = self.versions.read().unwrap();
-        if let Some(entry) = versions.get(&row_id) {
-            let entry_version = &entry.version;
+        match versions.entry(row_id) {
+            Entry::Occupied(mut occupied) => {
+                let existing = occupied.get();
+                let existing_arena_idx = existing.arena_idx;
 
-            if entry_version.is_deleted() || is_deleted || entry_version.data == data {
-                if row_id > 0 {
-                    // TODO: increment counter
+                let existing_depth = chain_depth(existing);
+                let can_prune =
+                    self.max_version_history > 0 && (existing_depth + 1) > self.max_version_history;
+
+                let mut new_version = version;
+
+                if new_version.is_deleted() && new_version.data.is_empty() {
+                    new_version.data = existing.version.data.clone();
                 }
 
-                return;
+                let arena_idx = match !is_deleted {
+                    true => {
+                        let idx = self
+                            .arena
+                            .insert(row_id, new_version.txn_id, &new_version.data);
+                        pack_index(idx)
+                    }
+                    _ => {
+                        if let Some(old_idx) = unpack_index(existing_arena_idx) {
+                            self.arena
+                                .mark_as_deleted(old_idx as i64, new_version.txn_id);
+                        }
+                        existing_arena_idx
+                    }
+                };
+
+                let prev = match can_prune {
+                    true => None,
+                    _ => {
+                        let existing_version = existing.version.clone();
+                        let existing_prev = existing.prev.clone();
+                        Some(Arc::new(VersionEntry {
+                            version: existing_version,
+                            prev: existing_prev,
+                            arena_idx: None,
+                        }))
+                    }
+                };
+
+                let new_entry = VersionEntry {
+                    version: new_version,
+                    prev,
+                    arena_idx,
+                };
+
+                occupied.insert(new_entry);
+            }
+
+            Entry::Vacant(vacant) => {
+                let arena_idx = match !is_deleted {
+                    true => {
+                        let idx = self.arena.insert(row_id, version.txn_id, &version.data);
+                        pack_index(idx)
+                    }
+                    _ => None,
+                };
+
+                vacant.insert(VersionEntry {
+                    version,
+                    prev: None,
+                    arena_idx,
+                });
+            }
+        }
+    }
+
+    /// Gets the latest visible version of a row for the given transaction.
+    ///
+    /// Walks the version chain, checking visibility via the `TransactionRegistry`.
+    /// Returns `None` if the row doesn't exist or the visible version is deleted.
+    pub fn get_visible_version(&self, row_id: i64, txn_id: i64) -> Option<TupleVersion> {
+        if !self.open.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let checker = self.visibility_checker.as_ref()?;
+        let versions = self.versions.read().unwrap();
+        let entry = versions.get(&row_id)?;
+
+        if checker.is_visible(entry.version.txn_id, txn_id) {
+            if entry.version.is_deleted()
+                && checker.is_visible(entry.version.deleted_at_txn_id, txn_id)
+            {
+                return None;
+            }
+            return Some(entry.version.clone());
+        }
+
+        let mut current = entry.prev.as_deref();
+        while let Some(prev) = current {
+            if checker.is_visible(prev.version.txn_id, txn_id) {
+                if prev.version.is_deleted()
+                    && checker.is_visible(prev.version.deleted_at_txn_id, txn_id)
+                {
+                    return None;
+                }
+                return Some(prev.version.clone());
+            }
+
+            current = prev.prev.as_deref();
+        }
+
+        None
+    }
+
+    /// Marks a row as deleted. Used during WAL replay for `Delete` entries.
+    pub fn mark_deleted(&self, row_id: i64, txn_id: i64) {
+        let mut versions = self.versions.write().unwrap();
+        if let Some(entry) = versions.get_mut(&row_id) {
+            entry.version.deleted_at_txn_id = txn_id;
+        }
+    }
+
+    /// Scans all visible (non-deleted) rows for the given transaction.
+    pub fn scan_visible(&self, txn_id: i64) -> Vec<Tuple> {
+        if !self.open.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+
+        let checker = match self.visibility_checker.as_ref() {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+
+        let versions = self.versions.read().unwrap();
+        let mut results = Vec::new();
+
+        for (_, entry) in versions.iter() {
+            if checker.is_visible(entry.version.txn_id, txn_id) {
+                if entry.version.is_deleted()
+                    && checker.is_visible(entry.version.deleted_at_txn_id, txn_id)
+                {
+                    continue;
+                }
+                results.push(entry.version.data.clone());
+                continue;
+            }
+
+            let mut current = entry.prev.as_deref();
+            while let Some(prev) = current {
+                if checker.is_visible(prev.version.txn_id, txn_id) {
+                    if prev.version.is_deleted()
+                        && checker.is_visible(prev.version.deleted_at_txn_id, txn_id)
+                    {
+                        break;
+                    }
+
+                    results.push(prev.version.data.clone());
+                    break;
+                }
+
+                current = prev.prev.as_deref();
             }
         }
 
-        // TODO: add version && update indexes
+        results
     }
 
     /// Cleans deleted tuples that are older than the given retention time.
@@ -328,6 +489,111 @@ impl TransationVersionStorage {
             write_set: None,
         }
     }
+
+    /// Ensures the local version map is initialised (from pool or fresh).
+    #[inline]
+    fn ensure_local(&mut self) -> &mut HashMap<i64, VersionChain> {
+        self.local.get_or_insert_with(get_version_map)
+    }
+
+    /// Ensures the write set map is initialised (from pool or fresh).
+    #[inline]
+    fn ensure_write_set(&mut self) -> &mut HashMap<i64, WriteSet> {
+        self.write_set.get_or_insert_with(get_write_set_map)
+    }
+
+    /// Insert a new row into the transaction-local storage.
+    pub fn insert(&mut self, row_id: i64, data: Tuple) {
+        let version = TupleVersion::new(self.txn_id, row_id, data);
+        let local = self.ensure_local();
+        local
+            .entry(row_id)
+            .or_insert_with(|| SmallVec::new())
+            .push(version);
+    }
+
+    /// Update an existing row in the transaction-local storage.
+    /// Records in the write set for conflict detection.
+    pub fn update(&mut self, row_id: i64, data: Tuple) {
+        let version = TupleVersion::new(self.txn_id, row_id, data);
+
+        let write_set = self.ensure_write_set();
+        write_set.entry(row_id).or_insert(WriteSet {
+            version: None,
+            version_sequence: 0,
+        });
+
+        let local = self.ensure_local();
+        local
+            .entry(row_id)
+            .or_insert_with(|| SmallVec::new())
+            .push(version);
+    }
+
+    /// Mark a row as deleted in the transaction-local storage.
+    pub fn delete(&mut self, row_id: i64) {
+        let mut version = TupleVersion::new(self.txn_id, row_id, Vec::new());
+        version.deleted_at_txn_id = self.txn_id;
+
+        let write_set = self.ensure_write_set();
+        write_set.entry(row_id).or_insert(WriteSet {
+            version: None,
+            version_sequence: 0,
+        });
+
+        let local = self.ensure_local();
+        local
+            .entry(row_id)
+            .or_insert_with(|| SmallVec::new())
+            .push(version);
+    }
+
+    /// Commit: drain local writes and flush them to the parent `VersionStorage`.
+    /// Returns the list of (row_id, TupleVersion) pairs that were committed.
+    pub fn commit(&mut self) -> Vec<(i64, TupleVersion)> {
+        let local = match self.local.take() {
+            Some(map) => map,
+            None => return Vec::new(),
+        };
+
+        let mut batch = Vec::with_capacity(local.len());
+
+        for (row_id, mut versions) in local {
+            if let Some(version) = versions.pop() {
+                batch.push((row_id, version));
+            }
+        }
+
+        for (row_id, version) in &batch {
+            self.parent.add_version(*row_id, version.clone());
+        }
+
+        if let Some(ws) = self.write_set.take() {
+            return_write_set_map(ws);
+        }
+
+        batch
+    }
+
+    /// Discard all local writes.
+    pub fn rollback(&mut self) {
+        if let Some(map) = self.local.take() {
+            return_version_map(map);
+        }
+
+        if let Some(ws) = self.write_set.take() {
+            return_write_set_map(ws);
+        }
+    }
+
+    /// Check local writes first (read-your-own-writes).
+    /// Returns the latest local version for a row, if any.
+    pub fn get_local_version(&self, row_id: i64) -> Option<&TupleVersion> {
+        self.local
+            .as_ref()
+            .and_then(|local| local.get(&row_id))
+            .and_then(|chain| chain.last())
+    }
 }
 
 impl TupleVersion {
@@ -489,6 +755,24 @@ impl Clone for VersionEntry {
 }
 
 #[inline]
+fn get_version_map() -> HashMap<i64, VersionChain> {
+    VERSION_CHAIN_MAP_POOL
+        .lock()
+        .expect("lock poisoned")
+        .pop()
+        .unwrap_or_default()
+}
+
+#[inline]
+fn get_write_set_map() -> HashMap<i64, WriteSet> {
+    WRITE_SET_MAP_POOL
+        .lock()
+        .expect("lock poisoned")
+        .pop()
+        .unwrap_or_default()
+}
+
+#[inline]
 fn return_version_map(mut map: HashMap<i64, VersionChain>) {
     map.clear();
     let mut pool = VERSION_CHAIN_MAP_POOL.lock().expect("lock poisoned");
@@ -509,6 +793,191 @@ fn return_write_set_map(mut map: HashMap<i64, WriteSet>) {
 }
 
 #[inline(always)]
+fn pack_index(idx: usize) -> Option<NonZeroU64> {
+    NonZeroU64::new((idx as u64).saturating_add(1))
+}
+
+#[inline(always)]
 fn unpack_index(packed: Option<NonZeroU64>) -> Option<usize> {
     packed.map(|non_zero| (non_zero.get() - 1) as usize)
+}
+
+/// Count the depth of a version chain by traversing `prev` pointers.
+#[inline(always)]
+fn chain_depth(entry: &VersionEntry) -> usize {
+    let mut depth = 1;
+    let mut current = &entry.prev;
+    while let Some(prev) = current {
+        depth += 1;
+        current = &prev.prev;
+    }
+    depth
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::SchemaBuilder;
+    use crate::sql::{statement::Type, Value};
+
+    fn make_schema() -> Schema {
+        SchemaBuilder::new("test")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build()
+    }
+
+    fn make_registry() -> Arc<TransactionRegistry> {
+        Arc::new(TransactionRegistry::new())
+    }
+
+    fn committed_txn(registry: &TransactionRegistry) -> i64 {
+        let (txn_id, _) = registry.begin();
+        registry.commit_transaction(txn_id);
+        txn_id
+    }
+
+    #[test]
+    fn add_and_get_visible_version() {
+        let registry = make_registry();
+        let storage = VersionStorage::with_checker("test", make_schema(), registry.clone());
+
+        let (writer_txn, _) = registry.begin();
+        let data: Tuple = vec![Value::Number(1), Value::String("alice".into())];
+        let version = TupleVersion::new(writer_txn, 1, data.clone());
+        storage.add_version(1, version);
+        registry.commit_transaction(writer_txn);
+
+        let (reader_txn, _) = registry.begin();
+        let visible = storage.get_visible_version(1, reader_txn);
+        assert!(visible.is_some());
+        assert_eq!(visible.unwrap().data, data);
+    }
+
+    #[test]
+    fn version_chain_history() {
+        let registry = make_registry();
+        let storage = VersionStorage::with_checker("test", make_schema(), registry.clone());
+
+        let (txn1, _) = registry.begin();
+        storage.add_version(
+            1,
+            TupleVersion::new(txn1, 1, vec![Value::Number(1), Value::String("v1".into())]),
+        );
+        registry.commit_transaction(txn1);
+
+        let (txn2, _) = registry.begin();
+        storage.add_version(
+            1,
+            TupleVersion::new(txn2, 1, vec![Value::Number(1), Value::String("v2".into())]),
+        );
+        registry.commit_transaction(txn2);
+
+        let (reader, _) = registry.begin();
+        let visible = storage.get_visible_version(1, reader).unwrap();
+        assert_eq!(
+            visible.data,
+            vec![Value::Number(1), Value::String("v2".into())]
+        );
+    }
+
+    #[test]
+    fn delete_makes_row_invisible() {
+        let registry = make_registry();
+        let storage = VersionStorage::with_checker("test", make_schema(), registry.clone());
+
+        // Insert
+        let (txn1, _) = registry.begin();
+        storage.add_version(
+            1,
+            TupleVersion::new(txn1, 1, vec![Value::Number(1), Value::String("x".into())]),
+        );
+        registry.commit_transaction(txn1);
+
+        // Delete
+        let (txn2, _) = registry.begin();
+        let mut del = TupleVersion::new(txn2, 1, Vec::new());
+        del.deleted_at_txn_id = txn2;
+        storage.add_version(1, del);
+        registry.commit_transaction(txn2);
+
+        // Reader after delete should see nothing
+        let (reader, _) = registry.begin();
+        assert!(storage.get_visible_version(1, reader).is_none());
+    }
+
+    #[test]
+    fn transaction_local_insert_commit() {
+        let registry = make_registry();
+        let storage = Arc::new(VersionStorage::with_checker(
+            "test",
+            make_schema(),
+            registry.clone(),
+        ));
+
+        let (txn_id, _) = registry.begin();
+        let mut txn_store = TransationVersionStorage::new(txn_id, storage.clone());
+
+        txn_store.insert(1, vec![Value::Number(1), Value::String("alice".into())]);
+        txn_store.insert(2, vec![Value::Number(2), Value::String("bob".into())]);
+
+        assert!(storage.get_visible_version(1, txn_id).is_none());
+
+        let batch = txn_store.commit();
+        assert_eq!(batch.len(), 2);
+        registry.commit_transaction(txn_id);
+
+        let (reader, _) = registry.begin();
+        assert!(storage.get_visible_version(1, reader).is_some());
+        assert!(storage.get_visible_version(2, reader).is_some());
+    }
+
+    #[test]
+    fn transaction_local_rollback() {
+        let registry = make_registry();
+        let storage = Arc::new(VersionStorage::with_checker(
+            "test",
+            make_schema(),
+            registry.clone(),
+        ));
+
+        let (txn_id, _) = registry.begin();
+        let mut txn_store = TransationVersionStorage::new(txn_id, storage.clone());
+
+        txn_store.insert(1, vec![Value::Number(1), Value::String("gone".into())]);
+        assert!(txn_store.get_local_version(1).is_some());
+
+        txn_store.rollback();
+        assert!(txn_store.get_local_version(1).is_none());
+        assert!(storage.get_visible_version(1, txn_id).is_none());
+    }
+
+    #[test]
+    fn scan_visible_rows() {
+        let registry = make_registry();
+        let storage = VersionStorage::with_checker("test", make_schema(), registry.clone());
+
+        let (txn1, _) = registry.begin();
+        for i in 1i64..=3 {
+            storage.add_version(
+                i,
+                TupleVersion::new(
+                    txn1,
+                    i,
+                    vec![Value::Number(i as i128), Value::String(format!("row{i}"))],
+                ),
+            );
+        }
+        registry.commit_transaction(txn1);
+
+        let (txn2, _) = registry.begin();
+        let mut del = TupleVersion::new(txn2, 2, Vec::new());
+        del.deleted_at_txn_id = txn2;
+        storage.add_version(2, del);
+        registry.commit_transaction(txn2);
+
+        let (reader, _) = registry.begin();
+        let rows = storage.scan_visible(reader);
+        assert_eq!(rows.len(), 2);
+    }
 }

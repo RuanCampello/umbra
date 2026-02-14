@@ -11,6 +11,7 @@ use crate::{
         },
         wal::{WalConfig, WalEntry, WalOperation},
     },
+    vm::planner::Tuple,
 };
 use std::{
     collections::BinaryHeap,
@@ -436,7 +437,16 @@ impl Engine {
                 let storage = self.version_storage(&table)?;
                 storage.recover_version(tuple_version);
             }
-            _ => unimplemented!(),
+
+            WalOperation::Delete => {
+                let tuple_version = TupleVersion::try_from(entry.data.as_ref())?;
+                let table = entry.table;
+
+                let storage = self.version_storage(&table)?;
+                storage.mark_deleted(tuple_version.row_id, tuple_version.txn_id);
+            }
+
+            _ => {}
         })
     }
 
@@ -454,6 +464,79 @@ impl Engine {
             .get(&name.to_string())
             .cloned()
             .ok_or(MvccError::TableNotFound)
+    }
+
+    pub fn insert(&self, txn_id: i64, table: &str, row_id: i64, data: Tuple) -> Result<()> {
+        let storage = self.version_storage(table)?;
+        let version = TupleVersion::new(txn_id, row_id, data);
+
+        storage.add_version(row_id, version.clone());
+
+        if !self.must_skip_wal() {
+            if let Some(ref wal) = *self.wal {
+                wal.record_dml(table, txn_id, row_id, WalOperation::Insert, version)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Update a row in a table.
+    pub fn update(&self, txn_id: i64, table: &str, row_id: i64, data: Tuple) -> Result<()> {
+        let storage = self.version_storage(table)?;
+        let version = TupleVersion::new(txn_id, row_id, data);
+
+        storage.add_version(row_id, version.clone());
+
+        if !self.must_skip_wal() {
+            if let Some(ref wal) = *self.wal {
+                wal.record_dml(table, txn_id, row_id, WalOperation::Update, version)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Delete a row from a table.
+    pub fn delete(&self, txn_id: i64, table: &str, row_id: i64) -> Result<()> {
+        let storage = self.version_storage(table)?;
+
+        let mut version = TupleVersion::new(txn_id, row_id, Vec::new());
+        version.deleted_at_txn_id = txn_id;
+
+        storage.add_version(row_id, version.clone());
+
+        if !self.must_skip_wal() {
+            if let Some(ref wal) = *self.wal {
+                wal.record_dml(table, txn_id, row_id, WalOperation::Delete, version)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Scan all visible rows for a given transaction.
+    pub fn scan(&self, txn_id: i64, table: &str) -> Result<Vec<Tuple>> {
+        let storage = self.version_storage(table)?;
+        Ok(storage.scan_visible(txn_id))
+    }
+
+    /// Commit a transaction: flush WAL commit record and commit in registry.
+    pub fn commit_transaction(&self, txn_id: i64) -> Result<()> {
+        if let Some(ref wal) = *self.wal {
+            wal.record_commit(txn_id)?;
+        }
+        self.registry.commit_transaction(txn_id);
+        Ok(())
+    }
+
+    /// Rollback a transaction: flush WAL rollback record and abort in registry.
+    pub fn rollback_transaction(&self, txn_id: i64) -> Result<()> {
+        if let Some(ref wal) = *self.wal {
+            wal.record_rollback(txn_id)?;
+        }
+        self.registry.abort_transaction(txn_id);
+        Ok(())
     }
 }
 
@@ -566,7 +649,7 @@ fn deserialise_snapshot_header(path: &Path) -> u64 {
 mod tests {
     use super::*;
     use crate::db::SchemaBuilder;
-    use crate::sql::statement::Type;
+    use crate::sql::{statement::Type, Value};
 
     #[test]
     fn create() {
@@ -599,6 +682,129 @@ mod tests {
         let created = engine.create_table(schema).unwrap();
         assert_eq!(created.name, "users");
         assert!(engine.does_table_exists("users").unwrap());
+
+        engine.close().unwrap();
+    }
+
+    #[test]
+    fn insert_and_scan() {
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("users")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+
+        engine.create_table(schema).unwrap();
+
+        let (txn_id, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn_id,
+                "users",
+                1,
+                vec![Value::Number(1), Value::String("alice".into())],
+            )
+            .unwrap();
+        engine
+            .insert(
+                txn_id,
+                "users",
+                2,
+                vec![Value::Number(2), Value::String("bob".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn_id).unwrap();
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 2);
+
+        engine.close().unwrap();
+    }
+
+    #[test]
+    fn update_row() {
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("items")
+            .primary("id", Type::Integer)
+            .nullable("val", Type::Text)
+            .build();
+
+        engine.create_table(schema).unwrap();
+
+        let (txn1, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn1,
+                "items",
+                1,
+                vec![Value::Number(1), Value::String("old".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn1).unwrap();
+
+        let (txn2, _) = engine.registry.begin();
+        engine
+            .update(
+                txn2,
+                "items",
+                1,
+                vec![Value::Number(1), Value::String("new".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn2).unwrap();
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "items").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][1], Value::String("new".into()));
+
+        engine.close().unwrap();
+    }
+
+    #[test]
+    fn delete_row() {
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("items")
+            .primary("id", Type::Integer)
+            .nullable("val", Type::Text)
+            .build();
+
+        engine.create_table(schema).unwrap();
+
+        let (txn1, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn1,
+                "items",
+                1,
+                vec![Value::Number(1), Value::String("a".into())],
+            )
+            .unwrap();
+        engine
+            .insert(
+                txn1,
+                "items",
+                2,
+                vec![Value::Number(2), Value::String("b".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn1).unwrap();
+
+        let (txn2, _) = engine.registry.begin();
+        engine.delete(txn2, "items", 1).unwrap();
+        engine.commit_transaction(txn2).unwrap();
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "items").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][1], Value::String("b".into()));
 
         engine.close().unwrap();
     }

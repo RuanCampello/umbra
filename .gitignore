@@ -20,3 +20,5 @@ perf.data*
 !PROTOCOL.md
 
 *.md
+
+wal/*
