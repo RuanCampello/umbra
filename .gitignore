@@ -13,3 +13,10 @@
 perf.data*
 *.svg
 *.journal
+
+!README.md
+!LICENSE.md
+!THIRD_PARTY_NOTICES.md
+!PROTOCOL.md
+
+*.md
