@@ -15,7 +15,7 @@ use std::{
 pub(self) mod arena;
 pub(crate) mod engine;
 pub(crate) mod registry;
-pub(crate) mod version;
+pub(in crate::storage::mvcc) mod version;
 pub(crate) mod wal;
 
 #[derive(Debug)]

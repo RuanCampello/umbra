@@ -14,6 +14,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, RwLock,
     },
+    time::Duration,
 };
 
 pub(crate) struct VersionStorage {
@@ -136,7 +137,8 @@ impl VersionStorage {
         // TODO: add version && update indexes
     }
 
-    pub fn cleanup(&self, retention: std::time::Duration) -> i32 {
+    /// Cleans deleted tuples that are older than the given retention time.
+    pub fn cleanup(&self, retention: Duration) -> i32 {
         if !self.open.load(Ordering::Acquire) {
             return 0;
         }
@@ -187,7 +189,111 @@ impl VersionStorage {
         // TODO: we need to remove the indexes using batches
         // after the version store removal
 
-        todo!()
+        self.arena.clear(&indices);
+        deleted.len() as i32
+    }
+
+    pub fn cleanup_versions(&self, max_age: Duration) -> i32 {
+        if !self.open.load(Ordering::Acquire) {
+            return 0;
+        }
+
+        let checker = match self.visibility_checker.as_ref() {
+            Some(checker) => checker,
+            _ => return 0,
+        };
+
+        let retention = Duration::from_secs(24 * 60 * 60);
+        let now = self::get_timestamp();
+        let cutoff = now - retention.as_nanos() as i64;
+
+        let active = checker.get_active_transactions();
+        let mut candidate = Vec::new();
+
+        {
+            let versions = self.versions.read().unwrap();
+            for (&id, entry) in versions.iter() {
+                if entry.prev.is_none() {
+                    continue;
+                }
+
+                candidate.push(id);
+            }
+        }
+
+        if candidate.is_empty() {
+            return 0;
+        }
+
+        let mut cleaned = 0;
+        let mut versions = self.versions.write().unwrap();
+
+        for id in candidate {
+            let Some(entry) = versions.get(&id) else {
+                continue;
+            };
+
+            let mut previous = Vec::new();
+            let mut current = entry.prev.as_ref();
+
+            while let Some(prev) = current {
+                previous.push(prev.clone());
+                current = prev.prev.as_ref();
+            }
+
+            if previous.is_empty() {
+                continue;
+            }
+
+            let mut keep_total = 0;
+            for (idx, previous) in previous.iter().enumerate() {
+                let mut keep = false;
+
+                for &txn_id in &active {
+                    if checker.is_visible(previous.version.txn_id, txn_id) {
+                        keep = true;
+                        break;
+                    }
+                }
+
+                if !keep && previous.version.created_at >= cutoff {
+                    keep = true;
+                }
+
+                if keep {
+                    keep_total = idx + 1;
+                }
+            }
+
+            if keep_total < previous.len() {
+                let to_be_removed = previous.len() - keep_total;
+                cleaned += to_be_removed as i32;
+
+                let mut modified = entry.clone();
+
+                match keep_total == 0 {
+                    true => modified.prev = None,
+                    _ => {
+                        let kept = previous.into_iter().take(keep_total).collect::<Vec<_>>();
+
+                        let mut new_prev = None;
+                        // we build the chain from oldest -> newest
+                        // so that's reversed :D
+                        for entry in kept.into_iter().rev() {
+                            let mut cloned = (*entry).clone();
+                            cloned.prev = new_prev;
+                            new_prev = Some(Arc::new(cloned));
+                        }
+
+                        modified.prev = new_prev;
+                    }
+                }
+
+                versions.insert(id, modified);
+            }
+        }
+
+        cleaned
     }
 
     /// Checks if a version can be safely removed, which means that's not
@@ -368,6 +474,16 @@ impl Drop for TransationVersionStorage {
 
         if let Some(map) = self.write_set.take() {
             return_write_set_map(map);
+        }
+    }
+}
+
+impl Clone for VersionEntry {
+    fn clone(&self) -> Self {
+        Self {
+            version: self.version.clone(),
+            prev: self.prev.clone(),
+            arena_idx: self.arena_idx,
         }
     }
 }

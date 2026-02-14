@@ -169,12 +169,20 @@ impl Engine {
                     break;
                 }
 
-                let _ = engine.registry.cleanup_transactions(transaction_retetion);
+                let _ = engine.cleanup_transactions(transaction_retetion);
                 let _ = engine.cleanup_deleted_rows(transaction_retetion);
             }
         }));
 
         CleanUpThread { stop, thread }
+    }
+
+    fn cleanup_transactions(&self, max_age: Duration) -> i32 {
+        if !self.is_open() {
+            return 0;
+        }
+
+        self.registry.cleanup_transactions(max_age)
     }
 
     fn cleanup_deleted_rows(&self, max_age: Duration) -> i32 {
@@ -185,9 +193,24 @@ impl Engine {
         let mut storage = self.versions.read().unwrap();
         let mut deleted = 0;
 
-        storage.values().for_each(|storage| deleted += 1);
+        storage
+            .values()
+            .for_each(|storage| deleted += storage.cleanup(max_age));
 
         deleted
+    }
+
+    fn cleanup_old_versions(&self) -> i32 {
+        if !self.is_open() {
+            return 0;
+        }
+
+        let mut storage = self.versions.read().unwrap();
+        let mut total = 0;
+
+        storage.values().for_each(|storage| total += 1);
+
+        total
     }
 
     fn load_snapshots(&self) -> Result<u64> {
