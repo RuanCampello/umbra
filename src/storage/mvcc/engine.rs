@@ -40,6 +40,7 @@ pub(crate) struct Engine {
     epoch: AtomicU64,
     fetching_disk: Arc<AtomicBool>,
     config: RwLock<Config>,
+    clean_up_handle: Mutex<Option<CleanUpThread>>,
 }
 
 #[derive(Clone)]
@@ -95,6 +96,7 @@ impl Engine {
             file: Mutex::new(None),
             fetching_disk: Arc::new(AtomicBool::new(false)),
             config: RwLock::new(config),
+            clean_up_handle: Mutex::new(None),
         }
     }
 
@@ -124,6 +126,42 @@ impl Engine {
         Ok(())
     }
 
+    pub fn close(&self) -> Result<()> {
+        if self
+            .is_open
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        {
+            let mut handle = self.clean_up_handle.lock().unwrap();
+            if let Some(mut handle) = handle.take() {
+                handle.stop()
+            }
+        }
+
+        self.registry.deny_transactions();
+
+        let storages = self.versions.read().unwrap();
+        storages.values().for_each(|storage| storage.close());
+        drop(storages);
+
+        if let Some(ref wal) = *self.wal {
+            if let Err(err) = wal.stop() {
+                eprintln!("Warning: Error stopping wal manager: {err}");
+            }
+        }
+
+        {
+            let mut file_lock = self.file.lock().unwrap();
+            *file_lock = None;
+        }
+
+        Ok(())
+    }
+
     pub fn is_open(&self) -> bool {
         self.is_open.load(Ordering::Acquire)
     }
@@ -139,8 +177,9 @@ impl Engine {
         let transaction_retetion = Duration::from_secs(config.cleanup.transaction_retetion);
         drop(config);
 
-        // TODO: internal cleanup
-        todo!()
+        let handle = self.periodic_cleanup(interval, deleted_retetion, transaction_retetion);
+        let mut clean_up_handle = self.clean_up_handle.lock().unwrap();
+        *clean_up_handle = Some(handle);
     }
 
     fn periodic_cleanup(

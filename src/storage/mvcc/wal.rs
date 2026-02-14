@@ -99,6 +99,20 @@ impl WalManager {
         Ok(manager)
     }
 
+    pub fn stop(&self) -> Result<()> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        self.running.store(false, Ordering::Release);
+
+        if let Some(ref wal) = self.wal {
+            wal.close()?;
+        }
+
+        Ok(())
+    }
+
     /// Used for `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` etc...
     /// Those are auto-committed operations that don't interleave user transactions.
     pub fn record_ddl(&self, table: &str, operation: WalOperation, content: &[u8]) -> Result<()> {
