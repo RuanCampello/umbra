@@ -96,18 +96,22 @@ impl BTreeIndex {
 }
 
 impl Index for BTreeIndex {
+    #[inline]
     fn name(&self) -> &str {
         &self.name
     }
 
+    #[inline]
     fn column_index(&self) -> usize {
         self.column_index
     }
 
+    #[inline]
     fn is_unique(&self) -> bool {
         self.unique
     }
 
+    #[inline]
     fn add(&self, value: &Value, row_id: i64) -> Result<()> {
         let mut data = self.data.write().unwrap();
 
@@ -134,6 +138,7 @@ impl Index for BTreeIndex {
         Ok(())
     }
 
+    #[inline]
     fn remove(&self, value: &Value, row_id: i64) {
         let mut data = self.data.write().unwrap();
 
@@ -148,6 +153,7 @@ impl Index for BTreeIndex {
         data.row_to_value.remove(&row_id);
     }
 
+    #[inline]
     fn find(&self, value: &Value) -> Vec<i64> {
         let data = self.data.read().unwrap();
 
@@ -157,6 +163,7 @@ impl Index for BTreeIndex {
             .unwrap_or_default()
     }
 
+    #[inline]
     fn find_range(&self, start: Bound<&Value>, end: Bound<&Value>) -> Vec<i64> {
         let data = self.data.read().unwrap();
 
@@ -166,6 +173,7 @@ impl Index for BTreeIndex {
             .collect()
     }
 
+    #[inline]
     fn clear(&self) {
         let mut data = self.data.write().unwrap();
         data.entries.clear();

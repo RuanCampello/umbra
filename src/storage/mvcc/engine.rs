@@ -2,6 +2,7 @@ use super::FileLock;
 use crate::{
     collections::hash::HashMap,
     db::SchemaNew as Schema,
+    index,
     sql::Value,
     storage::{
         mvcc::{
@@ -194,6 +195,8 @@ impl Engine {
             schema.clone(),
             self.registry.clone(),
         ));
+
+        add_primary_index(&schema, &version);
 
         let data = Vec::from(&schema);
         let returned = schema.clone();
@@ -411,6 +414,7 @@ impl Engine {
                     self.registry.clone(),
                 ));
 
+                add_primary_index(&schema, &version_storage);
                 let table = schema.name.clone();
 
                 let mut schemas = self.schemas.write().unwrap();
@@ -691,6 +695,18 @@ fn deserialise_snapshot_header(path: &Path) -> u64 {
     }
 
     u64::from_le_bytes(data[8..16].try_into().unwrap())
+}
+
+/// Creates a virtual primary key index on a column.
+/// This is used by the optimiser.
+#[inline(always)]
+fn add_primary_index(schema: &Schema, version: &Arc<VersionStorage>) {
+    if let Some(index) = schema.primary_column_index() {
+        let column = &schema.columns[index];
+        let index = index!(primary on (schema.name));
+
+        todo!()
+    }
 }
 
 #[cfg(test)]

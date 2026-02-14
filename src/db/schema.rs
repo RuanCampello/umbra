@@ -37,6 +37,9 @@ pub struct SchemaNew {
     /// Cached column index map, computed on the first access
     /// column name -> index
     column_index: OnceLock<HashMap<String, usize>>,
+
+    /// Cached primary key index, computed on the first access
+    primary_key_index: OnceLock<Option<usize>>,
 }
 
 pub struct SchemaBuilder {
@@ -81,7 +84,22 @@ impl SchemaNew {
             column_names,
             created_at: now,
             updated_at: now,
+            primary_key_index: OnceLock::new(),
         }
+    }
+
+    #[inline]
+    pub fn primary_column_index(&self) -> Option<usize> {
+        *self.primary_key_index.get_or_init(|| {
+            for (index, column) in self.columns.iter().enumerate() {
+                // TODO: we might wanna filter out by the type
+                if column.primary_key {
+                    return Some(index);
+                }
+            }
+
+            None
+        })
     }
 }
 

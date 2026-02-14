@@ -24,14 +24,14 @@ pub(crate) struct VersionStorage {
     /// Row versions indexed by the `row_id`
     versions: RwLock<BTreeMap<i64, VersionEntry>>,
     schema: RwLock<Arc<Schema>>,
+    /// Registered indexes, keyed by index name.
+    indexes: RwLock<HashMap<String, Arc<dyn Index>>>,
     open: AtomicBool,
     uncommited_writes: RwLock<HashMap<i64, i64>>,
     /// Maximum number of previous versions per row.
     max_version_history: usize,
     visibility_checker: Option<Arc<TransactionRegistry>>,
     arena: TupleArena,
-    /// Registered indexes, keyed by index name.
-    indexes: RwLock<HashMap<String, Arc<dyn Index>>>,
 }
 
 pub(crate) struct TransationVersionStorage {
