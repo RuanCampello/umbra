@@ -507,4 +507,22 @@ fn deserialise_snapshot_header(path: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create() {
+        let engine = Engine::in_memory();
+        assert!(!engine.is_open());
+        assert_eq!(engine.path, IN_MEMORY_PATH);
+    }
+
+    #[test]
+    fn open_and_close() {
+        let engine = Engine::in_memory();
+
+        engine.open().unwrap();
+        assert!(engine.is_open());
+
+        engine.close().unwrap();
+        assert!(!engine.is_open());
+    }
 }
