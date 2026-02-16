@@ -6,7 +6,7 @@ use crate::{
     sql::Value,
     storage::{
         mvcc::{
-            index::Index,
+            index::{BTreeIndex, Index},
             registry::TransactionRegistry,
             version::{TupleVersion, VersionEntry, VersionStorage},
             wal::WalManager,
@@ -697,15 +697,16 @@ fn deserialise_snapshot_header(path: &Path) -> u64 {
     u64::from_le_bytes(data[8..16].try_into().unwrap())
 }
 
-/// Creates a virtual primary key index on a column.
-/// This is used by the optimiser.
+/// Creates a virtual primary key index backed by a unique `BTreeIndex`.
+///
+/// Automatically registered on table creation so the optimiser can use
+/// `scan_index` for point lookups on the primary key.
 #[inline(always)]
 fn add_primary_index(schema: &Schema, version: &Arc<VersionStorage>) {
-    if let Some(index) = schema.primary_column_index() {
-        let column = &schema.columns[index];
-        let index = index!(primary on (schema.name));
-
-        todo!()
+    if let Some(col_index) = schema.primary_column_index() {
+        let name = index!(primary on (schema.name));
+        let btree = Arc::new(BTreeIndex::new(name.clone(), col_index, true));
+        version.add_index(name, btree);
     }
 }
 
@@ -869,6 +870,64 @@ mod tests {
         let rows = engine.scan(reader, "items").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][1], Value::String("b".into()));
+
+        engine.close().unwrap();
+    }
+
+    #[test]
+    fn scan_primary_index() {
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("users")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+
+        engine.create_table(schema).unwrap();
+
+        let (txn1, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn1,
+                "users",
+                1,
+                vec![Value::Number(1), Value::String("alice".into())],
+            )
+            .unwrap();
+        engine
+            .insert(
+                txn1,
+                "users",
+                2,
+                vec![Value::Number(2), Value::String("bob".into())],
+            )
+            .unwrap();
+        engine
+            .insert(
+                txn1,
+                "users",
+                3,
+                vec![Value::Number(3), Value::String("carol".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn1).unwrap();
+
+        // point lookup via primary index
+        let (reader, _) = engine.registry.begin();
+        let pk_index_name = index!(primary on users);
+
+        let results = engine
+            .scan_index(reader, "users", &pk_index_name, &Value::Number(2))
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0][1], Value::String("bob".into()));
+
+        // missing key returns empty
+        let missing = engine
+            .scan_index(reader, "users", &pk_index_name, &Value::Number(99))
+            .unwrap();
+        assert!(missing.is_empty());
 
         engine.close().unwrap();
     }
