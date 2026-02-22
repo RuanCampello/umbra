@@ -42,6 +42,8 @@ pub(crate) struct Engine {
     /// This is incremented on any change of the schema.
     /// So we can invalidate the cache without lookups.
     epoch: AtomicU64,
+    /// This indicates if we are loading anything from disk to
+    /// shun unnecessary writes from [WAL](crate::storage::wal::Wal).
     fetching_disk: Arc<AtomicBool>,
     config: RwLock<Config>,
     clean_up_handle: Mutex<Option<CleanUpThread>>,
@@ -417,11 +419,15 @@ impl Engine {
                 add_primary_index(&schema, &version_storage);
                 let table = schema.name.clone();
 
-                let mut schemas = self.schemas.write().unwrap();
-                schemas.insert(table.clone(), Arc::new(schema));
+                {
+                    let mut schemas = self.schemas.write().unwrap();
+                    schemas.insert(table.clone(), Arc::new(schema));
+                }
 
-                let mut storages = self.versions.write().unwrap();
-                storages.insert(table, version_storage);
+                {
+                    let mut storages = self.versions.write().unwrap();
+                    storages.insert(table, version_storage);
+                }
             }
 
             WalOperation::DropTable => {
