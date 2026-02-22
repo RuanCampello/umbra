@@ -3,7 +3,7 @@ use crate::{
     db::SchemaNew as Schema,
     sql::Value,
     storage::mvcc::{
-        arena::TupleArena, get_timestamp, index::Index, registry::TransactionRegistry,
+        arena::TupleArena, get_timestamp, index::Index, registry::TransactionRegistry, MvccError,
     },
     vm::planner::Tuple,
 };
@@ -36,7 +36,7 @@ pub(crate) struct VersionStorage {
 
 pub(crate) struct TransationVersionStorage {
     txn_id: i64,
-    local: Option<HashMap<i64, VersionChain>>,
+    pub(crate) local: Option<HashMap<i64, VersionChain>>,
     parent: Arc<VersionStorage>,
     write_set: Option<HashMap<i64, WriteSet>>,
 }
@@ -66,12 +66,21 @@ pub(crate) struct WriteSet {
     version_sequence: i64,
 }
 
+/// Determines the kind of DML write operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteKind {
+    Insert,
+    Update,
+    Delete,
+}
+
 static VERSION_CHAIN_MAP_POOL: Mutex<Vec<HashMap<i64, VersionChain>>> = Mutex::new(Vec::new());
 static WRITE_SET_MAP_POOL: Mutex<Vec<HashMap<i64, WriteSet>>> = Mutex::new(Vec::new());
 
 const MAX_POOL_SIZE: usize = 1 << 6;
 
 type VersionChain = SmallVec<TupleVersion, 1>;
+type MvccResult<T> = std::result::Result<T, MvccError>;
 
 pub trait VisibilityChecker: Sync + Send {
     fn is_visible(&self, version_txn_id: i64, view_txn_id: i64) -> bool;
@@ -534,6 +543,53 @@ impl VersionStorage {
 
         true
     }
+
+    /// Eagerly claims a tuple for writing by the given transaction.
+    ///
+    /// If another transaction already holds the tuple, returns `WriteConflict`.
+    /// If the same transaction holds it, this is a no-op (idempotent).
+    pub fn try_claim_tuple(
+        &self,
+        tuple_id: i64,
+        txn_id: i64,
+    ) -> std::result::Result<(), MvccError> {
+        let mut writes = self.uncommited_writes.write().unwrap();
+        match writes.get(&tuple_id) {
+            Some(&holder) if holder != txn_id => Err(MvccError::WriteConflict),
+            Some(_) => Ok(()), // already claimed by us
+            None => {
+                writes.insert(tuple_id, txn_id);
+                Ok(())
+            }
+        }
+    }
+
+    /// Release a single tuple claim held by `txn_id`.
+    pub fn release_tuple_claim(&self, tuple_id: i64, txn_id: i64) {
+        let mut writes = self.uncommited_writes.write().unwrap();
+        if matches!(writes.get(&tuple_id), Some(&holder) if holder == txn_id) {
+            writes.remove(&tuple_id);
+        }
+    }
+
+    /// Batch release of tuple claims held by `txn_id`.
+    pub fn release_tuple_claims_batch(&self, tuple_ids: &[i64], txn_id: i64) {
+        let mut writes = self.uncommited_writes.write().unwrap();
+        for &id in tuple_ids {
+            if matches!(writes.get(&id), Some(&holder) if holder == txn_id) {
+                writes.remove(&id);
+            }
+        }
+    }
+
+    /// Returns the `txn_id` of the HEAD (latest committed) version for a tuple.
+    ///
+    /// Used at commit time to detect if another transaction has modified
+    /// the tuple since we read it.
+    pub fn get_latest_version_id(&self, tuple_id: i64) -> Option<i64> {
+        let versions = self.versions.read().unwrap();
+        versions.get(&tuple_id).map(|entry| entry.version.txn_id)
+    }
 }
 
 impl TransationVersionStorage {
@@ -546,109 +602,225 @@ impl TransationVersionStorage {
         }
     }
 
-    /// Ensures the local version map is initialised (from pool or fresh).
     #[inline]
     fn ensure_local(&mut self) -> &mut HashMap<i64, VersionChain> {
         self.local.get_or_insert_with(get_version_map)
     }
 
-    /// Ensures the write set map is initialised (from pool or fresh).
     #[inline]
     fn ensure_write_set(&mut self) -> &mut HashMap<i64, WriteSet> {
         self.write_set.get_or_insert_with(get_write_set_map)
     }
 
-    /// Insert a new row into the transaction-local storage.
-    pub fn insert(&mut self, row_id: i64, data: Tuple) {
-        let version = TupleVersion::new(self.txn_id, row_id, data);
-        let local = self.ensure_local();
-        local
-            .entry(row_id)
-            .or_insert_with(|| SmallVec::new())
-            .push(version);
+    /// Write a tuple into the transaction-local storage.
+    /// This is the single entry point for all DML operations.
+    pub fn put(&mut self, tuple_id: i64, data: Tuple, kind: WriteKind) -> MvccResult<()> {
+        let mut version = TupleVersion::new(self.txn_id, tuple_id, data);
+        if kind == WriteKind::Delete {
+            version.deleted_at_txn_id = self.txn_id;
+        }
+
+        let has_local = self
+            .local
+            .as_ref()
+            .is_some_and(|l| l.contains_key(&tuple_id));
+
+        match has_local {
+            true => self
+                .ensure_local()
+                .get_mut(&tuple_id)
+                .unwrap()
+                .push(version),
+            _ => {
+                let needs_write_set = self
+                    .write_set
+                    .as_ref()
+                    .is_none_or(|ws| !ws.contains_key(&tuple_id));
+
+                if needs_write_set {
+                    let read_version = self.parent.get_visible_version(tuple_id, self.txn_id);
+                    let tuple_exists = read_version.is_some();
+
+                    let version_sequence = self
+                        .parent
+                        .visibility_checker
+                        .as_ref()
+                        .map(|c| c.get_sequence())
+                        .unwrap_or(0);
+
+                    self.ensure_write_set().insert(
+                        tuple_id,
+                        WriteSet {
+                            version: read_version,
+                            version_sequence,
+                        },
+                    );
+
+                    if tuple_exists {
+                        self.parent.try_claim_tuple(tuple_id, self.txn_id)?;
+                    }
+                }
+
+                let mut chain = SmallVec::new();
+                chain.push(version);
+                self.ensure_local().insert(tuple_id, chain);
+            }
+        }
+
+        Ok(())
     }
 
-    /// Update an existing row in the transaction-local storage.
-    /// Records in the write set for conflict detection.
-    pub fn update(&mut self, row_id: i64, data: Tuple) {
-        let version = TupleVersion::new(self.txn_id, row_id, data);
+    /// Check local writes first (read-your-own-writes), then fall back to parent.
+    pub fn get(&self, tuple_id: i64) -> Option<Tuple> {
+        if let Some(local) = self.local.as_ref() {
+            if let Some(versions) = local.get(&tuple_id) {
+                if let Some(version) = versions.last() {
+                    if version.is_deleted() {
+                        return None;
+                    }
+                    return Some(version.data.clone());
+                }
+            }
+        }
 
-        let write_set = self.ensure_write_set();
-        write_set.entry(row_id).or_insert(WriteSet {
-            version: None,
-            version_sequence: 0,
-        });
-
-        let local = self.ensure_local();
-        local
-            .entry(row_id)
-            .or_insert_with(|| SmallVec::new())
-            .push(version);
+        self.parent
+            .get_visible_version(tuple_id, self.txn_id)
+            .map(|v| v.data.clone())
     }
 
-    /// Mark a row as deleted in the transaction-local storage.
-    pub fn delete(&mut self, row_id: i64) {
-        let mut version = TupleVersion::new(self.txn_id, row_id, Vec::new());
-        version.deleted_at_txn_id = self.txn_id;
-
-        let write_set = self.ensure_write_set();
-        write_set.entry(row_id).or_insert(WriteSet {
-            version: None,
-            version_sequence: 0,
-        });
-
-        let local = self.ensure_local();
-        local
-            .entry(row_id)
-            .or_insert_with(|| SmallVec::new())
-            .push(version);
+    #[inline(always)]
+    pub fn get_local_version(&self, tuple_id: i64) -> Option<&TupleVersion> {
+        self.local
+            .as_ref()
+            .and_then(|local| local.get(&tuple_id))
+            .and_then(|chain| chain.last())
     }
 
-    /// Commit: drain local writes and flush them to the parent `VersionStorage`.
-    /// Returns the list of (row_id, TupleVersion) pairs that were committed.
-    pub fn commit(&mut self) -> Vec<(i64, TupleVersion)> {
+    #[inline(always)]
+    pub fn has_local_changes(&self) -> bool {
+        self.local.as_ref().is_some_and(|l| !l.is_empty())
+    }
+
+    /// Detect write-write conflicts before commit.
+    ///
+    /// For each entry in the write set:
+    /// - UPDATE/DELETE: verify the HEAD version hasn't changed since we read it.
+    /// - INSERT: verify no other transaction inserted a visible version for this tuple.
+    fn detect_conflicts(&self) -> MvccResult<()> {
+        let Some(write_set) = self.write_set.as_ref() else {
+            return Ok(());
+        };
+
+        for (&tuple_id, entry) in write_set.iter() {
+            if let Some(read_version) = &entry.version {
+                match self.parent.get_latest_version_id(tuple_id) {
+                    Some(latest_txn_id) if latest_txn_id != read_version.txn_id => {
+                        return Err(MvccError::WriteConflict);
+                    }
+                    // tuple vanished (gc'd): treat as conflict.
+                    None => return Err(MvccError::WriteConflict),
+                    _ => {}
+                }
+            } else {
+                if self
+                    .parent
+                    .get_visible_version(tuple_id, self.txn_id)
+                    .is_some()
+                {
+                    return Err(MvccError::WriteConflict);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Update indexes at commit time (deferred from DML time).
+    ///
+    /// Walks local versions and determines the appropriate index operation:
+    /// - INSERT (no old version): add to indexes
+    /// - UPDATE (old version exists, new is not deleted): remove old, add new
+    /// - DELETE (new version is deleted): remove from indexes
+    fn update_indexes_on_commit(&self) {
+        let Some(local) = self.local.as_ref() else {
+            return;
+        };
+
+        for (&tuple_id, chain) in local.iter() {
+            let Some(new_version) = chain.last() else {
+                continue;
+            };
+
+            let old_version = self
+                .write_set
+                .as_ref()
+                .and_then(|ws| ws.get(&tuple_id))
+                .and_then(|entry| entry.version.as_ref())
+                .filter(|v| !v.is_deleted());
+
+            if new_version.is_deleted() {
+                if let Some(old) = old_version {
+                    self.parent.update_indexes_on_delete(tuple_id, &old.data);
+                }
+            } else if let Some(old) = old_version {
+                self.parent
+                    .update_indexes_on_update(tuple_id, &old.data, &new_version.data);
+            } else {
+                self.parent
+                    .update_indexes_on_insert(tuple_id, &new_version.data);
+            }
+        }
+    }
+
+    pub fn commit(&mut self) -> MvccResult<Vec<(i64, TupleVersion)>> {
+        self.detect_conflicts()?;
+
+        self.update_indexes_on_commit();
+
         let local = match self.local.take() {
             Some(map) => map,
-            None => return Vec::new(),
+            None => {
+                self.release_all_claims();
+                return Ok(Vec::new());
+            }
         };
 
         let mut batch = Vec::with_capacity(local.len());
 
-        for (row_id, mut versions) in local {
+        for (tuple_id, mut versions) in local {
             if let Some(version) = versions.pop() {
-                batch.push((row_id, version));
+                batch.push((tuple_id, version));
             }
         }
 
-        for (row_id, version) in &batch {
-            self.parent.add_version(*row_id, version.clone());
+        for (tuple_id, version) in &batch {
+            self.parent.add_version(*tuple_id, version.clone());
         }
 
-        if let Some(ws) = self.write_set.take() {
-            return_write_set_map(ws);
-        }
+        self.release_all_claims();
 
-        batch
+        Ok(batch)
     }
 
-    /// Discard all local writes.
+    /// Discard all local writes and release tuple claims.
     pub fn rollback(&mut self) {
         if let Some(map) = self.local.take() {
             return_version_map(map);
         }
 
-        if let Some(ws) = self.write_set.take() {
-            return_write_set_map(ws);
-        }
+        self.release_all_claims();
     }
 
-    /// Check local writes first (read-your-own-writes).
-    /// Returns the latest local version for a row, if any.
-    pub fn get_local_version(&self, row_id: i64) -> Option<&TupleVersion> {
-        self.local
-            .as_ref()
-            .and_then(|local| local.get(&row_id))
-            .and_then(|chain| chain.last())
+    /// Release all tuple claims tracked in the write set back to the parent.
+    fn release_all_claims(&mut self) {
+        if let Some(ws) = self.write_set.take() {
+            let tuple_ids: Vec<i64> = ws.keys().copied().collect();
+            if !tuple_ids.is_empty() {
+                self.parent
+                    .release_tuple_claims_batch(&tuple_ids, self.txn_id);
+            }
+            return_write_set_map(ws);
+        }
     }
 }
 
@@ -674,7 +846,10 @@ impl TupleVersion {
     }
 
     pub fn get(&self, row_id: i64) -> Option<Tuple> {
-        todo!()
+        match self.row_id == row_id && !self.is_deleted() {
+            true => Some(self.data.clone()),
+            _ => None,
+        }
     }
 
     pub fn is_deleted(&self) -> bool {
@@ -974,12 +1149,24 @@ mod tests {
         let (txn_id, _) = registry.begin();
         let mut txn_store = TransationVersionStorage::new(txn_id, storage.clone());
 
-        txn_store.insert(1, vec![Value::Number(1), Value::String("alice".into())]);
-        txn_store.insert(2, vec![Value::Number(2), Value::String("bob".into())]);
+        txn_store
+            .put(
+                1,
+                vec![Value::Number(1), Value::String("alice".into())],
+                WriteKind::Insert,
+            )
+            .unwrap();
+        txn_store
+            .put(
+                2,
+                vec![Value::Number(2), Value::String("bob".into())],
+                WriteKind::Insert,
+            )
+            .unwrap();
 
         assert!(storage.get_visible_version(1, txn_id).is_none());
 
-        let batch = txn_store.commit();
+        let batch = txn_store.commit().unwrap();
         assert_eq!(batch.len(), 2);
         registry.commit_transaction(txn_id);
 
@@ -1000,7 +1187,13 @@ mod tests {
         let (txn_id, _) = registry.begin();
         let mut txn_store = TransationVersionStorage::new(txn_id, storage.clone());
 
-        txn_store.insert(1, vec![Value::Number(1), Value::String("gone".into())]);
+        txn_store
+            .put(
+                1,
+                vec![Value::Number(1), Value::String("gone".into())],
+                WriteKind::Insert,
+            )
+            .unwrap();
         assert!(txn_store.get_local_version(1).is_some());
 
         txn_store.rollback();

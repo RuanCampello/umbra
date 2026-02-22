@@ -25,6 +25,7 @@ pub enum MvccError {
     Wal(WalError),
     NotOpen,
     TableNotFound,
+    WriteConflict,
 }
 
 static LAST_USED_TIMESTAMP: AtomicI64 = AtomicI64::new(0);
@@ -115,6 +116,9 @@ impl Display for MvccError {
             Self::NotOpen => f.write_str("Engine was not open at the operation time"),
             Self::TableNotFound => f.write_str("Table was not found by the engine"),
             Self::Wal(wal) => write!(f, "{wal}"),
+            Self::WriteConflict => {
+                f.write_str("Write conflict: row is being modified by another transaction")
+            }
         }
     }
 }
