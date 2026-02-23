@@ -8,6 +8,8 @@
 /umbra.temp
 # db files for testing
 *.db
+# WAL related files
+/wal
 
 # benchmarking
 perf.data*
