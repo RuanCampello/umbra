@@ -69,7 +69,6 @@ impl Executor {
                 tuple[*col_idx] = value.clone();
             }
 
-            // Skip the row_id column (engine manages it internally).
             let data = tuple[1..].to_vec();
             self.engine.update(txn_id, table, row_id, data)?;
             count += 1;
@@ -79,7 +78,7 @@ impl Executor {
     }
 }
 
-/// Extracts the `row_id` from column 0 of a tuple.
+#[inline(always)]
 fn extract_row_id(tuple: &[Value]) -> Result<i64, DatabaseError> {
     match &tuple[0] {
         Value::Number(id) => Ok(*id as i64),

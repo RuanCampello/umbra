@@ -8,6 +8,7 @@ use crate::db::{DatabaseError, SchemaNew as Schema};
 
 impl Executor {
     /// Creates a table in the engine and returns the stored schema.
+    #[inline(always)]
     pub fn create_table(&self, schema: Schema) -> Result<Schema, DatabaseError> {
         Ok(self.engine.create_table(schema)?)
     }
