@@ -10,27 +10,55 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The global transaction manager and visibility orchestrator.
+///
+/// This registry assigns monotonic transaction IDs and commit sequences,
+/// tracking the active/committing/aborted state of all transactions in the system.
+/// It is responsible for making snapshot isolation possible by maintaining a history
+/// of which transactions were committed at what sequence number.
+///
+/// Key responsibilities:
+/// - Assigns unique, monotonically increasing `txn_id`s on `begin`.
+/// - Assigns global commit sequences upon commit for snapshot visibility.
+/// - Determines whether a specific version (`version_txn_id`) is visible to a reader (`view_txn_id`)
+///   based on the active isolation level (`ReadCommitted` or `Snapshot`).
+/// - Manages garbage collection to retire old sequences and transaction states once no
+///   active transactions can observe them.
 #[derive(Default)]
 pub struct TransactionRegistry {
+    /// Monotonically increasing counter for new transactions.
     next_txn_id: AtomicI64,
+    /// Active, committing, or recently aborted transactions.
     transactions: Mutex<HashMap<i64, TransactionState>>,
     /// current number of active transactions for fast look-up
     active_transactions: AtomicUsize,
+    /// Maps `txn_id` -> `commit_sequence`. Kept around to answer visibility checks.
     snapshot_sequences: Mutex<HashMap<i64, i64>>,
     /// 0: Read Committed
     /// 1: Snapshot
     isolation_level: AtomicU8,
-    /// per transaction isolation level
+    /// per transaction isolation level overrides
     transaction_isolation_levels: Mutex<HashMap<i64, u8>>,
     isolation_override_count: AtomicUsize,
     /// whether we should accept new transactions.
     accepting: AtomicBool,
+    /// Global serial sequence counter. Incremented on `begin` and `commit`.
     next_sequence: AtomicI64,
 }
 
+/// A highly compacted representation of a transaction's lifecycle.
+///
+/// Stores both the `begin` sequence and the `commit` sequence.
+/// The `commit` field uses bit manipulation to encode the `TransactionStatus`
+/// (Active, Committing, Aborted) in the upper 2 bits of the 64-bit integer,
+/// leaving the lower 62 bits for the actual commit sequence number.
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionState {
+    /// The global sequence number when this transaction began.
+    /// `-1` if the transaction is aborted.
     begin: i64,
+    /// Lower 62 bits: the global sequence number when this transaction committed.
+    /// Upper 2 bits: 0 (Active), 1 (Committing), >1 (Aborted).
     commit: i64,
 }
 
@@ -46,11 +74,16 @@ pub enum TransactionStatus {
     Aborted,
 }
 
+/// Determines how visible uncommitted or newly committed writes are to a transaction.
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum IsolationLevel {
+    /// A transaction sees all writes committed before the *current statement* executes.
+    /// Does not prevent phantoms or non-repeatable reads.
     #[default]
     ReadCommitted,
+    /// A transaction sees a consistent snapshot of the database at the exact moment
+    /// the *transaction began*. Other transactions' commits after this point are ignored.
     Snapshot,
 }
 
