@@ -26,6 +26,7 @@ pub enum MvccError {
     NotOpen,
     TableNotFound,
     WriteConflict,
+    Other(String),
 }
 
 static LAST_USED_TIMESTAMP: AtomicI64 = AtomicI64::new(0);
@@ -119,6 +120,7 @@ impl Display for MvccError {
             Self::WriteConflict => {
                 f.write_str("Write conflict: row is being modified by another transaction")
             }
+            Self::Other(msg) => f.write_str(msg),
         }
     }
 }

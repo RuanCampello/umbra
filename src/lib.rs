@@ -28,6 +28,7 @@ use db::DatabaseError;
 mod collections;
 mod core;
 pub mod db;
+pub(crate) mod executor;
 pub(crate) mod os;
 pub mod sql;
 pub(crate) mod storage;
