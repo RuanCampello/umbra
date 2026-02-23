@@ -5,15 +5,15 @@
 use crate::collections::hash::{BuildHasher, HashMap, HashSet};
 use crate::core::json;
 use crate::core::random::Rng;
+use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
+use crate::sql::statement::{
+    join, Assignment, Expression, Function, JoinType, OrderDirection, Type, Value,
+};
 use crate::storage::btree::{BTree, BTreeKeyCmp, BytesCmp, Cursor};
 use crate::storage::page::PageNumber;
 use crate::storage::pagination::io::FileOperations;
 use crate::storage::pagination::pager::{reassemble_content, Pager};
 use crate::storage::tuple::{self, deserialize};
-use crate::db::{DatabaseError, IndexMetadata, Numeric, Relation, Schema, SqlError, TableMetadata};
-use crate::sql::statement::{
-    join, Assignment, Expression, Function, JoinType, OrderDirection, Type, Value,
-};
 use crate::vm;
 use crate::vm::expression::{evaluate_where, resolve_expression, resolve_only_expression, VmType};
 use std::cell::RefCell;

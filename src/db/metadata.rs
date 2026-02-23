@@ -1,14 +1,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::collections::hash::HashMap;
+use crate::db::{DatabaseError, RowId, Schema};
+use crate::sql::analyzer::AnalyzerError;
+use crate::sql::statement::{Column, Type};
 use crate::storage::btree::{
     BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp, VarlenaCmp,
 };
 use crate::storage::page::PageNumber;
 use crate::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
-use crate::db::{DatabaseError, RowId, Schema};
-use crate::sql::analyzer::AnalyzerError;
-use crate::sql::statement::{Column, Type};
 
 /// That's all the information we've from a table during runtime.
 /// We save this to the database metadata table at page zero.
