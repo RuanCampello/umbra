@@ -19,6 +19,23 @@ use std::{
     time::Duration,
 };
 
+/// The global, thread-safe version storage for a single table.
+///
+/// This structure holds the authoritative version chains for all tuples in the table,
+/// acting as the primary source of truth for MVCC visibility.
+///
+/// Key responsibilities:
+/// - Maintains the `row_id -> VersionChain` mapping in a concurrent B-Tree.
+/// - Stores actual tuple data in a [`TupleArena`] for cache-efficient, non-copying access.
+/// - Tracks active uncommitted writes to detect write-write conflicts.
+/// - Integrates with the [`VisibilityChecker`] (usually `TransactionRegistry`) to determine
+///   which tuple versions are visible to which transactions.
+/// - Orchestrates garbage collection of old versions and deleted rows.
+///
+/// **Concurrency Model:**
+/// Access to the version chains is guarded by a `RwLock`. However, the actual tuple data
+/// is arena-allocated and accessed lock-free once the index is known, minimizing contention
+/// during heavy read workloads.
 pub(crate) struct VersionStorage {
     table: String,
     /// Row versions indexed by the `row_id`
@@ -27,42 +44,76 @@ pub(crate) struct VersionStorage {
     /// Registered indexes, keyed by index name.
     indexes: RwLock<HashMap<String, Arc<dyn Index>>>,
     open: AtomicBool,
+    /// Tracks which transaction currently holds a lock (claim) on a tuple for modification.
+    /// Maps `row_id` -> `txn_id`. Used for write-write conflict detection.
     uncommited_writes: RwLock<HashMap<i64, i64>>,
     /// Maximum number of previous versions per row.
     max_version_history: usize,
+    /// Checks transaction visibility (xmin/xmax). Usually an `Arc<TransactionRegistry>`.
     visibility_checker: Option<Arc<TransactionRegistry>>,
+    /// Arena allocator for tuple data, reducing heap fragmentation and locking overhead.
     arena: TupleArena,
 }
 
+/// Transaction-local write buffer and read-your-own-writes manager.
+///
+/// Each active transaction maintains one of these per table it modifies.
+/// It buffers `INSERT`, `UPDATE`, and `DELETE` operations locally until commit time,
+/// ensuring that a transaction can read its own uncommitted changes while shielding
+/// them from other concurrent transactions.
+///
+/// Upon commit, the `local` changes are flushed to the parent [`VersionStorage`].
 pub(crate) struct TransationVersionStorage {
     txn_id: i64,
+    /// Buffers local version chains for rows modified by this transaction.
     pub(crate) local: Option<HashMap<i64, VersionChain>>,
     parent: Arc<VersionStorage>,
+    /// Tracks the highest visible version at the time a row was first read or modified.
+    /// Crucial for detecting if another transaction modified the row before we commit.
     write_set: Option<HashMap<i64, WriteSet>>,
 }
 
-/// Entry of the linked list version chain.
+/// A single node in a tuple's version chain linked list.
+///
+/// Version chains are ordered from newest (HEAD) to oldest.
+/// When checking visibility, the engine walks this chain backwards in time
+/// until it finds a version visible to the current transaction.
 pub(crate) struct VersionEntry {
     version: TupleVersion,
+    /// The previous (older) version of this tuple, if any.
     prev: Option<Arc<VersionEntry>>,
     /// Index into the arena for non-copying access.
-    /// Stored as `idx + 1` for optimisation.
+    /// Stored as `idx + 1` for optimisation. 0 means not in arena.
     arena_idx: Option<NonZeroU64>,
 }
 
+/// Core representation of a row version in MVCC.
+///
+/// Contains the data and the fundamental metadata (`txn_id`, `deleted_at_txn_id`)
+/// required to evaluate Snapshot Isolation visibility rules.
 #[derive(Clone)]
 pub(crate) struct TupleVersion {
-    pub txn_id: i64, // Transaction that created this version (min_txn_id / xmin)
-    pub deleted_at_txn_id: i64, // Transaction that deleted this version (max_txn_id / xmax)
+    /// The transaction ID that created this version (analogous to `xmin`).
+    pub txn_id: i64,
+    /// The transaction ID that deleted or updated this version (analogous to `xmax`).
+    /// If not deleted, this is typically set to infinity or 0.
+    pub deleted_at_txn_id: i64,
+    /// The actual serialized row data.
     pub data: Tuple, // PERFORMANCE: we could compress this one
     pub row_id: i64,
-    pub created_at: i64, // Timestamp
+    /// Physical timestamp of creation, primarily used for garbage collection thresholds.
+    pub created_at: i64,
 }
 
-/// Tracks write operations.
-/// This serves as conflict detection.
+/// Tracks the state of a row when a transaction first observed it.
+///
+/// This serves as the foundation for optimistic concurrency control (OCC) conflict detection.
+/// By storing the version sequence at read time, the engine can verify at commit time
+/// that the `HEAD` version hasn't advanced (meaning no other transaction snuck in a write).
 pub(crate) struct WriteSet {
+    /// The version of the tuple visible to this transaction when it first read/modified it.
     version: Option<TupleVersion>,
+    /// The global sequence number of the registry when this check occurred.
     version_sequence: i64,
 }
 
