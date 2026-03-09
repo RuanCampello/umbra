@@ -186,8 +186,9 @@ pub(crate) fn resolve_expression(
 
             let (left, right) = try_coerce_enum(left, left_val, right, right_val, schema)?;
             let (left, right) = left.coerce_to(right);
+
             if matches!(left, Value::Null) || matches!(right, Value::Null) {
-                return Ok(Value::Null);
+                return Ok(three_valued_logic(&left, &right, operator));
             }
 
             let mismatched_types = || {
@@ -428,6 +429,22 @@ pub(crate) fn evaluate_where(
             expected: VmType::Bool,
             found: Expression::Value(other),
         })),
+    }
+}
+
+#[inline(always)]
+/// Uses 3VL matching to short-circuit correctly logical expressions with `Value::Null`
+const fn three_valued_logic(left: &Value, right: &Value, operator: &BinaryOperator) -> Value {
+    match operator {
+        BinaryOperator::Or => match (left, right) {
+            (Value::Boolean(true), _) | (_, Value::Boolean(true)) => Value::Boolean(true),
+            _ => Value::Null,
+        },
+        BinaryOperator::And => match (left, right) {
+            (Value::Boolean(false), _) | (_, Value::Boolean(false)) => Value::Boolean(false),
+            _ => Value::Null,
+        },
+        _ => Value::Null,
     }
 }
 
