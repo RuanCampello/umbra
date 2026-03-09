@@ -3318,3 +3318,36 @@ fn text_indexing() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn non_null_json_key() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        "CREATE TABLE users (id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE, metadata JSONB);",
+    )?;
+
+    db.exec(
+        r#"
+        INSERT INTO users(email, metadata) VALUES
+        ('lead.researcher@institute.edu', '{"name": "Dr. Aris", "department": "Bioinformatics", "target_nuclei": "HVC", "is_active": true}'),
+        ('postdoc.smith@institute.edu', '{"name": "Dr. Smith", "department": "Bioinformatics", "target_nuclei": "RA", "is_active": true}'),
+        ('sysadmin@institute.edu', '{"name": "Alex", "department": "IT", "is_active": true, "access_level": "root"}');
+    "#,
+    )?;
+
+    let query = db.exec(r#"
+        SELECT email FROM users WHERE metadata.target_nuclei != 'HVC' OR metadata.target_nuclei IS NULL;
+    "#)?;
+
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["postdoc.smith@institute.edu".into()],
+            vec!["sysadmin@institute.edu".into()],
+        ]
+    );
+    assert_eq!(query.tuples.len(), 2);
+
+    Ok(())
+}
