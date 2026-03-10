@@ -3351,3 +3351,46 @@ fn non_null_json_key() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn jsonb_null_evaluation() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec(
+        "CREATE TABLE experiments (id SERIAL PRIMARY KEY, name VARCHAR(255) UNIQUE, data JSONB);",
+    )?;
+    db.exec(
+        r#"
+        INSERT INTO experiments(name, data) VALUES
+        ('exp_1', '{"gene": "FOXP2", "nuclei": "HVC", "config": {"threshold": 0.5}}'),
+        ('exp_2', '{"gene": "FOXP2", "nuclei": null, "config": {"active": true}}'),
+        ('exp_3', '{"gene": "DRD2"}'),
+        ('exp_4', '{}');
+    "#,
+    )?;
+
+    let query = db.exec("SELECT name FROM experiments WHERE data.nuclei IS NOT NULL;")?;
+    assert_eq!(query.tuples, vec![vec!["exp_1".into()]]);
+
+    let query = db.exec("SELECT name FROM experiments WHERE data.nuclei IS NULL;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["exp_2".into()], // explicit null
+            vec!["exp_3".into()], // missing key
+            vec!["exp_4".into()]  // empty object
+        ]
+    );
+
+    let query = db.exec("SELECT name FROM experiments WHERE data.config.threshold IS NULL;")?;
+    assert_eq!(
+        query.tuples,
+        vec![
+            vec!["exp_2".into()], // config exists but threshold is missing
+            vec!["exp_3".into()], // config is missing entirely
+            vec!["exp_4".into()]  // config is missing entirely
+        ]
+    );
+
+    Ok(())
+}
