@@ -1560,13 +1560,14 @@ impl Jsonb {
         match kind {
             ElementType::INT | ElementType::FLOAT => string.push_str(slice),
             ElementType::INT5 => self.serialize_int(string, slice)?,
-            ElementType::FLOAT5 => unimplemented!(),
+            ElementType::FLOAT5 => self.serialize_float(string, slice)?,
             _ => unsafe { unreachable_unchecked() },
         }
 
         Ok(current)
     }
 
+    #[inline(always)]
     fn serialize_int(&self, string: &mut String, hex: &str) -> super::Result<()> {
         use std::fmt::Write;
 
@@ -1615,6 +1616,42 @@ impl Jsonb {
             string.push_str(hex);
         } else {
             parse_error!("malformed JSON");
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn serialize_float(&self, string: &mut String, float_str: &str) -> super::Result<()> {
+        let bytes = float_str.as_bytes();
+
+        if bytes.len() < 2 {
+            parse_error!("Integer is less then 2 chars: {float_str}");
+        }
+
+        match bytes {
+            b"9.0e+999" | b"-9.0e+999" => {
+                string.push_str(float_str);
+            }
+            [b'-', b'.', ..] => {
+                string.push_str("-0.");
+                string.push_str(&float_str[2..]);
+            }
+            [b'+', b'.', ..] => {
+                string.push_str("0.");
+                string.push_str(&float_str[2..]);
+            }
+            [b'.', ..] => {
+                string.push_str("0.");
+                string.push_str(&float_str[1..]);
+            }
+            [first, ..] if first.is_ascii_alphanumeric() || matches!(first, b'+' | b'-') => {
+                string.push_str(float_str);
+                string.push('0');
+            }
+            _ => {
+                parse_error!("Unable to serialize float: {float_str}");
+            }
         }
 
         Ok(())
