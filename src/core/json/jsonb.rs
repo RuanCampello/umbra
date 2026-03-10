@@ -1559,12 +1559,65 @@ impl Jsonb {
 
         match kind {
             ElementType::INT | ElementType::FLOAT => string.push_str(slice),
-            ElementType::INT5 => unimplemented!(),
+            ElementType::INT5 => self.serialize_int(string, slice)?,
             ElementType::FLOAT5 => unimplemented!(),
             _ => unsafe { unreachable_unchecked() },
         }
 
         Ok(current)
+    }
+
+    fn serialize_int(&self, string: &mut String, hex: &str) -> super::Result<()> {
+        use std::fmt::Write;
+
+        let bytes = hex.as_bytes();
+        let starts_with_0x = bytes
+            .get(..2)
+            .is_some_and(|bytes| bytes.eq_ignore_ascii_case(b"0x"));
+        let has_sign = matches!(bytes.first(), Some(b'-' | b'+'));
+        let starts_with_sign_0x = has_sign
+            && bytes
+                .get(1..3)
+                .is_some_and(|bytes| bytes.eq_ignore_ascii_case(b"0x"));
+        let is_hex = bytes.len() > 2 && (starts_with_0x || starts_with_sign_0x);
+
+        if is_hex {
+            let (sign, parts) = match bytes {
+                [b'-', b'0', b'x' | b'X', ..] => ("-", &hex[3..]),
+                [b'+', b'0', b'x' | b'X', ..] => ("", &hex[3..]),
+                _ => ("", &hex[2..]),
+            };
+
+            string.push_str(sign);
+            let mut value = 0;
+
+            for char in parts.chars() {
+                if !char.is_ascii_hexdigit() {
+                    parse_error!("failed to parse hex digit: {char}");
+                }
+
+                if (value >> 60) != 0 {
+                    string.push_str("9.0e999");
+                    return Ok(());
+                }
+
+                value = value * 16 + char.to_digit(16).unwrap_or(0) as u64;
+            }
+
+            write!(string, "{value}")
+                .map_err(|_| JsonError::Internal("Error writing string to json".into()))?;
+        } else if !hex.is_empty() && hex.bytes().all(|byte| byte.is_ascii_digit()) {
+            string.push_str(hex);
+        } else if hex.len() > 1
+            && hex.starts_with(['+', '-'])
+            && hex.bytes().skip(1).all(|byte| byte.is_ascii_digit())
+        {
+            string.push_str(hex);
+        } else {
+            parse_error!("malformed JSON");
+        }
+
+        Ok(())
     }
 
     fn serialize_object(
