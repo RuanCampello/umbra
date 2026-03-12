@@ -3435,3 +3435,53 @@ fn null_in() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn null_in_aggregate_functions() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE scores (id SERIAL PRIMARY KEY, score INTEGER NULLABLE);")?;
+    db.exec("INSERT INTO scores (score) VALUES (10), (20), (NULL), (30), (NULL);")?;
+
+    let query = db.exec("SELECT COUNT(*) FROM scores;")?;
+    assert_eq!(
+        query.tuples,
+        vec![vec![Value::Number(5)]],
+        "COUNT(*) must include NULLs"
+    );
+
+    let query = db.exec("SELECT COUNT(score) FROM scores;")?;
+    assert_eq!(
+        query.tuples,
+        vec![vec![Value::Number(3)]],
+        "COUNT(field) must exclude NULLs"
+    );
+
+    let query = db.exec("SELECT SUM(score) FROM scores;")?;
+    assert_eq!(
+        query.tuples,
+        vec![vec![Value::Number(60)]],
+        "SUM(field) must exclude NULLs"
+    );
+
+    let query = db.exec("SELECT AVG(score) FROM scores;")?;
+    assert_eq!(
+        query.tuples,
+        vec![vec![Value::Number(20)]],
+        "AVG(field) must exclude NULLs"
+    );
+
+    let query = db.exec("SELECT MIN(score), MAX(score) FROM scores;")?;
+    assert_eq!(
+        query.tuples[0][0],
+        Value::Number(10),
+        "MIN should ignore NULL"
+    );
+    assert_eq!(
+        query.tuples[0][1],
+        Value::Number(30),
+        "MAX should ignore NULL"
+    );
+
+    Ok(())
+}
