@@ -657,11 +657,12 @@ impl QuerySet {
         }
     }
 
+    #[inline(always)]
     fn get(&self, row: usize, column: &str) -> Option<&Value> {
         self.tuples.get(row)?.get(self.schema.index_of(column)?)
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.tuples.iter().all(|tuple| tuple.is_empty())
     }
 

@@ -3394,3 +3394,32 @@ fn jsonb_null_evaluation() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn null_in_between() -> Result<()> {
+    let mut db = State::default();
+
+    db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, value INT NULLABLE);")?;
+    db.exec("INSERT INTO items (value) VALUES (5), (10), (15), (NULL);")?;
+
+    let query = db.exec("SELECT * FROM items WHERE value BETWEEN 5 AND 15;")?;
+    assert_eq!(
+        query.tuples.len(),
+        3,
+        "NULL should be excluded from BETWEEN"
+    );
+
+    let query = db.exec("SELECT * FROM items WHERE value BETWEEN NULL AND 20;")?;
+    assert!(
+        query.is_empty(),
+        "BETWEEN with a NULL lower bound should yield zero items"
+    );
+
+    let query = db.exec("SELECT * FROM items WHERE value BETWEEN 0 AND NULL;")?;
+    assert!(
+        query.is_empty(),
+        "BETWEEN with a NULL upper bound should yield zero items"
+    );
+
+    Ok(())
+}

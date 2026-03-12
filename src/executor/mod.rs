@@ -24,6 +24,8 @@
 //!                                  VersionStorage (MVCC-aware scans)
 //! ```
 
+#![allow(unused)]
+
 pub(crate) mod ddl;
 pub(crate) mod dml;
 pub(crate) mod operator;
