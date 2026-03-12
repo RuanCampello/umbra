@@ -666,6 +666,11 @@ impl QuerySet {
         self.tuples.iter().all(|tuple| tuple.is_empty())
     }
 
+    #[inline(always)]
+    pub const fn len(&self) -> usize {
+        self.tuples.len()
+    }
+
     pub fn display_enums(&mut self) {
         for tuple in &mut self.tuples {
             for (idx, value) in tuple.iter_mut().enumerate() {
