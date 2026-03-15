@@ -193,6 +193,14 @@ impl Column {
             default_value,
         }
     }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn column_type(&self) -> Type {
+        self.r#type
+    }
 }
 
 impl Display for Schema {

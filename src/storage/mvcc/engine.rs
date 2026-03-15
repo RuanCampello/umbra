@@ -233,6 +233,11 @@ impl Engine {
         Ok(schemas.contains_key(name))
     }
 
+    pub fn schema(&self, table: &str) -> Result<Arc<Schema>> {
+        let schemas = self.schemas.read().unwrap();
+        schemas.get(table).cloned().ok_or(MvccError::TableNotFound)
+    }
+
     fn record_ddl(&self, name: &str, operation: WalOperation, schema: &[u8]) -> Result<()> {
         if self.must_skip_wal() {
             return Ok(());

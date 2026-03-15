@@ -29,6 +29,7 @@
 pub(crate) mod ddl;
 pub(crate) mod dml;
 pub(crate) mod operator;
+pub(crate) mod query;
 
 use crate::db::DatabaseError;
 use crate::storage::mvcc::{engine::Engine, MvccError};
@@ -250,7 +251,6 @@ mod tests {
         let (reader, _) = exec.auto_txn().unwrap();
         let scan = operator::Scan::new(exec.engine(), reader, "users").unwrap();
 
-        // Project only column 1 (name).
         let mut project = operator::Project::new(Box::new(scan), vec![1]);
         let row = project.next().unwrap().unwrap();
 
@@ -318,5 +318,128 @@ mod tests {
         assert!(exec.begin_transaction().is_err());
 
         exec.rollback().unwrap();
+    }
+
+    #[test]
+    fn select_wildcard() {
+        let mut exec = setup();
+        create_users_table(&exec);
+
+        let (txn_id, _) = exec.auto_txn().unwrap();
+        exec.insert(
+            txn_id,
+            "users",
+            vec![
+                vec![Value::Number(1), Value::String("alice".into())],
+                vec![Value::Number(2), Value::String("bob".into())],
+            ],
+            1,
+        )
+        .unwrap();
+        exec.engine().commit_transaction(txn_id).unwrap();
+
+        let (reader, _) = exec.auto_txn().unwrap();
+        use crate::sql::statement::{Expression, Select, TableRef};
+
+        let select = Select {
+            columns: vec![Expression::Wildcard],
+            from: TableRef {
+                name: "users".into(),
+                alias: None,
+            },
+            joins: vec![],
+            r#where: None,
+            order_by: vec![],
+            group_by: vec![],
+            limit: None,
+            offset: None,
+        };
+
+        let rows = exec.execute_select(reader, select).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][1], Value::String("alice".into()));
+    }
+
+    #[test]
+    fn select_with_projection() {
+        let mut exec = setup();
+        create_users_table(&exec);
+
+        let (txn_id, _) = exec.auto_txn().unwrap();
+        exec.insert(
+            txn_id,
+            "users",
+            vec![vec![Value::Number(1), Value::String("alice".into())]],
+            1,
+        )
+        .unwrap();
+        exec.engine().commit_transaction(txn_id).unwrap();
+
+        let (reader, _) = exec.auto_txn().unwrap();
+        use crate::sql::statement::{Expression, Select, TableRef};
+
+        let select = Select {
+            columns: vec![Expression::Identifier("name".into())],
+            from: TableRef {
+                name: "users".into(),
+                alias: None,
+            },
+            joins: vec![],
+            r#where: None,
+            order_by: vec![],
+            group_by: vec![],
+            limit: None,
+            offset: None,
+        };
+
+        let rows = exec.execute_select(reader, select).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 1);
+        assert_eq!(rows[0][0], Value::String("alice".into()));
+    }
+
+    #[test]
+    fn select_order_by_and_limit() {
+        let mut exec = setup();
+        create_users_table(&exec);
+
+        let (txn_id, _) = exec.auto_txn().unwrap();
+        exec.insert(
+            txn_id,
+            "users",
+            vec![
+                vec![Value::Number(3), Value::String("charlie".into())],
+                vec![Value::Number(1), Value::String("alice".into())],
+                vec![Value::Number(2), Value::String("bob".into())],
+            ],
+            1,
+        )
+        .unwrap();
+        exec.engine().commit_transaction(txn_id).unwrap();
+
+        let (reader, _) = exec.auto_txn().unwrap();
+        use crate::sql::statement::{Expression, OrderBy, OrderDirection, Select, TableRef};
+
+        let select = Select {
+            columns: vec![Expression::Wildcard],
+            from: TableRef {
+                name: "users".into(),
+                alias: None,
+            },
+            joins: vec![],
+            r#where: None,
+            order_by: vec![OrderBy {
+                expr: Expression::Identifier("id".into()),
+                direction: OrderDirection::Asc,
+            }],
+            group_by: vec![],
+            limit: Some(2),
+            offset: None,
+        };
+
+        let rows = exec.execute_select(reader, select).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], Value::Number(1));
+        assert_eq!(rows[1][0], Value::Number(2));
     }
 }

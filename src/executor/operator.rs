@@ -42,6 +42,17 @@ pub(crate) struct Limit {
     skipped: usize,
 }
 
+/// Materialises all source tuples, sorts them, and yields one at a time.
+///
+/// This is an in-memory sort only. The existing `vm::planner::Sort<File>` has
+/// an external merge sort for when tuples exceed the buffer size; that should
+/// be ported here once `Scan` moves to a streaming model instead of
+/// materialising all rows upfront.
+pub(crate) struct Sort {
+    sorted: Vec<Tuple>,
+    cursor: usize,
+}
+
 /// Yields pre-built tuples one at a time.
 pub(crate) struct Values {
     tuples: Vec<Tuple>,
@@ -148,6 +159,38 @@ impl Operator for Limit {
         }
 
         Ok(tuple)
+    }
+}
+
+impl Sort {
+    pub fn new(
+        mut source: Box<dyn Operator>,
+        comparator: Box<dyn Fn(&Tuple, &Tuple) -> std::cmp::Ordering>,
+    ) -> Result<Self, DatabaseError> {
+        let mut tuples = Vec::new();
+        while let Some(tuple) = source.next()? {
+            tuples.push(tuple);
+        }
+
+        tuples.sort_by(|a, b| comparator(a, b));
+
+        Ok(Self {
+            sorted: tuples,
+            cursor: 0,
+        })
+    }
+}
+
+impl Operator for Sort {
+    fn next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        if self.cursor >= self.sorted.len() {
+            return Ok(None);
+        }
+
+        let tuple = self.sorted[self.cursor].clone();
+        self.cursor += 1;
+
+        Ok(Some(tuple))
     }
 }
 
