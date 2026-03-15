@@ -213,6 +213,11 @@ pub(crate) struct HashJoin<File: FileOperations> {
     right_key: Expression,
     key_type: VmType,
 
+    // both are computed once to avoid schema
+    // clone on every `try_next` iteration
+    left_schema: Schema,
+    right_schema: Schema,
+
     // run-time state
     table: HashMap<Vec<u8>, Rc<Vec<Tuple>>>,
     hash_built: bool,
@@ -244,6 +249,7 @@ pub(crate) struct IndexNestedLoopJoin<File: FileOperations> {
     pub left_tables: HashSet<String>,
     pub right_tables: HashSet<String>,
 
+    pub left_schema: Schema,
     pub schema: Schema,
 }
 
@@ -1364,7 +1370,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             while let Some(right) = self.right.try_next()? {
                 let key = vm::expression::resolve_expression(
                     &right,
-                    &self.right_schema(),
+                    &self.right_schema,
                     &self.right_key,
                 )?;
 
@@ -1402,7 +1408,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
             if let Some(left) = self.current_left.take() {
                 if matches!(self.join_type, JoinType::Left | JoinType::Full) && self.index.eq(&0) {
                     let mut tuple = left;
-                    tuple.extend(vec![Value::Null; self.right_schema().len()]);
+                    tuple.extend(vec![Value::Null; self.right_schema.len()]);
 
                     return Ok(Some(tuple));
                 }
@@ -1419,7 +1425,7 @@ impl<File: PlanExecutor> Execute for HashJoin<File> {
 
             // d: probe hash table with the new tuple
             let key_value =
-                vm::expression::resolve_expression(&left, &self.left_schema(), &self.left_key)?;
+                vm::expression::resolve_expression(&left, &self.left_schema, &self.left_key)?;
 
             self.current_left = Some(left);
 
@@ -1448,7 +1454,7 @@ impl<File: PlanExecutor> Execute for IndexNestedLoopJoin<File> {
                 None => return Ok(None),
             };
 
-            let key = resolve_expression(&left_tuple, &self.left_schema(), &self.left_key_expr)?;
+            let key = resolve_expression(&left_tuple, &self.left_schema, &self.left_key_expr)?;
 
             if key.is_null() {
                 if matches!(self.join_type, JoinType::Left) {
@@ -1532,11 +1538,15 @@ impl<File: FileOperations> HashJoin<File> {
         right_key: Expression,
         key_type: VmType,
     ) -> Self {
+        let left_schema = left.schema().expect("HashJoin must have a left schema");
+        let right_schema = right.schema().expect("HashJoin must have a right schema");
         Self {
             join_type,
             key_type,
             left_key,
             right_key,
+            left_schema,
+            right_schema,
             schema,
             left: Box::new(left),
             right: Box::new(right),
@@ -1568,7 +1578,7 @@ impl<File: FileOperations> HashJoin<File> {
                 match self.unmatched_right_index < tuples.len() {
                     true => {
                         let right = &tuples[self.unmatched_right_index];
-                        let mut tuple = vec![Value::Null; self.left_schema().len()];
+                        let mut tuple = vec![Value::Null; self.left_schema.len()];
                         tuple.extend(right.clone());
 
                         self.unmatched_right_index += 1;
@@ -1591,18 +1601,6 @@ impl<File: FileOperations> HashJoin<File> {
         Ok(None)
     }
 
-    fn left_schema(&self) -> Schema {
-        self.left
-            .schema()
-            .expect("HashJoin must have a left node schema")
-    }
-
-    fn right_schema(&self) -> Schema {
-        self.right
-            .schema()
-            .expect("HashJoin must have a right node schema")
-    }
-
     const fn right_matters(&self) -> bool {
         matches!(self.join_type, JoinType::Right | JoinType::Full)
     }
@@ -1622,12 +1620,6 @@ impl<File: FileOperations> IndexNestedLoopJoin<File> {
         self.right_tables = right_tables;
 
         self
-    }
-
-    fn left_schema(&self) -> Schema {
-        self.left
-            .schema()
-            .expect("IndexNestedLoopJoin must have a left node schema")
     }
 }
 
