@@ -276,6 +276,7 @@ struct TupleBuffer {
     packed: bool,
     schema: Schema,
     tuples: VecDeque<Tuple>,
+    sizes: VecDeque<usize>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -1218,7 +1219,8 @@ impl<File: PlanExecutor> Execute for SortKeys<File> {
 impl<File: PlanExecutor> Collect<File> {
     fn collect(&mut self) -> Result<(), DatabaseError> {
         while let Some(tuple) = self.source.try_next()? {
-            if !self.mem_buff.fits(&tuple) {
+            if let Some(tuple) = self.mem_buff.try_push(tuple) {
+                // the buffer is full, spill the current page to disk, then push
                 if self.file.is_none() {
                     let (file_path, file) = temp_file::<File>(&self.work_dir, "umbra.query")?;
                     self.file_path = file_path;
@@ -1226,9 +1228,8 @@ impl<File: PlanExecutor> Collect<File> {
                 }
                 self.mem_buff.write_to(self.file.as_mut().unwrap())?;
                 self.mem_buff.clear();
+                self.mem_buff.push(tuple);
             }
-
-            self.mem_buff.push(tuple);
         }
 
         if let Some(mut file) = self.file.take() {
@@ -1850,13 +1851,18 @@ impl Execute for Values {
 
 impl TupleBuffer {
     fn new(page_size: usize, schema: Schema, packed: bool) -> Self {
+        let capacity = match packed {
+            true => 64,
+            _ => (page_size / 64).max(4).min(512),
+        };
         Self {
             page_size,
             schema,
             packed,
             current_size: if packed { 0 } else { TUPLE_HEADER_SIZE },
             largest_size: 0,
-            tuples: VecDeque::with_capacity(page_size.saturating_sub(TUPLE_HEADER_SIZE)),
+            tuples: VecDeque::with_capacity(capacity),
+            sizes: VecDeque::with_capacity(capacity),
         }
     }
 
@@ -1868,6 +1874,7 @@ impl TupleBuffer {
             schema: Schema::empty(),
             packed: false,
             tuples: VecDeque::new(),
+            sizes: VecDeque::new(),
         }
     }
 
@@ -1906,8 +1913,9 @@ impl TupleBuffer {
         let mut cursor = TUPLE_HEADER_SIZE;
         (0..num_of_tuples).for_each(|_| {
             let tuple = tuple::deserialize(&buff[cursor..], &self.schema);
-            cursor += tuple::size_of(&tuple, &self.schema);
-            self.push(tuple);
+            let size = tuple::size_of(&tuple, &self.schema);
+            cursor += size;
+            self.push_with_size(tuple, size);
         });
 
         Ok(())
@@ -1931,23 +1939,45 @@ impl TupleBuffer {
         buff
     }
 
+    #[inline(always)]
     fn push(&mut self, tuple: Tuple) {
         let size = tuple::size_of(&tuple, &self.schema);
+        self.push_with_size(tuple, size)
+    }
 
+    #[inline]
+    fn try_push(&mut self, tuple: Tuple) -> Option<Tuple> {
+        let size = tuple::size_of(&tuple, &self.schema);
+        if self.current_size + size > self.page_size {
+            return Some(tuple);
+        }
+
+        self.push_with_size(tuple, size);
+        None
+    }
+
+    #[inline(always)]
+    fn push_with_size(&mut self, tuple: Tuple, size: usize) {
         if size > self.largest_size {
             self.largest_size = size;
         }
 
         self.current_size += size;
+        self.sizes.push_back(size);
         self.tuples.push_back(tuple);
     }
 
+    #[inline(always)]
     fn pop_front(&mut self) -> Option<Tuple> {
-        self.tuples
-            .pop_front()
-            .inspect(|tuple| self.current_size -= tuple::size_of(tuple, &self.schema))
+        let tuple = self.tuples.pop_front()?;
+        if let Some(size) = self.sizes.pop_front() {
+            self.current_size -= size;
+        }
+
+        Some(tuple)
     }
 
+    #[inline(always)]
     fn page_size_for(size: usize) -> usize {
         let mut page = std::mem::size_of::<u32>() * 2 + size;
         page -= 1;
@@ -1962,6 +1992,7 @@ impl TupleBuffer {
 
     fn clear(&mut self) {
         self.tuples.clear();
+        self.sizes.clear();
         self.current_size = match self.packed {
             true => 0,
             false => TUPLE_HEADER_SIZE,

@@ -1318,6 +1318,7 @@ mod tests {
                     },
                 ],
                 source: Box::new(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
+                    left_schema: left_plan.schema().unwrap(),
                     left: Box::new(left_plan),
                     right_table: users_table.clone(),
                     index: users_pk_index,
@@ -1392,6 +1393,7 @@ mod tests {
                     },
                 ],
                 source: Box::new(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
+                    left_schema: left_plan.schema().unwrap(),
                     left: Box::new(left_plan),
                     right_table: orders.clone(),
                     index: orders_idx,

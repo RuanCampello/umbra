@@ -258,6 +258,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                         .schema()
                         .expect("IndexNestedLoopJoin must have a left schema");
                     self.source = Some(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
+                        left_schema: left_schema,
                         left: Box::new(left),
                         right_table: right_table.clone(),
                         index,
