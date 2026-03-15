@@ -14,7 +14,8 @@ use crate::{
     storage::{btree::Cursor, tuple},
     vm::planner::{
         Collect, CollectBuilder, ExactMatch, Filter, KeyScan, LogicalScan, PlanExecutor, Planner,
-        RangeScan, SeqScan, Sort, SortBuilder, TupleComparator, DEFAULT_SORT_BUFFER_SIZE,
+        RangeScan, SeqScan, Sort, SortBuilder, TupleComparator, DEFAULT_COLLECT_BUFFER_SIZE,
+        DEFAULT_SORT_BUFFER_SIZE,
     },
 };
 
@@ -178,7 +179,7 @@ fn generate_optimised_seq_plan<File: PlanExecutor>(
                 work_dir,
                 source: Box::new(source),
                 schema: table.key_only_schema(),
-                mem_buff_size: page_size,
+                mem_buff_size: DEFAULT_COLLECT_BUFFER_SIZE,
             }),
         }));
     }

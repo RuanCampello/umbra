@@ -302,17 +302,17 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             let mut string = vec![0; len];
             reader.read_exact(&mut string)?;
 
-            Ok(Value::String(
-                String::from_utf8(string).expect("Couldn't parse string from utf8"),
-            ))
+            // SAFETY: all VARCHAR bytes are written via rust string values,
+            // which are guaranteed to be valid utf-8. the round-trip of the storage cannot corrupt
+            // bytes, so the O(n) check is redundant.
+            unsafe { Ok(Value::String(String::from_utf8_unchecked(string))) }
         }
 
-        Type::Text => {
+        Type::Text => unsafe {
             let (_, buf) = read_varlena(reader)?;
-            Ok(Value::String(
-                String::from_utf8(buf).expect("Couldn't parse TEXT from utf8"),
-            ))
-        }
+            // SAFETY: same argument as VARCHAR
+            Ok(Value::String(String::from_utf8_unchecked(buf)))
+        },
 
         Type::Jsonb => {
             use std::io::{Error, ErrorKind};
