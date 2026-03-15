@@ -555,6 +555,8 @@ impl<File: PlanExecutor> RangeScan<File> {
         }
     }
     fn init(&mut self) -> std::io::Result<()> {
+        use crate::storage::btree::Descent;
+
         let mut pager = self.pager.borrow_mut();
 
         let key = match self.range.start_bound() {
@@ -563,7 +565,7 @@ impl<File: PlanExecutor> RangeScan<File> {
             Bound::Unbounded => return Ok(()),
         };
 
-        let mut descent = Vec::new();
+        let mut descent = Descent::new();
         let mut btree = BTree::new(&mut pager, self.root, self.comparator);
         let search = btree.search(self.root, key, &mut descent)?;
 

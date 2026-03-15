@@ -6,6 +6,7 @@ use super::page::{Cell, OverflowPage, Page, PageNumber, SlotId};
 use super::pagination::io::FileOperations;
 use super::pagination::pager::{reassemble_content, Pager};
 use crate::collections::hash::HashSet;
+use crate::collections::smallvec::SmallVec;
 use crate::sql::statement::Type;
 use crate::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
 use std::cmp::{min, Ordering, Reverse};
@@ -31,7 +32,7 @@ pub(crate) struct BTree<'p, File, Cmp> {
 pub(crate) struct Cursor {
     page: PageNumber,
     slot: SlotId,
-    descent: Vec<PageNumber>,
+    descent: Descent,
     init: bool,
     done: bool,
 }
@@ -131,6 +132,7 @@ pub(crate) trait BytesCmp {
 }
 
 pub(crate) type MemoryBuffer = std::io::Cursor<Vec<u8>>;
+pub(crate) type Descent = SmallVec<PageNumber, 8>;
 
 /// [`BTree`] common keys iterator
 trait Keys: IntoIterator<Item = u64> {}
@@ -139,7 +141,7 @@ impl<Type> Keys for Type where Type: IntoIterator<Item = u64> {}
 impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, File, Cmp> {
     /// Returns a value of a given key.
     pub fn get(&mut self, entry: &[u8]) -> IOResult<Option<Content<'_>>> {
-        let search = self.search(self.root, entry, &mut Vec::new())?;
+        let search = self.search(self.root, entry, &mut Descent::new())?;
 
         match search.index {
             Err(_) => Ok(None),
@@ -149,7 +151,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
     /// Inserts a new entry into the tree or replace it if already exists.
     pub fn insert(&mut self, entry: Vec<u8>) -> IOResult<()> {
-        let mut parents = Vec::new();
+        let mut parents = Descent::new();
         let search = self.search(self.root, &entry, &mut parents)?;
 
         let mut cell = self.allocate_cell(entry)?;
@@ -170,7 +172,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
     }
 
     pub fn try_insert(&mut self, entry: Vec<u8>) -> IOResult<Result<(), Search>> {
-        let mut parents = Vec::new();
+        let mut parents = Descent::new();
         let search = self.search(self.root, &entry, &mut parents)?;
 
         let Err(index) = search.index else {
@@ -186,7 +188,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
     }
 
     pub fn remove(&mut self, entry: &[u8]) -> IOResult<Option<Box<Cell>>> {
-        let mut parents = Vec::new();
+        let mut parents = Descent::new();
         let Some(Removal {
             cell,
             leaf_node,
@@ -200,8 +202,12 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
 
         if let Some(node) = internal_node {
             if let Some(index) = parents.iter().position(|n| n.eq(&node)) {
-                parents.drain(index..);
+                while parents.len() > index {
+                    parents.pop();
+                }
                 self.balance(node, &mut parents)?;
+                // TODO: implement drain for smallvec
+                // parents.drain(index..);
             }
         }
 
@@ -219,11 +225,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         Ok(count)
     }
 
-    fn remove_entry(
-        &mut self,
-        entry: &[u8],
-        parents: &mut Vec<PageNumber>,
-    ) -> IOResult<Option<Removal>> {
+    fn remove_entry(&mut self, entry: &[u8], parents: &mut Descent) -> IOResult<Option<Removal>> {
         let search = self.search(self.root, entry, parents)?;
         let node = self.pager.get(search.page)?;
 
@@ -269,7 +271,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
         &mut self,
         page: PageNumber,
         entry: &[u8],
-        parents: &mut Vec<PageNumber>,
+        parents: &mut Descent,
     ) -> IOResult<Search> {
         let index = self.binary_search(page, entry)?;
         let node = self.pager.get(page)?;
@@ -327,11 +329,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
     /// You can check out this mostly same `balance`
     /// implementation for this [Sqlite](https://www.sqlite.org/src/file?name=src/btree.c&ci=590f963b6599e4e2)
     /// version.
-    fn balance(
-        &mut self,
-        mut page_number: PageNumber,
-        parents: &mut Vec<PageNumber>,
-    ) -> IOResult<()> {
+    fn balance(&mut self, mut page_number: PageNumber, parents: &mut Descent) -> IOResult<()> {
         let node = self.pager.get(page_number)?;
         let is_root = parents.is_empty();
         let is_underflow = node.len() == 0 || !is_root && node.is_underflow();
@@ -384,7 +382,9 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
             page_number = new_page;
         }
 
-        let parent = parents.remove(parents.len() - 1);
+        let parent = parents
+            .pop()
+            .expect("balance called on non-root node with empty parent stack");
         let mut siblings = self.siblings(page_number, parent)?;
 
         debug_assert_eq!(
@@ -535,7 +535,8 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
     }
 
     pub(crate) fn max(&mut self) -> IOResult<Option<Content<'_>>> {
-        let (page, slot) = self.search_leaf_key(self.root, &mut Vec::new(), LeafKeySearch::Max)?;
+        let (page, slot) =
+            self.search_leaf_key(self.root, &mut Descent::new(), LeafKeySearch::Max)?;
 
         if self.pager.get(page)?.len() == 0 {
             return Ok(None);
@@ -547,7 +548,7 @@ impl<'p, File: Read + Write + Seek + FileOperations, Cmp: BytesCmp> BTree<'p, Fi
     fn search_leaf_key(
         &mut self,
         page_number: PageNumber,
-        parents: &mut Vec<PageNumber>,
+        parents: &mut Descent,
         leaf_key_search: LeafKeySearch,
     ) -> IOResult<(PageNumber, u16)> {
         let node = self.pager.get(page_number)?;
@@ -631,13 +632,13 @@ impl Cursor {
         Self {
             page,
             slot,
-            descent: vec![],
+            descent: Descent::new(),
             init: false,
             done: false,
         }
     }
 
-    pub fn initialized(page: PageNumber, slot: SlotId, descent: Vec<PageNumber>) -> Self {
+    pub fn initialized(page: PageNumber, slot: SlotId, descent: Descent) -> Self {
         Self {
             page,
             slot,
@@ -651,7 +652,7 @@ impl Cursor {
         Self {
             page: 0,
             slot: 0,
-            descent: vec![],
+            descent: Descent::new(),
             init: true,
             done: true,
         }
