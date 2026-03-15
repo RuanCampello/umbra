@@ -331,6 +331,9 @@ pub(crate) struct AggregateBuilder<File: FileOperations> {
 pub(crate) type Tuple = Vec<Value>;
 
 pub(crate) const DEFAULT_SORT_BUFFER_SIZE: usize = 4;
+/// In-memory buffer size for `Sort` and `Collect` nodes.
+/// Large enough to hold a considerable result set entirely in memory and avoid disk spilling.
+pub(crate) const DEFAULT_COLLECT_BUFFER_SIZE: usize = DEFAULT_SORT_BUFFER_SIZE * 1024 * 1024;
 const TUPLE_HEADER_SIZE: usize = size_of::<u32>();
 
 pub trait PlanExecutor: Seek + Read + Write + FileOperations {}

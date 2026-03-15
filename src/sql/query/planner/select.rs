@@ -22,7 +22,7 @@ use crate::{
         planner::{
             AggregateBuilder, Collect, CollectBuilder, Filter, HashJoin, IndexNestedLoopJoin,
             Limit, Planner, Project, Sort, SortBuilder, SortKeys, TupleComparator,
-            DEFAULT_SORT_BUFFER_SIZE,
+            DEFAULT_COLLECT_BUFFER_SIZE, DEFAULT_SORT_BUFFER_SIZE,
         },
     },
 };
@@ -146,7 +146,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                 source: Box::new(source),
                 schema: sorted_schema.clone(),
                 work_dir: self.work_dir.clone(),
-                mem_buff_size: self.page_size,
+                mem_buff_size: DEFAULT_COLLECT_BUFFER_SIZE,
             }),
             comparator: TupleComparator::new(
                 sorted_schema.clone(),
@@ -254,6 +254,9 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                     self.ranges.insert(right_key, (left_len, right_end));
 
                     let right_tables = hash_set!(right_key.to_string());
+                    let left_schema = left
+                        .schema()
+                        .expect("IndexNestedLoopJoin must have a left schema");
                     self.source = Some(Planner::IndexNestedLoopJoin(IndexNestedLoopJoin {
                         left: Box::new(left),
                         right_table: right_table.clone(),
@@ -397,7 +400,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                     source: Box::new(old_source),
                     schema: self.schema.clone(),
                     work_dir: self.work_dir.clone(),
-                    mem_buff_size: self.page_size,
+                    mem_buff_size: DEFAULT_COLLECT_BUFFER_SIZE,
                 }),
                 comparator: TupleComparator::new(
                     self.schema.clone(),
@@ -455,7 +458,7 @@ impl<'s, File: Seek + Read + Write + FileOperations> SelectBuilder<'s, File> {
                     source: Box::new(old_source),
                     schema: aggr_schema.clone(),
                     work_dir: self.work_dir.clone(),
-                    mem_buff_size: self.page_size,
+                    mem_buff_size: DEFAULT_COLLECT_BUFFER_SIZE,
                 }),
                 comparator: TupleComparator::new(
                     aggr_schema.clone(),

@@ -9,6 +9,7 @@ pub use crate::core::numeric::Numeric;
 pub(crate) use context::Context;
 use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
+#[allow(unused_imports)]
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema, SchemaBuilder, SchemaNew};
 
 use crate::collections::hash::HashMap;

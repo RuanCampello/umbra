@@ -543,6 +543,17 @@ impl Schema {
         }
     }
 
+    /// Resolves `table.column` without allocating a new string with `format!()`
+    #[inline]
+    pub fn index_of_qualified(&self, table: &str, column: &str) -> Option<usize> {
+        self.index
+            .iter()
+            .find_map(|(key, &idx)| {
+                (key.as_str().split_once('.') == Some((table, column))).then_some(idx)
+            })
+            .or_else(|| self.last_index_of(column))
+    }
+
     pub fn columns_ids(&self) -> Vec<String> {
         self.columns.iter().map(|c| c.name.to_string()).collect()
     }

@@ -11,7 +11,7 @@ use crate::{
         expression::VmType,
         planner::{
             Collect, CollectBuilder, Delete as DeletePlan, Insert as InsertPlan, Planner, Project,
-            Update as UpdatePlan, Values,
+            Update as UpdatePlan, Values, DEFAULT_COLLECT_BUFFER_SIZE,
         },
     },
 };
@@ -132,7 +132,6 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
         }) => {
             let mut source = optimiser::generate_plan(&table, r#where, db)?;
             let work_dir = db.work_dir.clone();
-            let page_size = db.pager.borrow().page_size;
             let metadata = db.metadata(&table)?;
 
             if needs_collection(&source) {
@@ -140,7 +139,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     source: Box::new(source),
                     schema: metadata.schema.clone(),
                     work_dir,
-                    mem_buff_size: page_size,
+                    mem_buff_size: DEFAULT_COLLECT_BUFFER_SIZE,
                 }));
             }
 
@@ -167,14 +166,13 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
             let mut source = optimiser::generate_plan(&from, r#where, db)?;
 
             let work_dir = db.work_dir.clone();
-            let page_size = db.pager.borrow().page_size;
             let metadata = db.metadata(&from)?;
 
             if needs_collection(&source) {
                 source = Planner::Collect(
                     CollectBuilder {
                         work_dir,
-                        mem_buff_size: page_size,
+                        mem_buff_size: DEFAULT_COLLECT_BUFFER_SIZE,
                         source: Box::new(source),
                         schema: metadata.schema.clone(),
                     }
@@ -220,6 +218,7 @@ fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
     })
 }
 
+#[inline(always)]
 fn needs_collection<File: FileOperations>(planner: &Planner<File>) -> bool {
     match planner {
         Planner::Filter(filter) => needs_collection(&filter.source),
