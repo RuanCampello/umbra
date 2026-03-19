@@ -421,6 +421,21 @@ pub(crate) fn evaluate_where(
     tuple: &[Value],
     expr: &Expression,
 ) -> Result<bool, SqlError> {
+    if let Expression::BinaryOperation {
+        operator,
+        left,
+        right,
+    } = expr
+    {
+        match operator {
+            BinaryOperator::And if !evaluate_where(schema, tuple, left)? => return Ok(false),
+            BinaryOperator::And => return evaluate_where(schema, tuple, right),
+            BinaryOperator::Or if evaluate_where(schema, tuple, left)? => return Ok(true),
+            BinaryOperator::Or => return evaluate_where(schema, tuple, right),
+            _ => {}
+        }
+    }
+
     match resolve_expression(tuple, schema, expr)? {
         Value::Boolean(boolean) => Ok(boolean),
         Value::Null => Ok(false),
