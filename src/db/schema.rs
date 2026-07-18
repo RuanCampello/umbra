@@ -1,7 +1,7 @@
 use crate::{
     collections::hash::HashMap,
     sql::{
-        statement::{Constraint, JoinType, Type},
+        statement::{self, Constraint, JoinType, Type},
         Value,
     },
 };
@@ -15,7 +15,7 @@ use std::{
 /// The representation of the table schema during runtime.
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct Schema {
-    pub columns: Vec<crate::sql::statement::Column>,
+    pub columns: Vec<statement::Column>,
     /// Index of columns definitions based on their name
     index: HashMap<String, usize>,
 
@@ -49,7 +49,8 @@ pub struct SchemaBuilder {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Column {
-    id: usize, // TODO: SUPPORT OTHER TYPES OF ID
+    /// Positional identifier: the column's index within its table
+    id: usize,
     name: String,
     nullable: bool,
     r#type: Type,
@@ -58,6 +59,12 @@ pub struct Column {
     increment: bool,
     default: Option<String>,
     default_value: Option<Value>,
+}
+
+/// Bounds-checked cursor over serialised schema bytes.
+struct SchemaBytes<'a> {
+    data: &'a [u8],
+    position: usize,
 }
 
 impl SchemaNew {
@@ -142,6 +149,24 @@ impl SchemaBuilder {
     pub fn build(self) -> SchemaNew {
         SchemaNew::new(self.table, self.columns)
     }
+
+    /// builds the schema from parsed `CREATE TABLE` column definitions
+    pub fn from_ast_columns(mut self, columns: &[crate::sql::statement::Column]) -> SchemaNew {
+        for column in columns {
+            let idx = self.columns.len();
+            let primary = column.constraints.contains(&Constraint::PrimaryKey);
+
+            self.columns.push(Column::new(
+                idx,
+                &column.name,
+                column.data_type,
+                column.is_nullable(),
+                primary,
+            ));
+        }
+
+        SchemaNew::new(self.table, self.columns)
+    }
 }
 
 impl Column {
@@ -200,6 +225,99 @@ impl Column {
 
     pub fn column_type(&self) -> Type {
         self.r#type
+    }
+
+    pub fn is_primary_key(&self) -> bool {
+        self.primary_key
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.nullable
+    }
+}
+
+impl<'a> SchemaBytes<'a> {
+    const fn new(data: &'a [u8]) -> Self {
+        Self { data, position: 0 }
+    }
+
+    fn take<'s>(&mut self, len: usize, context: &'s str) -> Result<&'a [u8], Error> {
+        match self.data.get(self.position..self.position + len) {
+            Some(bytes) => {
+                self.position += len;
+                Ok(bytes)
+            }
+            None => Err(Error::new(ErrorKind::InvalidInput, context)),
+        }
+    }
+
+    fn u8<'s>(&mut self, context: &'s str) -> Result<u8, Error> {
+        Ok(self.take(1, context)?[0])
+    }
+
+    fn flag<'s>(&mut self, context: &'s str) -> Result<bool, Error> {
+        Ok(self.u8(context)? != 0)
+    }
+
+    fn u16<'s>(&mut self, context: &'s str) -> Result<u16, Error> {
+        Ok(u16::from_le_bytes(
+            self.take(2, context)?.try_into().unwrap(),
+        ))
+    }
+
+    fn u32<'s>(&mut self, context: &'s str) -> Result<u32, Error> {
+        Ok(u32::from_le_bytes(
+            self.take(4, context)?.try_into().unwrap(),
+        ))
+    }
+
+    fn u64<'s>(&mut self, context: &'s str) -> Result<u64, Error> {
+        Ok(u64::from_le_bytes(
+            self.take(8, context)?.try_into().unwrap(),
+        ))
+    }
+
+    fn string<'s>(&mut self, len: usize, context: &'s str) -> Result<String, Error> {
+        let bytes = self.take(len, context)?;
+        String::from_utf8(bytes.to_vec()).map_err(|_| Error::new(ErrorKind::InvalidData, context))
+    }
+
+    fn column_type(&mut self) -> Result<Type, Error> {
+        let discriminant = self.u8("Missing column type")?;
+
+        Ok(match discriminant {
+            0 => Type::SmallInt,
+            1 => Type::UnsignedSmallInt,
+            2 => Type::Integer,
+            3 => Type::UnsignedInteger,
+            4 => Type::BigInteger,
+            5 => Type::UnsignedBigInteger,
+            6 => Type::SmallSerial,
+            7 => Type::Serial,
+            8 => Type::BigSerial,
+            9 => Type::Boolean,
+            10 => Type::Varchar(self.u32("Missing varchar limit")? as usize),
+            11 => Type::Text,
+            12 => Type::Real,
+            13 => Type::DoublePrecision,
+            14 => Type::Uuid,
+            15 => Type::Numeric(
+                self.u32("Missing numeric precision")? as usize,
+                self.u32("Missing numeric scale")? as usize,
+            ),
+            16 => Type::Date,
+            17 => Type::Time,
+            18 => Type::DateTime,
+            19 => Type::Interval,
+            20 => Type::Jsonb,
+            21 => Type::Enum(self.u32("Missing enum id")?),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Unknown column type discriminant",
+                ))
+            }
+        })
     }
 }
 
@@ -284,6 +402,8 @@ impl From<&SchemaNew> for Vec<u8> {
 
         buff.extend_from_slice(&(value.name.len() as u16).to_le_bytes());
         buff.extend_from_slice(value.name.as_bytes());
+        buff.extend_from_slice(&value.created_at.to_le_bytes());
+        buff.extend_from_slice(&value.updated_at.to_le_bytes());
 
         buff.extend_from_slice(&(value.columns.len() as u16).to_le_bytes());
 
@@ -291,10 +411,10 @@ impl From<&SchemaNew> for Vec<u8> {
             buff.extend_from_slice(&(column.name.len() as u16).to_le_bytes());
             buff.extend_from_slice(column.name.as_bytes());
 
-            buff.push(column.r#type.into());
-            buff.push(if column.primary_key { 1 } else { 0 });
-            buff.push(if column.nullable { 1 } else { 0 });
-            buff.push(if column.increment { 1 } else { 0 });
+            serialise_type(column.r#type, &mut buff);
+            buff.push(column.primary_key as u8);
+            buff.push(column.nullable as u8);
+            buff.push(column.increment as u8);
 
             match column.default {
                 Some(ref expr) => {
@@ -313,103 +433,29 @@ impl TryFrom<&[u8]> for SchemaNew {
     type Error = Error;
 
     fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        if data.len() < 32 {
-            return Err(Error::new(ErrorKind::InvalidInput, "Schema data too short"));
-        }
+        let mut bytes = SchemaBytes::new(data);
 
-        let mut cursor = 0;
+        let name_len = bytes.u16("Missing schema name length")? as usize;
+        let name = bytes.string(name_len, "Missing table name")?;
+        let created_at = bytes.u64("Missing creation timestamp")?;
+        let updated_at = bytes.u64("Missing update timestamp")?;
 
-        if cursor + 2 > data.len() {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "Missing schema name length",
-            ));
-        }
-        let name_len = u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
-        cursor += 2;
-
-        if cursor + name_len > data.len() {
-            return Err(Error::new(ErrorKind::InvalidInput, "Missing table name"));
-        }
-        let name = String::from_utf8(data[cursor..cursor + name_len].to_vec())
-            .map_err(|_| Error::new(ErrorKind::InvalidData, "Invalid schema table name"))?;
-        cursor += name_len;
-
-        if cursor + 2 > data.len() {
-            return Err(Error::new(ErrorKind::InvalidInput, "Missing columns count"));
-        }
-        let column_count =
-            u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
-        cursor += 2;
-
+        let column_count = bytes.u16("Missing columns count")? as usize;
         let mut columns = Vec::with_capacity(column_count);
+
         for idx in 0..column_count {
-            if cursor + 2 > data.len() {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    "Missing column name length",
-                ));
-            }
-            let column_name_len =
-                u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
-            cursor += 2;
+            let column_name_len = bytes.u16("Missing column name length")? as usize;
+            let column_name = bytes.string(column_name_len, "Missing column name")?;
+            let r#type = bytes.column_type()?;
+            let primary_key = bytes.flag("Missing primary key field")?;
+            let nullable = bytes.flag("Missing nullable field")?;
+            let increment = bytes.flag("Missing increment field")?;
 
-            if cursor + column_name_len > data.len() {
-                return Err(Error::new(ErrorKind::InvalidInput, "Missing column name"));
-            }
-
-            let column_name = String::from_utf8(data[cursor..cursor + column_name_len].to_vec())
-                .map_err(|_| Error::new(ErrorKind::InvalidData, "Invalid column name"))?;
-            cursor += column_name_len;
-
-            if cursor >= data.len() {
-                return Err(Error::new(ErrorKind::InvalidInput, "Missing column type"));
-            }
-            let r#type = Type::SmallInt; // TODO: parse type
-            cursor += 1;
-
-            if cursor >= data.len() {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    "Missing primary key field",
-                ));
-            }
-            let primary_key = data[cursor] != 0;
-            cursor += 1;
-
-            if cursor >= data.len() {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    "Missing nullable field",
-                ));
-            }
-            let nullable = data[cursor] != 0;
-            cursor += 1;
-
-            if cursor >= data.len() {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    "Missing increment field",
-                ));
-            }
-            let increment = data[cursor] != 0;
-            cursor += 1;
-
-            if cursor + 2 > data.len() {
-                return Err(Error::new(ErrorKind::InvalidInput, "Missing default field"));
-            }
-            let default_len =
-                u16::from_le_bytes(data[cursor..cursor + 2].try_into().unwrap()) as usize;
-            cursor += 2;
-
-            if cursor + default_len > data.len() {
-                return Err(Error::new(
-                    ErrorKind::InvalidInput,
-                    "Missing default expression",
-                ));
-            }
-            let default = String::from_utf8(data[cursor..cursor + default_len].to_vec())
-                .map_err(|_| Error::new(ErrorKind::InvalidData, "Invalid default expression"))?;
+            let default_len = bytes.u16("Missing default field")? as usize;
+            let default = match default_len {
+                0 => None,
+                len => Some(bytes.string(len, "Missing default expression")?),
+            };
 
             columns.push(Column {
                 id: idx,
@@ -418,12 +464,16 @@ impl TryFrom<&[u8]> for SchemaNew {
                 r#type,
                 primary_key,
                 increment,
-                default: Some(default),
+                default,
                 default_value: None,
             })
         }
 
-        Ok(SchemaNew::new(name, columns))
+        let mut schema = SchemaNew::new(name, columns);
+        schema.created_at = created_at;
+        schema.updated_at = updated_at;
+
+        Ok(schema)
     }
 }
 
@@ -622,4 +672,160 @@ pub(crate) fn umbra_schema() -> Schema {
         Column::new("table_name", Type::Varchar(255)),
         Column::new("sql", Type::Varchar(65535)),
     ])
+}
+
+/// Mirrors [`SchemaBytes::column_type`]; the discriminants must stay in sync.
+fn serialise_type(r#type: Type, buff: &mut Vec<u8>) {
+    match r#type {
+        Type::SmallInt => buff.push(0),
+        Type::UnsignedSmallInt => buff.push(1),
+        Type::Integer => buff.push(2),
+        Type::UnsignedInteger => buff.push(3),
+        Type::BigInteger => buff.push(4),
+        Type::UnsignedBigInteger => buff.push(5),
+        Type::SmallSerial => buff.push(6),
+        Type::Serial => buff.push(7),
+        Type::BigSerial => buff.push(8),
+        Type::Boolean => buff.push(9),
+        Type::Varchar(limit) => {
+            buff.push(10);
+            let limit = u32::try_from(limit).expect("varchar limit exceeds u32");
+            buff.extend_from_slice(&limit.to_le_bytes());
+        }
+        Type::Text => buff.push(11),
+        Type::Real => buff.push(12),
+        Type::DoublePrecision => buff.push(13),
+        Type::Uuid => buff.push(14),
+        Type::Numeric(precision, scale) => {
+            buff.push(15);
+            let precision = u32::try_from(precision).expect("numeric precision exceeds u32");
+            let scale = u32::try_from(scale).expect("numeric scale exceeds u32");
+            buff.extend_from_slice(&precision.to_le_bytes());
+            buff.extend_from_slice(&scale.to_le_bytes());
+        }
+        Type::Date => buff.push(16),
+        Type::Time => buff.push(17),
+        Type::DateTime => buff.push(18),
+        Type::Interval => buff.push(19),
+        Type::Jsonb => buff.push(20),
+        Type::Enum(id) => {
+            buff.push(21);
+            buff.extend_from_slice(&id.to_le_bytes());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EVERY_TYPE: [Type; 22] = [
+        Type::SmallInt,
+        Type::UnsignedSmallInt,
+        Type::Integer,
+        Type::UnsignedInteger,
+        Type::BigInteger,
+        Type::UnsignedBigInteger,
+        Type::SmallSerial,
+        Type::Serial,
+        Type::BigSerial,
+        Type::Boolean,
+        Type::Varchar(255),
+        Type::Text,
+        Type::Real,
+        Type::DoublePrecision,
+        Type::Uuid,
+        Type::Numeric(10, 2),
+        Type::Date,
+        Type::Time,
+        Type::DateTime,
+        Type::Interval,
+        Type::Jsonb,
+        Type::Enum(7),
+    ];
+
+    fn round_trip(schema: &SchemaNew) -> SchemaNew {
+        let bytes = Vec::<u8>::from(schema);
+        SchemaNew::try_from(bytes.as_slice()).expect("schema must round-trip")
+    }
+
+    #[test]
+    fn round_trip_preserves_every_type() {
+        let columns = EVERY_TYPE
+            .iter()
+            .enumerate()
+            .map(|(idx, &r#type)| {
+                Column::new(idx, format!("col_{idx}"), r#type, idx % 2 == 0, idx == 0)
+            })
+            .collect();
+
+        let schema = SchemaNew::new("every_type", columns);
+        assert_eq!(schema, round_trip(&schema));
+    }
+
+    #[test]
+    fn round_trip_preserves_flags_defaults_and_timestamps() {
+        let columns = vec![
+            Column::primary_key(0, "id", Type::BigInteger),
+            Column::with_default(
+                1,
+                "flag",
+                Type::Boolean,
+                true,
+                false,
+                false,
+                Some("true".into()),
+                None,
+            ),
+            Column::with_default(
+                2,
+                "counter",
+                Type::Integer,
+                false,
+                false,
+                true,
+                Some("0".into()),
+                None,
+            ),
+        ];
+
+        let mut schema = SchemaNew::new("defaults", columns);
+        schema.created_at = 1_234;
+        schema.updated_at = 5_678;
+
+        let decoded = round_trip(&schema);
+        assert_eq!(schema, decoded);
+        assert_eq!(decoded.created_at, 1_234);
+        assert_eq!(decoded.updated_at, 5_678);
+    }
+
+    #[test]
+    fn tiny_schema_round_trips() {
+        let schema = SchemaBuilder::new("t").add("a", Type::Integer).build();
+        assert_eq!(schema, round_trip(&schema));
+    }
+
+    #[test]
+    fn truncated_schema_is_rejected() {
+        let schema = SchemaBuilder::new("t").add("a", Type::Varchar(64)).build();
+        let bytes = Vec::<u8>::from(&schema);
+
+        for len in 0..bytes.len() {
+            assert!(
+                SchemaNew::try_from(&bytes[..len]).is_err(),
+                "prefix of {len} bytes must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_type_discriminant_is_rejected() {
+        let schema = SchemaBuilder::new("t").add("a", Type::Integer).build();
+        let mut bytes = Vec::<u8>::from(&schema);
+
+        // discriminant of the single column sits right after both name fields,
+        // the timestamps and the column count
+        bytes[24] = 0xFF;
+        assert!(SchemaNew::try_from(bytes.as_slice()).is_err());
+    }
 }
