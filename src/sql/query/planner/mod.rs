@@ -196,7 +196,7 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
     })
 }
 
-fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
+pub(crate) fn resolve_type(schema: &Schema, expr: &Expression) -> Result<Type, SqlError> {
     Ok(match expr {
         Expression::Identifier(col) => {
             let index = schema

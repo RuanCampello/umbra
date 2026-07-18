@@ -386,7 +386,7 @@ fn analyze_assignment<'exp>(
 }
 
 /// Check if a given expression contains aggregate functions (recursively)
-pub(in crate::sql) fn contains_aggregate(expr: &Expression) -> bool {
+pub(crate) fn contains_aggregate(expr: &Expression) -> bool {
     match expr {
         Expression::Function { func, args } => {
             // if this is an aggregate function, return true

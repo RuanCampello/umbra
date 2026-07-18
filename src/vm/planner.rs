@@ -1345,11 +1345,11 @@ impl<File: PlanExecutor> Execute for Aggregate<File> {
             for aggr_expr in &self.aggr_exprs {
                 match aggr_expr {
                     Expression::Function { func, args } if func.is_aggr() => {
-                        let value = self.apply_aggr(func, args, &rows, &input_schema)?;
+                        let value = apply_aggregate(func, args, &rows, &input_schema)?;
                         tuple.push(value)
                     }
                     _ => {
-                        let expr = self.process_aggr_expr(aggr_expr, &rows, &input_schema)?;
+                        let expr = reduce_aggregate_expr(aggr_expr, &rows, &input_schema)?;
                         let value = resolve_expression(&rows[0], &input_schema, &expr)?;
                         tuple.push(value)
                     }
@@ -1646,14 +1646,14 @@ impl<File: PlanExecutor> Execute for Limit<File> {
     }
 }
 
-impl<File: PlanExecutor> Aggregate<File> {
-    fn apply_aggr(
-        &self,
-        func: &Function,
-        args: &[Expression],
-        rows: &[Tuple],
-        schema: &Schema,
-    ) -> Result<Value, DatabaseError> {
+/// Applies one aggregate function over a set of rows.
+/// Shared by the legacy planner node and the MVCC executor.
+pub(crate) fn apply_aggregate(
+    func: &Function,
+    args: &[Expression],
+    rows: &[Tuple],
+    schema: &Schema,
+) -> Result<Value, DatabaseError> {
         let values = match args.first() {
             None => vec![],
             Some(Expression::Wildcard) => vec![Value::Number(1); rows.len()],
@@ -1756,29 +1756,29 @@ impl<File: PlanExecutor> Aggregate<File> {
 
             _ => unreachable!("this ain't a aggregate function"),
         }
-    }
+}
 
-    /// Process complex expression that contains aggregate functions. This recursively finds
-    /// aggregate functions, compute then and replace with its values, so we can nest aggregate
-    /// functions with functions that are computed during runtime, like `TRUNC`.
-    fn process_aggr_expr(
-        &self,
-        expr: &Expression,
-        rows: &[Tuple],
-        schema: &Schema,
-    ) -> Result<Expression, DatabaseError> {
+/// Process complex expression that contains aggregate functions. This recursively finds
+/// aggregate functions, compute then and replace with its values, so we can nest aggregate
+/// functions with functions that are computed during runtime, like `TRUNC`.
+/// Shared by the legacy planner node and the MVCC executor.
+pub(crate) fn reduce_aggregate_expr(
+    expr: &Expression,
+    rows: &[Tuple],
+    schema: &Schema,
+) -> Result<Expression, DatabaseError> {
         match expr {
             // this is the base case: when we get a aggr function, we execute them
             // if we don't get here after traversing the expression tree, we just return the
             // expression and consider the job done :/
             Expression::Function { func, args } if func.is_aggr() => {
-                let value = self.apply_aggr(func, args, rows, schema)?;
+                let value = apply_aggregate(func, args, rows, schema)?;
                 Ok(Expression::Value(value))
             }
             Expression::Function { func, args } => {
                 let args: Result<Vec<_>, _> = args
                     .iter()
-                    .map(|arg| self.process_aggr_expr(arg, rows, schema))
+                    .map(|arg| reduce_aggregate_expr(arg, rows, schema))
                     .collect();
 
                 Ok(Expression::Function {
@@ -1792,24 +1792,23 @@ impl<File: PlanExecutor> Aggregate<File> {
                 right,
             } => Ok(Expression::BinaryOperation {
                 operator: *operator,
-                left: Box::new(self.process_aggr_expr(left, rows, schema)?),
-                right: Box::new(self.process_aggr_expr(right, rows, schema)?),
+                left: Box::new(reduce_aggregate_expr(left, rows, schema)?),
+                right: Box::new(reduce_aggregate_expr(right, rows, schema)?),
             }),
             Expression::UnaryOperation { operator, expr } => Ok(Expression::UnaryOperation {
                 operator: *operator,
-                expr: Box::new(self.process_aggr_expr(expr, rows, schema)?),
+                expr: Box::new(reduce_aggregate_expr(expr, rows, schema)?),
             }),
             Expression::Nested(inner) => Ok(Expression::Nested(Box::new(
-                self.process_aggr_expr(inner, rows, schema)?,
+                reduce_aggregate_expr(inner, rows, schema)?,
             ))),
             Expression::Alias { expr, alias } => Ok(Expression::Alias {
                 alias: alias.to_string(),
-                expr: Box::new(self.process_aggr_expr(expr, rows, schema)?),
+                expr: Box::new(reduce_aggregate_expr(expr, rows, schema)?),
             }),
 
             _ => Ok(expr.to_owned()),
         }
-    }
 }
 
 impl<File: FileOperations> From<AggregateBuilder<File>> for Aggregate<File> {
