@@ -1,12 +1,13 @@
 //! Top-level statement dispatch.
 //!
 //! Routes a parsed [`Statement`] to the appropriate handler:
-//! DDL → [`ddl`](super::ddl), DML → [`dml`](super::dml),
-//! Query → [`query`](super::query).
+//! DDL -> [`ddl`](super::ddl), DML -> [`dml`](super::dml),
+//! Query -> [`query`](super::query).
 
 use super::Executor;
-use crate::db::DatabaseError;
-use crate::sql::statement::{Create, Statement};
+use crate::db::{DatabaseError, Schema};
+use crate::executor::operator;
+use crate::sql::statement::{self, Create, Drop, Statement};
 use crate::sql::Value;
 use crate::vm::planner::Tuple;
 
@@ -14,9 +15,9 @@ use crate::vm::planner::Tuple;
 pub(crate) enum ExecResult {
     /// DDL/DML that affected N rows.
     Affected(usize),
-    /// Query that produced rows.
-    Rows(Vec<Tuple>),
-    /// Transaction control — no meaningful return value.
+    /// Query that produced rows under the projected schema.
+    Rows(Schema, Vec<Tuple>),
+    /// Transaction control, no meaningful return value.
     Ok,
 }
 
@@ -26,7 +27,34 @@ impl Executor {
     /// Manages auto-commit: if no explicit transaction is active,
     /// a short-lived transaction is started and committed on success
     /// (or rolled back on error).
+    ///
+    /// Once a statement fails inside an explicit transaction, the
+    /// transaction is aborted: everything except `COMMIT`/`ROLLBACK`
+    /// (both of which roll back) is rejected until the block ends.
     pub fn execute(&mut self, stmt: Statement) -> Result<ExecResult, DatabaseError> {
+        if self.aborted {
+            return match stmt {
+                Statement::Commit | Statement::Rollback => {
+                    self.aborted = false;
+                    self.rollback()?;
+                    Ok(ExecResult::Ok)
+                }
+                _ => Err(DatabaseError::Other(
+                    "current transaction is aborted, commands ignored until end of transaction block"
+                        .into(),
+                )),
+            };
+        }
+
+        let result = self.dispatch_statement(stmt);
+        if result.is_err() && self.has_active_transaction() {
+            self.aborted = true;
+        }
+
+        result
+    }
+
+    fn dispatch_statement(&mut self, stmt: Statement) -> Result<ExecResult, DatabaseError> {
         match stmt {
             Statement::StartTransaction => {
                 self.begin_transaction()?;
@@ -44,15 +72,30 @@ impl Executor {
             }
 
             Statement::Create(Create::Table { name, columns }) => {
-                let schema = crate::db::SchemaBuilder::new(name).build_from_ast_columns(&columns);
+                let schema = crate::db::SchemaBuilder::new(name).from_ast_columns(&columns);
 
                 self.create_table(schema)?;
                 Ok(ExecResult::Affected(0))
             }
 
+            Statement::Drop(Drop::Table(name)) => {
+                self.drop_table(&name)?;
+                Ok(ExecResult::Affected(0))
+            }
+
+            Statement::Create(Create::Index {
+                name,
+                table,
+                column,
+                unique,
+            }) => {
+                self.engine.create_index(&name, &table, &column, unique)?;
+                Ok(ExecResult::Affected(0))
+            }
+
             Statement::Select(select) => {
                 let (txn_id, auto) = self.auto_txn()?;
-                let result = self.execute_select(txn_id, *select);
+                let result = self.execute_select(txn_id, select);
 
                 if auto {
                     match &result {
@@ -63,26 +106,27 @@ impl Executor {
                     }
                 }
 
-                Ok(ExecResult::Rows(result?))
+                let (schema, tuples) = result?;
+                Ok(ExecResult::Rows(schema, tuples))
             }
 
             Statement::Insert(insert) => {
                 let (txn_id, auto) = self.auto_txn()?;
 
-                let values: Vec<Tuple> = insert
+                let values: Vec<_> = insert
                     .values
                     .into_iter()
                     .map(|row| {
                         row.into_iter()
                             .filter_map(|expr| match expr {
-                                crate::sql::statement::Expression::Value(v) => Some(v),
+                                statement::Expression::Value(v) => Some(v),
                                 _ => None,
                             })
                             .collect()
                     })
                     .collect();
 
-                let result = self.insert(txn_id, &insert.into, values, 1);
+                let result = self.insert(txn_id, &insert.into, values);
 
                 if auto {
                     match &result {
@@ -98,13 +142,13 @@ impl Executor {
 
             Statement::Delete(delete) => {
                 let (txn_id, auto) = self.auto_txn()?;
-                let mut scan = super::operator::Scan::new(&self.engine, txn_id, &delete.from)?;
+                let mut scan = operator::Scan::new(&self.engine, txn_id, &delete.from)?;
 
-                let mut source: Box<dyn super::operator::Operator> = Box::new(scan);
+                let mut source: Box<dyn operator::Operator> = Box::new(scan);
 
                 if let Some(predicate) = delete.r#where {
                     let schema = self.resolve_schema(&delete.from)?;
-                    source = Box::new(super::operator::Filter::new(source, schema, predicate));
+                    source = Box::new(operator::Filter::new(source, schema, predicate));
                 }
 
                 let result = self.delete(txn_id, &delete.from, &mut *source);

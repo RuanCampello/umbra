@@ -10,11 +10,16 @@
 
 use crate::db::{DatabaseError, Schema};
 use crate::sql::statement::Expression;
+use crate::sql::Value;
 use crate::storage::mvcc::engine::Engine;
 use crate::vm::expression::evaluate_where;
 use crate::vm::planner::Tuple;
 
 /// Scans all MVCC-visible rows from a table for a given transaction.
+///
+/// Yields tuples with the row id prepended as column 0, mirroring the
+/// `row_id`-first layout the rest of the pipeline expects, schemas for
+/// downstream operators must be built with [Schema::prepend_id]
 pub(crate) struct Scan {
     tuples: Vec<Tuple>,
     cursor: usize,
@@ -69,7 +74,16 @@ pub(crate) trait Operator {
 
 impl Scan {
     pub fn new(engine: &Engine, txn_id: i64, table: &str) -> Result<Self, DatabaseError> {
-        let tuples = engine.scan(txn_id, table)?;
+        let tuples = engine
+            .scan(txn_id, table)?
+            .into_iter()
+            .map(|(row_id, tuple)| {
+                let mut row = Vec::with_capacity(tuple.len() + 1);
+                row.push(Value::Number(row_id as i128));
+                row.extend(tuple);
+                row
+            })
+            .collect();
 
         Ok(Self { tuples, cursor: 0 })
     }

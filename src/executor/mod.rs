@@ -27,6 +27,7 @@
 #![allow(unused)]
 
 pub(crate) mod ddl;
+pub(crate) mod dispatch;
 pub(crate) mod dml;
 pub(crate) mod operator;
 pub(crate) mod query;
@@ -44,6 +45,9 @@ pub(crate) struct Executor {
     engine: Arc<Engine>,
     /// The active explicit transaction, if any (`txn_id`, `begin_seq`).
     active_txn: Option<(i64, i64)>,
+    /// Set when a statement fails inside an explicit transaction, the block
+    /// then rejects everything except `COMMIT`/`ROLLBACK`.
+    aborted: bool,
 }
 
 impl Executor {
@@ -51,6 +55,7 @@ impl Executor {
         Self {
             engine,
             active_txn: None,
+            aborted: false,
         }
     }
 
@@ -116,6 +121,9 @@ impl From<MvccError> for DatabaseError {
             MvccError::WriteConflict => {
                 DatabaseError::Other("write-write conflict detected".into())
             }
+            MvccError::DuplicatedKey(value) => {
+                DatabaseError::Sql(crate::db::SqlError::DuplicatedKey(value))
+            }
             MvccError::Wal(e) => DatabaseError::Other(format!("WAL error: {e:?}")),
             MvccError::Other(msg) => DatabaseError::Other(msg),
         }
@@ -166,7 +174,6 @@ mod tests {
                 vec![Value::Number(1), Value::String("alice".into())],
                 vec![Value::Number(2), Value::String("bob".into())],
             ],
-            1,
         )
         .unwrap();
 
@@ -183,8 +190,9 @@ mod tests {
         }
 
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][1], Value::String("alice".into()));
-        assert_eq!(rows[1][1], Value::String("bob".into()));
+        assert_eq!(rows[0][0], Value::Number(1));
+        assert_eq!(rows[0][2], Value::String("alice".into()));
+        assert_eq!(rows[1][2], Value::String("bob".into()));
     }
 
     #[test]
@@ -201,7 +209,6 @@ mod tests {
                 vec![Value::Number(2), Value::String("bob".into())],
                 vec![Value::Number(3), Value::String("charlie".into())],
             ],
-            1,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -210,10 +217,11 @@ mod tests {
         let scan = operator::Scan::new(exec.engine(), reader, "users").unwrap();
 
         use crate::sql::statement::{BinaryOperator, Column, Expression};
-        let schema = crate::db::Schema::new(vec![
+        let mut schema = crate::db::Schema::new(vec![
             Column::new("id", Type::Integer),
             Column::new("name", Type::Text),
         ]);
+        schema.prepend_id();
 
         // WHERE id > 1
         let predicate = Expression::BinaryOperation {
@@ -229,8 +237,8 @@ mod tests {
         }
 
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][1], Value::String("bob".into()));
-        assert_eq!(rows[1][1], Value::String("charlie".into()));
+        assert_eq!(rows[0][2], Value::String("bob".into()));
+        assert_eq!(rows[1][2], Value::String("charlie".into()));
     }
 
     #[test]
@@ -243,7 +251,6 @@ mod tests {
             txn_id,
             "users",
             vec![vec![Value::Number(1), Value::String("alice".into())]],
-            1,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -251,7 +258,7 @@ mod tests {
         let (reader, _) = exec.auto_txn().unwrap();
         let scan = operator::Scan::new(exec.engine(), reader, "users").unwrap();
 
-        let mut project = operator::Project::new(Box::new(scan), vec![1]);
+        let mut project = operator::Project::new(Box::new(scan), vec![2]);
         let row = project.next().unwrap().unwrap();
 
         assert_eq!(row.len(), 1);
@@ -273,7 +280,6 @@ mod tests {
                 vec![Value::Number(2), Value::String("b".into())],
                 vec![Value::Number(3), Value::String("c".into())],
             ],
-            1,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -290,8 +296,8 @@ mod tests {
         }
 
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][1], Value::String("b".into()));
-        assert_eq!(rows[1][1], Value::String("c".into()));
+        assert_eq!(rows[0][2], Value::String("b".into()));
+        assert_eq!(rows[1][2], Value::String("c".into()));
     }
 
     #[test]
@@ -321,6 +327,141 @@ mod tests {
     }
 
     #[test]
+    fn update_with_where_targets_matched_rows_only() {
+        use super::dispatch::ExecResult;
+        use crate::sql::statement::{Assignment, BinaryOperator, Expression, Statement, Update};
+
+        let mut exec = setup();
+        create_users_table(&exec);
+
+        // user ids deliberately differ from row ids to catch offset bugs
+        let (txn_id, _) = exec.auto_txn().unwrap();
+        exec.insert(
+            txn_id,
+            "users",
+            vec![
+                vec![Value::Number(10), Value::String("a".into())],
+                vec![Value::Number(20), Value::String("b".into())],
+            ],
+        )
+        .unwrap();
+        exec.engine().commit_transaction(txn_id).unwrap();
+
+        let stmt = Statement::Update(Update {
+            table: "users".into(),
+            columns: vec![Assignment {
+                identifier: "name".into(),
+                value: Expression::Value(Value::String("updated".into())),
+            }],
+            r#where: Some(Expression::BinaryOperation {
+                left: Box::new(Expression::Identifier("id".into())),
+                operator: BinaryOperator::Eq,
+                right: Box::new(Expression::Value(Value::Number(20))),
+            }),
+            returning: vec![],
+        });
+
+        let ExecResult::Affected(affected) = exec.execute(stmt).unwrap() else {
+            panic!("UPDATE must report affected rows");
+        };
+        assert_eq!(affected, 1);
+
+        let (reader, _) = exec.auto_txn().unwrap();
+        let rows = exec.engine().scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].1,
+            vec![Value::Number(10), Value::String("a".into())]
+        );
+        assert_eq!(
+            rows[1].1,
+            vec![Value::Number(20), Value::String("updated".into())]
+        );
+    }
+
+    #[test]
+    fn delete_with_where_targets_matched_rows_only() {
+        use super::dispatch::ExecResult;
+        use crate::sql::statement::{BinaryOperator, Delete, Expression, Statement};
+
+        let mut exec = setup();
+        create_users_table(&exec);
+
+        let (txn_id, _) = exec.auto_txn().unwrap();
+        exec.insert(
+            txn_id,
+            "users",
+            vec![
+                vec![Value::Number(10), Value::String("a".into())],
+                vec![Value::Number(20), Value::String("b".into())],
+            ],
+        )
+        .unwrap();
+        exec.engine().commit_transaction(txn_id).unwrap();
+
+        let stmt = Statement::Delete(Delete {
+            from: "users".into(),
+            r#where: Some(Expression::BinaryOperation {
+                left: Box::new(Expression::Identifier("id".into())),
+                operator: BinaryOperator::Eq,
+                right: Box::new(Expression::Value(Value::Number(10))),
+            }),
+        });
+
+        let ExecResult::Affected(affected) = exec.execute(stmt).unwrap() else {
+            panic!("DELETE must report affected rows");
+        };
+        assert_eq!(affected, 1);
+
+        let (reader, _) = exec.auto_txn().unwrap();
+        let rows = exec.engine().scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, 2);
+        assert_eq!(rows[0].1[0], Value::Number(20));
+    }
+
+    #[test]
+    fn execution_error_aborts_explicit_transaction() {
+        use super::dispatch::ExecResult;
+        use crate::sql::statement::{Expression, Select, Statement, TableRef};
+
+        let mut exec = setup();
+        create_users_table(&exec);
+
+        let select = |table: &str| {
+            Statement::Select(Select {
+                columns: vec![Expression::Wildcard],
+                from: TableRef {
+                    name: table.into(),
+                    alias: None,
+                },
+                joins: vec![],
+                r#where: None,
+                order_by: vec![],
+                group_by: vec![],
+                limit: None,
+                offset: None,
+            })
+        };
+
+        exec.begin_transaction().unwrap();
+        assert!(exec.execute(select("missing")).is_err());
+
+        // block is aborted: even valid statements are rejected
+        assert!(exec.execute(select("users")).is_err());
+
+        // ROLLBACK clears the aborted state and ends the block
+        assert!(matches!(
+            exec.execute(Statement::Rollback).unwrap(),
+            ExecResult::Ok
+        ));
+        assert!(!exec.has_active_transaction());
+
+        let (reader, _) = exec.auto_txn().unwrap();
+        assert!(exec.engine().scan(reader, "users").is_ok());
+    }
+
+    #[test]
     fn select_wildcard() {
         let mut exec = setup();
         create_users_table(&exec);
@@ -333,7 +474,6 @@ mod tests {
                 vec![Value::Number(1), Value::String("alice".into())],
                 vec![Value::Number(2), Value::String("bob".into())],
             ],
-            1,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -355,7 +495,7 @@ mod tests {
             offset: None,
         };
 
-        let rows = exec.execute_select(reader, select).unwrap();
+        let (_, rows) = exec.execute_select(reader, select).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][1], Value::String("alice".into()));
     }
@@ -370,7 +510,6 @@ mod tests {
             txn_id,
             "users",
             vec![vec![Value::Number(1), Value::String("alice".into())]],
-            1,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -392,7 +531,7 @@ mod tests {
             offset: None,
         };
 
-        let rows = exec.execute_select(reader, select).unwrap();
+        let (_, rows) = exec.execute_select(reader, select).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].len(), 1);
         assert_eq!(rows[0][0], Value::String("alice".into()));
@@ -412,7 +551,6 @@ mod tests {
                 vec![Value::Number(1), Value::String("alice".into())],
                 vec![Value::Number(2), Value::String("bob".into())],
             ],
-            1,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -437,7 +575,7 @@ mod tests {
             offset: None,
         };
 
-        let rows = exec.execute_select(reader, select).unwrap();
+        let (_, rows) = exec.execute_select(reader, select).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][0], Value::Number(1));
         assert_eq!(rows[1][0], Value::Number(2));

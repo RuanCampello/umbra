@@ -1,6 +1,6 @@
 //! DDL execution dispatch.
 //!
-//! Handles `CREATE TABLE` by delegating directly to the
+//! Handles `CREATE TABLE` and `DROP TABLE` by delegating directly to the
 //! MVCC [`Engine`](crate::storage::mvcc::engine::Engine).
 
 use super::Executor;
@@ -11,5 +11,10 @@ impl Executor {
     #[inline(always)]
     pub fn create_table(&self, schema: Schema) -> Result<Schema, DatabaseError> {
         Ok(self.engine.create_table(schema)?)
+    }
+
+    #[inline(always)]
+    pub fn drop_table(&self, name: &str) -> Result<(), DatabaseError> {
+        Ok(self.engine.drop_table(name)?)
     }
 }

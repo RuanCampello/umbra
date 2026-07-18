@@ -11,21 +11,19 @@ use crate::sql::Value;
 use crate::vm::planner::Tuple;
 
 impl Executor {
-    /// Inserts all tuples from a `values` batch into `table`.
-    /// Returns the number of inserted rows.
+    /// Inserts all tuples from a `values` batch into `table`, allocating
+    /// a fresh row id per tuple. Returns the number of inserted rows.
     pub fn insert(
         &self,
         txn_id: i64,
         table: &str,
         values: Vec<Tuple>,
-        start_row_id: i64,
     ) -> Result<usize, DatabaseError> {
-        let mut row_id = start_row_id;
         let mut count = 0;
 
         for tuple in values {
+            let row_id = self.engine.next_row_id(table)?;
             self.engine.insert(txn_id, table, row_id, tuple)?;
-            row_id += 1;
             count += 1;
         }
 
