@@ -1646,169 +1646,160 @@ impl<File: PlanExecutor> Execute for Limit<File> {
     }
 }
 
-/// Applies one aggregate function over a set of rows.
-/// Shared by the legacy planner node and the MVCC executor.
 pub(crate) fn apply_aggregate(
     func: &Function,
     args: &[Expression],
     rows: &[Tuple],
     schema: &Schema,
 ) -> Result<Value, DatabaseError> {
-        let values = match args.first() {
-            None => vec![],
-            Some(Expression::Wildcard) => vec![Value::Number(1); rows.len()],
-            Some(arg) => rows
-                .iter()
-                .map(|row| resolve_expression(row, schema, arg))
-                .collect::<Result<Vec<_>, _>>()?,
-        };
+    let values = match args.first() {
+        None => vec![],
+        Some(Expression::Wildcard) => vec![Value::Number(1); rows.len()],
+        Some(arg) => rows
+            .iter()
+            .map(|row| resolve_expression(row, schema, arg))
+            .collect::<Result<Vec<_>, _>>()?,
+    };
 
-        match func {
-            Function::Count => Ok(Value::Number(
-                values.iter().filter(|v| !v.is_null()).count() as i128,
-            )),
+    match func {
+        Function::Count => Ok(Value::Number(
+            values.iter().filter(|v| !v.is_null()).count() as i128,
+        )),
 
-            Function::Sum | Function::Avg => {
-                let non_null_iter = values.iter().filter(|v| !v.is_null());
+        Function::Sum | Function::Avg => {
+            let non_null_iter = values.iter().filter(|v| !v.is_null());
 
-                let first_val = match non_null_iter.clone().next() {
-                    Some(v) => v,
-                    None => return Ok(Value::Null),
-                };
+            let first_val = match non_null_iter.clone().next() {
+                Some(v) => v,
+                None => return Ok(Value::Null),
+            };
 
-                match first_val {
-                    Value::Numeric(_) => {
-                        // avg(numeric) -> numeric
-                        let (sum, count) =
-                            non_null_iter.fold((Numeric::zero(), 0), |(acc_s, acc_c), v| match v {
-                                Value::Numeric(n) => (acc_s + n, acc_c + 1),
-                                Value::Number(n) => (acc_s + Numeric::from(*n), acc_c + 1),
-                                Value::Float(f) => (
-                                    acc_s + Numeric::try_from(*f).unwrap_or(Numeric::zero()),
-                                    acc_c + 1,
-                                ),
-                                _ => (acc_s, acc_c),
-                            });
+            match first_val {
+                Value::Numeric(_) => {
+                    // avg(numeric) -> numeric
+                    let (sum, count) =
+                        non_null_iter.fold((Numeric::zero(), 0), |(acc_s, acc_c), v| match v {
+                            Value::Numeric(n) => (acc_s + n, acc_c + 1),
+                            Value::Number(n) => (acc_s + Numeric::from(*n), acc_c + 1),
+                            Value::Float(f) => (
+                                acc_s + Numeric::try_from(*f).unwrap_or(Numeric::zero()),
+                                acc_c + 1,
+                            ),
+                            _ => (acc_s, acc_c),
+                        });
 
-                        match func {
-                            Function::Sum => Ok(Value::Numeric(sum)),
-                            Function::Avg => {
-                                let count_numeric = Numeric::from(count as i64);
-                                Ok(Value::Numeric(sum / count_numeric))
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-
-                    Value::Number(_) => match func {
-                        // avg(integer) -> numeric
+                    match func {
+                        Function::Sum => Ok(Value::Numeric(sum)),
                         Function::Avg => {
-                            let (sum, count) = non_null_iter.fold(
-                                (Numeric::zero(), 0),
-                                |(acc_s, acc_c), v| match v {
-                                    Value::Number(n) => (acc_s + Numeric::from(*n), acc_c + 1),
-                                    _ => (acc_s, acc_c),
-                                },
-                            );
                             let count_numeric = Numeric::from(count as i64);
                             Ok(Value::Numeric(sum / count_numeric))
                         }
-                        // sum(integer) -> bigint (kept as Number i128)
-                        Function::Sum => {
-                            let sum = non_null_iter.fold(0i128, |acc, v| match v {
-                                Value::Number(n) => acc + n,
-                                _ => acc,
-                            });
-                            Ok(Value::Number(sum))
-                        }
                         _ => unreachable!(),
-                    },
+                    }
+                }
 
-                    _ => {
+                Value::Number(_) => match func {
+                    // avg(integer) -> numeric
+                    Function::Avg => {
                         let (sum, count) =
-                            non_null_iter.fold((0.0, 0), |(acc_s, acc_c), v| match v {
-                                Value::Float(f) => (acc_s + f, acc_c + 1),
-                                Value::Number(n) => (acc_s + *n as f64, acc_c + 1),
+                            non_null_iter.fold((Numeric::zero(), 0), |(acc_s, acc_c), v| match v {
+                                Value::Number(n) => (acc_s + Numeric::from(*n), acc_c + 1),
                                 _ => (acc_s, acc_c),
                             });
+                        let count_numeric = Numeric::from(count as i64);
+                        Ok(Value::Numeric(sum / count_numeric))
+                    }
+                    // sum(integer) -> bigint (kept as Number i128)
+                    Function::Sum => {
+                        let sum = non_null_iter.fold(0i128, |acc, v| match v {
+                            Value::Number(n) => acc + n,
+                            _ => acc,
+                        });
+                        Ok(Value::Number(sum))
+                    }
+                    _ => unreachable!(),
+                },
 
-                        match func {
-                            Function::Sum => Ok(Value::Float(sum)),
-                            Function::Avg => Ok(Value::Float(sum / count as f64)),
-                            _ => unreachable!(),
-                        }
+                _ => {
+                    let (sum, count) = non_null_iter.fold((0.0, 0), |(acc_s, acc_c), v| match v {
+                        Value::Float(f) => (acc_s + f, acc_c + 1),
+                        Value::Number(n) => (acc_s + *n as f64, acc_c + 1),
+                        _ => (acc_s, acc_c),
+                    });
+
+                    match func {
+                        Function::Sum => Ok(Value::Float(sum)),
+                        Function::Avg => Ok(Value::Float(sum / count as f64)),
+                        _ => unreachable!(),
                     }
                 }
             }
-
-            Function::Min => Ok(values
-                .iter()
-                .filter(|v| !v.is_null())
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-                .cloned()
-                .unwrap_or(Value::Number(0))),
-            Function::Max => Ok(values
-                .iter()
-                .filter(|v| !v.is_null())
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-                .cloned()
-                .unwrap_or(Value::Number(0))),
-
-            _ => unreachable!("this ain't a aggregate function"),
         }
+
+        Function::Min => Ok(values
+            .iter()
+            .filter(|v| !v.is_null())
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+            .cloned()
+            .unwrap_or(Value::Number(0))),
+        Function::Max => Ok(values
+            .iter()
+            .filter(|v| !v.is_null())
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+            .cloned()
+            .unwrap_or(Value::Number(0))),
+
+        _ => unreachable!("this ain't a aggregate function"),
+    }
 }
 
-/// Process complex expression that contains aggregate functions. This recursively finds
-/// aggregate functions, compute then and replace with its values, so we can nest aggregate
-/// functions with functions that are computed during runtime, like `TRUNC`.
-/// Shared by the legacy planner node and the MVCC executor.
 pub(crate) fn reduce_aggregate_expr(
     expr: &Expression,
     rows: &[Tuple],
     schema: &Schema,
 ) -> Result<Expression, DatabaseError> {
-        match expr {
-            // this is the base case: when we get a aggr function, we execute them
-            // if we don't get here after traversing the expression tree, we just return the
-            // expression and consider the job done :/
-            Expression::Function { func, args } if func.is_aggr() => {
-                let value = apply_aggregate(func, args, rows, schema)?;
-                Ok(Expression::Value(value))
-            }
-            Expression::Function { func, args } => {
-                let args: Result<Vec<_>, _> = args
-                    .iter()
-                    .map(|arg| reduce_aggregate_expr(arg, rows, schema))
-                    .collect();
-
-                Ok(Expression::Function {
-                    func: *func,
-                    args: args?,
-                })
-            }
-            Expression::BinaryOperation {
-                operator,
-                left,
-                right,
-            } => Ok(Expression::BinaryOperation {
-                operator: *operator,
-                left: Box::new(reduce_aggregate_expr(left, rows, schema)?),
-                right: Box::new(reduce_aggregate_expr(right, rows, schema)?),
-            }),
-            Expression::UnaryOperation { operator, expr } => Ok(Expression::UnaryOperation {
-                operator: *operator,
-                expr: Box::new(reduce_aggregate_expr(expr, rows, schema)?),
-            }),
-            Expression::Nested(inner) => Ok(Expression::Nested(Box::new(
-                reduce_aggregate_expr(inner, rows, schema)?,
-            ))),
-            Expression::Alias { expr, alias } => Ok(Expression::Alias {
-                alias: alias.to_string(),
-                expr: Box::new(reduce_aggregate_expr(expr, rows, schema)?),
-            }),
-
-            _ => Ok(expr.to_owned()),
+    match expr {
+        // this is the base case: when we get a aggr function, we execute them
+        // if we don't get here after traversing the expression tree, we just return the
+        // expression and consider the job done :/
+        Expression::Function { func, args } if func.is_aggr() => {
+            let value = apply_aggregate(func, args, rows, schema)?;
+            Ok(Expression::Value(value))
         }
+        Expression::Function { func, args } => {
+            let args: Result<Vec<_>, _> = args
+                .iter()
+                .map(|arg| reduce_aggregate_expr(arg, rows, schema))
+                .collect();
+
+            Ok(Expression::Function {
+                func: *func,
+                args: args?,
+            })
+        }
+        Expression::BinaryOperation {
+            operator,
+            left,
+            right,
+        } => Ok(Expression::BinaryOperation {
+            operator: *operator,
+            left: Box::new(reduce_aggregate_expr(left, rows, schema)?),
+            right: Box::new(reduce_aggregate_expr(right, rows, schema)?),
+        }),
+        Expression::UnaryOperation { operator, expr } => Ok(Expression::UnaryOperation {
+            operator: *operator,
+            expr: Box::new(reduce_aggregate_expr(expr, rows, schema)?),
+        }),
+        Expression::Nested(inner) => Ok(Expression::Nested(Box::new(reduce_aggregate_expr(
+            inner, rows, schema,
+        )?))),
+        Expression::Alias { expr, alias } => Ok(Expression::Alias {
+            alias: alias.to_string(),
+            expr: Box::new(reduce_aggregate_expr(expr, rows, schema)?),
+        }),
+
+        _ => Ok(expr.to_owned()),
+    }
 }
 
 impl<File: FileOperations> From<AggregateBuilder<File>> for Aggregate<File> {
