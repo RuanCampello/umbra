@@ -122,7 +122,7 @@ impl WalEntry {
         buff.extend_from_slice(&WAL_MAGIC.to_le_bytes());
         buff.push(WAL_BINARY_VERSION);
         buff.push(self.flags.into());
-        buff.extend_from_slice(&WAL_HEADER_SIZE.to_le_bytes());
+        buff.extend_from_slice(&(WAL_HEADER_SIZE as u16).to_le_bytes());
         buff.extend_from_slice(&self.lsn.to_le_bytes());
         buff.extend_from_slice(&self.previous_lsn.to_le_bytes());
         buff.extend_from_slice(&(size as u32).to_le_bytes());
@@ -193,7 +193,7 @@ impl WalEntry {
         let timestamp = i64::from_le_bytes(read_bytes(8)?.try_into().unwrap());
 
         let content_len = u32::from_le_bytes(read_bytes(4)?.try_into().unwrap()) as usize;
-        let content = data[cursor..cursor + content_len].to_vec();
+        let content = read_bytes(content_len)?.to_vec();
 
         Ok(Self {
             table: table_name,
@@ -270,8 +270,8 @@ impl TryFrom<u8> for WalOperation {
             4 => Self::Commit,
             5 => Self::Rollback,
             6 => Self::CreateTable,
-            7 => Self::DropTable,
-            8 => Self::AlterTable,
+            7 => Self::AlterTable,
+            8 => Self::DropTable,
             9 => Self::CreateIndex,
             10 => Self::DropIndex,
             _ => return Err(()),

@@ -95,6 +95,9 @@ pub(crate) struct TwoPhaseRecovery {
     aborted_transactions: usize,
     applied: u64,
     pub(super) skipped: u64,
+    /// Highest transaction id seen in the log, committed or not.
+    /// Recovery must keep the id counter above it so ids are never reused.
+    pub(super) max_txn_id: i64,
 }
 
 #[derive(Debug)]
@@ -276,9 +279,12 @@ impl Wal {
             if self.must_sync(entry.operation) {
                 self.sync_with_lock()?;
             }
+
+            if self.file_position.load(Ordering::Acquire) as usize >= self.max_size {
+                self.rotate()?;
+            }
         }
 
-        let _ = encoded.len();
         Ok(entry.lsn)
     }
 
@@ -394,7 +400,87 @@ impl Wal {
 
         let result = self.write(&buffer);
         self.in_flight_writes.fetch_sub(1, Ordering::SeqCst);
-        result
+        result?;
+
+        self.file_position
+            .fetch_add(buffer.len() as u64, Ordering::SeqCst);
+
+        Ok(())
+    }
+
+    /// rotates to a fresh segment file, the old one stays behind for pruning
+    pub fn rotate(&self) -> Result<u64, WalError> {
+        self.flush()?;
+
+        let mut active = self.active_segment.lock().unwrap();
+        if let Some(file) = active.as_mut() {
+            file.sync_data()?;
+        }
+
+        let segment_id = self.current_segment_id.fetch_add(1, Ordering::SeqCst) + 1;
+        let path = self.dir.join(format!("wal-{segment_id:08}.log"));
+
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&path)?;
+
+        *active = Some(file);
+        self.file_position.store(0, Ordering::SeqCst);
+        self.sequence.store(segment_id, Ordering::SeqCst);
+
+        Ok(segment_id)
+    }
+
+    /// writes `checkpoint.meta` and prunes segments made obsolete by it
+    ///
+    /// The caller must guarantee that everything up to the current LSN is
+    /// already persisted elsewhere (snapshots) and that no active transaction
+    /// still needs older entries.
+    pub fn checkpoint(&self, active_transactions: Vec<i64>) -> Result<u64, WalError> {
+        self.flush()?;
+        self.sync_with_lock()?;
+
+        let lsn = self.lsn();
+        let segment_id = self.rotate()?;
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as i64)
+            .unwrap_or(0);
+
+        let metadata = CheckpointMetadata {
+            wal_segment_sequence: segment_id,
+            lsn,
+            timestamp,
+            is_consistent: active_transactions.is_empty(),
+            active_transactions,
+            committed_transactions: Vec::new(),
+        };
+
+        metadata.encode(&self.dir.join("checkpoint.meta"))?;
+        self.last_checkpoint.store(lsn, Ordering::SeqCst);
+        self.prune_segments(segment_id);
+
+        Ok(lsn)
+    }
+
+    /// removes every segment file older than `keep_from`
+    fn prune_segments(&self, keep_from: u64) {
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return;
+        };
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            match extract_sequence_from_filename(&name) {
+                Some(seq) if seq < keep_from => {
+                    let _ = fs::remove_file(entry.path());
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn close(&self) -> Result<(), WalError> {
@@ -453,6 +539,7 @@ impl Wal {
 
         let mut applied = 0;
         let mut skipped = 0;
+        let mut max_txn_id = 0i64;
 
         for path in &files {
             let Ok(mut file) = File::open(path) else {
@@ -513,6 +600,10 @@ impl Wal {
 
                 match WalEntry::decode(lsn, previous_lsn, flags, &content) {
                     Ok(entry) => {
+                        if entry.txn_id > max_txn_id {
+                            max_txn_id = entry.txn_id;
+                        }
+
                         if entry.is_marker() || entry.is_abort() {
                             continue;
                         }
@@ -552,6 +643,7 @@ impl Wal {
             aborted_transactions: aborted.len(),
             applied,
             skipped,
+            max_txn_id,
         })
     }
 
@@ -756,7 +848,7 @@ fn extract_sequence_from_filename(filename: &str) -> Option<u64> {
     seq_str.parse::<u64>().ok()
 }
 
-/// Find the last LSN in a WAL file by scanning entries
+/// Finds the last LSN in a WAL file by scanning entries.
 #[inline]
 fn find_last_lsn(path: &Path) -> Result<u64, WalError> {
     let mut file = File::open(path)?;
@@ -802,4 +894,308 @@ fn find_last_lsn(path: &Path) -> Result<u64, WalError> {
     }
 
     Ok(last_lsn)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock must be past the epoch")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("umbra-wal-{tag}-{}-{nanos}", std::process::id(),));
+        fs::create_dir_all(&dir).expect("scratch dir must be creatable");
+
+        dir
+    }
+
+    fn insert_entry(table: &str, txn_id: i64, row_id: i64) -> WalEntry {
+        WalEntry::new(
+            table.into(),
+            txn_id,
+            row_id,
+            WalOperation::Insert,
+            vec![0xAB; 16],
+        )
+    }
+
+    fn segment_path(dir: &Path) -> PathBuf {
+        dir.join("wal-00000000.log")
+    }
+
+    #[test]
+    fn entry_encode_decode_round_trip() {
+        let entry = insert_entry("users", 7, 42);
+        let encoded = entry.encode();
+
+        assert_eq!(
+            u32::from_le_bytes(encoded[0..4].try_into().unwrap()),
+            WAL_MAGIC
+        );
+        assert_eq!(encoded[4], WAL_BINARY_VERSION);
+        assert_eq!(
+            u16::from_le_bytes(encoded[6..8].try_into().unwrap()),
+            WAL_HEADER_SIZE as u16
+        );
+
+        let content_size = u32::from_le_bytes(encoded[24..28].try_into().unwrap()) as usize;
+        assert_eq!(encoded.len(), WAL_HEADER_SIZE as usize + content_size + 4);
+
+        let flags = WalFlags::from(encoded[5]);
+        let decoded = WalEntry::decode(
+            entry.lsn,
+            entry.previous_lsn,
+            flags,
+            &encoded[WAL_HEADER_SIZE as usize..],
+        )
+        .expect("entry must round-trip");
+
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn entry_decode_rejects_corrupt_checksum() {
+        let entry = insert_entry("users", 7, 42);
+        let mut encoded = entry.encode();
+
+        let content_start = WAL_HEADER_SIZE as usize;
+        encoded[content_start + 10] ^= 0xFF;
+
+        let result = WalEntry::decode(0, 0, WalFlags::NONE, &encoded[content_start..]);
+        assert!(matches!(result, Err(WalError::Checksum)));
+    }
+
+    #[test]
+    fn entry_decode_rejects_truncated_data() {
+        let entry = insert_entry("users", 7, 42);
+        let encoded = entry.encode();
+        let content = &encoded[WAL_HEADER_SIZE as usize..];
+
+        for len in 0..35.min(content.len()) {
+            assert!(WalEntry::decode(0, 0, WalFlags::NONE, &content[..len]).is_err());
+        }
+    }
+
+    #[test]
+    fn append_assigns_monotonic_lsns() {
+        let dir = scratch_dir("lsn");
+        let wal = Wal::new(&dir, Sync::Relaxed).unwrap();
+
+        assert_eq!(wal.append(insert_entry("t", 1, 1)).unwrap(), 1);
+        assert_eq!(wal.append(insert_entry("t", 1, 2)).unwrap(), 2);
+        assert_eq!(wal.append(insert_entry("t", 1, 3)).unwrap(), 3);
+        assert_eq!(wal.lsn(), 3);
+
+        wal.flush().unwrap();
+        assert_eq!(find_last_lsn(&segment_path(&dir)).unwrap(), 3);
+
+        wal.close().unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_applies_only_committed_transactions() {
+        let dir = scratch_dir("two-phase");
+        let wal = Wal::new(&dir, Sync::Relaxed).unwrap();
+
+        wal.append(insert_entry("t", 1, 1)).unwrap();
+        wal.append(insert_entry("t", 1, 2)).unwrap();
+        wal.write_commit(1).unwrap();
+
+        wal.append(insert_entry("t", 2, 3)).unwrap();
+        wal.write_abort(2).unwrap();
+
+        wal.append(insert_entry("t", 3, 4)).unwrap();
+
+        let mut replayed = Vec::new();
+        let recovery = wal
+            .replay_two_phase(0, |entry| {
+                if !entry.is_commit() {
+                    replayed.push((entry.txn_id, entry.operation));
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(recovery.applied, 2);
+        assert_eq!(recovery.skipped, 2);
+        assert_eq!(recovery.committed_transactions, 1);
+        assert_eq!(recovery.aborted_transactions, 1);
+        assert_eq!(
+            replayed,
+            vec![(1, WalOperation::Insert), (1, WalOperation::Insert)]
+        );
+
+        wal.close().unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reopen_continues_from_last_lsn() {
+        let dir = scratch_dir("reopen");
+
+        {
+            let wal = Wal::new(&dir, Sync::Relaxed).unwrap();
+            wal.append(insert_entry("t", 1, 1)).unwrap();
+            wal.append(insert_entry("t", 1, 2)).unwrap();
+            wal.write_commit(1).unwrap();
+            wal.close().unwrap();
+        }
+
+        let wal = Wal::new(&dir, Sync::Relaxed).unwrap();
+        assert_eq!(wal.lsn(), 3);
+        assert_eq!(wal.append(insert_entry("t", 2, 3)).unwrap(), 4);
+
+        wal.close().unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_resyncs_after_corrupt_entry() {
+        let dir = scratch_dir("corrupt");
+
+        {
+            let wal = Wal::new(&dir, Sync::Relaxed).unwrap();
+            wal.append(insert_entry("t", 1, 1)).unwrap();
+            wal.write_commit(1).unwrap();
+            wal.append(insert_entry("t", 2, 2)).unwrap();
+            wal.write_commit(2).unwrap();
+            wal.close().unwrap();
+        }
+
+        // corrupt one content byte of the first insert entry
+        let path = segment_path(&dir);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[WAL_HEADER_SIZE as usize + 12] ^= 0xFF;
+        fs::write(&path, &bytes).unwrap();
+
+        let wal = Wal::new(&dir, Sync::Relaxed).unwrap();
+        let mut replayed = Vec::new();
+        let recovery = wal
+            .replay_two_phase(0, |entry| {
+                if !entry.is_commit() {
+                    replayed.push(entry.txn_id);
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(recovery.applied, 1);
+        assert_eq!(replayed, vec![2]);
+        assert!(recovery.skipped >= 1);
+
+        wal.close().unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_temp_files_are_removed_on_open() {
+        let dir = scratch_dir("tmp-cleanup");
+        let temp = dir.join("wal-00000001.tmp");
+        fs::write(&temp, b"half-written").unwrap();
+
+        let wal = Wal::new(&dir, Sync::Relaxed).unwrap();
+        assert!(!temp.exists());
+
+        wal.close().unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotation_on_max_size_and_multi_segment_replay() {
+        let dir = scratch_dir("rotate");
+        let config = WalConfig {
+            max_size: 256,
+            flush_trigger: 1,
+            ..Default::default()
+        };
+        let wal = Wal::with_config(&dir, Sync::Relaxed, &config).unwrap();
+
+        for txn in 1..=5i64 {
+            wal.append(insert_entry("t", txn, txn)).unwrap();
+            wal.write_commit(txn).unwrap();
+        }
+        wal.flush().unwrap();
+
+        let segments = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with("wal-") && name.ends_with(".log")
+            })
+            .count();
+        assert!(
+            segments > 1,
+            "expected rotation to produce several segments"
+        );
+
+        let mut applied = Vec::new();
+        let recovery = wal
+            .replay_two_phase(0, |entry| {
+                if !entry.is_commit() {
+                    applied.push(entry.txn_id);
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(recovery.applied, 5);
+        assert_eq!(applied, vec![1, 2, 3, 4, 5]);
+
+        wal.close().unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_operation_round_trips_through_its_discriminant() {
+        const EVERY_OPERATION: [WalOperation; 10] = [
+            WalOperation::Insert,
+            WalOperation::Update,
+            WalOperation::Delete,
+            WalOperation::Commit,
+            WalOperation::Rollback,
+            WalOperation::CreateTable,
+            WalOperation::AlterTable,
+            WalOperation::DropTable,
+            WalOperation::CreateIndex,
+            WalOperation::DropIndex,
+        ];
+
+        for operation in EVERY_OPERATION {
+            let decoded = WalOperation::try_from(operation as u8)
+                .expect("every operation must decode from its own discriminant");
+            assert_eq!(decoded, operation);
+        }
+    }
+
+    #[test]
+    fn filename_sequence_extraction() {
+        assert_eq!(extract_sequence_from_filename("wal-00000007.log"), Some(7));
+        assert_eq!(extract_sequence_from_filename("wal-00000000.log"), Some(0));
+        assert_eq!(extract_sequence_from_filename("wal-junk.log"), None);
+        assert_eq!(extract_sequence_from_filename("checkpoint.meta"), None);
+    }
+
+    #[test]
+    fn sync_policy_matrix() {
+        let dir = scratch_dir("sync");
+        let relaxed = Wal::new(dir.join("relaxed"), Sync::Relaxed).unwrap();
+        let default = Wal::new(dir.join("default"), Sync::Default).unwrap();
+        let strict = Wal::new(dir.join("strict"), Sync::Strict).unwrap();
+
+        assert!(!relaxed.must_sync(WalOperation::Commit));
+        assert!(default.must_sync(WalOperation::Commit));
+        assert!(default.must_sync(WalOperation::Insert));
+        assert!(strict.must_sync(WalOperation::Commit));
+        assert!(strict.must_sync(WalOperation::Insert));
+
+        relaxed.close().unwrap();
+        default.close().unwrap();
+        strict.close().unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

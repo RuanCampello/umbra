@@ -118,14 +118,12 @@ impl CheckpointMetadata {
             match CheckpointSectionKind::try_from(section.kind) {
                 Ok(CheckpointSectionKind::Info) => {
                     is_consistent = content[cursor] != 0;
-                    let mut section_c = cursor + 1;
+                    let section_c = cursor + 1;
 
-                    // current wal name
                     if section_c + 8 <= end {
                         wal_segment_sequence = u64::from_le_bytes(
                             content[section_c..section_c + 8].try_into().unwrap(),
                         );
-                        wal_segment_sequence += 8;
                     }
                 }
 
@@ -135,7 +133,7 @@ impl CheckpointMetadata {
                             u64::from_le_bytes(content[cursor..cursor + 8].try_into().unwrap())
                                 as usize;
                         let mut section_c = cursor + 8;
-                        active_transactions.reserve_exact(section_c);
+                        active_transactions.reserve_exact(count);
 
                         for _ in 0..count {
                             if section_c + 8 > end {
@@ -154,22 +152,25 @@ impl CheckpointMetadata {
                 Ok(CheckpointSectionKind::Commited) => {
                     if cursor + 8 <= end {
                         let count =
-                            u64::from_le_bytes(content[cursor..cursor + 8].try_into().unwrap());
+                            u64::from_le_bytes(content[cursor..cursor + 8].try_into().unwrap())
+                                as usize;
                         let mut section_c = cursor + 8;
-                        committed_transactions.reserve_exact(section_c);
+                        committed_transactions.reserve_exact(count);
 
                         for _ in 0..count {
                             if section_c + 16 > end {
                                 break;
                             }
 
-                            let txn_id =
-                                i64::from_le_bytes(content[cursor..cursor + 8].try_into().unwrap());
+                            let txn_id = i64::from_le_bytes(
+                                content[section_c..section_c + 8].try_into().unwrap(),
+                            );
                             let commit_lsn = u64::from_le_bytes(
-                                content[cursor + 8..cursor + 16].try_into().unwrap(),
+                                content[section_c + 8..section_c + 16].try_into().unwrap(),
                             );
 
-                            committed_transactions.push(CommitedTransaction { txn_id, commit_lsn })
+                            committed_transactions.push(CommitedTransaction { txn_id, commit_lsn });
+                            section_c += 16;
                         }
                     }
                 }
@@ -197,7 +198,7 @@ impl CheckpointMetadata {
         })
     }
 
-    fn encode(&self, path: &Path) -> Result<(), WalError> {
+    pub fn encode(&self, path: &Path) -> Result<(), WalError> {
         let mut buff = Vec::with_capacity(32);
         let mut sections = Vec::with_capacity(32);
 
