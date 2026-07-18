@@ -13,7 +13,7 @@ use std::{
     io::{Error, ErrorKind},
     num::NonZeroU64,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
         Arc, Mutex, RwLock,
     },
     time::Duration,
@@ -49,6 +49,9 @@ pub(crate) struct VersionStorage {
     uncommited_writes: RwLock<HashMap<i64, i64>>,
     /// Maximum number of previous versions per row.
     max_version_history: usize,
+    /// Next row id to hand out; kept above every row id ever seen so that
+    /// recovery never re-issues an existing id.
+    next_row_id: AtomicI64,
     /// Checks transaction visibility (xmin/xmax). Usually an `Arc<TransactionRegistry>`.
     visibility_checker: Option<Arc<TransactionRegistry>>,
     /// Arena allocator for tuple data, reducing heap fragmentation and locking overhead.
@@ -165,8 +168,15 @@ impl VersionStorage {
             open: AtomicBool::new(true),
             uncommited_writes: RwLock::new(HashMap::default()),
             max_version_history: 10,
+            next_row_id: AtomicI64::new(1),
             indexes: RwLock::new(HashMap::default()),
         }
+    }
+
+    /// Hands out the next unused row id for this table.
+    #[inline]
+    pub fn allocate_row_id(&self) -> i64 {
+        self.next_row_id.fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn with_checker(
@@ -247,6 +257,8 @@ impl VersionStorage {
         if !self.open.load(Ordering::Acquire) {
             return;
         }
+
+        self.next_row_id.fetch_max(row_id + 1, Ordering::Relaxed);
 
         let is_deleted = version.is_deleted();
         let mut versions = self.versions.write().unwrap();
@@ -369,8 +381,9 @@ impl VersionStorage {
         }
     }
 
-    /// Scans all visible (non-deleted) rows for the given transaction.
-    pub fn scan_visible(&self, txn_id: i64) -> Vec<Tuple> {
+    /// Scans all visible (non-deleted) rows for the given transaction,
+    /// ordered by row id.
+    pub fn scan_visible(&self, txn_id: i64) -> Vec<(i64, Tuple)> {
         if !self.open.load(Ordering::Acquire) {
             return Vec::new();
         }
@@ -383,14 +396,14 @@ impl VersionStorage {
         let versions = self.versions.read().unwrap();
         let mut results = Vec::new();
 
-        for (_, entry) in versions.iter() {
+        for (&row_id, entry) in versions.iter() {
             if checker.is_visible(entry.version.txn_id, txn_id) {
                 if entry.version.is_deleted()
                     && checker.is_visible(entry.version.deleted_at_txn_id, txn_id)
                 {
                     continue;
                 }
-                results.push(entry.version.data.clone());
+                results.push((row_id, entry.version.data.clone()));
                 continue;
             }
 
@@ -403,7 +416,7 @@ impl VersionStorage {
                         break;
                     }
 
-                    results.push(prev.version.data.clone());
+                    results.push((row_id, prev.version.data.clone()));
                     break;
                 }
 
@@ -412,6 +425,63 @@ impl VersionStorage {
         }
 
         results
+    }
+
+    /// Clones the newest live version of every row.
+    ///
+    /// Only sound when nothing is mid-commit: the store holds committed
+    /// versions exclusively (uncommitted writes live in transaction-local
+    /// buffers), which the snapshot caller must guarantee by quiescing.
+    pub fn snapshot_rows(&self) -> Vec<TupleVersion> {
+        let versions = self.versions.read().unwrap();
+        versions
+            .values()
+            .filter(|entry| !entry.version.is_deleted())
+            .map(|entry| entry.version.clone())
+            .collect()
+    }
+
+    /// Highest committed `Value::Number` in a column, ignoring deleted rows.
+    /// Seeds sequence counters when table metadata is synthesised.
+    pub fn max_number_at(&self, column: usize) -> Option<i128> {
+        let versions = self.versions.read().unwrap();
+        versions
+            .values()
+            .filter(|entry| !entry.version.is_deleted())
+            .filter_map(|entry| match entry.version.data.get(column) {
+                Some(Value::Number(n)) => Some(*n),
+                _ => None,
+            })
+            .max()
+    }
+
+    /// Clears and repopulates every registered index from the live rows.
+    /// Used after WAL replay and snapshot loads, where versions are recovered
+    /// without touching the indexes.
+    pub fn rebuild_indexes(&self) {
+        let indexes = self.indexes.read().unwrap();
+        if indexes.is_empty() {
+            return;
+        }
+
+        for index in indexes.values() {
+            index.clear();
+        }
+
+        let versions = self.versions.read().unwrap();
+        for (&row_id, entry) in versions.iter() {
+            if entry.version.is_deleted() {
+                continue;
+            }
+
+            let data = &entry.version.data;
+            for index in indexes.values() {
+                let col = index.column_index();
+                if col < data.len() {
+                    let _ = index.add(&data[col], row_id);
+                }
+            }
+        }
     }
 
     /// Cleans deleted tuples that are older than the given retention time.
@@ -666,6 +736,10 @@ impl TransationVersionStorage {
     /// Write a tuple into the transaction-local storage.
     /// This is the single entry point for all DML operations.
     pub fn put(&mut self, tuple_id: i64, data: Tuple, kind: WriteKind) -> MvccResult<()> {
+        if kind != WriteKind::Delete {
+            self.check_unique_violation(tuple_id, &data)?;
+        }
+
         let mut version = TupleVersion::new(self.txn_id, tuple_id, data);
         if kind == WriteKind::Delete {
             version.deleted_at_txn_id = self.txn_id;
@@ -752,6 +826,69 @@ impl TransationVersionStorage {
         self.local.as_ref().is_some_and(|l| !l.is_empty())
     }
 
+    /// Rejects a write whose value collides with a unique index, checking
+    /// both committed rows visible to this transaction and its own pending
+    /// local writes. A row this transaction has locally deleted no longer
+    /// counts as a collision.
+    fn check_unique_violation(&self, tuple_id: i64, data: &[Value]) -> MvccResult<()> {
+        for index in self.parent.get_indexes() {
+            if !index.is_unique() {
+                continue;
+            }
+
+            let Some(value) = data.get(index.column_index()) else {
+                continue;
+            };
+            if matches!(value, Value::Null) {
+                continue;
+            }
+
+            for existing in index.find(value) {
+                if existing == tuple_id {
+                    continue;
+                }
+
+                let locally_deleted = self
+                    .local
+                    .as_ref()
+                    .and_then(|local| local.get(&existing))
+                    .and_then(|chain| chain.last())
+                    .is_some_and(|version| version.is_deleted());
+                if locally_deleted {
+                    continue;
+                }
+
+                if self
+                    .parent
+                    .get_visible_version(existing, self.txn_id)
+                    .is_some()
+                {
+                    return Err(MvccError::DuplicatedKey(value.clone()));
+                }
+            }
+
+            if let Some(local) = self.local.as_ref() {
+                let col = index.column_index();
+                for (&other_id, chain) in local.iter() {
+                    if other_id == tuple_id {
+                        continue;
+                    }
+
+                    match chain.last() {
+                        Some(version)
+                            if !version.is_deleted() && version.data.get(col) == Some(value) =>
+                        {
+                            return Err(MvccError::DuplicatedKey(value.clone()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Detect write-write conflicts before commit.
     ///
     /// For each entry in the write set:
@@ -797,28 +934,31 @@ impl TransationVersionStorage {
             return;
         };
 
-        for (&tuple_id, chain) in local.iter() {
-            let Some(new_version) = chain.last() else {
-                continue;
-            };
-
-            let old_version = self
-                .write_set
+        let old_version = |tuple_id: i64| {
+            self.write_set
                 .as_ref()
                 .and_then(|ws| ws.get(&tuple_id))
                 .and_then(|entry| entry.version.as_ref())
-                .filter(|v| !v.is_deleted());
+                .filter(|v| !v.is_deleted())
+        };
 
-            if new_version.is_deleted() {
-                if let Some(old) = old_version {
-                    self.parent.update_indexes_on_delete(tuple_id, &old.data);
+        for (&tuple_id, chain) in local.iter() {
+            if chain.last().is_none() {
+                continue;
+            }
+
+            if let Some(old) = old_version(tuple_id) {
+                self.parent.update_indexes_on_delete(tuple_id, &old.data);
+            }
+        }
+
+        for (&tuple_id, chain) in local.iter() {
+            match chain.last() {
+                Some(new_version) if !new_version.is_deleted() => {
+                    self.parent
+                        .update_indexes_on_insert(tuple_id, &new_version.data);
                 }
-            } else if let Some(old) = old_version {
-                self.parent
-                    .update_indexes_on_update(tuple_id, &old.data, &new_version.data);
-            } else {
-                self.parent
-                    .update_indexes_on_insert(tuple_id, &new_version.data);
+                _ => {}
             }
         }
     }

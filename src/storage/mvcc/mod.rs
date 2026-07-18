@@ -26,6 +26,7 @@ pub enum MvccError {
     NotOpen,
     TableNotFound,
     WriteConflict,
+    DuplicatedKey(crate::sql::Value),
     Other(String),
 }
 
@@ -120,6 +121,7 @@ impl Display for MvccError {
             Self::WriteConflict => {
                 f.write_str("Write conflict: row is being modified by another transaction")
             }
+            Self::DuplicatedKey(value) => write!(f, "Duplicated key value: {value}"),
             Self::Other(msg) => f.write_str(msg),
         }
     }

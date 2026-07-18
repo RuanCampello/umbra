@@ -92,10 +92,13 @@ type Result<T> = std::result::Result<T, MvccError>;
 
 impl Engine {
     pub fn new(config: Config) -> Self {
-        let wal = Some(
-            WalManager::new(Some(Path::new(&config.path)), &config.wal)
-                .expect("wal manager not to fail"),
-        );
+        // an empty path means in-memory: never touch the filesystem,
+        // regardless of the WAL configuration
+        let wal_path = match config.path.is_empty() {
+            true => None,
+            _ => Some(Path::new(&config.path)),
+        };
+        let wal = Some(WalManager::new(wal_path, &config.wal).expect("wal manager not to fail"));
 
         let path = match config.path.is_empty() {
             true => IN_MEMORY_PATH.to_string(),
@@ -142,6 +145,13 @@ impl Engine {
                 self.fetching_disk.store(true, Ordering::Release);
                 let lsn = self.load_snapshots()?;
                 self.replay(lsn)?;
+
+                {
+                    let storages = self.versions.read().unwrap();
+                    storages
+                        .values()
+                        .for_each(|storage| storage.rebuild_indexes());
+                }
 
                 self.fetching_disk.store(false, Ordering::Release);
             }
@@ -224,6 +234,25 @@ impl Engine {
         Ok(returned)
     }
 
+    pub fn drop_table(&self, name: &str) -> Result<()> {
+        if !self.is_open() {
+            return Err(MvccError::NotOpen);
+        }
+
+        if self.schemas.write().unwrap().remove(name).is_none() {
+            return Err(MvccError::TableNotFound);
+        }
+
+        if let Some(storage) = self.versions.write().unwrap().remove(name) {
+            storage.close();
+        }
+
+        self.record_ddl(name, WalOperation::DropTable, &[])?;
+        self.epoch.fetch_add(1, Ordering::Release);
+
+        Ok(())
+    }
+
     pub fn does_table_exists(&self, name: &str) -> Result<bool> {
         if !self.is_open() {
             return Err(MvccError::NotOpen);
@@ -300,6 +329,7 @@ impl Engine {
                 let _ = engine.cleanup_transactions(transaction_retetion);
                 let _ = engine.cleanup_deleted_rows(transaction_retetion);
                 let _ = engine.cleanup_old_versions(transaction_retetion);
+                let _ = engine.checkpoint();
             }
         }));
 
@@ -355,7 +385,7 @@ impl Engine {
             return Ok(0);
         }
 
-        let lsn = deserialise_snapshot_header(&dir);
+        let lsn = deserialise_snapshot_header(&dir.join("header.bin"));
         let mut max_header_lsn = 0u64;
 
         let Ok(tables) = std::fs::read_dir(&dir) else {
@@ -409,7 +439,12 @@ impl Engine {
                 info.skipped
             )
         }
-        // TODO: populate indexes
+
+        // ids seen in the log must never be handed out again, even those of
+        // uncommitted transactions whose entries were skipped
+        if info.max_txn_id > 0 {
+            self.registry.recover_aborted_transaction(info.max_txn_id);
+        }
 
         Ok(())
     }
@@ -468,12 +503,173 @@ impl Engine {
                 storage.mark_deleted(tuple_version.row_id, tuple_version.txn_id);
             }
 
+            WalOperation::CreateIndex => {
+                let (name, col, unique) = decode_index(entry.data.as_ref())?;
+                let storage = self.version_storage(&entry.table)?;
+
+                // registration only: `open()` rebuilds every index after replay
+                storage.add_index(name.clone(), Arc::new(BTreeIndex::new(name, col, unique)));
+            }
+
+            WalOperation::Commit if entry.txn_id > 0 => {
+                self.registry.recover_commit(entry.txn_id);
+            }
+
             _ => {}
         })
     }
 
+    /// Persists a consistent snapshot of every table, then checkpoints the WAL
+    ///
+    /// Returns `false` without doing anything when the WAL is disabled or
+    /// transactions are still active, a snapshot must only capture committed
+    /// state, and WAL truncation would lose entries an active transaction
+    /// still needs on recovery
+    pub fn checkpoint(&self) -> Result<bool> {
+        if !self.is_open() {
+            return Err(MvccError::NotOpen);
+        }
+
+        let wal = match self.wal.as_ref() {
+            Some(wal) if wal.is_enabled() => wal,
+            _ => return Ok(false),
+        };
+
+        if self.registry.active_transaction_count() > 0 {
+            return Ok(false);
+        }
+
+        let lsn = wal.current_lsn();
+        let snapshot_dir = wal.dir.join("snapshot");
+        let keep = wal.snapshot_keep();
+
+        let tables: Vec<(Arc<Schema>, Arc<VersionStorage>)> = {
+            let schemas = self.schemas.read().unwrap();
+            let versions = self.versions.read().unwrap();
+
+            versions
+                .iter()
+                .filter_map(|(name, storage)| {
+                    schemas
+                        .get(name)
+                        .map(|schema| (Arc::clone(schema), Arc::clone(storage)))
+                })
+                .collect()
+        };
+
+        for (schema, storage) in tables {
+            let table_dir = snapshot_dir.join(&schema.name);
+            std::fs::create_dir_all(&table_dir)?;
+
+            write_table_snapshot(&table_dir, &schema, &storage, lsn)?;
+            prune_snapshots(&table_dir, keep);
+        }
+
+        // snapshot dirs of dropped tables would resurrect on restart once
+        // their DropTable WAL entry is pruned by this very checkpoint
+        if let Ok(entries) = std::fs::read_dir(&snapshot_dir) {
+            let schemas = self.schemas.read().unwrap();
+            for entry in entries.filter_map(|e| e.ok()) {
+                if !entry.file_type().map(|ty| ty.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !schemas.contains_key(&name) {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+
+        serialise_snapshot_header(&snapshot_dir.join("header.bin"), lsn)?;
+        wal.checkpoint(Vec::new())?;
+
+        Ok(true)
+    }
+
     fn load_table(&self, name: &str, snapshot: &Path) -> Result<u64> {
-        unimplemented!()
+        let data = std::fs::read(snapshot)?;
+        if data.len() < 24 {
+            return Err(MvccError::Other(format!(
+                "Snapshot for table {name} is too short"
+            )));
+        }
+
+        let (content, footer) = data.split_at(data.len() - 4);
+        let expected = u32::from_le_bytes(footer.try_into().unwrap());
+        if super::fnv1a(content) != expected {
+            return Err(MvccError::Other(format!(
+                "Snapshot checksum mismatch for table {name}"
+            )));
+        }
+
+        let mut cursor = 0usize;
+        let mut take = |len: usize| -> Result<&[u8]> {
+            match content.get(cursor..cursor + len) {
+                Some(bytes) => {
+                    cursor += len;
+                    Ok(bytes)
+                }
+                None => Err(MvccError::Other(format!(
+                    "Snapshot for table {name} is truncated"
+                ))),
+            }
+        };
+
+        let magic = u32::from_le_bytes(take(4)?.try_into().unwrap());
+        if magic != SNAPSHOT_MAGIC {
+            return Err(MvccError::Other(format!(
+                "Wrong snapshot magic for table {name}"
+            )));
+        }
+
+        let version = u32::from_le_bytes(take(4)?.try_into().unwrap());
+        if version != SNAPSHOT_VERSION {
+            return Err(MvccError::Other(format!(
+                "Unsupported snapshot version {version} for table {name}"
+            )));
+        }
+
+        let lsn = u64::from_le_bytes(take(8)?.try_into().unwrap());
+
+        let schema_len = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+        let schema = Schema::try_from(take(schema_len)?)?;
+
+        let row_count = u64::from_le_bytes(take(8)?.try_into().unwrap()) as usize;
+        let mut rows = Vec::with_capacity(row_count);
+        let mut max_txn_id = 0i64;
+
+        for _ in 0..row_count {
+            let row_len = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+            let row = TupleVersion::try_from(take(row_len)?)?;
+
+            max_txn_id = max_txn_id.max(row.txn_id).max(row.deleted_at_txn_id);
+            rows.push(row);
+        }
+
+        let storage = Arc::new(VersionStorage::with_checker(
+            schema.name.clone(),
+            schema.clone(),
+            self.registry.clone(),
+        ));
+        add_primary_index(&schema, &storage);
+
+        for row in rows {
+            storage.recover_version(row);
+        }
+
+        if max_txn_id > 0 {
+            self.registry.recover_aborted_transaction(max_txn_id);
+        }
+
+        let table = schema.name.clone();
+        self.schemas
+            .write()
+            .unwrap()
+            .insert(table.clone(), Arc::new(schema));
+        self.versions.write().unwrap().insert(table, storage);
+
+        Ok(lsn)
     }
 
     fn version_storage(&self, name: &str) -> Result<Arc<VersionStorage>> {
@@ -553,40 +749,43 @@ impl Engine {
         Ok(())
     }
 
-    /// Scan all visible rows for a given transaction.
+    /// Scan all visible rows for a given transaction, ordered by row id.
     ///
-    /// Checks the transaction-local store first for read-your-own-writes,
-    /// then merges with the parent `VersionStorage` scan.
-    pub fn scan(&self, txn_id: i64, table: &str) -> Result<Vec<Tuple>> {
+    /// Local uncommitted writes override the parent `VersionStorage` scan
+    /// (read-your-own-writes): locally updated rows show their new data,
+    /// locally deleted rows disappear, and local inserts appear.
+    pub fn scan(&self, txn_id: i64, table: &str) -> Result<Vec<(i64, Tuple)>> {
         let storage = self.version_storage(table)?;
         let mut results = storage.scan_visible(txn_id);
 
-        // Overlay local writes (read-your-own-writes).
         let stores = self.txn_stores.read().unwrap();
-        if let Some(table_stores) = stores.get(&txn_id) {
-            if let Some(tvs) = table_stores.get(table) {
-                if tvs.has_local_changes() {
-                    // For simplicity, re-scan: check each local tuple.
-                    // Local versions override parent versions.
-                    if let Some(local) = &tvs.local {
-                        for (&tuple_id, chain) in local.iter() {
-                            if let Some(version) = chain.last() {
-                                // Remove any existing parent version for this tuple.
-                                results.retain(|t| {
-                                    // Tuples don't carry their ID in the data,
-                                    // so the parent scan result was already correct
-                                    // if we haven't committed yet — skip overlay
-                                    // for now; TVS.get handles single lookups.
-                                    true
-                                });
-                            }
-                        }
+        let local = stores
+            .get(&txn_id)
+            .and_then(|tables| tables.get(table))
+            .and_then(|tvs| tvs.local.as_ref())
+            .filter(|local| !local.is_empty());
+
+        if let Some(local) = local {
+            results.retain(|(row_id, _)| !local.contains_key(row_id));
+
+            for (&row_id, chain) in local.iter() {
+                match chain.last() {
+                    Some(version) if !version.is_deleted() => {
+                        results.push((row_id, version.data.clone()))
                     }
+                    _ => {}
                 }
             }
+
+            results.sort_unstable_by_key(|&(row_id, _)| row_id);
         }
 
         Ok(results)
+    }
+
+    /// Hands out the next unused row id for a table.
+    pub fn next_row_id(&self, table: &str) -> Result<i64> {
+        Ok(self.version_storage(table)?.allocate_row_id())
     }
 
     /// Commit a transaction: detect conflicts, update indexes, flush local writes,
@@ -626,12 +825,73 @@ impl Engine {
         Ok(())
     }
 
-    pub fn create_index(&self, table: &str, index: Arc<dyn Index>) -> Result<()> {
+    pub fn create_index(&self, name: &str, table: &str, column: &str, unique: bool) -> Result<()> {
+        if !self.is_open() {
+            return Err(MvccError::NotOpen);
+        }
+
+        let schema = self.schema(table)?;
+        let col = schema
+            .columns
+            .iter()
+            .position(|c| c.name() == column)
+            .ok_or_else(|| MvccError::Other(format!("Column {column} does not exist")))?;
+
         let storage = self.version_storage(table)?;
-        let name = index.name().to_string();
-        storage.add_index(name, index);
+        if storage.get_index(name).is_some() {
+            return Err(MvccError::Other(format!("Index {name} already exists")));
+        }
+
+        let index = Arc::new(BTreeIndex::new(name.to_string(), col, unique));
+        for row in storage.snapshot_rows() {
+            if let Some(value) = row.data.get(col) {
+                index
+                    .add(value, row.row_id)
+                    .map_err(|_| MvccError::DuplicatedKey(value.clone()))?;
+            }
+        }
+
+        storage.add_index(name.to_string(), index);
+        self.record_ddl(
+            table,
+            WalOperation::CreateIndex,
+            &encode_index(name, col, unique),
+        )?;
+        self.epoch.fetch_add(1, Ordering::Release);
 
         Ok(())
+    }
+
+    pub fn max_column_value(&self, table: &str, column: usize) -> Result<Option<i128>> {
+        Ok(self.version_storage(table)?.max_number_at(column))
+    }
+
+    pub fn index_for_column(&self, table: &str, column: usize) -> Result<Option<String>> {
+        let storage = self.version_storage(table)?;
+
+        let mut fallback = None;
+        for index in storage.get_indexes() {
+            if index.column_index() != column {
+                continue;
+            }
+
+            match index.is_unique() {
+                true => return Ok(Some(index.name().to_string())),
+                false => fallback = Some(index.name().to_string()),
+            }
+        }
+
+        Ok(fallback)
+    }
+
+    /// Whether a transaction holds uncommitted local writes for a table
+    pub fn has_local_writes(&self, txn_id: i64, table: &str) -> bool {
+        self.txn_stores
+            .read()
+            .unwrap()
+            .get(&txn_id)
+            .and_then(|tables| tables.get(table))
+            .is_some_and(|tvs| tvs.has_local_changes())
     }
 
     /// Scan an index for rows matching a specific value, filtering by MVCC visibility.
@@ -641,7 +901,7 @@ impl Engine {
         table: &str,
         index_name: &str,
         value: &Value,
-    ) -> Result<Vec<Tuple>> {
+    ) -> Result<Vec<(i64, Tuple)>> {
         let storage = self.version_storage(table)?;
 
         let index = storage
@@ -654,7 +914,7 @@ impl Engine {
         for row_id in row_ids {
             if let Some(version) = storage.get_visible_version(row_id, txn_id) {
                 if !version.is_deleted() {
-                    results.push(version.data);
+                    results.push((row_id, version.data));
                 }
             }
         }
@@ -705,6 +965,15 @@ impl Config {
             cleanup: Default::default(),
         }
     }
+
+    /// a configuration with the WAL enabled: changes survive restarts
+    pub fn durable<P: Into<String>>(path: P) -> Self {
+        Self {
+            path: path.into(),
+            wal: WalConfig::default(),
+            cleanup: Default::default(),
+        }
+    }
 }
 
 impl Default for CleanUpConfig {
@@ -731,6 +1000,124 @@ impl CleanUpThread {
 impl Drop for CleanUpThread {
     fn drop(&mut self) {
         self.stop()
+    }
+}
+
+/// writes one immutable snapshot file for a table: schema plus every live
+/// committed row, checksummed, via atomic tmp+rename
+fn write_table_snapshot(
+    dir: &Path,
+    schema: &Schema,
+    storage: &VersionStorage,
+    lsn: u64,
+) -> Result<()> {
+    let sequence = next_snapshot_sequence(dir);
+    let path = dir.join(format!("snapshot-{sequence:08}.bin"));
+
+    let rows = storage.snapshot_rows();
+    let schema_bytes = Vec::<u8>::from(schema);
+
+    let mut buff = Vec::with_capacity(64 + schema_bytes.len() + rows.len() * 64);
+    buff.extend_from_slice(&SNAPSHOT_MAGIC.to_le_bytes());
+    buff.extend_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
+    buff.extend_from_slice(&lsn.to_le_bytes());
+    buff.extend_from_slice(&(schema_bytes.len() as u32).to_le_bytes());
+    buff.extend_from_slice(&schema_bytes);
+    buff.extend_from_slice(&(rows.len() as u64).to_le_bytes());
+
+    for row in rows {
+        let bytes: Vec<u8> = row.try_into()?;
+        buff.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        buff.extend_from_slice(&bytes);
+    }
+
+    let hash = super::fnv1a(&buff);
+    buff.extend_from_slice(&hash.to_le_bytes());
+
+    let temp = path.with_extension("tmp");
+    let mut file = File::create(&temp)?;
+    file.write_all(&buff)?;
+    file.sync_all()?;
+    std::fs::rename(&temp, &path)?;
+
+    if let Ok(dir) = File::open(dir) {
+        let _ = dir.sync_all();
+    }
+
+    Ok(())
+}
+
+/// Binary layout for `CreateIndex` WAL payloads:
+/// `[name_len u16][name][column u32][unique u8]`
+fn encode_index(name: &str, column: usize, unique: bool) -> Vec<u8> {
+    let mut buff = Vec::with_capacity(2 + name.len() + 5);
+    buff.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    buff.extend_from_slice(name.as_bytes());
+    buff.extend_from_slice(&(column as u32).to_le_bytes());
+    buff.push(unique as u8);
+
+    buff
+}
+
+fn decode_index(data: &[u8]) -> Result<(String, usize, bool)> {
+    let too_short = || MvccError::Other("Truncated CreateIndex payload".into());
+
+    let name_len =
+        u16::from_le_bytes(data.get(0..2).ok_or_else(too_short)?.try_into().unwrap()) as usize;
+    let name = String::from_utf8(data.get(2..2 + name_len).ok_or_else(too_short)?.to_vec())
+        .map_err(|_| MvccError::Other("Invalid index name".into()))?;
+
+    let cursor = 2 + name_len;
+    let column = u32::from_le_bytes(
+        data.get(cursor..cursor + 4)
+            .ok_or_else(too_short)?
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let unique = *data.get(cursor + 4).ok_or_else(too_short)? != 0;
+
+    Ok((name, column, unique))
+}
+
+fn next_snapshot_sequence(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| snapshot_sequence(&entry.file_name().to_string_lossy()))
+        .max()
+        .map(|max| max + 1)
+        .unwrap_or(0)
+}
+
+fn snapshot_sequence(name: &str) -> Option<u64> {
+    name.strip_prefix("snapshot-")?
+        .strip_suffix(".bin")?
+        .parse()
+        .ok()
+}
+
+fn prune_snapshots(dir: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    let mut snapshots: Vec<(u64, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            snapshot_sequence(&entry.file_name().to_string_lossy()).map(|seq| (seq, entry.path()))
+        })
+        .collect();
+
+    if snapshots.len() <= keep {
+        return;
+    }
+
+    snapshots.sort_unstable_by_key(|&(seq, _)| seq);
+    for (_, path) in snapshots.drain(..snapshots.len() - keep) {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -928,7 +1315,8 @@ mod tests {
         let (reader, _) = engine.registry.begin();
         let rows = engine.scan(reader, "items").unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0][1], Value::String("new".into()));
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[0].1[1], Value::String("new".into()));
 
         engine.close().unwrap();
     }
@@ -971,7 +1359,8 @@ mod tests {
         let (reader, _) = engine.registry.begin();
         let rows = engine.scan(reader, "items").unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0][1], Value::String("b".into()));
+        assert_eq!(rows[0].0, 2);
+        assert_eq!(rows[0].1[1], Value::String("b".into()));
 
         engine.close().unwrap();
     }
@@ -1023,13 +1412,716 @@ mod tests {
             .scan_index(reader, "users", &pk_index_name, &Value::Number(2))
             .unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0][1], Value::String("bob".into()));
+        assert_eq!(results[0].1[1], Value::String("bob".into()));
 
         // missing key returns empty
         let missing = engine
             .scan_index(reader, "users", &pk_index_name, &Value::Number(99))
             .unwrap();
         assert!(missing.is_empty());
+
+        engine.close().unwrap();
+    }
+
+    pub(super) fn scratch_dir(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must be past the epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir()
+            .join(format!("umbra-engine-{tag}-{}-{nanos}", std::process::id(),));
+        std::fs::create_dir_all(&dir).expect("scratch dir must be creatable");
+
+        dir
+    }
+
+    pub(super) fn durable_engine(dir: &Path) -> Engine {
+        let engine = Engine::new(Config::durable(dir.to_string_lossy().to_string()));
+        engine.open().unwrap();
+
+        engine
+    }
+
+    #[test]
+    fn restart_recovers_committed_state_only() {
+        let dir = scratch_dir("recovery");
+
+        {
+            let engine = durable_engine(&dir);
+            let schema = SchemaBuilder::new("users")
+                .primary("id", Type::Integer)
+                .nullable("name", Type::Text)
+                .build();
+            engine.create_table(schema).unwrap();
+
+            let (committed, _) = engine.registry.begin();
+            engine
+                .insert(
+                    committed,
+                    "users",
+                    1,
+                    vec![Value::Number(1), Value::String("alice".into())],
+                )
+                .unwrap();
+            engine
+                .insert(
+                    committed,
+                    "users",
+                    2,
+                    vec![Value::Number(2), Value::String("bob".into())],
+                )
+                .unwrap();
+            engine.commit_transaction(committed).unwrap();
+
+            let (deleter, _) = engine.registry.begin();
+            engine.delete(deleter, "users", 2).unwrap();
+            engine.commit_transaction(deleter).unwrap();
+
+            // never committed: must not survive the restart
+            let (lost, _) = engine.registry.begin();
+            engine
+                .insert(
+                    lost,
+                    "users",
+                    3,
+                    vec![Value::Number(3), Value::String("ghost".into())],
+                )
+                .unwrap();
+
+            engine.close().unwrap();
+        }
+
+        let engine = durable_engine(&dir);
+        assert!(engine.does_table_exists("users").unwrap());
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[0].1[1], Value::String("alice".into()));
+
+        assert!(engine.get(reader, "users", 2).unwrap().is_none());
+        assert!(engine.get(reader, "users", 3).unwrap().is_none());
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restart_never_reuses_transaction_or_row_ids() {
+        let dir = scratch_dir("id-reuse");
+
+        let max_txn_before;
+        {
+            let engine = durable_engine(&dir);
+            let schema = SchemaBuilder::new("items")
+                .primary("id", Type::Integer)
+                .nullable("val", Type::Text)
+                .build();
+            engine.create_table(schema).unwrap();
+
+            let (txn, _) = engine.registry.begin();
+            engine
+                .insert(
+                    txn,
+                    "items",
+                    5,
+                    vec![Value::Number(5), Value::String("five".into())],
+                )
+                .unwrap();
+            engine.commit_transaction(txn).unwrap();
+
+            // uncommitted transaction: its id must still be retired
+            let (dangling, _) = engine.registry.begin();
+            engine
+                .insert(
+                    dangling,
+                    "items",
+                    6,
+                    vec![Value::Number(6), Value::String("six".into())],
+                )
+                .unwrap();
+            max_txn_before = dangling;
+
+            engine.close().unwrap();
+        }
+
+        let engine = durable_engine(&dir);
+
+        let (fresh, _) = engine.registry.begin();
+        assert!(
+            fresh > max_txn_before,
+            "fresh txn id {fresh} must exceed every logged id {max_txn_before}"
+        );
+
+        assert_eq!(engine.next_row_id("items").unwrap(), 6);
+
+        // writes on the recovered state keep working
+        engine
+            .insert(
+                fresh,
+                "items",
+                6,
+                vec![Value::Number(6), Value::String("six".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(fresh).unwrap();
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "items").unwrap();
+        assert_eq!(rows.len(), 2);
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checkpoint_snapshots_tables_and_prunes_wal() {
+        let dir = scratch_dir("checkpoint");
+
+        {
+            let engine = durable_engine(&dir);
+            let schema = SchemaBuilder::new("users")
+                .primary("id", Type::Integer)
+                .nullable("name", Type::Text)
+                .build();
+            engine.create_table(schema).unwrap();
+
+            let (txn, _) = engine.registry.begin();
+            for id in 1..=3i64 {
+                engine
+                    .insert(
+                        txn,
+                        "users",
+                        id,
+                        vec![Value::Number(id as i128), Value::String(format!("u{id}"))],
+                    )
+                    .unwrap();
+            }
+            engine.commit_transaction(txn).unwrap();
+
+            let (deleter, _) = engine.registry.begin();
+            engine.delete(deleter, "users", 2).unwrap();
+            engine.commit_transaction(deleter).unwrap();
+
+            assert!(engine.checkpoint().unwrap());
+
+            assert!(dir.join("snapshot/header.bin").exists());
+            assert!(dir.join("snapshot/users/snapshot-00000000.bin").exists());
+            assert!(dir.join("wal/checkpoint.meta").exists());
+            assert!(
+                !dir.join("wal/wal-00000000.log").exists(),
+                "pre-checkpoint segment must be pruned"
+            );
+            assert!(dir.join("wal/wal-00000001.log").exists());
+
+            // survives only in the WAL tail, not in the snapshot
+            let (txn, _) = engine.registry.begin();
+            engine
+                .insert(
+                    txn,
+                    "users",
+                    4,
+                    vec![Value::Number(4), Value::String("tail".into())],
+                )
+                .unwrap();
+            engine.commit_transaction(txn).unwrap();
+
+            engine.close().unwrap();
+        }
+
+        let engine = durable_engine(&dir);
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "users").unwrap();
+        let ids: Vec<i64> = rows.iter().map(|&(row_id, _)| row_id).collect();
+        assert_eq!(ids, vec![1, 3, 4]);
+
+        // indexes must be rebuilt after snapshot load + WAL tail replay
+        let pk_index_name = index!(primary on users);
+        let hits = engine
+            .scan_index(reader, "users", &pk_index_name, &Value::Number(4))
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1[1], Value::String("tail".into()));
+
+        assert_eq!(engine.next_row_id("users").unwrap(), 5);
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unique_violations_are_rejected() {
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("users")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+        engine.create_table(schema).unwrap();
+
+        let (txn, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn,
+                "users",
+                1,
+                vec![Value::Number(7), Value::String("a".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn).unwrap();
+
+        // same primary key value on a fresh row id
+        let (txn, _) = engine.registry.begin();
+        let result = engine.insert(
+            txn,
+            "users",
+            2,
+            vec![Value::Number(7), Value::String("b".into())],
+        );
+        assert!(matches!(result, Err(MvccError::DuplicatedKey(_))));
+        engine.rollback_transaction(txn).unwrap();
+
+        // duplicate within a single transaction's local writes
+        let (txn, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn,
+                "users",
+                2,
+                vec![Value::Number(8), Value::String("b".into())],
+            )
+            .unwrap();
+        let result = engine.insert(
+            txn,
+            "users",
+            3,
+            vec![Value::Number(8), Value::String("c".into())],
+        );
+        assert!(matches!(result, Err(MvccError::DuplicatedKey(_))));
+        engine.rollback_transaction(txn).unwrap();
+
+        // delete + reinsert of the same key inside one transaction is fine
+        let (txn, _) = engine.registry.begin();
+        engine.delete(txn, "users", 1).unwrap();
+        engine
+            .insert(
+                txn,
+                "users",
+                4,
+                vec![Value::Number(7), Value::String("again".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn).unwrap();
+
+        // update moving the key onto an existing one is rejected
+        let (txn, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn,
+                "users",
+                5,
+                vec![Value::Number(9), Value::String("e".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn).unwrap();
+
+        let (txn, _) = engine.registry.begin();
+        let result = engine.update(
+            txn,
+            "users",
+            5,
+            vec![Value::Number(7), Value::String("clash".into())],
+        );
+        assert!(matches!(result, Err(MvccError::DuplicatedKey(_))));
+        engine.rollback_transaction(txn).unwrap();
+
+        engine.close().unwrap();
+    }
+
+    #[test]
+    fn secondary_index_backfill_scan_and_restart() {
+        let dir = scratch_dir("secondary-index");
+
+        {
+            let engine = durable_engine(&dir);
+            let schema = SchemaBuilder::new("users")
+                .primary("id", Type::Integer)
+                .nullable("email", Type::Text)
+                .build();
+            engine.create_table(schema).unwrap();
+
+            let (txn, _) = engine.registry.begin();
+            for (id, email) in [(1, "a@x"), (2, "b@x")] {
+                engine
+                    .insert(
+                        txn,
+                        "users",
+                        id,
+                        vec![Value::Number(id as i128), Value::String(email.into())],
+                    )
+                    .unwrap();
+            }
+            engine.commit_transaction(txn).unwrap();
+
+            // backfills from existing rows
+            engine
+                .create_index("users_email_idx", "users", "email", true)
+                .unwrap();
+
+            let (reader, _) = engine.registry.begin();
+            let hits = engine
+                .scan_index(
+                    reader,
+                    "users",
+                    "users_email_idx",
+                    &Value::String("b@x".into()),
+                )
+                .unwrap();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].0, 2);
+
+            // uniqueness now enforced through the secondary index
+            let (txn, _) = engine.registry.begin();
+            let result = engine.insert(
+                txn,
+                "users",
+                3,
+                vec![Value::Number(3), Value::String("a@x".into())],
+            );
+            assert!(matches!(result, Err(MvccError::DuplicatedKey(_))));
+            engine.rollback_transaction(txn).unwrap();
+
+            // backfill over duplicates must fail for a unique index
+            assert!(matches!(
+                engine.create_index("users_email_idx", "users", "email", true),
+                Err(MvccError::Other(_))
+            ));
+
+            engine.close().unwrap();
+        }
+
+        let engine = durable_engine(&dir);
+
+        let (reader, _) = engine.registry.begin();
+        let hits = engine
+            .scan_index(
+                reader,
+                "users",
+                "users_email_idx",
+                &Value::String("a@x".into()),
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 1, "index must survive restart via WAL replay");
+        assert_eq!(hits[0].0, 1);
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wal_only_drop_survives_restart() {
+        let dir = scratch_dir("wal-drop");
+
+        {
+            let engine = durable_engine(&dir);
+            let schema = SchemaBuilder::new("gone")
+                .primary("id", Type::Integer)
+                .build();
+            engine.create_table(schema).unwrap();
+
+            let (txn, _) = engine.registry.begin();
+            engine
+                .insert(txn, "gone", 1, vec![Value::Number(1)])
+                .unwrap();
+            engine.commit_transaction(txn).unwrap();
+
+            engine.drop_table("gone").unwrap();
+            engine.close().unwrap();
+        }
+
+        let engine = durable_engine(&dir);
+        assert!(
+            !engine.does_table_exists("gone").unwrap(),
+            "dropped table must not resurrect from WAL replay"
+        );
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropped_table_stays_dropped_after_checkpoint_and_restart() {
+        let dir = scratch_dir("drop-checkpoint");
+
+        {
+            let engine = durable_engine(&dir);
+
+            for table in ["kept", "doomed"] {
+                let schema = SchemaBuilder::new(table)
+                    .primary("id", Type::Integer)
+                    .build();
+                engine.create_table(schema).unwrap();
+
+                let (txn, _) = engine.registry.begin();
+                engine
+                    .insert(txn, table, 1, vec![Value::Number(1)])
+                    .unwrap();
+                engine.commit_transaction(txn).unwrap();
+            }
+
+            // both tables land in the snapshot, then one is dropped and a
+            // second checkpoint prunes the DropTable WAL entry
+            assert!(engine.checkpoint().unwrap());
+            engine.drop_table("doomed").unwrap();
+            assert!(engine.checkpoint().unwrap());
+
+            assert!(matches!(
+                engine.scan(0, "doomed"),
+                Err(MvccError::TableNotFound)
+            ));
+
+            engine.close().unwrap();
+        }
+
+        let engine = durable_engine(&dir);
+        assert!(engine.does_table_exists("kept").unwrap());
+        assert!(
+            !engine.does_table_exists("doomed").unwrap(),
+            "dropped table must not resurrect from its stale snapshot"
+        );
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checkpoint_refuses_active_transactions() {
+        let dir = scratch_dir("checkpoint-active");
+        let engine = durable_engine(&dir);
+
+        let schema = SchemaBuilder::new("items")
+            .primary("id", Type::Integer)
+            .build();
+        engine.create_table(schema).unwrap();
+
+        let (txn, _) = engine.registry.begin();
+        engine
+            .insert(txn, "items", 1, vec![Value::Number(1)])
+            .unwrap();
+
+        assert!(!engine.checkpoint().unwrap());
+
+        engine.commit_transaction(txn).unwrap();
+        assert!(engine.checkpoint().unwrap());
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshot_pruning_keeps_newest_files() {
+        let dir = scratch_dir("snapshot-prune");
+        let engine = durable_engine(&dir);
+
+        let schema = SchemaBuilder::new("items")
+            .primary("id", Type::Integer)
+            .build();
+        engine.create_table(schema).unwrap();
+
+        for round in 0..7i64 {
+            let (txn, _) = engine.registry.begin();
+            engine
+                .insert(
+                    txn,
+                    "items",
+                    round + 1,
+                    vec![Value::Number((round + 1) as i128)],
+                )
+                .unwrap();
+            engine.commit_transaction(txn).unwrap();
+
+            assert!(engine.checkpoint().unwrap());
+        }
+
+        let snapshots: Vec<String> = std::fs::read_dir(dir.join("snapshot/items"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect();
+
+        assert!(
+            snapshots.len() <= 5,
+            "must keep at most 5 snapshots, found {snapshots:?}"
+        );
+        assert!(snapshots.contains(&"snapshot-00000006.bin".to_string()));
+
+        engine.close().unwrap();
+
+        // latest snapshot restores the full table
+        let engine = durable_engine(&dir);
+        let (reader, _) = engine.registry.begin();
+        assert_eq!(engine.scan(reader, "items").unwrap().len(), 7);
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wal_enabled_dml_round_trip() {
+        let dir = scratch_dir("wal-dml");
+        let engine = durable_engine(&dir);
+
+        let schema = SchemaBuilder::new("items")
+            .primary("id", Type::Integer)
+            .nullable("val", Type::Text)
+            .build();
+        engine.create_table(schema).unwrap();
+
+        let (txn, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn,
+                "items",
+                1,
+                vec![Value::Number(1), Value::String("a".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn).unwrap();
+
+        let (txn, _) = engine.registry.begin();
+        engine
+            .update(
+                txn,
+                "items",
+                1,
+                vec![Value::Number(1), Value::String("b".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn).unwrap();
+
+        let (rolled, _) = engine.registry.begin();
+        engine
+            .update(
+                rolled,
+                "items",
+                1,
+                vec![Value::Number(1), Value::String("junk".into())],
+            )
+            .unwrap();
+        engine.rollback_transaction(rolled).unwrap();
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "items").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1[1], Value::String("b".into()));
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_overlays_own_uncommitted_writes() {
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("items")
+            .primary("id", Type::Integer)
+            .nullable("val", Type::Text)
+            .build();
+
+        engine.create_table(schema).unwrap();
+
+        let (setup, _) = engine.registry.begin();
+        engine
+            .insert(
+                setup,
+                "items",
+                1,
+                vec![Value::Number(1), Value::String("one".into())],
+            )
+            .unwrap();
+        engine
+            .insert(
+                setup,
+                "items",
+                2,
+                vec![Value::Number(2), Value::String("two".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(setup).unwrap();
+
+        let (txn, _) = engine.registry.begin();
+        engine
+            .update(
+                txn,
+                "items",
+                1,
+                vec![Value::Number(1), Value::String("updated".into())],
+            )
+            .unwrap();
+        engine.delete(txn, "items", 2).unwrap();
+        engine
+            .insert(
+                txn,
+                "items",
+                3,
+                vec![Value::Number(3), Value::String("new".into())],
+            )
+            .unwrap();
+
+        let rows = engine.scan(txn, "items").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[0].1[1], Value::String("updated".into()));
+        assert_eq!(rows[1].0, 3);
+        assert_eq!(rows[1].1[1], Value::String("new".into()));
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "items").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[0].1[1], Value::String("one".into()));
+        assert_eq!(rows[1].0, 2);
+        assert_eq!(rows[1].1[1], Value::String("two".into()));
+
+        engine.rollback_transaction(txn).unwrap();
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "items").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1[1], Value::String("one".into()));
+
+        engine.close().unwrap();
+    }
+
+    #[test]
+    fn row_id_allocation_continues_after_existing_rows() {
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("items")
+            .primary("id", Type::Integer)
+            .nullable("val", Type::Text)
+            .build();
+
+        engine.create_table(schema).unwrap();
+
+        let (txn, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn,
+                "items",
+                7,
+                vec![Value::Number(7), Value::String("seven".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn).unwrap();
+
+        assert_eq!(engine.next_row_id("items").unwrap(), 8);
+        assert_eq!(engine.next_row_id("items").unwrap(), 9);
 
         engine.close().unwrap();
     }

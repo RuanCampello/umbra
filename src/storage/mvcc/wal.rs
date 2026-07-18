@@ -188,6 +188,25 @@ impl WalManager {
         Ok(())
     }
 
+    /// Flushes the log, writes `checkpoint.meta`, rotates the segment and
+    /// prunes obsolete ones. Returns the checkpoint LSN.
+    pub fn checkpoint(&self, active_transactions: Vec<i64>) -> Result<u64> {
+        let wal = self.wal.as_ref().ok_or(WalError::NotRunning)?;
+        let lsn = wal.checkpoint(active_transactions)?;
+
+        self.metadata.last_lsn.store(lsn, Ordering::Release);
+        Ok(lsn)
+    }
+
+    pub fn current_lsn(&self) -> u64 {
+        self.wal.as_ref().map(|wal| wal.lsn()).unwrap_or(0)
+    }
+
+    /// Number of snapshot files to keep per table.
+    pub fn snapshot_keep(&self) -> usize {
+        self.snapshots.max(1)
+    }
+
     #[inline]
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Acquire)

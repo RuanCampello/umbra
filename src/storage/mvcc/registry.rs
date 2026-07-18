@@ -1,4 +1,3 @@
-use crate::collections::chash;
 use crate::collections::hash::HashMap;
 use crate::storage::mvcc::version::VisibilityChecker;
 use std::{
@@ -175,6 +174,25 @@ impl TransactionRegistry {
         }
 
         self.active_transactions.fetch_sub(1, Ordering::Relaxed);
+
+        commit
+    }
+
+    #[inline]
+    pub fn active_transaction_count(&self) -> usize {
+        self.active_transactions.load(Ordering::Acquire)
+    }
+
+    /// Records a transaction recovered from the WAL as committed, allocating
+    /// its commit sequence and keeping both counters ahead of recovered ids.
+    pub fn recover_commit(&self, txn_id: i64) -> i64 {
+        let commit = self.next_sequence.fetch_add(1, Ordering::AcqRel) + 1;
+
+        self.snapshot_sequences
+            .lock()
+            .unwrap()
+            .insert(txn_id, commit);
+        self.recover_aborted_transaction(txn_id);
 
         commit
     }
@@ -495,7 +513,6 @@ impl TransactionRegistry {
         let mut transactions = self.transaction_isolation_levels.lock().unwrap();
         let is_new = !transactions.contains_key(&txn_id);
 
-        println!("level: {}", level as u8);
         transactions.insert(txn_id, level as u8);
 
         if is_new {
@@ -525,7 +542,6 @@ impl TransactionRegistry {
 
     /// Returns the global [isolation level](self::IsolationLevel).
     pub fn isolation_level(&self) -> IsolationLevel {
-        println!("{}", self.isolation_level.load(Ordering::Relaxed));
         IsolationLevel::from(self.isolation_level.load(Ordering::Acquire))
     }
 
