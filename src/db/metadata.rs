@@ -103,6 +103,8 @@ macro_rules! sequence {
     }};
 }
 
+pub(crate) use sequence;
+
 impl TableMetadata {
     pub fn next_id(&mut self) -> RowId {
         let row_id = self.row_id;
