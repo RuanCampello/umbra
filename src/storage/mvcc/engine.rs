@@ -922,6 +922,36 @@ impl Engine {
         Ok(results)
     }
 
+    /// Scan an index for rows whose keys fall within the given bounds,
+    /// filtering by MVCC visibility.
+    pub fn scan_index_range(
+        &self,
+        txn_id: i64,
+        table: &str,
+        index_name: &str,
+        start: std::ops::Bound<Value>,
+        end: std::ops::Bound<Value>,
+    ) -> Result<Vec<(i64, Tuple)>> {
+        let storage = self.version_storage(table)?;
+
+        let index = storage
+            .get_index(index_name)
+            .ok_or(MvccError::TableNotFound)?;
+
+        let row_ids = index.find_range(start.as_ref(), end.as_ref());
+
+        let mut results = Vec::with_capacity(row_ids.len());
+        for row_id in row_ids {
+            if let Some(version) = storage.get_visible_version(row_id, txn_id) {
+                if !version.is_deleted() {
+                    results.push((row_id, version.data));
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Get a single visible row by its row ID.
     pub fn get(&self, txn_id: i64, table: &str, row_id: i64) -> Result<Option<Tuple>> {
         let stores = self.txn_stores.read().unwrap();
@@ -1419,6 +1449,70 @@ mod tests {
             .scan_index(reader, "users", &pk_index_name, &Value::Number(99))
             .unwrap();
         assert!(missing.is_empty());
+
+        engine.close().unwrap();
+    }
+
+    #[test]
+    fn scan_primary_index_range() {
+        use std::ops::Bound;
+
+        let engine = Engine::in_memory();
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("users")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+
+        engine.create_table(schema).unwrap();
+
+        let (txn1, _) = engine.registry.begin();
+        for (id, name) in [(1, "alice"), (2, "bob"), (3, "carol"), (4, "dave")] {
+            engine
+                .insert(
+                    txn1,
+                    "users",
+                    id,
+                    vec![Value::Number(id as i128), Value::String(name.into())],
+                )
+                .unwrap();
+        }
+        engine.delete(txn1, "users", 3).unwrap();
+        engine.commit_transaction(txn1).unwrap();
+
+        let (reader, _) = engine.registry.begin();
+        let pk_index_name = index!(primary on users);
+
+        // half-open range, deleted row filtered out by visibility
+        let results = engine
+            .scan_index_range(
+                reader,
+                "users",
+                &pk_index_name,
+                Bound::Excluded(Value::Number(1)),
+                Bound::Unbounded,
+            )
+            .unwrap();
+        assert_eq!(
+            results.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![2, 4]
+        );
+
+        // fully bounded range
+        let results = engine
+            .scan_index_range(
+                reader,
+                "users",
+                &pk_index_name,
+                Bound::Included(Value::Number(1)),
+                Bound::Excluded(Value::Number(4)),
+            )
+            .unwrap();
+        assert_eq!(
+            results.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
 
         engine.close().unwrap();
     }
