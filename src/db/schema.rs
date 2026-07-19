@@ -31,6 +31,9 @@ pub struct SchemaNew {
     pub created_at: u64,
     pub updated_at: u64,
 
+    /// Variant lists for enum columns, indexed by the id in [`Type::Enum`]
+    enums: Vec<Vec<String>>,
+
     // Cached column names, computed on the first access
     column_names: OnceLock<Arc<Vec<String>>>,
 
@@ -91,8 +94,19 @@ impl SchemaNew {
             column_names,
             created_at: now,
             updated_at: now,
+            enums: Vec::new(),
             primary_key_index: OnceLock::new(),
         }
+    }
+
+    pub fn add_enum(&mut self, variants: Vec<String>) -> u32 {
+        self.enums.push(variants);
+        (self.enums.len() - 1) as u32
+    }
+
+    #[inline]
+    pub fn enum_variants(&self, id: u32) -> Option<&[String]> {
+        self.enums.get(id as usize).map(Vec::as_slice)
     }
 
     #[inline]
@@ -150,22 +164,36 @@ impl SchemaBuilder {
         SchemaNew::new(self.table, self.columns)
     }
 
-    /// builds the schema from parsed `CREATE TABLE` column definitions
+    /// builds the schema from parsed `CREATE TABLE` column definitions,
+    /// registering enum variant lists as they appear
     pub fn from_ast_columns(mut self, columns: &[crate::sql::statement::Column]) -> SchemaNew {
+        let mut enums = Vec::new();
+
         for column in columns {
             let idx = self.columns.len();
             let primary = column.constraints.contains(&Constraint::PrimaryKey);
 
+            let r#type = match &column.type_def {
+                Some(variants) => {
+                    enums.push(variants.clone());
+                    Type::Enum((enums.len() - 1) as u32)
+                }
+                None => column.data_type,
+            };
+
             self.columns.push(Column::new(
                 idx,
                 &column.name,
-                column.data_type,
+                r#type,
                 column.is_nullable(),
                 primary,
             ));
         }
 
-        SchemaNew::new(self.table, self.columns)
+        let mut schema = SchemaNew::new(self.table, self.columns);
+        schema.enums = enums;
+
+        schema
     }
 }
 
@@ -302,8 +330,8 @@ impl<'a> SchemaBytes<'a> {
             13 => Type::DoublePrecision,
             14 => Type::Uuid,
             15 => Type::Numeric(
-                self.u32("Missing numeric precision")? as usize,
-                self.u32("Missing numeric scale")? as usize,
+                self.u64("Missing numeric precision")? as usize,
+                self.u64("Missing numeric scale")? as usize,
             ),
             16 => Type::Date,
             17 => Type::Time,
@@ -425,6 +453,15 @@ impl From<&SchemaNew> for Vec<u8> {
             }
         }
 
+        buff.extend_from_slice(&(value.enums.len() as u16).to_le_bytes());
+        for variants in &value.enums {
+            buff.extend_from_slice(&(variants.len() as u16).to_le_bytes());
+            for variant in variants {
+                buff.extend_from_slice(&(variant.len() as u16).to_le_bytes());
+                buff.extend_from_slice(variant.as_bytes());
+            }
+        }
+
         buff
     }
 }
@@ -469,9 +506,22 @@ impl TryFrom<&[u8]> for SchemaNew {
             })
         }
 
+        let enum_count = bytes.u16("Missing enum count")? as usize;
+        let mut enums = Vec::with_capacity(enum_count);
+        for _ in 0..enum_count {
+            let variant_count = bytes.u16("Missing enum variant count")? as usize;
+            let mut variants = Vec::with_capacity(variant_count);
+            for _ in 0..variant_count {
+                let len = bytes.u16("Missing enum variant length")? as usize;
+                variants.push(bytes.string(len, "Missing enum variant")?);
+            }
+            enums.push(variants);
+        }
+
         let mut schema = SchemaNew::new(name, columns);
         schema.created_at = created_at;
         schema.updated_at = updated_at;
+        schema.enums = enums;
 
         Ok(schema)
     }
@@ -483,6 +533,7 @@ impl PartialEq for SchemaNew {
             && self.created_at == other.created_at
             && self.updated_at == other.updated_at
             && self.columns == other.columns
+            && self.enums == other.enums
     }
 }
 
@@ -581,6 +632,15 @@ impl Schema {
         self.columns.iter().rposition(|c| c.name == col)
     }
 
+    /// Indexes columns in the range by their bare name
+    pub fn index_bare_names(&mut self, start: usize, end: usize) {
+        for idx in start..end {
+            if let Some(col) = self.columns.get(idx) {
+                self.index.insert(col.name.clone(), idx);
+            }
+        }
+    }
+
     /// Adds qualified column to index for all columns within the range.
     /// This is usefull to support qualified identifier in self-joins where the same table appears
     /// with different aliases.
@@ -657,6 +717,41 @@ impl Schema {
     }
 }
 
+impl From<&SchemaNew> for Schema {
+    fn from(schema: &SchemaNew) -> Self {
+        let columns = schema
+            .columns
+            .iter()
+            .map(|col| {
+                let mut constraints = Vec::new();
+                if col.primary_key {
+                    constraints.push(Constraint::PrimaryKey);
+                }
+                if col.nullable {
+                    constraints.push(Constraint::Nullable);
+                }
+
+                let type_def = match col.r#type {
+                    Type::Enum(id) => schema.enum_variants(id).map(<[String]>::to_vec),
+                    _ => None,
+                };
+
+                statement::Column {
+                    name: col.name.clone(),
+                    data_type: col.r#type,
+                    constraints,
+                    type_def,
+                }
+            })
+            .collect();
+
+        let mut legacy = Schema::new(columns);
+        legacy.enums = schema.enums.clone();
+
+        legacy
+    }
+}
+
 pub(crate) fn has_btree_key(columns: &[crate::sql::statement::Column]) -> bool {
     columns[0].constraints.contains(&Constraint::PrimaryKey)
         && !matches!(columns[0].data_type, Type::Varchar(_) | Type::Boolean)
@@ -696,12 +791,11 @@ fn serialise_type(r#type: Type, buff: &mut Vec<u8>) {
         Type::Real => buff.push(12),
         Type::DoublePrecision => buff.push(13),
         Type::Uuid => buff.push(14),
+        // u64 so the NUMERIC_ANY (usize::MAX) sentinel round-trips
         Type::Numeric(precision, scale) => {
             buff.push(15);
-            let precision = u32::try_from(precision).expect("numeric precision exceeds u32");
-            let scale = u32::try_from(scale).expect("numeric scale exceeds u32");
-            buff.extend_from_slice(&precision.to_le_bytes());
-            buff.extend_from_slice(&scale.to_le_bytes());
+            buff.extend_from_slice(&(precision as u64).to_le_bytes());
+            buff.extend_from_slice(&(scale as u64).to_le_bytes());
         }
         Type::Date => buff.push(16),
         Type::Time => buff.push(17),

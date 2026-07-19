@@ -8,7 +8,7 @@ use crate::db::{
 use crate::executor::dispatch::ExecResult;
 use crate::executor::Executor;
 use crate::sql::parser::Parser;
-use crate::sql::statement::{Column, Constraint, Statement};
+use crate::sql::statement::Statement;
 use crate::storage::mvcc::engine::{Config, Engine};
 use crate::{sql, storage};
 use std::path::Path;
@@ -173,31 +173,10 @@ impl Ctx for MvccDatabase {
 }
 
 fn synthesise_metadata(schema: &SchemaNew) -> TableMetadata {
-    let columns = schema
-        .columns
-        .iter()
-        .map(|col| {
-            let mut constraints = Vec::new();
-            if col.is_primary_key() {
-                constraints.push(Constraint::PrimaryKey);
-            }
-            if col.is_nullable() {
-                constraints.push(Constraint::Nullable);
-            }
-
-            Column {
-                name: col.name().to_string(),
-                data_type: col.column_type(),
-                constraints,
-                type_def: None,
-            }
-        })
-        .collect();
-
     TableMetadata {
         root: 0,
         name: schema.name.clone(),
-        schema: Schema::new(columns),
+        schema: Schema::from(schema),
         indexes: Vec::new(),
         serials: HashMap::default(),
         row_id: 0,

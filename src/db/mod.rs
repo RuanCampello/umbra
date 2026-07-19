@@ -7,10 +7,10 @@ mod mvcc;
 mod schema;
 
 pub use crate::core::numeric::Numeric;
-pub use mvcc::MvccDatabase;
 pub(crate) use context::Context;
 use metadata::SequenceMetadata;
 pub(crate) use metadata::{IndexMetadata, Relation, TableMetadata};
+pub use mvcc::MvccDatabase;
 #[allow(unused_imports)]
 pub(crate) use schema::{has_btree_key, umbra_schema, Schema, SchemaBuilder, SchemaNew};
 
