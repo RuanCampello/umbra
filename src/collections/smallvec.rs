@@ -439,7 +439,7 @@ impl<T, const S: usize> Drop for SmallVec<T, S> {
         let ptr = self.as_mut_ptr();
 
         unsafe {
-            let _ = match on_heap {
+            let _dealloc = match on_heap {
                 true => {
                     let capacity = self.capacity();
                     Some(DropDealloc {
@@ -670,6 +670,17 @@ mod tests {
         assert_eq!(vec[0], "hello");
         vec.push("shave");
         assert_eq!(&*vec, &["hello", "there", "burma", "shave"]);
+    }
+
+    #[test]
+    fn spill_pop_then_drop_owned_payloads() {
+        let mut vec = SmallVec::<String, 1>::new();
+
+        vec.push("first".repeat(4));
+        vec.push("second".repeat(4));
+
+        assert_eq!(vec.pop().unwrap(), "second".repeat(4));
+        drop(vec);
     }
 
     #[test]
