@@ -22,12 +22,12 @@ fn memory_db_with_users() -> MvccDatabase {
     let mut db = MvccDatabase::in_memory().unwrap();
     db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(64));")
         .unwrap();
-    db.exec("INSERT INTO users (id, name) VALUES (1, 'alice');")
-        .unwrap();
-    db.exec("INSERT INTO users (id, name) VALUES (2, 'bob');")
-        .unwrap();
-    db.exec("INSERT INTO users (id, name) VALUES (3, 'carol');")
-        .unwrap();
+    db.exec(
+        r#"
+        INSERT INTO users (id, name)
+        VALUES (1, 'alice'), (2, 'bob'), (3, 'carol');"#,
+    )
+    .unwrap();
 
     db
 }
@@ -482,4 +482,220 @@ fn durable_database_survives_reopen() {
     }
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn enum_column_end_to_end() {
+    let mut db = MvccDatabase::in_memory().unwrap();
+    db.exec(
+        r#"CREATE TABLE tasks (
+            id INT PRIMARY KEY,
+            name VARCHAR(64),
+            urgency 'low' | 'medium' | 'high'
+        );"#,
+    )
+    .unwrap();
+
+    db.exec("INSERT INTO tasks (id, name, urgency) VALUES (1, 'a', 'high');")
+        .unwrap();
+    db.exec("INSERT INTO tasks (id, name, urgency) VALUES (2, 'b', 'low');")
+        .unwrap();
+    db.exec("INSERT INTO tasks (id, name, urgency) VALUES (3, 'c', 'medium');")
+        .unwrap();
+
+    // variants display as their string form
+    let result = db.exec("SELECT urgency FROM tasks WHERE id = 1;").unwrap();
+    assert_eq!(result.tuples[0][0], Value::String("high".into()));
+
+    // ordering follows variant declaration order, not lexicographic
+    let result = db.exec("SELECT name FROM tasks ORDER BY urgency;").unwrap();
+    assert_eq!(
+        result.tuples,
+        vec![
+            vec![Value::String("b".into())],
+            vec![Value::String("c".into())],
+            vec![Value::String("a".into())],
+        ]
+    );
+
+    // comparisons against variant literals
+    let result = db
+        .exec("SELECT name FROM tasks WHERE urgency > 'low' ORDER BY urgency;")
+        .unwrap();
+    assert_eq!(
+        result.tuples,
+        vec![
+            vec![Value::String("c".into())],
+            vec![Value::String("a".into())],
+        ]
+    );
+
+    // unknown variants are rejected on write and in predicates
+    assert!(db
+        .exec("INSERT INTO tasks (id, name, urgency) VALUES (4, 'd', 'urgent');")
+        .is_err());
+    assert!(db
+        .exec("SELECT * FROM tasks WHERE urgency = 'HIGH';")
+        .is_err());
+
+    // updates store the new variant index
+    db.exec("UPDATE tasks SET urgency = 'high' WHERE id = 2;")
+        .unwrap();
+    let result = db.exec("SELECT urgency FROM tasks WHERE id = 2;").unwrap();
+    assert_eq!(result.tuples[0][0], Value::String("high".into()));
+}
+
+#[test]
+fn enum_group_by_displays_variants() {
+    let mut db = MvccDatabase::in_memory().unwrap();
+    db.exec("CREATE TABLE tickets (id INT PRIMARY KEY, state 'open' | 'closed');")
+        .unwrap();
+    db.exec("INSERT INTO tickets (id, state) VALUES (1, 'open');")
+        .unwrap();
+    db.exec("INSERT INTO tickets (id, state) VALUES (2, 'closed');")
+        .unwrap();
+    db.exec("INSERT INTO tickets (id, state) VALUES (3, 'open');")
+        .unwrap();
+
+    let result = db
+        .exec("SELECT state, COUNT(*) FROM tickets GROUP BY state ORDER BY state;")
+        .unwrap();
+
+    assert_eq!(
+        result.tuples,
+        vec![
+            vec![Value::String("open".into()), Value::Number(2)],
+            vec![Value::String("closed".into()), Value::Number(1)],
+        ]
+    );
+}
+
+#[test]
+fn enum_survives_reopen() {
+    let dir = scratch_dir("enum");
+
+    {
+        let mut db = MvccDatabase::init(&dir).unwrap();
+        db.exec("CREATE TABLE tickets (id INT PRIMARY KEY, state 'open' | 'closed');")
+            .unwrap();
+        db.exec("INSERT INTO tickets (id, state) VALUES (1, 'closed');")
+            .unwrap();
+        db.close().unwrap();
+    }
+
+    {
+        let mut db = MvccDatabase::init(&dir).unwrap();
+
+        let result = db.exec("SELECT state FROM tickets;").unwrap();
+        assert_eq!(result.tuples[0][0], Value::String("closed".into()));
+
+        // variant table must survive the schema round-trip for new writes
+        db.exec("INSERT INTO tickets (id, state) VALUES (2, 'open');")
+            .unwrap();
+        assert!(db
+            .exec("INSERT INTO tickets (id, state) VALUES (3, 'other');")
+            .is_err());
+
+        let result = db
+            .exec("SELECT id FROM tickets WHERE state = 'open';")
+            .unwrap();
+        assert_eq!(result.tuples, vec![vec![Value::Number(2)]]);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn range_scan_on_indexed_column() {
+    let mut db = memory_db_with_users();
+
+    let result = db
+        .exec("SELECT name FROM users WHERE id > 1 AND id <= 3 ORDER BY id;")
+        .unwrap();
+    assert_eq!(
+        result.tuples,
+        vec![
+            vec![Value::String("bob".into())],
+            vec![Value::String("carol".into())],
+        ]
+    );
+
+    let result = db.exec("SELECT name FROM users WHERE id >= 3;").unwrap();
+    assert_eq!(result.tuples, vec![vec![Value::String("carol".into())]]);
+
+    let result = db.exec("SELECT name FROM users WHERE 2 > id;").unwrap();
+    assert_eq!(result.tuples, vec![vec![Value::String("alice".into())]]);
+}
+
+#[test]
+fn range_scan_sees_own_uncommitted_writes() {
+    let mut db = memory_db_with_users();
+
+    db.exec("BEGIN TRANSACTION;").unwrap();
+    db.exec("INSERT INTO users (id, name) VALUES (4, 'dan');")
+        .unwrap();
+
+    let result = db
+        .exec("SELECT name FROM users WHERE id > 2 ORDER BY id;")
+        .unwrap();
+    assert_eq!(
+        result.tuples,
+        vec![
+            vec![Value::String("carol".into())],
+            vec![Value::String("dan".into())],
+        ]
+    );
+
+    db.exec("ROLLBACK;").unwrap();
+}
+
+#[test]
+fn update_and_delete_through_index_bounds() {
+    let mut db = memory_db_with_users();
+
+    db.exec("UPDATE users SET name = 'upd' WHERE id >= 2 AND id < 3;")
+        .unwrap();
+    let result = db.exec("SELECT name FROM users WHERE id = 2;").unwrap();
+    assert_eq!(result.tuples, vec![vec![Value::String("upd".into())]]);
+
+    db.exec("DELETE FROM users WHERE id > 1;").unwrap();
+    let result = db.exec("SELECT id FROM users;").unwrap();
+    assert_eq!(result.tuples, vec![vec![Value::Number(1)]]);
+}
+
+#[test]
+fn explain_reports_access_paths() {
+    let mut db = memory_db_with_users();
+
+    let plan = db
+        .exec("EXPLAIN SELECT name FROM users WHERE id = 2;")
+        .unwrap();
+    assert!(matches!(&plan.tuples[0][0], Value::String(s) if s.starts_with("IndexScan on users")));
+
+    let plan = db
+        .exec("EXPLAIN SELECT name FROM users WHERE id > 1 ORDER BY name LIMIT 2;")
+        .unwrap();
+    assert!(
+        matches!(&plan.tuples[0][0], Value::String(s) if s.starts_with("IndexRangeScan on users"))
+    );
+    let lines: Vec<String> = plan
+        .tuples
+        .iter()
+        .map(|t| match &t[0] {
+            Value::String(s) => s.clone(),
+            other => panic!("plan lines must be strings, got {other:?}"),
+        })
+        .collect();
+    assert!(lines.iter().any(|l| l.starts_with("Filter")));
+    assert!(lines.iter().any(|l| l.starts_with("Sort")));
+    assert!(lines.iter().any(|l| l.starts_with("Limit")));
+
+    let plan = db
+        .exec("EXPLAIN SELECT id FROM users WHERE name = 'bob';")
+        .unwrap();
+    assert!(matches!(&plan.tuples[0][0], Value::String(s) if s.starts_with("SeqScan on users")));
+
+    assert!(db
+        .exec("EXPLAIN CREATE TABLE t (id INT PRIMARY KEY);")
+        .is_err());
 }

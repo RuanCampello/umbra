@@ -1,5 +1,5 @@
 use std::path::Path;
-use umbra::db::{Database, DatabaseError, QuerySet};
+use umbra::db::{DatabaseError, MvccDatabase, QuerySet};
 use umbra::db::{Numeric, SqlError};
 use umbra::sql::statement::{Type, Value};
 use umbra::{interval, temporal};
@@ -7,14 +7,14 @@ use umbra::{interval, temporal};
 type Result<T> = std::result::Result<T, DatabaseError>;
 
 struct State {
-    db: Database<std::fs::File>,
+    db: MvccDatabase,
     path: std::path::PathBuf,
 }
 
 impl State {
     fn new(path: impl AsRef<Path>) -> Self {
         Self {
-            db: Database::init(&path).unwrap(),
+            db: MvccDatabase::init(&path).unwrap(),
             path: path.as_ref().to_path_buf(),
         }
     }
@@ -45,7 +45,8 @@ impl Default for State {
 
 impl Drop for State {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.path).expect("Failed to drop State")
+        let _ = self.db.close();
+        std::fs::remove_dir_all(&self.path).expect("Failed to drop State")
     }
 }
 
