@@ -17,6 +17,21 @@ use crate::vm::planner::{reduce_aggregate_expr, Tuple};
 use std::cmp::Ordering;
 use std::ops::Bound;
 
+/// The index-servable shape of a `WHERE` predicate on a single column: either a
+/// contiguous range or a discrete set of points (`IN (..)`, `col = a OR col = b`).
+enum Access<'a> {
+    Range(&'a str, Bound<Value>, Bound<Value>),
+    Points(&'a str, Vec<Value>),
+}
+
+impl Access<'_> {
+    const fn column(&self) -> &str {
+        match self {
+            Self::Range(column, ..) | Self::Points(column, ..) => column,
+        }
+    }
+}
+
 impl Executor {
     /// Builds and drains a SELECT operator pipeline, returning the projected
     /// result schema and all result rows.
@@ -406,9 +421,10 @@ impl Executor {
         Ok(source)
     }
 
-    /// Serves an indexable predicate (`=`, `<`, `<=`, `>`, `>=`, and `AND`ed
-    /// bounds on one column) from a covering index when the transaction has no
-    /// local writes on the table
+    /// Serves an indexable predicate from a covering index when the transaction
+    /// has no local writes on the table: `AND`ed bounds (`=`, `<`, `<=`, `>`,
+    /// `>=`) collapse to a range, and `IN (..)` / `col = a OR col = b` on one
+    /// column collapse to a set of point look-ups.
     fn indexed_rows(
         &self,
         txn_id: i64,
@@ -419,7 +435,7 @@ impl Executor {
             return Ok(None);
         }
 
-        let Some((column, mut start, mut end)) = predicate_bounds(predicate) else {
+        let Some(access) = index_access(predicate) else {
             return Ok(None);
         };
 
@@ -427,7 +443,7 @@ impl Executor {
         let Some(col) = engine_schema
             .columns
             .iter()
-            .position(|c| c.name() == column)
+            .position(|c| c.name() == access.column())
         else {
             return Ok(None);
         };
@@ -438,19 +454,32 @@ impl Executor {
 
         // enum values are indexed by variant index, not by their literal
         let column_type = engine_schema.columns[col].column_type();
-        for bound in [&mut start, &mut end] {
-            if let Bound::Included(value) | Bound::Excluded(value) = bound {
-                dml::coerce_value(&engine_schema, column_type, value)?;
-            }
-        }
 
-        let matches = match (&start, &end) {
-            (Bound::Included(a), Bound::Included(b)) if a == b => {
-                self.engine.scan_index(txn_id, table, &index, a)?
+        let matches = match access {
+            Access::Range(_, mut start, mut end) => {
+                for bound in [&mut start, &mut end] {
+                    if let Bound::Included(value) | Bound::Excluded(value) = bound {
+                        dml::coerce_value(&engine_schema, column_type, value)?;
+                    }
+                }
+
+                match (&start, &end) {
+                    (Bound::Included(a), Bound::Included(b)) if a == b => {
+                        self.engine.scan_index(txn_id, table, &index, a)?
+                    }
+                    _ => self
+                        .engine
+                        .scan_index_range(txn_id, table, &index, start, end)?,
+                }
             }
-            _ => self
-                .engine
-                .scan_index_range(txn_id, table, &index, start, end)?,
+            Access::Points(_, mut values) => {
+                let mut matches = Vec::new();
+                for value in &mut values {
+                    dml::coerce_value(&engine_schema, column_type, value)?;
+                    matches.extend(self.engine.scan_index(txn_id, table, &index, value)?);
+                }
+                matches
+            }
         };
 
         let mut rows: Vec<_> = matches
@@ -464,6 +493,7 @@ impl Executor {
             .collect();
 
         rows.sort_unstable_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(Ordering::Equal));
+        rows.dedup_by(|a, b| a[0] == b[0]);
 
         Ok(Some(rows))
     }
@@ -531,8 +561,7 @@ impl Executor {
         table: &str,
         predicate: Option<&Expression>,
     ) -> Result<String, DatabaseError> {
-        let bounds = predicate.and_then(predicate_bounds);
-        let Some((column, start, end)) = bounds else {
+        let Some(access) = predicate.and_then(index_access) else {
             return Ok(format!("SeqScan on {table}"));
         };
 
@@ -540,16 +569,17 @@ impl Executor {
         let indexed = schema
             .columns
             .iter()
-            .position(|c| c.name() == column)
+            .position(|c| c.name() == access.column())
             .and_then(|col| self.engine.index_for_column(table, col).ok().flatten());
 
         Ok(match indexed {
             Some(index) => {
-                let kind = match (&start, &end) {
-                    (Bound::Included(a), Bound::Included(b)) if a == b => "IndexScan",
-                    _ => "IndexRangeScan",
+                let kind = match &access {
+                    Access::Range(_, Bound::Included(a), Bound::Included(b)) if a == b => "IndexScan",
+                    Access::Range(..) => "IndexRangeScan",
+                    Access::Points(..) => "IndexScan",
                 };
-                format!("{kind} on {table} using {index} ({column})")
+                format!("{kind} on {table} using {index} ({})", access.column())
             }
             None => format!("SeqScan on {table}"),
         })
@@ -728,6 +758,51 @@ fn join_expressions<E: std::fmt::Display>(expressions: &[E]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Chooses the index access for a predicate: a range first, then a point set.
+fn index_access(predicate: &Expression) -> Option<Access<'_>> {
+    if let Some((column, start, end)) = predicate_bounds(predicate) {
+        return Some(Access::Range(column, start, end));
+    }
+
+    predicate_values(predicate).map(|(column, values)| Access::Points(column, values))
+}
+
+/// Recognises `col = a OR col = b OR ...` (all on one column) as a point set.
+/// `IN (..)` desugars to exactly this chain during parsing.
+fn predicate_values(predicate: &Expression) -> Option<(&str, Vec<Value>)> {
+    use crate::sql::statement::BinaryOperator;
+
+    let Expression::BinaryOperation {
+        left,
+        operator,
+        right,
+    } = predicate
+    else {
+        return None;
+    };
+
+    match operator {
+        BinaryOperator::Or => {
+            let (left_col, mut values) = predicate_values(left)?;
+            let (right_col, right_values) = predicate_values(right)?;
+            if left_col != right_col {
+                return None;
+            }
+
+            values.extend(right_values);
+            Some((left_col, values))
+        }
+        BinaryOperator::Eq => match (&**left, &**right) {
+            (Expression::Identifier(column), Expression::Value(value))
+            | (Expression::Value(value), Expression::Identifier(column)) => {
+                Some((column, vec![value.clone()]))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn predicate_bounds(predicate: &Expression) -> Option<(&str, Bound<Value>, Bound<Value>)> {
