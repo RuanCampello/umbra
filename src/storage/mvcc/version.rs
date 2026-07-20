@@ -5,6 +5,7 @@ use crate::{
     storage::mvcc::{
         arena::TupleArena, get_timestamp, index::Index, registry::TransactionRegistry, MvccError,
     },
+    storage::segment::SegmentStore,
     vm::planner::Tuple,
 };
 use std::{
@@ -56,6 +57,10 @@ pub(crate) struct VersionStorage {
     visibility_checker: Option<Arc<TransactionRegistry>>,
     /// Arena allocator for tuple data, reducing heap fragmentation and locking overhead.
     arena: TupleArena,
+    /// The table's frozen half
+    /// rows sealed into cold segments leave the
+    /// hot chains, every read path falls back here when no chain version is visible
+    cold: RwLock<Option<Arc<SegmentStore>>>,
 }
 
 /// Transaction-local write buffer and read-your-own-writes manager.
@@ -128,6 +133,8 @@ pub(crate) enum WriteKind {
     Delete,
 }
 
+pub(crate) const FROZEN_TXN_ID: i64 = 0;
+
 static VERSION_CHAIN_MAP_POOL: Mutex<Vec<HashMap<i64, VersionChain>>> = Mutex::new(Vec::new());
 static WRITE_SET_MAP_POOL: Mutex<Vec<HashMap<i64, WriteSet>>> = Mutex::new(Vec::new());
 
@@ -170,6 +177,7 @@ impl VersionStorage {
             max_version_history: 10,
             next_row_id: AtomicI64::new(1),
             indexes: RwLock::new(HashMap::default()),
+            cold: RwLock::new(None),
         }
     }
 
@@ -189,6 +197,74 @@ impl VersionStorage {
 
     pub fn close(&self) {
         self.open.store(false, Ordering::Release)
+    }
+
+    /// Attaches the table's cold segment store and raises the row id
+    /// watermark above every frozen row, so recovery never re-issues
+    /// a frozen id
+    pub fn attach_cold(&self, store: Arc<SegmentStore>) {
+        if let Some(max) = store.max_row_id() {
+            self.next_row_id.fetch_max(max + 1, Ordering::Relaxed);
+        }
+
+        *self.cold.write().unwrap() = Some(store);
+    }
+
+    pub fn cold(&self) -> Option<Arc<SegmentStore>> {
+        self.cold.read().unwrap().clone()
+    }
+
+    /// The newest frozen copy of `row_id` as a synthetic committed
+    /// version, unless tombstoned or never frozen
+    fn frozen_version(&self, row_id: i64) -> Option<TupleVersion> {
+        let cold = self.cold.read().unwrap();
+        cold.as_ref()?.get(row_id).map(|data| TupleVersion {
+            txn_id: FROZEN_TXN_ID,
+            deleted_at_txn_id: 0,
+            data,
+            row_id,
+            created_at: 0,
+        })
+    }
+
+    fn is_frozen(&self, row_id: i64) -> bool {
+        let cold = self.cold.read().unwrap();
+        cold.as_ref().is_some_and(|store| store.is_frozen(row_id))
+    }
+
+    /// Number of live (non-deleted) committed rows in the hot store.
+    pub fn live_row_count(&self) -> usize {
+        let versions = self.versions.read().unwrap();
+        versions
+            .values()
+            .filter(|entry| !entry.version.is_deleted())
+            .count()
+    }
+
+    pub fn extract_for_freeze(&self) -> Vec<(i64, Tuple)> {
+        let mut versions = self.versions.write().unwrap();
+
+        let ids: Vec<_> = versions
+            .iter()
+            .filter(|(_, entry)| !entry.version.is_deleted())
+            .map(|(&id, _)| id)
+            .collect();
+
+        let mut rows = Vec::with_capacity(ids.len());
+        let mut indices = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            let entry = versions.remove(&id).expect("selected under the same lock");
+            if let Some(idx) = unpack_index(entry.arena_idx) {
+                indices.push(idx);
+            }
+            rows.push((id, entry.version.data));
+        }
+
+        drop(versions);
+        self.arena.clear(&indices);
+
+        rows
     }
 
     /// Recover a version from WAL replay.
@@ -345,7 +421,10 @@ impl VersionStorage {
 
         let checker = self.visibility_checker.as_ref()?;
         let versions = self.versions.read().unwrap();
-        let entry = versions.get(&row_id)?;
+        let Some(entry) = versions.get(&row_id) else {
+            drop(versions);
+            return self.frozen_version(row_id);
+        };
 
         if checker.is_visible(entry.version.txn_id, txn_id) {
             if entry.version.is_deleted()
@@ -370,14 +449,29 @@ impl VersionStorage {
             current = prev.prev.as_deref();
         }
 
-        None
+        // a chain exists but nothing in it is visible: whatever happened to
+        // this row happened after the reader's snapshot, so the frozen copy
+        // (if any) is still its truth
+        drop(versions);
+        self.frozen_version(row_id)
     }
 
     /// Marks a row as deleted. Used during WAL replay for `Delete` entries.
     pub fn mark_deleted(&self, row_id: i64, txn_id: i64) {
-        let mut versions = self.versions.write().unwrap();
-        if let Some(entry) = versions.get_mut(&row_id) {
-            entry.version.deleted_at_txn_id = txn_id;
+        {
+            let mut versions = self.versions.write().unwrap();
+            if let Some(entry) = versions.get_mut(&row_id) {
+                entry.version.deleted_at_txn_id = txn_id;
+                return;
+            }
+        }
+
+        // frozen row: the delete marker becomes its whole hot chain,
+        // shadowing the cold copy with full visibility semantics
+        if self.is_frozen(row_id) {
+            let mut marker = TupleVersion::new(txn_id, row_id, Vec::new());
+            marker.deleted_at_txn_id = txn_id;
+            self.add_version(row_id, marker);
         }
     }
 
@@ -395,9 +489,13 @@ impl VersionStorage {
 
         let versions = self.versions.read().unwrap();
         let mut results = Vec::new();
+        // row ids whose hot chain answered for this reader (emitted or
+        // visibly deleted), anything else may still resolve from cold
+        let mut decided = crate::collections::hash::HashSet::default();
 
         for (&row_id, entry) in versions.iter() {
             if checker.is_visible(entry.version.txn_id, txn_id) {
+                decided.insert(row_id);
                 if entry.version.is_deleted()
                     && checker.is_visible(entry.version.deleted_at_txn_id, txn_id)
                 {
@@ -410,6 +508,7 @@ impl VersionStorage {
             let mut current = entry.prev.as_deref();
             while let Some(prev) = current {
                 if checker.is_visible(prev.version.txn_id, txn_id) {
+                    decided.insert(row_id);
                     if prev.version.is_deleted()
                         && checker.is_visible(prev.version.deleted_at_txn_id, txn_id)
                     {
@@ -421,6 +520,17 @@ impl VersionStorage {
                 }
 
                 current = prev.prev.as_deref();
+            }
+        }
+
+        drop(versions);
+
+        let cold = self.cold.read().unwrap();
+        if let Some(store) = cold.as_ref() {
+            let frozen = store.collect(|row_id| decided.contains(&row_id));
+            if !frozen.is_empty() {
+                results.extend(frozen);
+                results.sort_unstable_by_key(|&(row_id, _)| row_id);
             }
         }
 
@@ -444,15 +554,26 @@ impl VersionStorage {
     /// Highest committed `Value::Number` in a column, ignoring deleted rows.
     /// Seeds sequence counters when table metadata is synthesised.
     pub fn max_number_at(&self, column: usize) -> Option<i128> {
-        let versions = self.versions.read().unwrap();
-        versions
-            .values()
-            .filter(|entry| !entry.version.is_deleted())
-            .filter_map(|entry| match entry.version.data.get(column) {
-                Some(Value::Number(n)) => Some(*n),
-                _ => None,
-            })
-            .max()
+        let hot = {
+            let versions = self.versions.read().unwrap();
+            versions
+                .values()
+                .filter(|entry| !entry.version.is_deleted())
+                .filter_map(|entry| match entry.version.data.get(column) {
+                    Some(Value::Number(n)) => Some(*n),
+                    _ => None,
+                })
+                .max()
+        };
+
+        let frozen = self
+            .cold
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|store| store.max_number_at(column));
+
+        hot.max(frozen)
     }
 
     /// Clears and repopulates every registered index from the live rows.
@@ -482,6 +603,20 @@ impl VersionStorage {
                 }
             }
         }
+
+        // frozen rows with no hot chain still belong in the indexes,
+        // rows with a chain were already decided by the hot loop above
+        let cold = self.cold.read().unwrap();
+        if let Some(store) = cold.as_ref() {
+            for (row_id, data) in store.collect(|row_id| versions.contains_key(&row_id)) {
+                for index in indexes.values() {
+                    let col = index.column_index();
+                    if col < data.len() {
+                        let _ = index.add(&data[col], row_id);
+                    }
+                }
+            }
+        }
     }
 
     /// Cleans deleted tuples that are older than the given retention time.
@@ -494,13 +629,16 @@ impl VersionStorage {
         let cutoff = now - retention.as_nanos() as i64;
 
         let mut to_be_deleted = Vec::new();
-        let versions = self.versions.read().unwrap();
+        {
+            let versions = self.versions.read().unwrap();
 
-        for (&id, chain) in versions.iter() {
-            let version = &chain.version;
+            for (&id, chain) in versions.iter() {
+                let version = &chain.version;
 
-            if version.is_deleted() && version.created_at < cutoff {
-                if self.can_be_safely_removed(version) {
+                if version.is_deleted()
+                    && version.created_at < cutoff
+                    && self.can_be_safely_removed(version)
+                {
                     to_be_deleted.push(id);
                 }
             }
@@ -508,6 +646,24 @@ impl VersionStorage {
 
         if to_be_deleted.is_empty() {
             return 0;
+        }
+
+        {
+            let cold = self.cold.read().unwrap();
+            if let Some(store) = cold.as_ref() {
+                let frozen: Vec<i64> = to_be_deleted
+                    .iter()
+                    .copied()
+                    .filter(|&id| store.is_frozen(id))
+                    .collect();
+
+                if !frozen.is_empty() && store.add_tombstones(frozen.iter().copied()).is_err() {
+                    to_be_deleted.retain(|id| !frozen.contains(id));
+                    if to_be_deleted.is_empty() {
+                        return 0;
+                    }
+                }
+            }
         }
 
         let mut deleted = Vec::with_capacity(to_be_deleted.len());
@@ -708,8 +864,18 @@ impl VersionStorage {
     /// Used at commit time to detect if another transaction has modified
     /// the tuple since we read it.
     pub fn get_latest_version_id(&self, tuple_id: i64) -> Option<i64> {
-        let versions = self.versions.read().unwrap();
-        versions.get(&tuple_id).map(|entry| entry.version.txn_id)
+        {
+            let versions = self.versions.read().unwrap();
+            if let Some(entry) = versions.get(&tuple_id) {
+                return Some(entry.version.txn_id);
+            }
+        }
+
+        let cold = self.cold.read().unwrap();
+        match cold.as_ref().is_some_and(|store| store.contains(tuple_id)) {
+            true => Some(FROZEN_TXN_ID),
+            false => None,
+        }
     }
 }
 

@@ -58,6 +58,9 @@ pub(crate) struct Config {
     path: String,
     wal: WalConfig,
     cleanup: CleanUpConfig,
+    /// hot rows required before a checkpoint freezes a table into a cold
+    /// segment, zero disables sealing
+    seal_rows: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -87,6 +90,13 @@ const SNAPSHOT_VERSION: u32 = 1;
 const SNAPSHOT_HEADER_SIZE: usize = 28;
 
 const IN_MEMORY_PATH: &str = "memory://";
+
+/// Committed hot rows required before a checkpoint freezes a table's first
+/// cold segment, later seals trigger at a tenth of it
+const DEFAULT_SEAL_ROWS: usize = 100_000;
+
+/// Cold segments a table may accumulate before a checkpoint merges them
+const COMPACT_SEGMENTS: usize = 4;
 
 type Result<T> = std::result::Result<T, MvccError>;
 
@@ -214,6 +224,7 @@ impl Engine {
         ));
 
         add_primary_index(&schema, &version);
+        self.attach_cold_store(&name, &version)?;
 
         let data = Vec::from(&schema);
         let returned = schema.clone();
@@ -245,6 +256,9 @@ impl Engine {
 
         if let Some(storage) = self.versions.write().unwrap().remove(name) {
             storage.close();
+        }
+        if let Some(dir) = self.segments_dir(name) {
+            let _ = std::fs::remove_dir_all(dir);
         }
 
         self.record_ddl(name, WalOperation::DropTable, &[])?;
@@ -279,7 +293,23 @@ impl Engine {
         Ok(())
     }
 
-    /// Check if we can't write to WAL (that's during reply recovery phase)
+    fn segments_dir(&self, table: &str) -> Option<PathBuf> {
+        match self.path.as_str() {
+            IN_MEMORY_PATH => None,
+            path => Some(Path::new(path).join("segments").join(table)),
+        }
+    }
+
+    /// opens the table's segment store and hands it to the version storage
+    fn attach_cold_store(&self, table: &str, storage: &Arc<VersionStorage>) -> Result<()> {
+        if let Some(dir) = self.segments_dir(table) {
+            let store = crate::storage::segment::SegmentStore::open(dir)?;
+            storage.attach_cold(Arc::new(store));
+        }
+
+        Ok(())
+    }
+
     fn must_skip_wal(&self) -> bool {
         self.fetching_disk.load(Ordering::Acquire)
     }
@@ -462,6 +492,7 @@ impl Engine {
                 ));
 
                 add_primary_index(&schema, &version_storage);
+                self.attach_cold_store(&schema.name, &version_storage)?;
                 let table = schema.name.clone();
 
                 {
@@ -485,6 +516,10 @@ impl Engine {
                 if let Some(storage) = storages.remove(&table) {
                     storage.close()
                 };
+
+                if let Some(dir) = self.segments_dir(&table) {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
             }
 
             WalOperation::Update | WalOperation::Insert => {
@@ -557,7 +592,31 @@ impl Engine {
                 .collect()
         };
 
+        let seal_rows = self.config.read().unwrap().seal_rows;
+
         for (schema, storage) in tables {
+            // freeze hot rows into a cold segment before snapshotting, so
+            // the snapshot only carries the hot residue
+            // safe here: no transactions are active (checked above), so every committed
+            // row is visible to all future readers
+            if seal_rows > 0 {
+                if let Some(store) = storage.cold() {
+                    let threshold = match store.is_empty() {
+                        true => seal_rows,
+                        false => std::cmp::max(seal_rows / 10, 1),
+                    };
+
+                    if storage.live_row_count() >= threshold {
+                        let rows = storage.extract_for_freeze();
+                        if !rows.is_empty() {
+                            store.seal(&schema, rows)?;
+                        }
+                    }
+
+                    store.compact(&schema, COMPACT_SEGMENTS)?;
+                }
+            }
+
             let table_dir = snapshot_dir.join(&schema.name);
             std::fs::create_dir_all(&table_dir)?;
 
@@ -653,6 +712,7 @@ impl Engine {
             self.registry.clone(),
         ));
         add_primary_index(&schema, &storage);
+        self.attach_cold_store(name, &storage)?;
 
         for row in rows {
             storage.recover_version(row);
@@ -993,6 +1053,7 @@ impl Config {
                 ..Default::default()
             },
             cleanup: Default::default(),
+            seal_rows: 0,
         }
     }
 
@@ -1002,7 +1063,14 @@ impl Config {
             path: path.into(),
             wal: WalConfig::default(),
             cleanup: Default::default(),
+            seal_rows: DEFAULT_SEAL_ROWS,
         }
+    }
+
+    /// overrides the freeze threshold
+    pub fn seal_after(mut self, rows: usize) -> Self {
+        self.seal_rows = rows;
+        self
     }
 }
 
@@ -2430,5 +2498,285 @@ mod tests {
         assert_eq!(row2[1], Value::String("updated".into()));
 
         engine.close().unwrap();
+    }
+
+    fn sealing_engine(dir: &Path) -> Engine {
+        let config = Config::durable(dir.to_string_lossy().to_string()).seal_after(2);
+        let engine = Engine::new(config);
+        engine.open().unwrap();
+
+        engine
+    }
+
+    fn insert_users(engine: &Engine, rows: &[(i64, &str)]) {
+        let (txn, _) = engine.registry.begin();
+        for &(id, name) in rows {
+            engine
+                .insert(
+                    txn,
+                    "users",
+                    id,
+                    vec![Value::Number(id as i128), Value::String(name.into())],
+                )
+                .unwrap();
+        }
+        engine.commit_transaction(txn).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_freezes_hot_rows_into_cold_segments() {
+        let dir = scratch_dir("freeze");
+        let engine = sealing_engine(&dir);
+
+        let schema = SchemaBuilder::new("users")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+        engine.create_table(schema).unwrap();
+        insert_users(&engine, &[(1, "alice"), (2, "bob"), (3, "carol")]);
+
+        assert!(engine.checkpoint().unwrap());
+
+        let storage = engine.version_storage("users").unwrap();
+        assert_eq!(storage.live_row_count(), 0, "hot store must be drained");
+        let store = storage.cold().expect("cold store attached");
+        assert!(!store.is_empty(), "a segment must exist");
+
+        // every read path still resolves the frozen rows
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].1[1], Value::String("alice".into()));
+
+        let row = engine.get(reader, "users", 2).unwrap().unwrap();
+        assert_eq!(row[1], Value::String("bob".into()));
+
+        let pk = index!(primary on users);
+        let hits = engine
+            .scan_index(reader, "users", &pk, &Value::Number(3))
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1[1], Value::String("carol".into()));
+
+        // unique constraints still see frozen rows
+        let (dup, _) = engine.registry.begin();
+        let clash = engine.insert(
+            dup,
+            "users",
+            engine.next_row_id("users").unwrap(),
+            vec![Value::Number(2), Value::String("impostor".into())],
+        );
+        assert!(matches!(clash, Err(MvccError::DuplicatedKey(_))));
+        engine.rollback_transaction(dup).unwrap();
+
+        // fresh row ids never collide with frozen ones
+        assert!(engine.next_row_id("users").unwrap() > 3);
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn frozen_rows_can_be_updated_and_deleted() {
+        let dir = scratch_dir("thaw");
+        let engine = sealing_engine(&dir);
+
+        let schema = SchemaBuilder::new("users")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+        engine.create_table(schema).unwrap();
+        insert_users(&engine, &[(1, "alice"), (2, "bob"), (3, "carol")]);
+        assert!(engine.checkpoint().unwrap());
+
+        let (writer, _) = engine.registry.begin();
+        engine
+            .update(
+                writer,
+                "users",
+                1,
+                vec![Value::Number(1), Value::String("alicia".into())],
+            )
+            .unwrap();
+        engine.delete(writer, "users", 2).unwrap();
+
+        // uncommitted writes over frozen rows stay invisible to others
+        let (concurrent, _) = engine.registry.begin();
+        let rows = engine.scan(concurrent, "users").unwrap();
+        assert_eq!(rows.len(), 3, "cold state holds until the writer commits");
+        assert_eq!(rows[0].1[1], Value::String("alice".into()));
+
+        engine.commit_transaction(writer).unwrap();
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1[1], Value::String("alicia".into()));
+        assert_eq!(rows[1].0, 3);
+        assert!(engine.get(reader, "users", 2).unwrap().is_none());
+
+        // write-write conflict on a frozen row: second writer must fail
+        let (first, _) = engine.registry.begin();
+        let (second, _) = engine.registry.begin();
+        engine
+            .update(
+                first,
+                "users",
+                3,
+                vec![Value::Number(3), Value::String("carola".into())],
+            )
+            .unwrap();
+        let conflict = engine.update(
+            second,
+            "users",
+            3,
+            vec![Value::Number(3), Value::String("carlota".into())],
+        );
+        assert!(
+            conflict.is_err(),
+            "conflicting cold update must be rejected"
+        );
+        engine.rollback_transaction(second).unwrap();
+        engine.commit_transaction(first).unwrap();
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn frozen_state_survives_restart() {
+        let dir = scratch_dir("cold-restart");
+
+        {
+            let engine = sealing_engine(&dir);
+            let schema = SchemaBuilder::new("users")
+                .primary("id", Type::Integer)
+                .nullable("name", Type::Text)
+                .build();
+            engine.create_table(schema).unwrap();
+            insert_users(&engine, &[(1, "alice"), (2, "bob"), (3, "carol")]);
+            assert!(engine.checkpoint().unwrap());
+
+            // post-checkpoint writes live only in the WAL tail
+            let (writer, _) = engine.registry.begin();
+            engine
+                .update(
+                    writer,
+                    "users",
+                    1,
+                    vec![Value::Number(1), Value::String("alicia".into())],
+                )
+                .unwrap();
+            engine.delete(writer, "users", 2).unwrap();
+            engine.commit_transaction(writer).unwrap();
+
+            engine.close().unwrap();
+        }
+
+        let engine = sealing_engine(&dir);
+        let (reader, _) = engine.registry.begin();
+
+        let rows = engine.scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1[1], Value::String("alicia".into()));
+        assert_eq!(rows[1].0, 3);
+        assert!(engine.get(reader, "users", 2).unwrap().is_none());
+
+        // indexes are rebuilt over hot + cold
+        let pk = index!(primary on users);
+        let hits = engine
+            .scan_index(reader, "users", &pk, &Value::Number(3))
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+
+        // frozen ids and values still feed watermarks
+        assert!(engine.next_row_id("users").unwrap() > 3);
+        assert_eq!(engine.max_column_value("users", 0).unwrap(), Some(3));
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_converts_cold_delete_markers_into_tombstones() {
+        let dir = scratch_dir("cold-tombstone");
+
+        {
+            let engine = sealing_engine(&dir);
+            let schema = SchemaBuilder::new("users")
+                .primary("id", Type::Integer)
+                .nullable("name", Type::Text)
+                .build();
+            engine.create_table(schema).unwrap();
+            insert_users(&engine, &[(1, "alice"), (2, "bob")]);
+            assert!(engine.checkpoint().unwrap());
+
+            let (writer, _) = engine.registry.begin();
+            engine.delete(writer, "users", 1).unwrap();
+            engine.commit_transaction(writer).unwrap();
+
+            let storage = engine.version_storage("users").unwrap();
+            assert!(storage.cleanup(Duration::ZERO) > 0, "marker must be purged");
+
+            let store = storage.cold().unwrap();
+            assert!(store.is_tombstoned(1), "purge must leave a tombstone");
+
+            let (reader, _) = engine.registry.begin();
+            let rows = engine.scan(reader, "users").unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].0, 2);
+
+            engine.close().unwrap();
+        }
+
+        // the tombstone, not the WAL, hides the row after restart
+        let engine = sealing_engine(&dir);
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, 2);
+        assert!(engine.get(reader, "users", 1).unwrap().is_none());
+
+        engine.close().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checkpoints_compact_accumulated_segments() {
+        let dir = scratch_dir("cold-compact");
+        let engine = sealing_engine(&dir);
+
+        let schema = SchemaBuilder::new("users")
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+        engine.create_table(schema).unwrap();
+
+        // every checkpoint seals one small segment, the fifth pushes the
+        // store past COMPACT_SEGMENTS and the same cycle merges them
+        for batch in 0..5i64 {
+            let base = batch * 2 + 1;
+            insert_users(&engine, &[(base, "even"), (base + 1, "odd")]);
+            assert!(engine.checkpoint().unwrap());
+        }
+
+        let storage = engine.version_storage("users").unwrap();
+        let store = storage.cold().unwrap();
+        assert!(!store.is_empty());
+
+        let (reader, _) = engine.registry.begin();
+        let rows = engine.scan(reader, "users").unwrap();
+        assert_eq!(rows.len(), 10);
+        assert_eq!(rows.first().unwrap().0, 1);
+        assert_eq!(rows.last().unwrap().0, 10);
+
+        engine.close().unwrap();
+
+        let engine = sealing_engine(&dir);
+        let (reader, _) = engine.registry.begin();
+        assert_eq!(engine.scan(reader, "users").unwrap().len(), 10);
+        engine.close().unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

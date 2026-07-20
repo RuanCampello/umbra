@@ -22,6 +22,7 @@ pub(crate) mod btree;
 pub(crate) mod mvcc;
 pub(crate) mod page;
 pub(crate) mod pagination;
+pub(crate) mod segment;
 pub(crate) mod tuple;
 pub(crate) mod wal;
 
