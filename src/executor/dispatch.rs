@@ -5,9 +5,9 @@
 //! Query -> [`query`](super::query).
 
 use super::Executor;
-use crate::db::{DatabaseError, Schema};
+use crate::db::{DatabaseError, Schema, SchemaBuilder, SqlError};
 use crate::executor::operator;
-use crate::sql::statement::{self, Create, Drop, Statement};
+use crate::sql::statement::{self, Column, Create, Drop, Statement, Type};
 use crate::sql::Value;
 use crate::vm::planner::Tuple;
 
@@ -72,7 +72,7 @@ impl Executor {
             }
 
             Statement::Create(Create::Table { name, columns }) => {
-                let schema = crate::db::SchemaBuilder::new(name).from_ast_columns(&columns);
+                let schema = SchemaBuilder::new(name).from_ast_columns(&columns);
 
                 self.create_table(schema)?;
                 Ok(ExecResult::Affected(0))
@@ -126,7 +126,8 @@ impl Executor {
                     })
                     .collect();
 
-                let result = self.insert(txn_id, &insert.into, values);
+                let result =
+                    self.insert(txn_id, &insert.into, values, !insert.returning.is_empty());
 
                 if auto {
                     match &result {
@@ -137,19 +138,23 @@ impl Executor {
                     }
                 }
 
-                Ok(ExecResult::Affected(result?))
+                let (count, written) = result?;
+                match insert.returning.is_empty() {
+                    true => Ok(ExecResult::Affected(count)),
+                    false => {
+                        let schema = self.resolve_schema(&insert.into)?;
+                        let (schema, rows) =
+                            self.evaluate_returning(&schema, &insert.returning, written, 1)?;
+                        Ok(ExecResult::Rows(schema, rows))
+                    }
+                }
             }
 
             Statement::Delete(delete) => {
                 let (txn_id, auto) = self.auto_txn()?;
-                let mut scan = operator::Scan::new(&self.engine, txn_id, &delete.from)?;
-
-                let mut source: Box<dyn operator::Operator> = Box::new(scan);
-
-                if let Some(predicate) = delete.r#where {
-                    let schema = self.resolve_schema(&delete.from)?;
-                    source = Box::new(operator::Filter::new(source, schema, predicate));
-                }
+                let schema = self.resolve_schema(&delete.from)?;
+                let mut source =
+                    self.filtered_source(txn_id, &delete.from, delete.r#where.as_ref(), &schema)?;
 
                 let result = self.delete(txn_id, &delete.from, &mut *source);
 
@@ -168,32 +173,26 @@ impl Executor {
             Statement::Update(update) => {
                 let (txn_id, auto) = self.auto_txn()?;
                 let schema = self.resolve_schema(&update.table)?;
+                let mut source =
+                    self.filtered_source(txn_id, &update.table, update.r#where.as_ref(), &schema)?;
 
-                let mut source: Box<dyn super::operator::Operator> = Box::new(
-                    super::operator::Scan::new(&self.engine, txn_id, &update.table)?,
-                );
+                let mut assignments = Vec::with_capacity(update.columns.len());
+                for assign in &update.columns {
+                    let idx = schema.index_of(&assign.identifier).ok_or_else(|| {
+                        DatabaseError::Sql(SqlError::InvalidColumn(assign.identifier.clone()))
+                    })?;
 
-                if let Some(predicate) = update.r#where {
-                    source = Box::new(super::operator::Filter::new(
-                        source,
-                        schema.clone(),
-                        predicate,
-                    ));
+                    assignments.push((idx, assign.value.clone()));
                 }
 
-                let assignments: Vec<(usize, Value)> = update
-                    .columns
-                    .iter()
-                    .filter_map(|assign| {
-                        let idx = schema.index_of(&assign.identifier)?;
-                        match &assign.value {
-                            crate::sql::statement::Expression::Value(v) => Some((idx, v.clone())),
-                            _ => None,
-                        }
-                    })
-                    .collect();
-
-                let result = self.update(txn_id, &update.table, &mut *source, &assignments);
+                let result = self.update(
+                    txn_id,
+                    &update.table,
+                    &mut *source,
+                    &assignments,
+                    &schema,
+                    !update.returning.is_empty(),
+                );
 
                 if auto {
                     match &result {
@@ -204,7 +203,45 @@ impl Executor {
                     }
                 }
 
-                Ok(ExecResult::Affected(result?))
+                let (count, pairs) = result?;
+                match update.returning.is_empty() {
+                    true => Ok(ExecResult::Affected(count)),
+                    false => {
+                        let width = schema.len();
+                        let input = schema.update_returning_input();
+                        let (schema, rows) =
+                            self.evaluate_returning(&input, &update.returning, pairs, width + 1)?;
+                        Ok(ExecResult::Rows(schema, rows))
+                    }
+                }
+            }
+
+            Statement::Explain(inner) => {
+                let lines = match &*inner {
+                    Statement::Select(select) => self.explain_select(select)?,
+                    Statement::Insert(insert) => vec![format!("Insert into {}", insert.into)],
+                    Statement::Update(update) => vec![
+                        self.access_path(&update.table, update.r#where.as_ref())?,
+                        format!("Update on {}", update.table),
+                    ],
+                    Statement::Delete(delete) => vec![
+                        self.access_path(&delete.from, delete.r#where.as_ref())?,
+                        format!("Delete from {}", delete.from),
+                    ],
+                    _ => {
+                        return Err(DatabaseError::Other(String::from(
+                            "EXPLAIN is meant to work only with SELECT, INSERT, UPDATE and DELETE statements",
+                        )))
+                    }
+                };
+
+                let schema = Schema::new(vec![Column::new("Query Plan", Type::Varchar(255))]);
+                let tuples = lines
+                    .into_iter()
+                    .map(|line| vec![Value::String(line)])
+                    .collect();
+
+                Ok(ExecResult::Rows(schema, tuples))
             }
 
             _ => Err(DatabaseError::Other(format!(

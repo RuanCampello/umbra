@@ -1,17 +1,21 @@
 //! SELECT query pipeline builder.
 //!
 //! Translates a parsed `Select` AST node into an operator pipeline:
-//! `Scan → Filter → Sort → Project → Limit`.
+//! `Scan -> Filter -> Sort -> Project -> Limit`.
 
 use super::operator::{self, Operator};
 use super::Executor;
 use crate::db::{self, DatabaseError, Schema};
+use crate::executor::dml;
+use crate::executor::operator::{Evaluate, Filter, Limit, Project, Scan, Sort, Values};
 use crate::sql::analyzer::contains_aggregate;
 use crate::sql::query::planner::resolve_type;
-use crate::sql::statement::{self, Column, Expression, OrderDirection};
+use crate::sql::statement::{self, Column, Expression, OrderDirection, Type};
 use crate::sql::Value;
 use crate::vm::expression::resolve_expression;
 use crate::vm::planner::{reduce_aggregate_expr, Tuple};
+use std::cmp::Ordering;
+use std::ops::Bound;
 
 impl Executor {
     /// Builds and drains a SELECT operator pipeline, returning the projected
@@ -27,50 +31,82 @@ impl Executor {
 
         let (schema, mut pipeline): (Schema, Box<dyn Operator>) =
             match self.joined_source(txn_id, &select)? {
-                Some((schema, rows)) => (schema, Box::new(operator::Values::new(rows))),
+                Some((schema, rows)) => {
+                    let mut source: Box<dyn Operator> = Box::new(Values::new(rows));
+                    if let Some(predicate) = &select.r#where {
+                        source = Box::new(Filter::new(source, schema.clone(), predicate.clone()));
+                    }
+
+                    (schema, source)
+                }
                 None => {
                     let table = &select.from.name;
                     let schema = self.resolve_schema(table)?;
-
-                    let indexed = match &select.r#where {
-                        Some(predicate) => self.index_point_lookup(txn_id, table, predicate)?,
-                        None => None,
-                    };
-
-                    let source: Box<dyn Operator> = match indexed {
-                        Some(rows) => Box::new(operator::Values::new(rows)),
-                        None => Box::new(operator::Scan::new(&self.engine, txn_id, table)?),
-                    };
+                    let source =
+                        self.filtered_source(txn_id, table, select.r#where.as_ref(), &schema)?;
 
                     (schema, source)
                 }
             };
 
-        if let Some(predicate) = select.r#where {
-            pipeline = Box::new(operator::Filter::new(pipeline, schema.clone(), predicate));
+        let result_schema;
+
+        match select.columns.as_slice() {
+            // lone `*` keeps the identity projection: sort on the input
+            // schema, then strip the row_id prefix
+            [Expression::Wildcard] => {
+                if !select.order_by.is_empty() {
+                    let comparator = build_comparator(&schema, &select.order_by);
+                    pipeline = Box::new(Sort::new(pipeline, comparator)?);
+                }
+
+                let indices: Vec<_> = (1..schema.len()).collect();
+                result_schema = Schema::new(
+                    indices
+                        .iter()
+                        .map(|&idx| schema.columns[idx].clone())
+                        .collect(),
+                );
+                pipeline = Box::new(Project::new(pipeline, indices));
+            }
+            _ => {
+                let mut items: Vec<_> = select.columns.clone();
+                let visible = items.len();
+
+                // sort keys reference a projected column when they can,
+                // otherwise they ride along as hidden columns
+                let mut sort_keys = Vec::with_capacity(select.order_by.len());
+                for order in &select.order_by {
+                    let position = items[..visible]
+                        .iter()
+                        .position(|item| projection_matches(item, &order.expr))
+                        .unwrap_or_else(|| {
+                            items.push(order.expr.clone());
+                            items.len() - 1
+                        });
+
+                    sort_keys.push((position, order.direction == OrderDirection::Desc));
+                }
+
+                let hidden = items.len() > visible;
+
+                result_schema = projection_schema(&schema, &items[..visible])?;
+                pipeline = Box::new(Evaluate::new(pipeline, schema.clone(), items));
+
+                if !sort_keys.is_empty() {
+                    pipeline = Box::new(Sort::new(pipeline, comparator_for(sort_keys))?);
+                }
+
+                if hidden {
+                    pipeline = Box::new(Project::new(pipeline, (0..visible).collect()));
+                }
+            }
         }
-
-        if !select.order_by.is_empty() {
-            let sort_schema = schema.clone();
-            let order_by = select.order_by;
-
-            let comparator = build_comparator(&sort_schema, &order_by);
-            pipeline = Box::new(operator::Sort::new(pipeline, comparator)?);
-        }
-
-        let indices = resolve_projection(&schema, &select.columns);
-        let result_schema = Schema::new(
-            indices
-                .iter()
-                .map(|&idx| schema.columns[idx].clone())
-                .collect(),
-        );
-        pipeline = Box::new(operator::Project::new(pipeline, indices));
 
         if select.limit.is_some() || select.offset.is_some() {
             let limit = select.limit.unwrap_or(usize::MAX);
             let offset = select.offset.unwrap_or(0);
-            pipeline = Box::new(operator::Limit::new(pipeline, limit, offset));
+            pipeline = Box::new(Limit::new(pipeline, limit, offset));
         }
 
         let mut results = Vec::new();
@@ -120,12 +156,24 @@ impl Executor {
             let right_columns: Vec<_> = right_schema
                 .columns
                 .iter()
-                .map(|col| statement::Column::new(col.name(), col.column_type()))
+                .map(|col| {
+                    let mut column = Column::new(col.name(), col.column_type());
+                    if let Type::Enum(id) = col.column_type() {
+                        let variants = right_schema
+                            .enum_variants(id)
+                            .expect("enum id registered at schema build")
+                            .to_vec();
+                        column.data_type = Type::Enum(schema.add_enum(variants.clone()));
+                        column.type_def = Some(variants);
+                    }
+                    column
+                })
                 .collect();
             let right_width = right_columns.len();
 
             let start = schema.len();
             schema.extend_with_join(right_columns, &join.join_type);
+            schema.index_bare_names(start, schema.len());
             schema.add_qualified_name(join.table.key(), start, schema.len());
 
             let right_rows: Vec<_> = self
@@ -189,24 +237,23 @@ impl Executor {
     ) -> Result<(Schema, Vec<Tuple>), DatabaseError> {
         let (schema, mut pipeline): (Schema, Box<dyn Operator>) =
             match self.joined_source(txn_id, &select)? {
-                Some((schema, rows)) => (schema, Box::new(operator::Values::new(rows))),
+                Some((schema, rows)) => {
+                    let mut source: Box<dyn Operator> = Box::new(operator::Values::new(rows));
+                    if let Some(predicate) = &select.r#where {
+                        source = Box::new(Filter::new(source, schema.clone(), predicate.clone()));
+                    }
+
+                    (schema, source)
+                }
                 None => {
                     let table = &select.from.name;
                     let schema = self.resolve_schema(table)?;
-                    let scan: Box<dyn Operator> =
-                        Box::new(operator::Scan::new(&self.engine, txn_id, table)?);
+                    let source =
+                        self.filtered_source(txn_id, table, select.r#where.as_ref(), &schema)?;
 
-                    (schema, scan)
+                    (schema, source)
                 }
             };
-
-        if let Some(predicate) = &select.r#where {
-            pipeline = Box::new(operator::Filter::new(
-                pipeline,
-                schema.clone(),
-                predicate.clone(),
-            ));
-        }
 
         let mut rows = Vec::new();
         while let Some(tuple) = pipeline.next()? {
@@ -222,17 +269,17 @@ impl Executor {
                         let key = select
                             .group_by
                             .iter()
-                            .map(|expr| resolve_expression(&row, &schema, expr))
+                            .map(|expr| {
+                                resolve_expression(&row, &schema, dealias(expr, &select.columns))
+                            })
                             .collect::<Result<Vec<_>, _>>()?;
                         Ok::<_, DatabaseError>((key, row))
                     })
                     .collect::<Result<_, _>>()?;
 
-                keyed.sort_by(|(a, _), (b, _)| {
-                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                keyed.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
-                let mut groups: Vec<Vec<Tuple>> = Vec::new();
+                let mut groups: Vec<Vec<_>> = Vec::new();
                 let mut current_key = None;
                 for (key, row) in keyed {
                     match current_key.as_ref() == Some(&key) {
@@ -248,21 +295,7 @@ impl Executor {
             }
         };
 
-        let out_schema = Schema::new(
-            select
-                .columns
-                .iter()
-                .map(|expr| {
-                    let (name, inner) = match expr {
-                        Expression::Alias { alias, expr } => (alias.clone(), expr.as_ref()),
-                        Expression::Function { func, .. } => (func.to_string(), expr),
-                        other => (other.to_string(), expr),
-                    };
-
-                    Ok(Column::new(&name, resolve_type(&schema, inner)?))
-                })
-                .collect::<Result<Vec<_>, db::SqlError>>()?,
-        );
+        let out_schema = projection_schema(&schema, &select.columns)?;
 
         let empty_row: Tuple = Vec::new();
         let mut out_rows = Vec::with_capacity(groups.len());
@@ -305,35 +338,46 @@ impl Executor {
         Ok((out_schema, out_rows))
     }
 
-    /// Serves `WHERE column = literal` from a covering index when the
-    /// transaction has no local writes on the table (index scans bypass the
-    /// read-your-own-writes overlay). Returns `row_id`-prefixed tuples.
-    fn index_point_lookup(
+    pub(crate) fn filtered_source(
+        &self,
+        txn_id: i64,
+        table: &str,
+        predicate: Option<&Expression>,
+        schema: &Schema,
+    ) -> Result<Box<dyn Operator>, DatabaseError> {
+        let indexed = match predicate {
+            Some(predicate) => self.indexed_rows(txn_id, table, predicate)?,
+            None => None,
+        };
+
+        let mut source: Box<dyn Operator> = match indexed {
+            Some(rows) => Box::new(Values::new(rows)),
+            None => Box::new(Scan::new(&self.engine, txn_id, table)?),
+        };
+
+        if let Some(predicate) = predicate {
+            source = Box::new(Filter::new(source, schema.clone(), predicate.clone()));
+        }
+
+        Ok(source)
+    }
+
+    /// Serves an indexable predicate (`=`, `<`, `<=`, `>`, `>=`, and `AND`ed
+    /// bounds on one column) from a covering index when the transaction has no
+    /// local writes on the table
+    fn indexed_rows(
         &self,
         txn_id: i64,
         table: &str,
         predicate: &Expression,
     ) -> Result<Option<Vec<Tuple>>, DatabaseError> {
-        use crate::sql::statement::BinaryOperator;
-
-        let Expression::BinaryOperation {
-            left,
-            operator: BinaryOperator::Eq,
-            right,
-        } = predicate
-        else {
-            return Ok(None);
-        };
-
-        let (column, value) = match (&**left, &**right) {
-            (Expression::Identifier(column), Expression::Value(value))
-            | (Expression::Value(value), Expression::Identifier(column)) => (column, value),
-            _ => return Ok(None),
-        };
-
         if self.engine.has_local_writes(txn_id, table) {
             return Ok(None);
         }
+
+        let Some((column, mut start, mut end)) = predicate_bounds(predicate) else {
+            return Ok(None);
+        };
 
         let engine_schema = self.engine.schema(table)?;
         let Some(col) = engine_schema
@@ -348,9 +392,24 @@ impl Executor {
             return Ok(None);
         };
 
-        let rows = self
-            .engine
-            .scan_index(txn_id, table, &index, value)?
+        // enum values are indexed by variant index, not by their literal
+        let column_type = engine_schema.columns[col].column_type();
+        for bound in [&mut start, &mut end] {
+            if let Bound::Included(value) | Bound::Excluded(value) = bound {
+                dml::coerce_value(&engine_schema, column_type, value)?;
+            }
+        }
+
+        let matches = match (&start, &end) {
+            (Bound::Included(a), Bound::Included(b)) if a == b => {
+                self.engine.scan_index(txn_id, table, &index, a)?
+            }
+            _ => self
+                .engine
+                .scan_index_range(txn_id, table, &index, start, end)?,
+        };
+
+        let mut rows: Vec<_> = matches
             .into_iter()
             .map(|(row_id, tuple)| {
                 let mut row = Vec::with_capacity(tuple.len() + 1);
@@ -360,7 +419,137 @@ impl Executor {
             })
             .collect();
 
+        rows.sort_unstable_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(Ordering::Equal));
+
         Ok(Some(rows))
+    }
+
+    /// Describes the pipeline `execute_select` would build, one line per
+    /// operator in execution order.
+    pub(crate) fn explain_select(
+        &self,
+        select: &statement::Select,
+    ) -> Result<Vec<String>, DatabaseError> {
+        let mut lines = vec![self.access_path(&select.from.name, select.r#where.as_ref())?];
+
+        for join in &select.joins {
+            lines.push(format!(
+                "NestedLoopJoin ({:?}) with {} on ({})",
+                join.join_type, join.table.name, join.on
+            ));
+        }
+
+        if let Some(predicate) = &select.r#where {
+            lines.push(format!("Filter ({predicate})"));
+        }
+
+        if !select.group_by.is_empty() || select.columns.iter().any(contains_aggregate) {
+            lines.push(match select.group_by.is_empty() {
+                true => "Aggregate".into(),
+                false => format!(
+                    "Aggregate group by ({})",
+                    join_expressions(&select.group_by)
+                ),
+            });
+        }
+
+        if !select.order_by.is_empty() {
+            lines.push(format!("Sort ({})", join_expressions(&select.order_by)));
+        }
+
+        lines.push(format!("Project ({})", join_expressions(&select.columns)));
+
+        if select.limit.is_some() || select.offset.is_some() {
+            let limit = select.limit.map_or("all".into(), |l| l.to_string());
+            lines.push(format!(
+                "Limit {limit} offset {}",
+                select.offset.unwrap_or(0)
+            ));
+        }
+
+        Ok(lines)
+    }
+
+    /// Names the scan `filtered_source` would choose for a table and
+    /// predicate: an index point/range scan when the bounds cover an indexed
+    /// column, a sequential scan otherwise
+    pub(crate) fn access_path(
+        &self,
+        table: &str,
+        predicate: Option<&Expression>,
+    ) -> Result<String, DatabaseError> {
+        let bounds = predicate.and_then(predicate_bounds);
+        let Some((column, start, end)) = bounds else {
+            return Ok(format!("SeqScan on {table}"));
+        };
+
+        let schema = self.engine.schema(table)?;
+        let indexed = schema
+            .columns
+            .iter()
+            .position(|c| c.name() == column)
+            .and_then(|col| self.engine.index_for_column(table, col).ok().flatten());
+
+        Ok(match indexed {
+            Some(index) => {
+                let kind = match (&start, &end) {
+                    (Bound::Included(a), Bound::Included(b)) if a == b => "IndexScan",
+                    _ => "IndexRangeScan",
+                };
+                format!("{kind} on {table} using {index} ({column})")
+            }
+            None => format!("SeqScan on {table}"),
+        })
+    }
+
+    /// Evaluates a `RETURNING` list over written rows
+    pub(crate) fn evaluate_returning(
+        &self,
+        schema: &Schema,
+        exprs: &[Expression],
+        rows: Vec<Tuple>,
+        wildcard_start: usize,
+    ) -> Result<(Schema, Vec<Tuple>), DatabaseError> {
+        enum Item {
+            Position(usize),
+            Expr(Expression),
+        }
+
+        let mut out_columns = Vec::new();
+        let mut items = Vec::new();
+
+        for expr in exprs {
+            match expr {
+                Expression::Wildcard => {
+                    for idx in wildcard_start..schema.len() {
+                        out_columns.push(schema.columns[idx].clone());
+                        items.push(Item::Position(idx));
+                    }
+                }
+                other => {
+                    let single = projection_schema(schema, std::slice::from_ref(other))?;
+                    out_columns.extend(single.columns);
+                    items.push(Item::Expr(other.clone()));
+                }
+            }
+        }
+
+        let out_schema = Schema::new(out_columns);
+        let mut out_rows = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let tuple = items
+                .iter()
+                .map(|item| match item {
+                    Item::Position(idx) => Ok(row[*idx].clone()),
+                    Item::Expr(expr) => {
+                        resolve_expression(row, schema, expr).map_err(DatabaseError::from)
+                    }
+                })
+                .collect::<Result<Tuple, DatabaseError>>()?;
+            out_rows.push(tuple);
+        }
+
+        Ok((out_schema, out_rows))
     }
 
     /// Resolves the old `Schema` (column list) for a table from the engine's
@@ -368,28 +557,152 @@ impl Executor {
     pub(crate) fn resolve_schema(&self, table: &str) -> Result<Schema, DatabaseError> {
         let schema_new = self.engine.schema(table)?;
 
-        let columns: Vec<_> = schema_new
-            .columns
-            .iter()
-            .map(|col| statement::Column::new(col.name(), col.column_type()))
-            .collect();
-
-        let mut schema = Schema::new(columns);
+        let mut schema = Schema::from(schema_new.as_ref());
         schema.prepend_id();
 
         Ok(schema)
     }
 }
 
-fn resolve_projection(schema: &Schema, columns: &[Expression]) -> Vec<usize> {
-    if columns.len() == 1 && columns[0] == Expression::Wildcard {
-        return (1..schema.len()).collect();
+fn projection_schema(schema: &Schema, columns: &[Expression]) -> Result<Schema, DatabaseError> {
+    Ok(Schema::new(
+        columns
+            .iter()
+            .map(|expr| {
+                let (name, inner) = match expr {
+                    Expression::Alias { alias, expr } => (alias.clone(), expr.as_ref()),
+                    Expression::Function { func, .. } => (func.to_string(), expr),
+                    other => (other.to_string(), expr),
+                };
+
+                match column_position(schema, inner) {
+                    Some(idx) => {
+                        let mut column = schema.columns[idx].clone();
+                        column.name = name;
+                        Ok(column)
+                    }
+                    None => Ok(Column::new(&name, resolve_type(schema, inner)?)),
+                }
+            })
+            .collect::<Result<Vec<Column>, db::SqlError>>()?,
+    ))
+}
+
+/// Whether an `ORDER BY` key refers to a projected column: the same
+/// expression, the aliased inner expression, or the alias by name.
+fn projection_matches(item: &Expression, key: &Expression) -> bool {
+    if item == key {
+        return true;
     }
+
+    match item {
+        Expression::Alias { alias, expr } => {
+            expr.as_ref() == key || matches!(key, Expression::Identifier(name) if name == alias)
+        }
+        _ => false,
+    }
+}
+
+/// Substitutes a bare identifier naming a select alias with the aliased
+/// expression, so `GROUP BY`/`ORDER BY` can reference projected names.
+fn dealias<'e>(expr: &'e Expression, columns: &'e [Expression]) -> &'e Expression {
+    let Expression::Identifier(name) = expr else {
+        return expr;
+    };
 
     columns
         .iter()
-        .filter_map(|expr| column_position(schema, expr))
-        .collect()
+        .find_map(|column| match column {
+            Expression::Alias { alias, expr } if alias == name => Some(expr.as_ref()),
+            _ => None,
+        })
+        .unwrap_or(expr)
+}
+
+fn comparator_for(sort_keys: Vec<(usize, bool)>) -> Box<dyn Fn(&Tuple, &Tuple) -> Ordering> {
+    Box::new(move |a: &Tuple, b: &Tuple| {
+        for &(idx, desc) in &sort_keys {
+            let ord = a[idx].partial_cmp(&b[idx]).unwrap_or(Ordering::Equal);
+            if ord != Ordering::Equal {
+                return match desc {
+                    true => ord.reverse(),
+                    false => ord,
+                };
+            }
+        }
+
+        Ordering::Equal
+    })
+}
+
+fn join_expressions<E: std::fmt::Display>(expressions: &[E]) -> String {
+    expressions
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn predicate_bounds(predicate: &Expression) -> Option<(&str, Bound<Value>, Bound<Value>)> {
+    use crate::sql::statement::BinaryOperator;
+
+    let Expression::BinaryOperation {
+        left,
+        operator,
+        right,
+    } = predicate
+    else {
+        return None;
+    };
+
+    if *operator == BinaryOperator::And {
+        let (left_col, left_start, left_end) = predicate_bounds(left)?;
+        let (right_col, right_start, right_end) = predicate_bounds(right)?;
+        if left_col != right_col {
+            return None;
+        }
+
+        let start = match left_start {
+            Bound::Unbounded => right_start,
+            bound => bound,
+        };
+        let end = match left_end {
+            Bound::Unbounded => right_end,
+            bound => bound,
+        };
+
+        return Some((left_col, start, end));
+    }
+
+    let (column, value, operator) = match (&**left, &**right) {
+        (Expression::Identifier(column), Expression::Value(value)) => (column, value, *operator),
+        // literal-first comparisons flip: `5 < col` means `col > 5`
+        (Expression::Value(value), Expression::Identifier(column)) => (
+            column,
+            value,
+            match operator {
+                BinaryOperator::Lt => BinaryOperator::Gt,
+                BinaryOperator::LtEq => BinaryOperator::GtEq,
+                BinaryOperator::Gt => BinaryOperator::Lt,
+                BinaryOperator::GtEq => BinaryOperator::LtEq,
+                other => *other,
+            },
+        ),
+        _ => return None,
+    };
+
+    match operator {
+        BinaryOperator::Eq => Some((
+            column,
+            Bound::Included(value.clone()),
+            Bound::Included(value.clone()),
+        )),
+        BinaryOperator::Gt => Some((column, Bound::Excluded(value.clone()), Bound::Unbounded)),
+        BinaryOperator::GtEq => Some((column, Bound::Included(value.clone()), Bound::Unbounded)),
+        BinaryOperator::Lt => Some((column, Bound::Unbounded, Bound::Excluded(value.clone()))),
+        BinaryOperator::LtEq => Some((column, Bound::Unbounded, Bound::Included(value.clone()))),
+        _ => None,
+    }
 }
 
 /// resolves plain, qualified, and aliased column references to a position
@@ -407,27 +720,16 @@ fn column_position(schema: &Schema, expr: &Expression) -> Option<usize> {
 fn build_comparator(
     schema: &Schema,
     order_by: &[statement::OrderBy],
-) -> Box<dyn Fn(&Tuple, &Tuple) -> std::cmp::Ordering> {
-    let sort_keys: Vec<(usize, bool)> = order_by
-        .iter()
-        .filter_map(|ob| {
-            let idx = column_position(schema, &ob.expr)?;
-            let desc = ob.direction == OrderDirection::Desc;
+) -> Box<dyn Fn(&Tuple, &Tuple) -> Ordering> {
+    comparator_for(
+        order_by
+            .iter()
+            .filter_map(|ob| {
+                let idx = column_position(schema, &ob.expr)?;
+                let desc = ob.direction == OrderDirection::Desc;
 
-            Some((idx, desc))
-        })
-        .collect();
-
-    Box::new(move |a: &Tuple, b: &Tuple| {
-        for &(idx, desc) in &sort_keys {
-            let ord = a[idx]
-                .partial_cmp(&b[idx])
-                .unwrap_or(std::cmp::Ordering::Equal);
-            if ord != std::cmp::Ordering::Equal {
-                return if desc { ord.reverse() } else { ord };
-            }
-        }
-
-        std::cmp::Ordering::Equal
-    })
+                Some((idx, desc))
+            })
+            .collect(),
+    )
 }

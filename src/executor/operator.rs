@@ -39,6 +39,16 @@ pub(crate) struct Project {
     indices: Vec<usize>,
 }
 
+/// Computes one output column per expression for every source tuple
+///
+/// Used for projections that are not plain column references (functions,
+/// arithmetic, aliases) and for hidden sort-key columns
+pub(crate) struct Evaluate {
+    source: Box<dyn Operator>,
+    schema: Schema,
+    expressions: Vec<Expression>,
+}
+
 /// Applies `LIMIT` and `OFFSET` to a source operator.
 pub(crate) struct Limit {
     source: Box<dyn Operator>,
@@ -139,6 +149,34 @@ impl Operator for Project {
         Ok(Some(
             self.indices.iter().map(|&idx| tuple[idx].clone()).collect(),
         ))
+    }
+}
+
+impl Evaluate {
+    pub fn new(source: Box<dyn Operator>, schema: Schema, expressions: Vec<Expression>) -> Self {
+        Self {
+            source,
+            schema,
+            expressions,
+        }
+    }
+}
+
+impl Operator for Evaluate {
+    fn next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        use crate::vm::expression::resolve_expression;
+
+        let Some(tuple) = self.source.next()? else {
+            return Ok(None);
+        };
+
+        let evaluated = self
+            .expressions
+            .iter()
+            .map(|expr| resolve_expression(&tuple, &self.schema, expr))
+            .collect::<Result<Tuple, _>>()?;
+
+        Ok(Some(evaluated))
     }
 }
 

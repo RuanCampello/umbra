@@ -174,6 +174,7 @@ mod tests {
                 vec![Value::Number(1), Value::String("alice".into())],
                 vec![Value::Number(2), Value::String("bob".into())],
             ],
+            false,
         )
         .unwrap();
 
@@ -209,6 +210,7 @@ mod tests {
                 vec![Value::Number(2), Value::String("bob".into())],
                 vec![Value::Number(3), Value::String("charlie".into())],
             ],
+            false,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -251,6 +253,7 @@ mod tests {
             txn_id,
             "users",
             vec![vec![Value::Number(1), Value::String("alice".into())]],
+            false,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -280,6 +283,7 @@ mod tests {
                 vec![Value::Number(2), Value::String("b".into())],
                 vec![Value::Number(3), Value::String("c".into())],
             ],
+            false,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -343,6 +347,7 @@ mod tests {
                 vec![Value::Number(10), Value::String("a".into())],
                 vec![Value::Number(20), Value::String("b".into())],
             ],
+            false,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -395,6 +400,7 @@ mod tests {
                 vec![Value::Number(10), Value::String("a".into())],
                 vec![Value::Number(20), Value::String("b".into())],
             ],
+            false,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -474,6 +480,7 @@ mod tests {
                 vec![Value::Number(1), Value::String("alice".into())],
                 vec![Value::Number(2), Value::String("bob".into())],
             ],
+            false,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -510,6 +517,7 @@ mod tests {
             txn_id,
             "users",
             vec![vec![Value::Number(1), Value::String("alice".into())]],
+            false,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
@@ -551,6 +559,7 @@ mod tests {
                 vec![Value::Number(1), Value::String("alice".into())],
                 vec![Value::Number(2), Value::String("bob".into())],
             ],
+            false,
         )
         .unwrap();
         exec.engine().commit_transaction(txn_id).unwrap();
