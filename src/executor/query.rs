@@ -10,7 +10,7 @@ use crate::executor::dml;
 use crate::executor::operator::{Evaluate, Filter, Limit, Project, Scan, Sort, Values};
 use crate::sql::analyzer::contains_aggregate;
 use crate::sql::query::planner::resolve_type;
-use crate::sql::statement::{self, Column, Expression, OrderDirection, Type};
+use crate::sql::statement::{self, BinaryOperator, Column, Expression, OrderDirection, Type};
 use crate::sql::Value;
 use crate::vm::expression::resolve_expression;
 use crate::vm::planner::{reduce_aggregate_expr, Tuple};
@@ -18,13 +18,14 @@ use std::cmp::Ordering;
 use std::ops::Bound;
 
 /// The index-servable shape of a `WHERE` predicate on a single column: either a
-/// contiguous range or a discrete set of points (`IN (..)`, `col = a OR col = b`).
+/// contiguous range or a discrete set of points (`IN (..)`, `col = a OR col = b`)
 enum Access<'a> {
     Range(&'a str, Bound<Value>, Bound<Value>),
     Points(&'a str, Vec<Value>),
 }
 
 impl Access<'_> {
+    #[inline]
     const fn column(&self) -> &str {
         match self {
             Self::Range(column, ..) | Self::Points(column, ..) => column,
@@ -133,13 +134,25 @@ impl Executor {
             return Ok(None);
         }
 
+        // single-table WHERE filters only push into the scans of an all-INNER
+        // join, where narrowing an input never changes the final result
+        let all_inner = select
+            .joins
+            .iter()
+            .all(|join| matches!(join.join_type, JoinType::Inner));
+
         let base = &select.from.name;
         let mut schema = self.resolve_schema(base)?;
+        let base_filter_schema = schema.clone();
         schema.add_qualified_name(select.from.key(), 0, schema.len());
 
-        let mut scan = operator::Scan::new(&self.engine, txn_id, base)?;
+        let base_pushed = all_inner
+            .then(|| pushable_predicate(select.r#where.as_ref(), select.from.key()))
+            .flatten();
+        let mut source =
+            self.filtered_source(txn_id, base, base_pushed.as_ref(), &base_filter_schema)?;
         let mut rows = Vec::new();
-        while let Some(tuple) = scan.next()? {
+        while let Some(tuple) = source.next()? {
             rows.push(tuple);
         }
 
@@ -173,12 +186,34 @@ impl Executor {
             schema.index_bare_names(start, schema.len());
             schema.add_qualified_name(join.table.key(), start, schema.len());
 
-            let right_rows: Vec<_> = self
-                .engine
-                .scan(txn_id, right_table)?
-                .into_iter()
-                .map(|(_, tuple)| tuple)
-                .collect();
+            let right_pushed = all_inner
+                .then(|| pushable_predicate(select.r#where.as_ref(), join.table.key()))
+                .flatten();
+
+            let right_rows: Vec<_> = match right_pushed {
+                Some(pushed) => {
+                    let right_filter_schema = self.resolve_schema(right_table)?;
+                    let mut right_source = self.filtered_source(
+                        txn_id,
+                        right_table,
+                        Some(&pushed),
+                        &right_filter_schema,
+                    )?;
+
+                    let mut right_rows = Vec::new();
+                    while let Some(mut tuple) = right_source.next()? {
+                        tuple.remove(0);
+                        right_rows.push(tuple);
+                    }
+                    right_rows
+                }
+                None => self
+                    .engine
+                    .scan(txn_id, right_table)?
+                    .into_iter()
+                    .map(|(_, tuple)| tuple)
+                    .collect(),
+            };
 
             let left_width = start;
             let mut joined = Vec::new();
@@ -424,7 +459,7 @@ impl Executor {
     /// Serves an indexable predicate from a covering index when the transaction
     /// has no local writes on the table: `AND`ed bounds (`=`, `<`, `<=`, `>`,
     /// `>=`) collapse to a range, and `IN (..)` / `col = a OR col = b` on one
-    /// column collapse to a set of point look-ups.
+    /// column collapse to a set of point look-ups
     fn indexed_rows(
         &self,
         txn_id: i64,
@@ -509,7 +544,7 @@ impl Executor {
         for join in &select.joins {
             let strategy = match &join.on {
                 Expression::BinaryOperation {
-                    operator: statement::BinaryOperator::Eq,
+                    operator: BinaryOperator::Eq,
                     left,
                     right,
                 } if is_column_ref(left) && is_column_ref(right) => "HashJoin",
@@ -575,7 +610,9 @@ impl Executor {
         Ok(match indexed {
             Some(index) => {
                 let kind = match &access {
-                    Access::Range(_, Bound::Included(a), Bound::Included(b)) if a == b => "IndexScan",
+                    Access::Range(_, Bound::Included(a), Bound::Included(b)) if a == b => {
+                        "IndexScan"
+                    }
                     Access::Range(..) => "IndexRangeScan",
                     Access::Points(..) => "IndexScan",
                 };
@@ -760,6 +797,67 @@ fn join_expressions<E: std::fmt::Display>(expressions: &[E]) -> String {
         .join(", ")
 }
 
+fn pushable_predicate(predicate: Option<&Expression>, key: &str) -> Option<Expression> {
+    let mut pushed: Option<Expression> = None;
+    let mut stack = vec![predicate?];
+
+    while let Some(expr) = stack.pop() {
+        if let Expression::BinaryOperation {
+            operator: BinaryOperator::And,
+            left,
+            right,
+        } = expr
+        {
+            stack.push(left);
+            stack.push(right);
+            continue;
+        }
+
+        let Some(dequalified) = dequalify(expr, key) else {
+            continue;
+        };
+
+        pushed = Some(match pushed {
+            Some(acc) => Expression::BinaryOperation {
+                operator: BinaryOperator::And,
+                left: Box::new(acc),
+                right: Box::new(dequalified),
+            },
+            None => dequalified,
+        });
+    }
+
+    pushed
+}
+
+fn dequalify(expr: &Expression, key: &str) -> Option<Expression> {
+    match expr {
+        Expression::QualifiedIdentifier { table, column } if table == key => {
+            Some(Expression::Identifier(column.clone()))
+        }
+        Expression::Value(_) => Some(expr.clone()),
+        Expression::BinaryOperation {
+            operator,
+            left,
+            right,
+        } => Some(Expression::BinaryOperation {
+            operator: *operator,
+            left: Box::new(dequalify(left, key)?),
+            right: Box::new(dequalify(right, key)?),
+        }),
+        Expression::UnaryOperation { operator, expr } => Some(Expression::UnaryOperation {
+            operator: *operator,
+            expr: Box::new(dequalify(expr, key)?),
+        }),
+        Expression::Nested(inner) => Some(Expression::Nested(Box::new(dequalify(inner, key)?))),
+        Expression::IsNull { expr, negated } => Some(Expression::IsNull {
+            expr: Box::new(dequalify(expr, key)?),
+            negated: *negated,
+        }),
+        _ => None,
+    }
+}
+
 /// Chooses the index access for a predicate: a range first, then a point set.
 fn index_access(predicate: &Expression) -> Option<Access<'_>> {
     if let Some((column, start, end)) = predicate_bounds(predicate) {
@@ -769,11 +867,9 @@ fn index_access(predicate: &Expression) -> Option<Access<'_>> {
     predicate_values(predicate).map(|(column, values)| Access::Points(column, values))
 }
 
-/// Recognises `col = a OR col = b OR ...` (all on one column) as a point set.
-/// `IN (..)` desugars to exactly this chain during parsing.
+/// Recognises `col = a OR col = b OR ...` (all on one column) as a point set
+/// `IN (..)` desugars to exactly this chain during parsing
 fn predicate_values(predicate: &Expression) -> Option<(&str, Vec<Value>)> {
-    use crate::sql::statement::BinaryOperator;
-
     let Expression::BinaryOperation {
         left,
         operator,
@@ -806,8 +902,6 @@ fn predicate_values(predicate: &Expression) -> Option<(&str, Vec<Value>)> {
 }
 
 fn predicate_bounds(predicate: &Expression) -> Option<(&str, Bound<Value>, Bound<Value>)> {
-    use crate::sql::statement::BinaryOperator;
-
     let Expression::BinaryOperation {
         left,
         operator,
@@ -874,7 +968,7 @@ fn equi_join_positions(
     left_width: usize,
 ) -> Option<(usize, usize)> {
     let Expression::BinaryOperation {
-        operator: statement::BinaryOperator::Eq,
+        operator: BinaryOperator::Eq,
         left,
         right,
     } = on
