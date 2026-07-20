@@ -23,31 +23,13 @@ impl Executor {
     pub fn execute_select(
         &self,
         txn_id: i64,
-        select: statement::Select,
+        mut select: statement::Select,
     ) -> Result<(Schema, Vec<Tuple>), DatabaseError> {
         if !select.group_by.is_empty() || select.columns.iter().any(contains_aggregate) {
             return self.execute_aggregate(txn_id, select);
         }
 
-        let (schema, mut pipeline): (Schema, Box<dyn Operator>) =
-            match self.joined_source(txn_id, &select)? {
-                Some((schema, rows)) => {
-                    let mut source: Box<dyn Operator> = Box::new(Values::new(rows));
-                    if let Some(predicate) = &select.r#where {
-                        source = Box::new(Filter::new(source, schema.clone(), predicate.clone()));
-                    }
-
-                    (schema, source)
-                }
-                None => {
-                    let table = &select.from.name;
-                    let schema = self.resolve_schema(table)?;
-                    let source =
-                        self.filtered_source(txn_id, table, select.r#where.as_ref(), &schema)?;
-
-                    (schema, source)
-                }
-            };
+        let (schema, mut pipeline) = self.select_source(txn_id, &mut select)?;
 
         let result_schema;
 
@@ -187,25 +169,73 @@ impl Executor {
             let mut joined = Vec::new();
             let mut right_matched = vec![false; right_rows.len()];
 
-            for left in &rows {
-                let mut matched = false;
+            match equi_join_positions(&join.on, &schema, left_width) {
+                // hash join: build on the right side, probe with the left
+                // keys hash their serialised bytes under the left column's
+                // type, so cross-representation values still collide
+                Some((left_pos, right_pos)) => {
+                    let key_type = schema.columns[left_pos].data_type;
+                    let mut table: crate::collections::hash::HashMap<Vec<u8>, Vec<usize>> =
+                        crate::collections::hash::HashMap::default();
 
-                for (idx, right) in right_rows.iter().enumerate() {
-                    let mut combined = Vec::with_capacity(left_width + right_width);
-                    combined.extend(left.iter().cloned());
-                    combined.extend(right.iter().cloned());
+                    for (idx, right) in right_rows.iter().enumerate() {
+                        let key = &right[right_pos];
+                        if !key.is_null() {
+                            table
+                                .entry(crate::storage::tuple::serialize(&key_type, key))
+                                .or_default()
+                                .push(idx);
+                        }
+                    }
 
-                    if evaluate_where(&schema, &combined, &join.on)? {
-                        matched = true;
-                        right_matched[idx] = true;
-                        joined.push(combined);
+                    for left in &rows {
+                        let key = &left[left_pos];
+                        let matches = match key.is_null() {
+                            true => None,
+                            false => table.get(&crate::storage::tuple::serialize(&key_type, key)),
+                        };
+
+                        match matches {
+                            Some(indices) => {
+                                for &idx in indices {
+                                    right_matched[idx] = true;
+                                    let mut combined = Vec::with_capacity(left_width + right_width);
+                                    combined.extend(left.iter().cloned());
+                                    combined.extend(right_rows[idx].iter().cloned());
+                                    joined.push(combined);
+                                }
+                            }
+                            None if matches!(join.join_type, JoinType::Left | JoinType::Full) => {
+                                let mut combined = left.clone();
+                                combined.extend(std::iter::repeat(Value::Null).take(right_width));
+                                joined.push(combined);
+                            }
+                            None => {}
+                        }
                     }
                 }
+                None => {
+                    for left in &rows {
+                        let mut matched = false;
 
-                if !matched && matches!(join.join_type, JoinType::Left | JoinType::Full) {
-                    let mut combined = left.clone();
-                    combined.extend(std::iter::repeat(Value::Null).take(right_width));
-                    joined.push(combined);
+                        for (idx, right) in right_rows.iter().enumerate() {
+                            let mut combined = Vec::with_capacity(left_width + right_width);
+                            combined.extend(left.iter().cloned());
+                            combined.extend(right.iter().cloned());
+
+                            if evaluate_where(&schema, &combined, &join.on)? {
+                                matched = true;
+                                right_matched[idx] = true;
+                                joined.push(combined);
+                            }
+                        }
+
+                        if !matched && matches!(join.join_type, JoinType::Left | JoinType::Full) {
+                            let mut combined = left.clone();
+                            combined.extend(std::iter::repeat(Value::Null).take(right_width));
+                            joined.push(combined);
+                        }
+                    }
                 }
             }
 
@@ -225,6 +255,38 @@ impl Executor {
         Ok(Some((schema, rows)))
     }
 
+    /// Builds the filtered row source shared by plain and aggregate SELECTs:
+    /// the joined result when the statement has joins, otherwise the
+    /// (possibly index-driven) base table
+    fn select_source(
+        &self,
+        txn_id: i64,
+        select: &mut statement::Select,
+    ) -> Result<(Schema, Box<dyn Operator>), DatabaseError> {
+        match self.joined_source(txn_id, select)? {
+            Some((schema, rows)) => {
+                let mut source: Box<dyn Operator> = Box::new(Values::new(rows));
+                if let Some(mut predicate) = select.r#where.take() {
+                    dealias_predicate(&mut predicate, &select.columns, &schema);
+                    source = Box::new(Filter::new(source, schema.clone(), predicate));
+                }
+
+                Ok((schema, source))
+            }
+            None => {
+                let table = &select.from.name;
+                let schema = self.resolve_schema(table)?;
+                if let Some(predicate) = select.r#where.as_mut() {
+                    dealias_predicate(predicate, &select.columns, &schema);
+                }
+                let source =
+                    self.filtered_source(txn_id, table, select.r#where.as_ref(), &schema)?;
+
+                Ok((schema, source))
+            }
+        }
+    }
+
     /// Executes a SELECT with aggregate functions and/or GROUP BY.
     ///
     /// Materialises the filtered rows, groups them, and evaluates each select column per group,
@@ -233,27 +295,9 @@ impl Executor {
     fn execute_aggregate(
         &self,
         txn_id: i64,
-        select: statement::Select,
+        mut select: statement::Select,
     ) -> Result<(Schema, Vec<Tuple>), DatabaseError> {
-        let (schema, mut pipeline): (Schema, Box<dyn Operator>) =
-            match self.joined_source(txn_id, &select)? {
-                Some((schema, rows)) => {
-                    let mut source: Box<dyn Operator> = Box::new(operator::Values::new(rows));
-                    if let Some(predicate) = &select.r#where {
-                        source = Box::new(Filter::new(source, schema.clone(), predicate.clone()));
-                    }
-
-                    (schema, source)
-                }
-                None => {
-                    let table = &select.from.name;
-                    let schema = self.resolve_schema(table)?;
-                    let source =
-                        self.filtered_source(txn_id, table, select.r#where.as_ref(), &schema)?;
-
-                    (schema, source)
-                }
-            };
+        let (schema, mut pipeline) = self.select_source(txn_id, &mut select)?;
 
         let mut rows = Vec::new();
         while let Some(tuple) = pipeline.next()? {
@@ -433,8 +477,17 @@ impl Executor {
         let mut lines = vec![self.access_path(&select.from.name, select.r#where.as_ref())?];
 
         for join in &select.joins {
+            let strategy = match &join.on {
+                Expression::BinaryOperation {
+                    operator: statement::BinaryOperator::Eq,
+                    left,
+                    right,
+                } if is_column_ref(left) && is_column_ref(right) => "HashJoin",
+                _ => "NestedLoopJoin",
+            };
+
             lines.push(format!(
-                "NestedLoopJoin ({:?}) with {} on ({})",
+                "{strategy} ({:?}) with {} on ({})",
                 join.join_type, join.table.name, join.on
             ));
         }
@@ -581,7 +634,8 @@ fn projection_schema(schema: &Schema, columns: &[Expression]) -> Result<Schema, 
                         column.name = name;
                         Ok(column)
                     }
-                    None => Ok(Column::new(&name, resolve_type(schema, inner)?)),
+                    // computed expressions can always evaluate to NULL
+                    None => Ok(Column::nullable(&name, resolve_type(schema, inner)?)),
                 }
             })
             .collect::<Result<Vec<Column>, db::SqlError>>()?,
@@ -617,6 +671,39 @@ fn dealias<'e>(expr: &'e Expression, columns: &'e [Expression]) -> &'e Expressio
             _ => None,
         })
         .unwrap_or(expr)
+}
+
+/// rewrites, in place, every identifier in a `WHERE` tree that names an
+/// output alias (and no real column) into the aliased expression
+fn dealias_predicate(predicate: &mut Expression, columns: &[Expression], schema: &Schema) {
+    match predicate {
+        Expression::Identifier(name) => {
+            if schema.index_of(name).is_some() {
+                return;
+            }
+
+            let aliased = columns.iter().find_map(|column| match column {
+                Expression::Alias { alias, expr } if alias == name => Some(expr.as_ref()),
+                _ => None,
+            });
+
+            if let Some(inner) = aliased {
+                *predicate = inner.clone();
+            }
+        }
+        Expression::UnaryOperation { expr, .. }
+        | Expression::IsNull { expr, .. }
+        | Expression::Nested(expr)
+        | Expression::Alias { expr, .. } => dealias_predicate(expr, columns, schema),
+        Expression::BinaryOperation { left, right, .. } => {
+            dealias_predicate(left, columns, schema);
+            dealias_predicate(right, columns, schema);
+        }
+        Expression::Function { args, .. } => args
+            .iter_mut()
+            .for_each(|arg| dealias_predicate(arg, columns, schema)),
+        _ => {}
+    }
 }
 
 fn comparator_for(sort_keys: Vec<(usize, bool)>) -> Box<dyn Fn(&Tuple, &Tuple) -> Ordering> {
@@ -706,6 +793,30 @@ fn predicate_bounds(predicate: &Expression) -> Option<(&str, Bound<Value>, Bound
 }
 
 /// resolves plain, qualified, and aliased column references to a position
+fn equi_join_positions(
+    on: &Expression,
+    schema: &Schema,
+    left_width: usize,
+) -> Option<(usize, usize)> {
+    let Expression::BinaryOperation {
+        operator: statement::BinaryOperator::Eq,
+        left,
+        right,
+    } = on
+    else {
+        return None;
+    };
+
+    let a = column_position(schema, left)?;
+    let b = column_position(schema, right)?;
+
+    match (a < left_width, b < left_width) {
+        (true, false) => Some((a, b - left_width)),
+        (false, true) => Some((b, a - left_width)),
+        _ => None,
+    }
+}
+
 fn column_position(schema: &Schema, expr: &Expression) -> Option<usize> {
     match expr {
         Expression::Identifier(name) => schema.index_of(name),
@@ -715,6 +826,14 @@ fn column_position(schema: &Schema, expr: &Expression) -> Option<usize> {
         Expression::Alias { expr, .. } => column_position(schema, expr),
         _ => None,
     }
+}
+
+#[inline]
+const fn is_column_ref(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::Identifier(_) | Expression::QualifiedIdentifier { .. }
+    )
 }
 
 fn build_comparator(

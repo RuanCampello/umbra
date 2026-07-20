@@ -105,7 +105,7 @@ impl Operator for Scan {
             return Ok(None);
         }
 
-        let tuple = self.tuples[self.cursor].clone();
+        let tuple = std::mem::take(&mut self.tuples[self.cursor]);
         self.cursor += 1;
 
         Ok(Some(tuple))
@@ -239,7 +239,7 @@ impl Operator for Sort {
             return Ok(None);
         }
 
-        let tuple = self.sorted[self.cursor].clone();
+        let tuple = std::mem::take(&mut self.sorted[self.cursor]);
         self.cursor += 1;
 
         Ok(Some(tuple))
@@ -258,7 +258,7 @@ impl Operator for Values {
             return Ok(None);
         }
 
-        let tuple = self.tuples[self.cursor].clone();
+        let tuple = std::mem::take(&mut self.tuples[self.cursor]);
         self.cursor += 1;
 
         Ok(Some(tuple))

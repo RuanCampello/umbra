@@ -699,3 +699,88 @@ fn explain_reports_access_paths() {
         .exec("EXPLAIN CREATE TABLE t (id INT PRIMARY KEY);")
         .is_err());
 }
+
+#[test]
+fn hash_join_and_nested_loop_fallback() {
+    let mut db = memory_db_with_users();
+    db.exec("CREATE TABLE pets (id INT PRIMARY KEY, owner_id INT, name VARCHAR(64));")
+        .unwrap();
+    db.exec(
+        r#"
+        INSERT INTO pets (id, owner_id, name)
+        VALUES (1, 1, 'rex'), (2, 1, 'milo'), (3, 3, 'luna'), (4, 9, 'ghost');"#,
+    )
+    .unwrap();
+
+    let set = db
+        .exec(
+            r#"
+            SELECT u.name, p.name FROM users AS u
+            JOIN pets AS p ON u.id = p.owner_id
+            ORDER BY p.id;"#,
+        )
+        .unwrap();
+    assert_eq!(
+        set.tuples,
+        vec![
+            vec!["alice".into(), "rex".into()],
+            vec!["alice".into(), "milo".into()],
+            vec!["carol".into(), "luna".into()],
+        ]
+    );
+
+    let set = db
+        .exec(
+            r#"
+            SELECT u.name, p.name FROM users AS u
+            LEFT JOIN pets AS p ON u.id = p.owner_id
+            ORDER BY u.id, p.id;"#,
+        )
+        .unwrap();
+    assert_eq!(set.tuples.len(), 4);
+    assert_eq!(
+        set.tuples[2],
+        vec![Value::String("bob".into()), Value::Null]
+    );
+
+    // non-equi ON falls back to the nested loop
+    let set = db
+        .exec(
+            r#"
+            SELECT u.name, p.name FROM users AS u
+            JOIN pets AS p ON u.id < p.owner_id
+            ORDER BY u.id, p.id;"#,
+        )
+        .unwrap();
+    assert_eq!(
+        set.tuples,
+        vec![
+            vec!["alice".into(), "luna".into()],
+            vec!["alice".into(), "ghost".into()],
+            vec!["bob".into(), "luna".into()],
+            vec!["bob".into(), "ghost".into()],
+            vec!["carol".into(), "ghost".into()],
+        ]
+    );
+
+    let plan = db
+        .exec("EXPLAIN SELECT u.name FROM users AS u JOIN pets AS p ON u.id = p.owner_id;")
+        .unwrap();
+    let lines: Vec<String> = plan
+        .tuples
+        .iter()
+        .map(|t| match &t[0] {
+            Value::String(s) => s.clone(),
+            other => panic!("plan lines must be strings, got {other:?}"),
+        })
+        .collect();
+    assert!(lines.iter().any(|l| l.starts_with("HashJoin")));
+
+    let plan = db
+        .exec("EXPLAIN SELECT u.name FROM users AS u JOIN pets AS p ON u.id < p.owner_id;")
+        .unwrap();
+    assert!(plan
+        .tuples
+        .iter()
+        .any(|t| matches!(&t[0], Value::String(s) if s.starts_with("NestedLoopJoin"))));
+}
