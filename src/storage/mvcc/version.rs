@@ -581,6 +581,35 @@ impl VersionStorage {
         results
     }
 
+    pub fn candidate_row_ids(&self) -> Option<Vec<i64>> {
+        if !self.open.load(Ordering::Acquire) {
+            return Some(Vec::new());
+        }
+
+        self.visibility_checker.as_ref()?;
+        if self.cold.read().unwrap().is_some() {
+            return None;
+        }
+
+        let versions = self.versions.read().unwrap();
+        Some(versions.keys().copied().collect())
+    }
+
+    pub fn resolve_visible_chunk(&self, ids: &[i64], txn_id: i64, out: &mut Vec<(i64, Tuple)>) {
+        let Some(checker) = self.visibility_checker.as_ref() else {
+            return;
+        };
+
+        let versions = self.versions.read().unwrap();
+        for &row_id in ids {
+            if let Some(entry) = versions.get(&row_id) {
+                if let Some(version) = visible_live(entry, checker, txn_id) {
+                    out.push((row_id, version.data.clone()));
+                }
+            }
+        }
+    }
+
     /// Clones the newest live version of every row.
     ///
     /// Only sound when nothing is mid-commit: the store holds committed
@@ -1444,6 +1473,27 @@ fn chain_depth(entry: &VersionEntry) -> usize {
         current = &prev.prev;
     }
     depth
+}
+
+fn visible_live<'a>(
+    entry: &'a VersionEntry,
+    checker: &TransactionRegistry,
+    txn_id: i64,
+) -> Option<&'a TupleVersion> {
+    let mut version = &entry.version;
+    let mut prev = entry.prev.as_deref();
+
+    loop {
+        if checker.is_visible(version.txn_id, txn_id) {
+            let deleted =
+                version.is_deleted() && checker.is_visible(version.deleted_at_txn_id, txn_id);
+            return (!deleted).then_some(version);
+        }
+
+        let node = prev?;
+        version = &node.version;
+        prev = node.prev.as_deref();
+    }
 }
 
 #[cfg(test)]

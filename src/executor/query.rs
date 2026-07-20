@@ -45,7 +45,10 @@ impl Executor {
             return self.execute_aggregate(txn_id, select);
         }
 
-        let (schema, mut pipeline) = self.select_source(txn_id, &mut select)?;
+        // a lazy scan only pays off when a `LIMIT` can stop the pipeline early
+        // an `ORDER BY` interposes a `Sort` that drains every row, so stay eager
+        let streaming = select.limit.is_some() && select.order_by.is_empty();
+        let (schema, mut pipeline) = self.select_source(txn_id, &mut select, streaming)?;
 
         let result_schema;
 
@@ -149,8 +152,13 @@ impl Executor {
         let base_pushed = all_inner
             .then(|| pushable_predicate(select.r#where.as_ref(), select.from.key()))
             .flatten();
-        let mut source =
-            self.filtered_source(txn_id, base, base_pushed.as_ref(), &base_filter_schema)?;
+        let mut source = self.filtered_source(
+            txn_id,
+            base,
+            base_pushed.as_ref(),
+            &base_filter_schema,
+            false,
+        )?;
         let mut rows = Vec::new();
         while let Some(tuple) = source.next()? {
             rows.push(tuple);
@@ -198,6 +206,7 @@ impl Executor {
                         right_table,
                         Some(&pushed),
                         &right_filter_schema,
+                        false,
                     )?;
 
                     let mut right_rows = Vec::new();
@@ -312,6 +321,7 @@ impl Executor {
         &self,
         txn_id: i64,
         select: &mut statement::Select,
+        streaming: bool,
     ) -> Result<(Schema, Box<dyn Operator>), DatabaseError> {
         match self.joined_source(txn_id, select)? {
             Some((schema, rows)) => {
@@ -329,8 +339,13 @@ impl Executor {
                 if let Some(predicate) = select.r#where.as_mut() {
                     dealias_predicate(predicate, &select.columns, &schema);
                 }
-                let source =
-                    self.filtered_source(txn_id, table, select.r#where.as_ref(), &schema)?;
+                let source = self.filtered_source(
+                    txn_id,
+                    table,
+                    select.r#where.as_ref(),
+                    &schema,
+                    streaming,
+                )?;
 
                 Ok((schema, source))
             }
@@ -347,7 +362,7 @@ impl Executor {
         txn_id: i64,
         mut select: statement::Select,
     ) -> Result<(Schema, Vec<Tuple>), DatabaseError> {
-        let (schema, mut pipeline) = self.select_source(txn_id, &mut select)?;
+        let (schema, mut pipeline) = self.select_source(txn_id, &mut select, false)?;
 
         let mut rows = Vec::new();
         while let Some(tuple) = pipeline.next()? {
@@ -438,6 +453,7 @@ impl Executor {
         table: &str,
         predicate: Option<&Expression>,
         schema: &Schema,
+        streaming: bool,
     ) -> Result<Box<dyn Operator>, DatabaseError> {
         let indexed = match predicate {
             Some(predicate) => self.indexed_rows(txn_id, table, predicate)?,
@@ -446,6 +462,7 @@ impl Executor {
 
         let mut source: Box<dyn Operator> = match indexed {
             Some(rows) => Box::new(Values::new(rows)),
+            None if streaming => Box::new(Scan::streaming(&self.engine, txn_id, table)?),
             None => Box::new(Scan::new(&self.engine, txn_id, table)?),
         };
 

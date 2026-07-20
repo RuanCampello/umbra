@@ -851,6 +851,22 @@ impl Engine {
         Ok(results)
     }
 
+    pub fn scan_lazy(
+        &self,
+        txn_id: i64,
+        table: &str,
+    ) -> Result<Option<(Arc<VersionStorage>, Vec<i64>)>> {
+        if self.has_local_writes(txn_id, table) {
+            return Ok(None);
+        }
+
+        let storage = self.version_storage(table)?;
+        match storage.candidate_row_ids() {
+            Some(ids) => Ok(Some((storage, ids))),
+            None => Ok(None),
+        }
+    }
+
     /// Hands out the next unused row id for a table.
     pub fn next_row_id(&self, table: &str) -> Result<i64> {
         Ok(self.version_storage(table)?.allocate_row_id())

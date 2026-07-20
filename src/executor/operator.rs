@@ -12,8 +12,10 @@ use crate::db::{DatabaseError, Schema};
 use crate::sql::statement::Expression;
 use crate::sql::Value;
 use crate::storage::mvcc::engine::Engine;
+use crate::storage::mvcc::version::VersionStorage;
 use crate::vm::expression::evaluate_where;
 use crate::vm::planner::Tuple;
+use std::sync::Arc;
 
 /// Scans all MVCC-visible rows from a table for a given transaction.
 ///
@@ -21,8 +23,7 @@ use crate::vm::planner::Tuple;
 /// `row_id`-first layout the rest of the pipeline expects, schemas for
 /// downstream operators must be built with [Schema::prepend_id]
 pub(crate) struct Scan {
-    tuples: Vec<Tuple>,
-    cursor: usize,
+    mode: ScanMode,
 }
 
 /// Filters tuples from a source operator using a `WHERE` clause expression.
@@ -74,6 +75,22 @@ pub(crate) struct Values {
     cursor: usize,
 }
 
+/// The two shapes a [Scan] can take
+enum ScanMode {
+    /// Rows already materialised: read-your-own-writes or cold segments forced
+    /// the eager merge up front
+    Eager { tuples: Vec<Tuple>, cursor: usize },
+    /// Row ids resolved a batch at a time against the version store, so
+    /// `LIMIT`/`Filter` short-circuit before most rows are cloned
+    Lazy {
+        storage: Arc<VersionStorage>,
+        txn_id: i64,
+        ids: std::vec::IntoIter<i64>,
+        buffer: Vec<Tuple>,
+        cursor: usize,
+    },
+}
+
 /// Pull-based iterator over tuples.
 ///
 /// Every node in the execution tree implements this trait.
@@ -82,33 +99,89 @@ pub(crate) trait Operator {
     fn next(&mut self) -> Result<Option<Tuple>, DatabaseError>;
 }
 
+/// Rows resolved per refill of a [ScanMode::Lazy] batch
+const SCAN_CHUNK: usize = 256;
+
 impl Scan {
+    /// materialises every visible row up front
     pub fn new(engine: &Engine, txn_id: i64, table: &str) -> Result<Self, DatabaseError> {
+        Self::eager(engine, txn_id, table)
+    }
+
+    /// resolves rows a batch at a time so a downstream `LIMIT`/`Filter` can
+    /// short-circuit before most rows are cloned
+    pub fn streaming(engine: &Engine, txn_id: i64, table: &str) -> Result<Self, DatabaseError> {
+        match engine.scan_lazy(txn_id, table)? {
+            Some((storage, ids)) => Ok(Self {
+                mode: ScanMode::Lazy {
+                    storage,
+                    txn_id,
+                    ids: ids.into_iter(),
+                    buffer: Vec::new(),
+                    cursor: 0,
+                },
+            }),
+            None => Self::eager(engine, txn_id, table),
+        }
+    }
+
+    fn eager(engine: &Engine, txn_id: i64, table: &str) -> Result<Self, DatabaseError> {
         let tuples = engine
             .scan(txn_id, table)?
             .into_iter()
-            .map(|(row_id, tuple)| {
-                let mut row = Vec::with_capacity(tuple.len() + 1);
-                row.push(Value::Number(row_id as i128));
-                row.extend(tuple);
-                row
-            })
+            .map(|(row_id, tuple)| prepend_id(row_id, tuple))
             .collect();
 
-        Ok(Self { tuples, cursor: 0 })
+        Ok(Self {
+            mode: ScanMode::Eager { tuples, cursor: 0 },
+        })
     }
 }
 
 impl Operator for Scan {
     fn next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        if self.cursor >= self.tuples.len() {
-            return Ok(None);
+        match &mut self.mode {
+            ScanMode::Eager { tuples, cursor } => {
+                if *cursor >= tuples.len() {
+                    return Ok(None);
+                }
+
+                let tuple = std::mem::take(&mut tuples[*cursor]);
+                *cursor += 1;
+
+                Ok(Some(tuple))
+            }
+
+            ScanMode::Lazy {
+                storage,
+                txn_id,
+                ids,
+                buffer,
+                cursor,
+            } => loop {
+                if *cursor < buffer.len() {
+                    let tuple = std::mem::take(&mut buffer[*cursor]);
+                    *cursor += 1;
+                    return Ok(Some(tuple));
+                }
+
+                let batch: Vec<_> = ids.by_ref().take(SCAN_CHUNK).collect();
+                if batch.is_empty() {
+                    return Ok(None);
+                }
+
+                let mut resolved = Vec::with_capacity(batch.len());
+                storage.resolve_visible_chunk(&batch, *txn_id, &mut resolved);
+
+                buffer.clear();
+                buffer.extend(
+                    resolved
+                        .into_iter()
+                        .map(|(row_id, tuple)| prepend_id(row_id, tuple)),
+                );
+                *cursor = 0;
+            },
         }
-
-        let tuple = std::mem::take(&mut self.tuples[self.cursor]);
-        self.cursor += 1;
-
-        Ok(Some(tuple))
     }
 }
 
@@ -263,4 +336,12 @@ impl Operator for Values {
 
         Ok(Some(tuple))
     }
+}
+
+#[inline]
+fn prepend_id(row_id: i64, tuple: Tuple) -> Tuple {
+    let mut row = Vec::with_capacity(tuple.len() + 1);
+    row.push(Value::Number(row_id as i128));
+    row.extend(tuple);
+    row
 }

@@ -153,8 +153,13 @@ impl Executor {
             Statement::Delete(delete) => {
                 let (txn_id, auto) = self.auto_txn()?;
                 let schema = self.resolve_schema(&delete.from)?;
-                let mut source =
-                    self.filtered_source(txn_id, &delete.from, delete.r#where.as_ref(), &schema)?;
+                let mut source = self.filtered_source(
+                    txn_id,
+                    &delete.from,
+                    delete.r#where.as_ref(),
+                    &schema,
+                    false,
+                )?;
 
                 let result = self.delete(txn_id, &delete.from, &mut *source);
 
@@ -173,8 +178,13 @@ impl Executor {
             Statement::Update(update) => {
                 let (txn_id, auto) = self.auto_txn()?;
                 let schema = self.resolve_schema(&update.table)?;
-                let mut source =
-                    self.filtered_source(txn_id, &update.table, update.r#where.as_ref(), &schema)?;
+                let mut source = self.filtered_source(
+                    txn_id,
+                    &update.table,
+                    update.r#where.as_ref(),
+                    &schema,
+                    false,
+                )?;
 
                 let mut assignments = Vec::with_capacity(update.columns.len());
                 for assign in &update.columns {
