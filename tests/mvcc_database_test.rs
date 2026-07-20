@@ -1,6 +1,6 @@
 //! End-to-end tests for the MVCC-backed database session:
-//! SQL strings through the full pipeline (parse → analyse → optimise →
-//! execute) against the engine, including durability across reopen.
+//! SQL strings through the full pipeline against the engine,
+//! including durability across reopen
 
 use std::path::PathBuf;
 use umbra::db::MvccDatabase;
@@ -771,10 +771,7 @@ fn hash_join_and_nested_loop_fallback() {
         )
         .unwrap();
     assert_eq!(set.tuples.len(), 4);
-    assert_eq!(
-        set.tuples[2],
-        vec![Value::String("bob".into()), Value::Null]
-    );
+    assert_eq!(set.tuples[2], vec!["bob".into(), Value::Null]);
 
     // non-equi ON falls back to the nested loop
     let set = db
@@ -816,4 +813,145 @@ fn hash_join_and_nested_loop_fallback() {
         .tuples
         .iter()
         .any(|t| matches!(&t[0], Value::String(s) if s.starts_with("NestedLoopJoin"))));
+}
+
+#[test]
+fn non_unique_index_serves_exact_and_range_lookups() {
+    let mut db = MvccDatabase::in_memory().unwrap();
+    db.exec("CREATE TABLE people (id INT PRIMARY KEY, age INT);")
+        .unwrap();
+    db.exec(
+        r#"
+        INSERT INTO people (id, age)
+        VALUES (1, 30), (2, 40), (3, 30), (4, 50), (5, 40);"#,
+    )
+    .unwrap();
+
+    db.exec("CREATE INDEX people_age_idx ON people(age);")
+        .unwrap();
+    db.exec("INSERT INTO people (id, age) VALUES (6, 30);")
+        .unwrap();
+
+    let plan = db
+        .exec("EXPLAIN SELECT id FROM people WHERE age = 30;")
+        .unwrap();
+    assert!(matches!(&plan.tuples[0][0], Value::String(s) if s.starts_with("IndexScan on people")));
+
+    let exact = db
+        .exec("SELECT id FROM people WHERE age = 30 ORDER BY id;")
+        .unwrap();
+    assert_eq!(
+        exact.tuples,
+        vec![vec![1.into()], vec![3.into()], vec![6.into()],]
+    );
+
+    let range = db
+        .exec("SELECT id FROM people WHERE age >= 40 ORDER BY id;")
+        .unwrap();
+    assert_eq!(
+        range.tuples,
+        vec![vec![2.into()], vec![4.into()], vec![5.into()],]
+    );
+}
+
+#[test]
+fn in_and_or_are_served_by_index_point_probes() {
+    let mut db = MvccDatabase::in_memory().unwrap();
+    db.exec("CREATE TABLE people (id INT PRIMARY KEY, age INT);")
+        .unwrap();
+    db.exec(
+        r#"
+        INSERT INTO people (id, age)
+        VALUES (1, 30), (2, 40), (3, 50), (4, 40), (5, 60);"#,
+    )
+    .unwrap();
+    db.exec("CREATE INDEX people_age_idx ON people(age);")
+        .unwrap();
+
+    let plan = db
+        .exec("EXPLAIN SELECT id FROM people WHERE age IN (30, 50);")
+        .unwrap();
+    assert!(matches!(&plan.tuples[0][0], Value::String(s) if s.starts_with("IndexScan on people")));
+
+    let in_list = db
+        .exec("SELECT id FROM people WHERE age IN (30, 50) ORDER BY id;")
+        .unwrap();
+    assert_eq!(in_list.tuples, vec![vec![1.into()], vec![3.into()]]);
+
+    let disjunction = db
+        .exec(
+            r#"
+            SELECT id FROM people
+            WHERE age = 40 OR age = 60
+            ORDER BY id;
+        "#,
+        )
+        .unwrap();
+    assert_eq!(
+        disjunction.tuples,
+        vec![vec![2.into()], vec![4.into()], vec![5.into()],]
+    );
+
+    let repeated = db
+        .exec(
+            r#"
+            SELECT id FROM people
+            WHERE age = 40 OR age = 40
+            ORDER BY id;
+        "#,
+        )
+        .unwrap();
+    assert_eq!(
+        repeated.tuples,
+        vec![vec![Value::Number(2)], vec![Value::Number(4)]]
+    );
+}
+
+#[test]
+fn inner_join_pushes_single_table_filter_into_the_scan() {
+    let mut db = db_with_orders();
+    db.exec("CREATE INDEX orders_total_idx ON orders(total);")
+        .unwrap();
+
+    // alias-qualified filter on the joined table is pushed into its scan
+    let pushed = db
+        .exec(
+            "SELECT u.name, o.total FROM users AS u \
+             JOIN orders AS o ON u.id = o.user_id \
+             WHERE o.total = 100;",
+        )
+        .unwrap();
+    assert_eq!(
+        pushed.tuples,
+        vec![vec![Value::String("alice".into()), Value::Number(100)]]
+    );
+
+    // a two-table predicate cannot be pushed, but still filters correctly
+    let residual = db
+        .exec(
+            "SELECT u.name, o.total FROM users AS u \
+             JOIN orders AS o ON u.id = o.user_id \
+             WHERE o.total > u.id + 60 ORDER BY o.total;",
+        )
+        .unwrap();
+    assert_eq!(
+        residual.tuples,
+        vec![
+            vec![Value::String("bob".into()), Value::Number(70)],
+            vec![Value::String("alice".into()), Value::Number(100)],
+        ]
+    );
+
+    // a LEFT join never pushes (not all-inner); WHERE still drops null-padded rows
+    let outer = db
+        .exec(
+            "SELECT u.name, o.total FROM users AS u \
+             LEFT JOIN orders AS o ON u.id = o.user_id \
+             WHERE o.total = 100;",
+        )
+        .unwrap();
+    assert_eq!(
+        outer.tuples,
+        vec![vec![Value::String("alice".into()), Value::Number(100)]]
+    );
 }
