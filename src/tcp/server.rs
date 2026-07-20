@@ -1,5 +1,4 @@
 use std::{
-    fs::File,
     io::{Read, Write},
     mem,
     net::{SocketAddr, TcpListener, TcpStream},
@@ -9,19 +8,19 @@ use std::{
 };
 
 use crate::{
-    db::{Database, DatabaseError},
+    db::{DatabaseError, MvccDatabase},
     tcp::{
         pool::ThreadPool,
         protocol::{self, Response},
     },
 };
 
-/// Starts the database at the given file path and listens on the given address.
-pub fn start<File: AsRef<Path>>(address: SocketAddr, file: File) -> Result<(), DatabaseError> {
+/// Starts the database rooted at the given directory and listens on the given address.
+pub fn start<Dir: AsRef<Path>>(address: SocketAddr, dir: Dir) -> Result<(), DatabaseError> {
     // it's alright have a static lifetime here because... well, the database will live forever
     // until the program exit :)
-    let db = &*Box::leak(Box::new(Mutex::new(Database::init(&file)?)));
-    println!("Database file initialised on {}", file.as_ref().display());
+    let db = &*Box::leak(Box::new(Mutex::new(MvccDatabase::init(&dir)?)));
+    println!("Database initialised on {}", dir.as_ref().display());
 
     let pool = ThreadPool::new(8);
     let listener = TcpListener::bind(address)?;
@@ -44,12 +43,12 @@ pub fn start<File: AsRef<Path>>(address: SocketAddr, file: File) -> Result<(), D
     Ok(())
 }
 
-fn handle(stream: &mut TcpStream, db: &'static Mutex<Database<File>>) -> Result<(), DatabaseError> {
+fn handle(stream: &mut TcpStream, db: &'static Mutex<MvccDatabase>) -> Result<(), DatabaseError> {
     let connection = stream.peer_addr().unwrap().to_string();
     println!("Connection from: {connection}");
 
     let mut content_buff_len = [0; mem::size_of::<u32>()];
-    let mut guard: Option<MutexGuard<'_, Database<File>>> = None;
+    let mut guard: Option<MutexGuard<'_, MvccDatabase>> = None;
 
     loop {
         let mut content_buff = Vec::new();

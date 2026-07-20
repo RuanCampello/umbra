@@ -62,7 +62,7 @@ impl Default for State {
 
         let db_path = std::env::temp_dir().join(format!("umbra_test_{port}.db"));
 
-        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&db_path);
         let server_db_path = db_path.clone();
 
         thread::spawn(move || {
@@ -101,7 +101,7 @@ impl Client {
 
 impl Drop for State {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir_all(&self.path);
     }
 }
 
