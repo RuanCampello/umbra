@@ -152,40 +152,53 @@ fn join_over_tcp() {
     )
 }
 
-/// this should be valid until we make the core engine non-blocking with a MVCC
+/// Under MVCC read-committed a reader never blocks on another connection's
+/// open transaction: it sees the last committed snapshot at once and the
+/// in-flight uncommitted insert stays invisible until that transaction commits.
 #[test]
-fn transaction_blocks_concurrent_reads() {
+fn concurrent_reads_do_not_block_on_open_transactions() {
     let server = State::new("sql/employees-and-departments.sql");
     let mut client_a = server.client();
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (pending_tx, pending_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
 
     let handler = std::thread::spawn(move || {
         client_a.exec("BEGIN TRANSACTION;");
-        tx.send(()).unwrap();
-
         client_a.exec(
             r#"
             INSERT INTO departments (department_id, department_name, location)
             VALUES (5, 'Accounting', 'Trenton');
             "#,
         );
-
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        pending_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
         client_a.exec("COMMIT;");
     });
-    rx.recv().expect("Client A failed to start transaction");
+    pending_rx
+        .recv()
+        .expect("client A failed to open its transaction");
 
     let mut client_b = server.client();
     let start = std::time::Instant::now();
-
     let query = client_b.exec("SELECT * FROM departments WHERE location = 'Trenton';");
     let duration = start.elapsed();
 
-    assert!(duration >= std::time::Duration::from_millis(500));
-    assert_eq!(query.tuples[0][1], "Accounting".into());
+    assert!(
+        duration < std::time::Duration::from_millis(500),
+        "the read must not wait on the open transaction"
+    );
+    assert!(
+        query.tuples.is_empty(),
+        "the uncommitted insert must stay invisible"
+    );
 
+    release_tx.send(()).unwrap();
     handler.join().unwrap();
+
+    let visible =
+        client_b.exec("SELECT department_name FROM departments WHERE location = 'Trenton';");
+    assert_eq!(visible.tuples[0][0], "Accounting".into());
 }
 
 #[test]
@@ -214,13 +227,18 @@ fn concurrent_inserts_are_atomic() {
     let query = verifier.exec("SELECT count(*) FROM traffic;");
     assert_eq!(query.tuples[0][0], 500.into());
 
+    // concurrent inserts interleave row ids and serial values independently,
+    // so scan order (by row id) need not match serial order, what must hold is
+    // that every serial from 1 to 500 was handed out exactly once
     let query = verifier.exec("SELECT id FROM traffic;");
+    let mut ids = query.tuples;
+    ids.sort_unstable();
 
-    let original_tuples = query.tuples;
-    let mut sorted_tuples = original_tuples.clone();
-    sorted_tuples.sort_unstable();
-
-    assert_eq!(original_tuples, sorted_tuples)
+    let expected: Vec<_> = (1..=500).map(|n| vec![Value::Number(n)]).collect();
+    assert_eq!(
+        ids, expected,
+        "every serial from 1 to 500 present exactly once"
+    );
 }
 
 #[test]

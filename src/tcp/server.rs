@@ -3,12 +3,13 @@ use std::{
     mem,
     net::{SocketAddr, TcpListener, TcpStream},
     path::Path,
-    sync::{Mutex, MutexGuard},
+    sync::Arc,
     thread,
 };
 
 use crate::{
     db::{DatabaseError, MvccDatabase},
+    storage::mvcc::engine::Engine,
     tcp::{
         pool::ThreadPool,
         protocol::{self, Response},
@@ -17,9 +18,10 @@ use crate::{
 
 /// Starts the database rooted at the given directory and listens on the given address.
 pub fn start<Dir: AsRef<Path>>(address: SocketAddr, dir: Dir) -> Result<(), DatabaseError> {
-    // it's alright have a static lifetime here because... well, the database will live forever
-    // until the program exit :)
-    let db = &*Box::leak(Box::new(Mutex::new(MvccDatabase::init(&dir)?)));
+    // the engine is opened once and shared: every connection runs its own
+    // session over it, so transactions no longer serialise on a global lock.
+    // a static lifetime is fine, the engine lives until the process exits
+    let engine: &'static Arc<Engine> = &*Box::leak(Box::new(MvccDatabase::open_engine(&dir)?));
     println!("Database initialised on {}", dir.as_ref().display());
 
     let pool = ThreadPool::new(8);
@@ -31,7 +33,7 @@ pub fn start<Dir: AsRef<Path>>(address: SocketAddr, dir: Dir) -> Result<(), Data
             let stream = &mut stream.unwrap();
             stream.set_nodelay(true).unwrap();
 
-            if let Err(err) = handle(stream, db) {
+            if let Err(err) = handle(stream, Arc::clone(engine)) {
                 eprintln!(
                     "Error on thread {:?} while processing connection: {err:#?}",
                     thread::current().id()
@@ -43,12 +45,12 @@ pub fn start<Dir: AsRef<Path>>(address: SocketAddr, dir: Dir) -> Result<(), Data
     Ok(())
 }
 
-fn handle(stream: &mut TcpStream, db: &'static Mutex<MvccDatabase>) -> Result<(), DatabaseError> {
+fn handle(stream: &mut TcpStream, engine: Arc<Engine>) -> Result<(), DatabaseError> {
     let connection = stream.peer_addr().unwrap().to_string();
     println!("Connection from: {connection}");
 
+    let mut db = MvccDatabase::connect(engine);
     let mut content_buff_len = [0; mem::size_of::<u32>()];
-    let mut guard: Option<MutexGuard<'_, MvccDatabase>> = None;
 
     loop {
         let mut content_buff = Vec::new();
@@ -73,17 +75,6 @@ fn handle(stream: &mut TcpStream, db: &'static Mutex<MvccDatabase>) -> Result<()
             }
         };
 
-        if guard.is_none() {
-            guard = match db.try_lock() {
-                Ok(guard) => Some(guard),
-                Err(_) => {
-                    println!("Connection {} locked on mutex", connection);
-                    Some(db.lock().unwrap())
-                }
-            }
-        }
-
-        let db = guard.as_mut().unwrap();
         let result = db.exec(&statement);
 
         match protocol::serialize(&Response::from(result)) {
@@ -99,20 +90,12 @@ fn handle(stream: &mut TcpStream, db: &'static Mutex<MvccDatabase>) -> Result<()
                 }
             }
         };
-
-        if !db.active_transaction() {
-            drop(guard.take());
-        }
     }
 
     println!("Close {connection} connection");
-    if let Some(mut db) = guard {
-        if db.active_transaction() {
-            println!(
-                "Connection {connection} closed in the middle of a transaction. Running rollback."
-            );
-            db.rollback()?;
-        }
+    if db.active_transaction() {
+        println!("Connection {connection} closed in the middle of a transaction. Running rollback.");
+        db.rollback()?;
     }
 
     Ok(())
