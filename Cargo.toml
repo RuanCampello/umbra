@@ -23,6 +23,7 @@ members = ["usql"]
 criterion = { version = "0.6.0", features = ["html_reports"] }
 fake = {version = "4.3.0", features = ["derive", "chrono"] }
 rusqlite = "0.36.0"
+postgres = "0.19.10"
 
 [[bench]]
 name = "db_benchmark"
@@ -43,3 +44,8 @@ harness = false
 [[bench]]
 name = "stress_benchmark"
 harness = false
+
+[[bench]]
+name = "comparison"
+harness = false
+
