@@ -95,16 +95,7 @@ pub(in crate::sql) fn analyze<'s>(
             }
         }
 
-        Statement::Create(Create::Index {
-            table,
-            unique,
-            name,
-            ..
-        }) => {
-            if !unique {
-                return Err(SqlError::Other("Non-unique index is not yet supported".into()).into());
-            }
-
+        Statement::Create(Create::Index { table, name, .. }) => {
             let metadata = ctx.metadata(table)?;
 
             if metadata.indexes.iter().any(|idx| idx.name.eq(name)) {
