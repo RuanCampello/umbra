@@ -267,6 +267,14 @@ impl Engine {
         Ok(())
     }
 
+    /// Monotonic schema-change counter, bumped on every DDL. Sessions compare
+    /// it against their last-seen value to drop stale cached metadata after a
+    /// concurrent connection changes the catalogue.
+    #[inline]
+    pub fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Acquire)
+    }
+
     pub fn does_table_exists(&self, name: &str) -> Result<bool> {
         if !self.is_open() {
             return Err(MvccError::NotOpen);
@@ -924,6 +932,13 @@ impl Engine {
 
     pub fn max_column_value(&self, table: &str, column: usize) -> Result<Option<i128>> {
         Ok(self.version_storage(table)?.max_number_at(column))
+    }
+
+    /// Allocates the next serial value for a column from the shared per-table
+    /// counter. The overflow check against the column type lives at the session
+    /// layer, which owns the SQL error types.
+    pub fn next_serial(&self, table: &str, column: usize) -> Result<i128> {
+        Ok(self.version_storage(table)?.next_serial(column) as i128)
     }
 
     pub fn index_for_column(&self, table: &str, column: usize) -> Result<Option<String>> {
@@ -2778,5 +2793,55 @@ mod tests {
         engine.close().unwrap();
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serial_counter_is_shared_and_seeded_from_committed_max() {
+        let engine = Arc::new(Engine::in_memory());
+        engine.open().unwrap();
+
+        let schema = SchemaBuilder::new("logs")
+            .primary("id", Type::BigSerial)
+            .nullable("msg", Type::Text)
+            .build();
+        engine.create_table(schema).unwrap();
+
+        // seed a committed row so the counter starts above the existing max
+        let (txn_id, _) = engine.registry.begin();
+        engine
+            .insert(
+                txn_id,
+                "logs",
+                1,
+                vec![Value::Number(5), Value::String("seed".into())],
+            )
+            .unwrap();
+        engine.commit_transaction(txn_id).unwrap();
+
+        // two threads sharing one engine stand in for two connections
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let engine = Arc::clone(&engine);
+                std::thread::spawn(move || {
+                    (0..500)
+                        .map(|_| engine.next_serial("logs", 0).unwrap())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut allocated: Vec<i128> = handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect();
+
+        assert!(allocated.iter().all(|&value| value > 5), "seeded above max");
+
+        allocated.sort_unstable();
+        let unique = allocated.len();
+        allocated.dedup();
+        assert_eq!(allocated.len(), unique, "no value handed out twice");
+
+        engine.close().unwrap();
     }
 }

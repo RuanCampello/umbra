@@ -1,18 +1,17 @@
 //! MVCC-backed database session.
 
 use crate::collections::hash::HashMap;
-use crate::db::metadata::{sequence, SequenceMetadata};
 use crate::db::{
-    self, Context, Ctx, DatabaseError, QuerySet, Result, Schema, SchemaNew, SqlError, TableMetadata,
+    Context, Ctx, DatabaseError, QuerySet, Result, Schema, SchemaNew, SqlError, TableMetadata,
 };
 use crate::executor::dispatch::ExecResult;
 use crate::executor::Executor;
+use crate::sql::analyzer::AnalyzerError;
 use crate::sql::parser::Parser;
 use crate::sql::statement::Statement;
 use crate::storage::mvcc::engine::{Config, Engine};
 use crate::{sql, storage};
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 pub struct MvccDatabase {
@@ -20,32 +19,72 @@ pub struct MvccDatabase {
     /// Caches [TableMetadata] synthesised from the engine's schemas for the
     /// analyzer/prepare pipeline
     context: Context,
+    /// Engine schema epoch this session's [Context] was last synced against;
+    /// a bump means another connection changed the catalogue and the cache is
+    /// stale.
+    epoch: u64,
+    /// Whether this session owns the engine's lifecycle. Sessions spawned per
+    /// connection over a shared engine leave closing to the owner.
+    owns_engine: bool,
 }
 
 impl MvccDatabase {
     /// Opens (or creates) a durable database rooted at `dir`, recovering
     /// state from snapshots and the WAL.
     pub fn init(dir: impl AsRef<Path>) -> Result<Self> {
-        let path = dir.as_ref().to_string_lossy().into_owned();
-        let engine = Arc::new(Engine::new(Config::durable(path)));
-
-        engine.open()?;
-        engine.cleanup();
-
-        Ok(Self::with_engine(engine))
+        Ok(Self::with_engine(Self::open_engine(dir)?, true))
     }
 
     pub fn in_memory() -> Result<Self> {
         let engine = Arc::new(Engine::in_memory());
         engine.open()?;
 
-        Ok(Self::with_engine(engine))
+        Ok(Self::with_engine(engine, true))
     }
 
-    fn with_engine(engine: Arc<Engine>) -> Self {
+    /// Opens and recovers a durable engine, returning the shared handle so
+    /// several sessions can be spawned over it with [`MvccDatabase::connect`].
+    pub(crate) fn open_engine(dir: impl AsRef<Path>) -> Result<Arc<Engine>> {
+        let path = dir.as_ref().to_string_lossy().into_owned();
+        let engine = Arc::new(Engine::new(Config::durable(path)));
+
+        engine.open()?;
+        engine.cleanup();
+
+        Ok(engine)
+    }
+
+    /// Spawns a session over an already-open shared engine. The session does
+    /// not own the engine's lifecycle, so dropping it only rolls back its own
+    /// transaction.
+    pub(crate) fn connect(engine: Arc<Engine>) -> Self {
+        Self::with_engine(engine, false)
+    }
+
+    /// The shared engine handle, for spawning further sessions over it.
+    #[cfg(test)]
+    pub(crate) fn engine(&self) -> Arc<Engine> {
+        Arc::clone(self.executor.engine())
+    }
+
+    fn with_engine(engine: Arc<Engine>, owns_engine: bool) -> Self {
+        let epoch = engine.epoch();
+
         Self {
             executor: Executor::new(engine),
             context: Context::with_size(crate::db::DEFAULT_CACHE_SIZE),
+            epoch,
+            owns_engine,
+        }
+    }
+
+    /// Drops cached metadata when another connection has changed the
+    /// catalogue since this session last looked.
+    fn sync_schema_epoch(&mut self) {
+        let epoch = self.executor.engine().epoch();
+        if epoch != self.epoch {
+            self.context = Context::with_size(crate::db::DEFAULT_CACHE_SIZE);
+            self.epoch = epoch;
         }
     }
 
@@ -60,20 +99,18 @@ impl MvccDatabase {
         let content = std::fs::read_to_string(path).map_err(DatabaseError::Io)?;
         let statements = Parser::new(&content).try_parse()?;
 
+        self.sync_schema_epoch();
         for statement in statements {
             let statement = sql::process_statement(statement, self)?;
-            let invalidates = matches!(statement, Statement::Create(_) | Statement::Drop(_));
-
             self.executor.execute(statement)?;
-            if invalidates {
-                self.context = Context::with_size(db::DEFAULT_CACHE_SIZE);
-            }
+            self.sync_schema_epoch();
         }
 
         Ok(())
     }
 
     pub fn exec(&mut self, input: &str) -> Result<QuerySet> {
+        self.sync_schema_epoch();
         let statement = sql::pipeline(input, self)?;
 
         if let Statement::Source(path) = statement {
@@ -81,12 +118,8 @@ impl MvccDatabase {
             return Ok(QuerySet::empty());
         }
 
-        let invalidates = matches!(statement, Statement::Create(_) | Statement::Drop(_));
-
         let result = self.executor.execute(statement)?;
-        if invalidates {
-            self.context = Context::with_size(crate::db::DEFAULT_CACHE_SIZE);
-        }
+        self.sync_schema_epoch();
 
         Ok(match result {
             ExecResult::Rows(schema, tuples) => {
@@ -118,13 +151,16 @@ impl MvccDatabase {
         Ok(())
     }
 
-    /// rolls back any open transaction and shuts the engine down cleanly
+    /// Rolls back any open transaction and, when this session owns the engine,
+    /// shuts it down cleanly. Shared sessions leave the engine to its owner.
     pub fn close(&mut self) -> Result<()> {
         if self.executor.has_active_transaction() {
             self.executor.rollback()?;
         }
 
-        self.executor.engine().close()?;
+        if self.owns_engine {
+            self.executor.engine().close()?;
+        }
         Ok(())
     }
 }
@@ -138,37 +174,32 @@ impl Drop for MvccDatabase {
 impl Ctx for MvccDatabase {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata> {
         if !self.context.contains(table) {
-            let engine = self.executor.engine();
-            let schema = engine
+            let schema = self
+                .executor
+                .engine()
                 .schema(table)
                 .map_err(|_| DatabaseError::Sql(SqlError::InvalidTable(table.into())))?;
 
-            let mut metadata = synthesise_metadata(&schema);
-
-            // serial columns draw from sequences seeded with the committed max
-            for (idx, col) in schema.columns.iter().enumerate() {
-                if !col.column_type().is_serial() {
-                    continue;
-                }
-
-                let current = engine.max_column_value(table, idx)?.unwrap_or(0).max(0) as u64;
-
-                let name = sequence!(sequence on (table) (col.name()));
-                metadata.serials.insert(
-                    name.clone(),
-                    SequenceMetadata {
-                        root: 0,
-                        name,
-                        value: AtomicU64::new(current),
-                        data_type: col.column_type(),
-                    },
-                );
-            }
-
-            self.context.insert(metadata);
+            self.context.insert(synthesise_metadata(&schema));
         }
 
         self.context.metadata(table)
+    }
+
+    fn next_serial(&mut self, table: &str, column: usize) -> Result<i128> {
+        let engine = self.executor.engine();
+        let value = engine.next_serial(table, column)?;
+
+        let schema = engine
+            .schema(table)
+            .map_err(|_| DatabaseError::Sql(SqlError::InvalidTable(table.into())))?;
+        let data_type = schema.columns[column].column_type();
+        let max = data_type.max();
+
+        match value > max as i128 {
+            true => Err(AnalyzerError::Overflow(data_type, max).into()),
+            false => Ok(value),
+        }
     }
 }
 
@@ -181,5 +212,66 @@ fn synthesise_metadata(schema: &SchemaNew) -> TableMetadata {
         serials: HashMap::default(),
         row_id: 0,
         count: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql::Value;
+
+    #[test]
+    fn sessions_observe_each_others_schema_changes() {
+        let mut owner = MvccDatabase::in_memory().unwrap();
+        let mut session = MvccDatabase::connect(owner.engine());
+
+        owner
+            .exec("CREATE TABLE t (id SERIAL PRIMARY KEY, v INT);")
+            .unwrap();
+
+        // the session predates the table; the schema epoch bump makes it visible
+        session.exec("INSERT INTO t (v) VALUES (10);").unwrap();
+        let rows = owner.exec("SELECT v FROM t;").unwrap();
+        assert_eq!(rows.tuples.len(), 1);
+        assert_eq!(rows.tuples[0][0], Value::Number(10));
+
+        owner.exec("DROP TABLE t;").unwrap();
+        assert!(
+            session.exec("INSERT INTO t (v) VALUES (20);").is_err(),
+            "a dropped table is gone for the other session too"
+        );
+    }
+
+    #[test]
+    fn concurrent_sessions_never_collide_on_serials() {
+        let mut owner = MvccDatabase::in_memory().unwrap();
+        owner
+            .exec("CREATE TABLE t (id SERIAL PRIMARY KEY, who INT);")
+            .unwrap();
+        let engine = owner.engine();
+
+        let handles: Vec<_> = (0..4)
+            .map(|who| {
+                let mut session = MvccDatabase::connect(Arc::clone(&engine));
+                std::thread::spawn(move || {
+                    for _ in 0..50 {
+                        session
+                            .exec(&format!("INSERT INTO t (who) VALUES ({who});"))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let rows = owner.exec("SELECT id FROM t ORDER BY id;").unwrap();
+        assert_eq!(rows.tuples.len(), 200, "every insert committed");
+
+        let mut ids: Vec<_> = rows.tuples.iter().map(|row| row[0].clone()).collect();
+        ids.dedup();
+        assert_eq!(ids.len(), 200, "no serial value handed out twice");
     }
 }
