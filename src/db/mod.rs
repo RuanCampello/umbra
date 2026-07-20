@@ -120,6 +120,12 @@ const DEFAULT_CACHE_SIZE: usize = 512;
 
 pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata>;
+
+    fn next_serial(&mut self, table: &str, column: usize) -> Result<i128> {
+        let metadata = self.metadata(table)?;
+        let name = metadata.schema.columns[column].name.clone();
+        Ok(metadata.next_val(table, &name)? as i128)
+    }
 }
 
 #[macro_export]

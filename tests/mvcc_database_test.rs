@@ -270,6 +270,39 @@ fn serial_primary_key_autogenerates_and_survives_reopen() {
 }
 
 #[test]
+fn serial_does_not_reuse_a_deleted_value_across_restart() {
+    let dir = scratch_dir("serial-delete");
+
+    {
+        let mut db = MvccDatabase::init(&dir).unwrap();
+        db.exec("CREATE TABLE logs (id SERIAL PRIMARY KEY, msg VARCHAR(64));")
+            .unwrap();
+
+        for msg in ["a", "b", "c"] {
+            db.exec(&format!("INSERT INTO logs (msg) VALUES ('{msg}');"))
+                .unwrap();
+        }
+        db.exec("DELETE FROM logs WHERE id = 3;").unwrap();
+        db.close().unwrap();
+    }
+
+    {
+        let mut db = MvccDatabase::init(&dir).unwrap();
+        db.exec("INSERT INTO logs (msg) VALUES ('d');").unwrap();
+
+        let result = db.exec("SELECT id FROM logs ORDER BY id;").unwrap();
+        let ids: Vec<_> = result.tuples.iter().map(|row| row[0].clone()).collect();
+        assert_eq!(
+            ids,
+            vec![Value::Number(1), Value::Number(2), Value::Number(4)],
+            "the deleted id 3 must not be re-issued after restart"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn aggregates_without_group_by() {
     let mut db = MvccDatabase::in_memory().unwrap();
     db.exec("CREATE TABLE sales (id INT PRIMARY KEY, amount INT);")

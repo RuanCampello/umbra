@@ -108,18 +108,20 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             }
 
             // insert generated values into EACH row of values
+            // serials route through the context so the MVCC session draws from the shared
+            // engine counter rather than a per-session one
             for row in values.iter_mut() {
-                for (idx, name, r#type) in &auto_inserts {
+                for (idx, _, r#type) in &auto_inserts {
                     let expr = match r#type {
                         Type::Uuid => Expression::Value(Value::Uuid(Uuid::new_v4())),
-                        _ => Expression::Value(Value::Number(
-                            metadata.next_val(into.as_ref(), name)?.into(),
-                        )),
+                        _ => Expression::Value(ctx.next_serial(into.as_ref(), *idx)?.into()),
                     };
 
                     row.insert(*idx, expr);
                 }
             }
+
+            let metadata = ctx.metadata(into)?;
 
             (0..columns.len()).for_each(|idx| {
                 if let Some(sorted_idx) = {
@@ -147,7 +149,7 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
         }) => {
             let metadata = ctx.metadata(table)?;
 
-            let identifiers: Vec<Expression> = metadata
+            let identifiers: Vec<_> = metadata
                 .schema
                 .columns
                 .iter()

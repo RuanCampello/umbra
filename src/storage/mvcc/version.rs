@@ -50,9 +50,13 @@ pub(crate) struct VersionStorage {
     uncommited_writes: RwLock<HashMap<i64, i64>>,
     /// Maximum number of previous versions per row.
     max_version_history: usize,
-    /// Next row id to hand out; kept above every row id ever seen so that
+    /// Next row id to hand out, kept above every row id ever seen so that
     /// recovery never re-issues an existing id.
     next_row_id: AtomicI64,
+    /// Serial counters keyed by column index, shared by every session over
+    /// this engine so concurrent inserts never hand out the same value
+    /// Seeded lazily from the highest value ever assigned on first use
+    serials: RwLock<HashMap<usize, AtomicI64>>,
     /// Checks transaction visibility (xmin/xmax). Usually an `Arc<TransactionRegistry>`.
     visibility_checker: Option<Arc<TransactionRegistry>>,
     /// Arena allocator for tuple data, reducing heap fragmentation and locking overhead.
@@ -176,6 +180,7 @@ impl VersionStorage {
             uncommited_writes: RwLock::new(HashMap::default()),
             max_version_history: 10,
             next_row_id: AtomicI64::new(1),
+            serials: RwLock::new(HashMap::default()),
             indexes: RwLock::new(HashMap::default()),
             cold: RwLock::new(None),
         }
@@ -185,6 +190,45 @@ impl VersionStorage {
     #[inline]
     pub fn allocate_row_id(&self) -> i64 {
         self.next_row_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// hands out the next value for the serial column at `column`
+    pub fn next_serial(&self, column: usize) -> i64 {
+        if let Some(counter) = self.serials.read().unwrap().get(&column) {
+            return counter.fetch_add(1, Ordering::Relaxed) + 1;
+        }
+
+        let mut serials = self.serials.write().unwrap();
+        let counter = serials
+            .entry(column)
+            .or_insert_with(|| AtomicI64::new(self.serial_seed(column)));
+
+        counter.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// highest value ever written to `column`, counting rows deleted but not
+    /// yet reclaimed so a restart never re-issues a value still present in a
+    /// chain or segment
+    fn serial_seed(&self, column: usize) -> i64 {
+        let hot = {
+            let versions = self.versions.read().unwrap();
+            versions
+                .values()
+                .filter_map(|entry| match entry.version.data.get(column) {
+                    Some(Value::Number(n)) => Some(*n),
+                    _ => None,
+                })
+                .max()
+        };
+
+        let frozen = self
+            .cold
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|store| store.max_number_at(column));
+
+        hot.max(frozen).unwrap_or(0).max(0) as i64
     }
 
     pub fn with_checker(
