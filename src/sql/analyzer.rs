@@ -341,7 +341,7 @@ fn analyze_assignment<'exp>(
         let variants = column.type_def.as_ref().or(table.schema.get_enum(id));
 
         if let Some(variants) = variants {
-            if !variants.contains(str) {
+            if !variants.iter().any(|v| v.as_str() == &**str) {
                 return Err(SqlError::Type(TypeError::InvalidEnumVariant {
                     allowed: variants.clone(),
                     found: str.to_string(),
@@ -785,7 +785,7 @@ fn analyze_string(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
         }
         Type::Jsonb => {
             use crate::core::json::{from_value_to_jsonb, Conv};
-            let value = Value::String(s.to_string());
+            let value = Value::String(s.to_string().into());
 
             from_value_to_jsonb(&value, Conv::Strict)
                 .map_err(|e| SqlError::Other(format!("Malformed JSON: {s} ({e})")))?;

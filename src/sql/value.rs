@@ -42,6 +42,7 @@ use std::fmt::{self, Display, Formatter};
 use std::hash::Hash;
 use std::io::{self, Error, ErrorKind};
 use std::ops::Neg;
+use std::sync::Arc;
 
 /// Type tags for binary serialisation format.
 /// Tags 11-255 are reserved for future types.
@@ -81,7 +82,7 @@ mod number_sizes {
 /// typically used in query results, expression evaluation, and row serialisation.
 ///
 /// For example:
-/// - A row with a `VARCHAR` column might store `Value::String("hello".to_string())`.
+/// - A row with a `VARCHAR` column might store `Value::String("hello".into())`.
 /// - A `DATE` column would store `Value::Temporal(Temporal::Date(...))`.
 ///
 /// `Value` is the counterpart to `Type`:  
@@ -110,7 +111,7 @@ mod number_sizes {
 /// ```
 #[derive(Debug, Clone)]
 pub enum Value {
-    String(String),
+    String(Arc<str>),
     Number(i128),
     Float(f64),
     Boolean(bool),
@@ -371,7 +372,7 @@ impl Value {
                 let s = String::from_utf8(content[4..4 + len].to_vec())
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-                (Value::String(s), 5 + len)
+                (Value::String(s.into()), 5 + len)
             }
 
             tags::TEMPORAL => {
@@ -501,7 +502,7 @@ impl Value {
     }
 
     #[inline]
-    const fn serialised_size_hint(&self) -> usize {
+    fn serialised_size_hint(&self) -> usize {
         match self {
             Value::Null => 1,
             Value::Boolean(_) => 2,
@@ -575,16 +576,14 @@ impl Coerce for Value {
             (Value::Number(n), Value::Float(f)) => (Value::Float(*n as f64), Value::Float(*f)),
 
             // String -> Temporal coercion
-            (Value::String(string), Value::Temporal(_)) => {
-                match Temporal::try_from(string.as_str()) {
-                    Ok(parsed) => (Value::Temporal(parsed), other),
-                    _ => (self, other),
-                }
-            }
+            (Value::String(string), Value::Temporal(_)) => match Temporal::try_from(&**string) {
+                Ok(parsed) => (Value::Temporal(parsed), other),
+                _ => (self, other),
+            },
             (Value::Temporal(from), Value::String(string)) => {
                 use std::mem::discriminant;
 
-                match Temporal::try_from(string.as_str()) {
+                match Temporal::try_from(&**string) {
                     Ok(parsed) => match discriminant(from) == discriminant(&parsed) {
                         true => (self, Value::Temporal(parsed)),
 
@@ -798,7 +797,7 @@ impl From<f32> for Value {
 
 impl From<&str> for Value {
     fn from(value: &str) -> Self {
-        Self::String(value.to_string())
+        Self::String(value.into())
     }
 }
 
@@ -915,13 +914,13 @@ mod tests {
 
     #[test]
     fn test_value_serialise_string() {
-        let value = Value::String("hello".to_string());
+        let value = Value::String("hello".into());
         let bytes = value.serialise().unwrap();
         assert_eq!(bytes[0], 4); // STRING tag
 
         let (deserialized, consumed) = Value::deserialise(&bytes).unwrap();
         assert_eq!(consumed, 10); // tag + 4 len + 5 chars
-        assert_eq!(deserialized, Value::String("hello".to_string()));
+        assert_eq!(deserialized, Value::String("hello".into()));
     }
 
     #[test]
@@ -947,8 +946,8 @@ mod tests {
             Value::Number(i32::MAX as i128),
             Value::Float(-0.0),
             Value::Float(f64::MAX),
-            Value::String("".to_string()),
-            Value::String("hello world 🌍".to_string()),
+            Value::String("".into()),
+            Value::String("hello world 🌍".into()),
             Value::Enum(255),
             Value::Blob(vec![1, 2, 3, 4, 5]),
         ];

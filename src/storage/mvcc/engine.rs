@@ -1787,7 +1787,10 @@ mod tests {
                         txn,
                         "users",
                         id,
-                        vec![Value::Number(id as i128), Value::String(format!("u{id}"))],
+                        vec![
+                            Value::Number(id as i128),
+                            Value::String(format!("u{id}").into()),
+                        ],
                     )
                     .unwrap();
             }

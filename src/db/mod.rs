@@ -620,7 +620,9 @@ impl<'db, File: Seek + Write + Read + FileOperations> PreparedStatement<'db, Fil
                 }
             },
             Exec::Explain(lines) => {
-                let lines = lines.pop_front().map(|line| vec![Value::String(line)]);
+                let lines = lines
+                    .pop_front()
+                    .map(|line| vec![Value::String(line.into())]);
 
                 if lines.is_none() {
                     self.exec.take();
@@ -700,7 +702,7 @@ impl QuerySet {
                     .map(|v| v.to_string());
 
                 if let Some(s) = variant_str {
-                    *value = Value::String(s);
+                    *value = Value::String(s.into());
                 }
             }
         }
@@ -987,7 +989,7 @@ mod tests {
                     Value::String("users".into()),
                     Value::Number(1),
                     Value::String("users".into()),
-                    Value::String(Parser::new(sql).parse_statement()?.to_string())
+                    Value::String(Parser::new(sql).parse_statement()?.to_string().into())
                 ]]
             )
         );
@@ -1012,17 +1014,18 @@ mod tests {
                         Value::String("users".into()),
                         Value::Number(1),
                         Value::String("users".into()),
-                        Value::String(Parser::new(sql).parse_statement()?.to_string()),
+                        Value::String(Parser::new(sql).parse_statement()?.to_string().into()),
                     ],
                     vec![
                         Value::String("index".into()),
-                        Value::String(index!(primary on users)),
+                        Value::String(index!(primary on users).into()),
                         Value::Number(2),
                         Value::String("users".into()),
                         Value::String(
                             Parser::new("CREATE UNIQUE INDEX users_pk_index ON users(id);")
                                 .parse_statement()?
                                 .to_string()
+                                .into()
                         )
                     ],
                 ]
@@ -1173,7 +1176,7 @@ mod tests {
         for i in 1..500 {
             expected.push(vec![
                 Value::Number(i),
-                Value::String(format!("employee_{i}")),
+                Value::String(format!("employee_{i}").into()),
             ]);
         }
 
@@ -1277,7 +1280,12 @@ mod tests {
                     Value::String("users".into()),
                     Value::Number(1),
                     Value::String("users".into()),
-                    Value::String(Parser::new(create_query).parse_statement()?.to_string())
+                    Value::String(
+                        Parser::new(create_query)
+                            .parse_statement()?
+                            .to_string()
+                            .into()
+                    )
                 ]]
             }
         );

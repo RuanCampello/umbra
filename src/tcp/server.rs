@@ -94,7 +94,9 @@ fn handle(stream: &mut TcpStream, engine: Arc<Engine>) -> Result<(), DatabaseErr
 
     println!("Close {connection} connection");
     if db.active_transaction() {
-        println!("Connection {connection} closed in the middle of a transaction. Running rollback.");
+        println!(
+            "Connection {connection} closed in the middle of a transaction. Running rollback."
+        );
         db.rollback()?;
     }
 

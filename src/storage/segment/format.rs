@@ -389,12 +389,13 @@ impl Column {
             (ColumnData::Enum(data), Value::Null) => data.push(0),
 
             (ColumnData::Dict(data), Value::String(s)) => {
-                let index = match interned.get(&s) {
+                let index = match interned.get(&*s) {
                     Some(&index) => index,
                     None => {
                         let index = dictionary.len() as u32;
-                        interned.insert(s.clone(), index);
-                        dictionary.push(s);
+                        let owned = s.to_string();
+                        interned.insert(owned.clone(), index);
+                        dictionary.push(owned);
                         index
                     }
                 };
@@ -424,7 +425,9 @@ impl Column {
             ColumnData::Float(data) => Value::Float(data[index]),
             ColumnData::Bool(data) => Value::Boolean(data[index] == 1),
             ColumnData::Enum(data) => Value::Enum(data[index]),
-            ColumnData::Dict(data) => Value::String(dictionary[data[index] as usize].clone()),
+            ColumnData::Dict(data) => {
+                Value::String(dictionary[data[index] as usize].as_str().into())
+            }
             ColumnData::Bytes { offsets, blob } => {
                 let slice = &blob[offsets[index] as usize..offsets[index + 1] as usize];
                 let (value, _) = Value::deserialise(slice).expect("frozen value deserialises");

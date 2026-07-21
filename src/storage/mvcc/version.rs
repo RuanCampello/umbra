@@ -1664,7 +1664,10 @@ mod tests {
                 TupleVersion::new(
                     txn1,
                     i,
-                    vec![Value::Number(i as i128), Value::String(format!("row{i}"))],
+                    vec![
+                        Value::Number(i as i128),
+                        Value::String(format!("row{i}").into()),
+                    ],
                 ),
             );
         }

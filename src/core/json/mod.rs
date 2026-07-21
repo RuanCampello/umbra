@@ -105,19 +105,19 @@ pub fn get(value: &Value, indent: Option<&str>) -> Result<Value> {
                 _ => value.to_string(),
             };
 
-            Ok(Value::String(json))
+            Ok(Value::String(json.into()))
         }
         Value::Blob(blob) => {
             let json = Jsonb::new(blob.len(), Some(blob));
             json.element_type()?;
 
-            Ok(Value::String(json.to_string()))
+            Ok(Value::String(json.to_string().into()))
         }
         Value::Null => Ok(Value::Null),
         _ => {
             let value = from_value_to_jsonb(value, Conv::Strict)?;
             let json = match indent {
-                Some(indent) => Value::String(value.to_string_pretty(Some(indent))?),
+                Some(indent) => Value::String(value.to_string_pretty(Some(indent))?.into()),
                 _ => {
                     let element_type = value.element_type()?;
                     from_json_to_value(value, element_type, OutputFlag::ElementType)?
@@ -327,7 +327,7 @@ fn json_array_length(value: &Value, path: Option<&Value>, cache: &JsonCacheCell)
 fn from_value_to_path<'v>(path: &'v Value, strict: bool) -> Result<Option<JsonPath<'v>>> {
     let path = match strict {
         true => match path {
-            Value::String(string) => json_path(string.as_str())?,
+            Value::String(string) => json_path(&**string)?,
             Value::Null => return Ok(None),
             _ => {
                 return Err(JsonError::Internal(format!(
@@ -338,11 +338,11 @@ fn from_value_to_path<'v>(path: &'v Value, strict: bool) -> Result<Option<JsonPa
         },
         _ => match path {
             Value::String(string) => match string.starts_with("$") {
-                true => json_path(string.as_str())?,
+                true => json_path(&**string)?,
                 _ => JsonPath {
                     elements: vec![
                         PathElement::Root,
-                        PathElement::Key(Cow::Borrowed(string.as_str()), false),
+                        PathElement::Key(Cow::Borrowed(&**string), false),
                     ],
                 },
             },
@@ -395,15 +395,15 @@ pub(crate) fn from_json_to_value(
     }
 
     Ok(match element_type {
-        ElementType::ARRAY | ElementType::OBJECT => Value::String(string),
+        ElementType::ARRAY | ElementType::OBJECT => Value::String(string.into()),
         ElementType::TEXT | ElementType::TEXT5 | ElementType::TEXTJ | ElementType::TEXTRAW => {
             match matches!(flag, OutputFlag::ElementType) {
-                false => Value::String(string),
+                false => Value::String(string.into()),
                 _ => {
                     string.remove(string.len() - 1);
                     string.remove(0);
 
-                    Value::String(string)
+                    Value::String(string.into())
                 }
             }
         }
@@ -452,7 +452,7 @@ mod tests {
 
         match json {
             Value::String(string) => {
-                assert!(string.as_str().contains(r#"{"hey":"yo"}"#));
+                assert!(string.contains(r#"{"hey":"yo"}"#));
             }
             _ => panic!("Expected Value::String"),
         }
@@ -514,7 +514,7 @@ mod tests {
         let result = object(&parent_input).unwrap();
 
         match result {
-            Value::String(json) => assert_eq!(json.as_str(), r#"{"parent_key":{"key":"value"}}"#),
+            Value::String(json) => assert_eq!(&*json, r#"{"parent_key":{"key":"value"}}"#),
             _ => panic!("Expected Value::Text"),
         }
     }

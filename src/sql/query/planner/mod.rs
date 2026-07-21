@@ -73,10 +73,12 @@ pub(crate) fn generate_plan<File: Seek + Read + Write + FileOperations>(
                     output: Schema::new(vec![Column::new(&col_name, Type::Varchar(50))]),
                     input: Schema::empty(),
                     source: Box::new(Planner::Values(Values {
-                        values: vec![vec![Expression::Value(Value::String(type_of.clone()))]]
-                            .into(),
+                        values: vec![vec![Expression::Value(Value::String(
+                            type_of.clone().into(),
+                        ))]]
+                        .into(),
                     })),
-                    projection: vec![Expression::Value(Value::String(type_of))],
+                    projection: vec![Expression::Value(Value::String(type_of.into()))],
                 }));
             }
 

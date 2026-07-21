@@ -93,7 +93,7 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
                 serialize_into(buff, r#type, &Value::Blob(json.data()))
             }
 
-            _ => string.serialize(buff, r#type),
+            _ => string.to_string().serialize(buff, r#type),
         },
         Value::Boolean(_) | Value::Float(_) | Value::Number(_) if matches!(r#type, Type::Jsonb) => {
             let json = json::from_value_to_jsonb(value, Conv::Strict).unwrap();
@@ -164,12 +164,15 @@ pub(crate) fn serialize_tuple<'value>(
                     .get_enum(id)
                     .or(col.type_def.as_ref())
                     .unwrap_or_else(|| panic!("Enum variants not found in schema for id: {id}"));
-                let idx = variants.iter().position(|v| v == s).unwrap_or_else(|| {
-                    panic!(
-                        "Invalid enum variant: '{s}'. Expected one of: {:?}",
-                        variants.join(", ")
-                    )
-                }) as u8;
+                let idx = variants
+                    .iter()
+                    .position(|v| v.as_str() == &**s)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Invalid enum variant: '{s}'. Expected one of: {:?}",
+                            variants.join(", ")
+                        )
+                    }) as u8;
 
                 buff.push(idx)
             }
@@ -305,13 +308,13 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             // SAFETY: all VARCHAR bytes are written via rust string values,
             // which are guaranteed to be valid utf-8. the round-trip of the storage cannot corrupt
             // bytes, so the O(n) check is redundant.
-            unsafe { Ok(Value::String(String::from_utf8_unchecked(string))) }
+            unsafe { Ok(Value::String(String::from_utf8_unchecked(string).into())) }
         }
 
         Type::Text => unsafe {
             let (_, buf) = read_varlena(reader)?;
             // SAFETY: same argument as VARCHAR
-            Ok(Value::String(String::from_utf8_unchecked(buf)))
+            Ok(Value::String(String::from_utf8_unchecked(buf).into()))
         },
 
         Type::Jsonb => {
@@ -660,7 +663,7 @@ mod tests {
 
         for s in cases {
             let mut buf = Vec::new();
-            serialize_into(&mut buf, &Type::Text, &Value::String(s.to_string()));
+            serialize_into(&mut buf, &Type::Text, &Value::String(s.to_string().into()));
 
             if s.len() < 0x7f {
                 assert_eq!(buf[0], s.len() as u8);
@@ -677,7 +680,7 @@ mod tests {
 
             assert_eq!(
                 row[0],
-                Value::String(s.clone()),
+                Value::String(s.clone().into()),
                 "Failed roundtrip for text: {s:?}",
             );
         }

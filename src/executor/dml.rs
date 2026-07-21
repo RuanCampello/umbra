@@ -142,9 +142,12 @@ pub(super) fn coerce_value(
                 .enum_variants(id)
                 .expect("enum id registered at schema build");
 
-            match variants.iter().position(|variant| variant == literal) {
+            match variants
+                .iter()
+                .position(|variant| variant.as_str() == &**literal)
+            {
                 Some(idx) => *value = Value::Enum(idx as u8),
-                None => return Err(invalid("enum variant", literal)),
+                None => return Err(invalid("enum variant", &**literal)),
             }
         }
 

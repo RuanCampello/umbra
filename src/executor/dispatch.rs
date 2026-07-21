@@ -248,7 +248,7 @@ impl Executor {
                 let schema = Schema::new(vec![Column::new("Query Plan", Type::Varchar(255))]);
                 let tuples = lines
                     .into_iter()
-                    .map(|line| vec![Value::String(line)])
+                    .map(|line| vec![Value::String(line.into())])
                     .collect();
 
                 Ok(ExecResult::Rows(schema, tuples))

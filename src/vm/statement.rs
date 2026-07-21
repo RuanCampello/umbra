@@ -35,11 +35,11 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
             insert_into_metadata(
                 db,
                 vec![
-                    Value::String(String::from("table")),
-                    Value::String(name.clone()),
+                    Value::String("table".into()),
+                    Value::String(name.clone().into()),
                     Value::Number(root.into()),
-                    Value::String(name.clone()),
-                    Value::String(sql),
+                    Value::String(name.clone().into()),
+                    Value::String(sql.into()),
                 ],
             )?;
 
@@ -107,10 +107,10 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 db,
                 vec![
                     Value::String("index".into()),
-                    Value::String(name.clone()),
+                    Value::String(name.clone().into()),
                     Value::Number(root.into()),
-                    Value::String(table.clone()),
-                    Value::String(sql),
+                    Value::String(table.clone().into()),
+                    Value::String(sql.into()),
                 ],
             )?;
 
@@ -178,10 +178,10 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                 db,
                 vec![
                     Value::String("sequence".into()),
-                    Value::String(name.clone()),
+                    Value::String(name.clone().into()),
                     Value::Number(root as _),
-                    Value::String(table),
-                    Value::String(sql),
+                    Value::String(table.into()),
+                    Value::String(sql.into()),
                 ],
             )?;
         }
@@ -209,7 +209,7 @@ pub(crate) fn exec<File: Seek + Read + Write + FileOperations>(
                         .index_of("type")
                         .and_then(|index| tuple.get(index))
                         .inspect(|value| match value {
-                            Value::String(relation) if relation == "table" => {
+                            Value::String(relation) if &**relation == "table" => {
                                 affected_rows = removed_cells;
                             }
                             _ => {}

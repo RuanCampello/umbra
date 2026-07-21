@@ -241,21 +241,21 @@ impl<'input> Parser<'input> {
 
     fn parse_pref(&mut self) -> ParserResult<Expression> {
         match self.next_token()? {
-            Token::String(string) => Ok(Expression::Value(Value::String(string))),
+            Token::String(string) => Ok(Expression::Value(Value::String(string.into()))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
             Token::Keyword(Keyword::Null) => Ok(Expression::Value(Value::Null)),
             Token::LeftBrace => {
                 let json_text = self.parse_json_object()?;
                 let jsonb =
-                    json::from_value_to_jsonb(&Value::String(json_text), json::Conv::Strict)
+                    json::from_value_to_jsonb(&Value::String(json_text.into()), json::Conv::Strict)
                         .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
                 Ok(Expression::Value(Value::Blob(jsonb.data())))
             }
             Token::LeftBracket => {
                 let json_text = self.parse_json_array()?;
                 let jsonb =
-                    json::from_value_to_jsonb(&Value::String(json_text), json::Conv::Strict)
+                    json::from_value_to_jsonb(&Value::String(json_text.into()), json::Conv::Strict)
                         .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
                 Ok(Expression::Value(Value::Blob(jsonb.data())))
             }
@@ -830,7 +830,7 @@ impl<'input> Parser<'input> {
             ))));
         }
 
-        Ok(Expression::Value(Value::String(value_str)))
+        Ok(Expression::Value(Value::String(value_str.into())))
     }
 
     fn parse_func(&mut self, function: Keyword) -> ParserResult<Expression> {
@@ -880,7 +880,7 @@ impl<'input> Parser<'input> {
 
                 Ok(Expression::Function {
                     func: Function::Extract,
-                    args: vec![Expression::Value(Value::String(kind_str)), from],
+                    args: vec![Expression::Value(Value::String(kind_str.into())), from],
                 })
             }
 
@@ -1224,9 +1224,7 @@ mod tests {
                     .r#where(Expression::BinaryOperation {
                         operator: BinaryOperator::Eq,
                         left: Box::new(Expression::Identifier("author".to_string())),
-                        right: Box::new(Expression::Value(Value::String(
-                            "Agatha Christie".to_string()
-                        ))),
+                        right: Box::new(Expression::Value(Value::String("Agatha Christie".into()))),
                     })
                     .into()
             )),
@@ -1341,9 +1339,9 @@ mod tests {
                         left: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::Eq,
                             left: Box::new(Expression::Identifier("department".to_string())),
-                            right: Box::new(Expression::Value(Value::String(
-                                "engineering".to_string(),
-                            ))),
+                            right: Box::new(Expression::Value(
+                                Value::String("engineering".into(),)
+                            )),
                         }),
                         right: Box::new(Expression::BinaryOperation {
                             operator: BinaryOperator::GtEq,
@@ -1399,7 +1397,7 @@ mod tests {
                 values: vec![vec![
                     // outer vec = rows, inner vec = expressions in that row
                     Expression::Value(Value::Number(1)),
-                    Expression::Value(Value::String("HR".to_string()))
+                    Expression::Value(Value::String("HR".into()))
                 ]],
                 returning: vec![],
             }))

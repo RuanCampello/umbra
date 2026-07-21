@@ -337,19 +337,19 @@ mod tests {
             tuples: vec![
                 vec![
                     Value::Number(1),
-                    Value::String("Sword of Darkness".to_string()),
+                    Value::String("Sword of Darkness".into()),
                     Value::Number(42),
                     Value::Number(1000),
                 ],
                 vec![
                     Value::Number(2),
-                    Value::String("Shield of Light".to_string()),
+                    Value::String("Shield of Light".into()),
                     Value::Number(5),
                     Value::Number(500),
                 ],
                 vec![
                     Value::Number(3),
-                    Value::String("Amulet of Shadows".to_string()),
+                    Value::String("Amulet of Shadows".into()),
                     Value::Number(87),
                     Value::Number(2500),
                 ],

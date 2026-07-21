@@ -290,7 +290,9 @@ pub(crate) fn resolve_expression(
                     .ok()
                     .map(|num| num as isize);
 
-                Ok(Value::String(functions::substring(&string, start, count)))
+                Ok(Value::String(
+                    functions::substring(&string, start, count).into(),
+                ))
             }
             Function::Extract => {
                 let kind = get_value::<String>(val, schema, &args[0])?;
@@ -320,7 +322,7 @@ pub(crate) fn resolve_expression(
                     .map(|arg| get_value(val, schema, arg))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(Value::String(functions::concat(&strings)))
+                Ok(Value::String(functions::concat(&strings).into()))
             }
             Function::Position => {
                 let pat: String = get_value(val, schema, &args[0])?;
@@ -376,7 +378,7 @@ pub(crate) fn resolve_expression(
                     )),
                 }?;
 
-                Ok(Value::String(type_of))
+                Ok(Value::String(type_of.into()))
             }
             func => unimplemented!("function {func} handling is not yet implemented"),
         },
@@ -396,12 +398,23 @@ pub(crate) fn resolve_expression(
 }
 
 impl_value_extractor! {
-    String => (String, String),
     Number => (i128, Number),
     Float => (f64, Float),
     Boolean => (bool, Bool),
     Temporal => (Temporal, Date),
     Numeric => (Numeric, Numeric)
+}
+
+impl ValueExtractor<String> for Value {
+    fn extract(value: Value, argument: &Expression) -> Result<String, SqlError> {
+        match value {
+            Value::String(x) => Ok(x.to_string()),
+            _ => Err(SqlError::Type(TypeError::ExpectedType {
+                expected: VmType::String,
+                found: argument.clone(),
+            })),
+        }
+    }
 }
 
 fn get_value<T>(val: &[Value], schema: &Schema, argument: &Expression) -> Result<T, SqlError>
