@@ -715,7 +715,7 @@ fn explain_reports_access_paths() {
         .tuples
         .iter()
         .map(|t| match &t[0] {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             other => panic!("plan lines must be strings, got {other:?}"),
         })
         .collect();
@@ -800,7 +800,7 @@ fn hash_join_and_nested_loop_fallback() {
         .tuples
         .iter()
         .map(|t| match &t[0] {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             other => panic!("plan lines must be strings, got {other:?}"),
         })
         .collect();

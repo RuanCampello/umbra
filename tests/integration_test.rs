@@ -744,7 +744,10 @@ fn typeof_function() -> Result<()> {
 
     for (column, r#type) in cases {
         let query = db.exec(&format!("SELECT typeof({column}) FROM employees;"))?;
-        assert_eq!(query.tuples, vec![vec![Value::String(r#type.to_string())]])
+        assert_eq!(
+            query.tuples,
+            vec![vec![Value::String(r#type.to_string().into())]]
+        )
     }
 
     Ok(())
@@ -995,8 +998,8 @@ fn select_alias_with_group_by() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![Value::String("N".to_string()), Value::Float(39.0)],
-            vec![Value::String("S".to_string()), Value::Float(87.0)],
+            vec![Value::String("N".into()), Value::Float(39.0)],
+            vec![Value::String("S".into()), Value::Float(87.0)],
         ]
     );
 
@@ -1013,13 +1016,13 @@ fn select_alias_with_group_by() -> Result<()> {
         query.tuples,
         vec![
             vec![
-                Value::String("N".to_string()),
+                Value::String("N".into()),
                 Value::Float(33.0),
                 Value::Float(2.0),
                 Value::Float(2.0),
             ],
             vec![
-                Value::String("S".to_string()),
+                Value::String("S".into()),
                 Value::Float(75.0),
                 Value::Float(4.0),
                 Value::Float(3.0),
@@ -1040,27 +1043,27 @@ fn select_alias_with_group_by() -> Result<()> {
         query.tuples,
         vec![
             vec![
-                Value::String("Alice".to_string()),
+                Value::String("Alice".into()),
                 Value::Number(2),
                 Value::Float(34.0)
             ],
             vec![
-                Value::String("Bob".to_string()),
+                Value::String("Bob".into()),
                 Value::Number(1),
                 Value::Float(16.0)
             ],
             vec![
-                Value::String("Carol".to_string()),
+                Value::String("Carol".into()),
                 Value::Number(1),
                 Value::Float(25.0)
             ],
             vec![
-                Value::String("Dave".to_string()),
+                Value::String("Dave".into()),
                 Value::Number(1),
                 Value::Float(34.0)
             ],
             vec![
-                Value::String("Eve".to_string()),
+                Value::String("Eve".into()),
                 Value::Number(1),
                 Value::Float(8.0)
             ],
