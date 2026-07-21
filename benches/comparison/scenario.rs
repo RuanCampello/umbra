@@ -12,10 +12,15 @@ pub enum Category {
     Basic,
     Advanced,
     Bottleneck,
+    Specialised,
 }
 
 pub enum Workload {
     Read(&'static str),
+    /// A read whose SQL is built per engine (by [`Engine::name`]) — for cases
+    /// whose syntax diverges, e.g. JSON extraction (`tags.region` vs
+    /// `json_extract` vs `->>`).
+    ReadEach(fn(&str) -> String),
     Write(fn(usize) -> String),
 }
 
@@ -25,8 +30,39 @@ impl Category {
             Self::Basic => "Basic Operations",
             Self::Advanced => "Advanced Operations",
             Self::Bottleneck => "Bottleneck Hunters",
+            Self::Specialised => "Specialised (UUID / enum / numeric / JSON / sorting)",
         }
     }
+}
+
+/// Engine-specific extraction of a JSON object key, all returning text.
+fn json_extract(engine: &str, key: &str) -> String {
+    match engine {
+        "Umbra" => format!("tags.{key}"),
+        "Postgres" => format!("tags->>'{key}'"),
+        _ => format!("json_extract(tags, '$.{key}')"),
+    }
+}
+
+fn json_region_filter(engine: &str) -> String {
+    format!(
+        "SELECT label FROM records WHERE {} = 'north' LIMIT 100",
+        json_extract(engine, "region")
+    )
+}
+
+fn json_region_projection(engine: &str) -> String {
+    format!(
+        "SELECT {} FROM records LIMIT 100",
+        json_extract(engine, "region")
+    )
+}
+
+fn uuid_lookup(_engine: &str) -> String {
+    format!(
+        "SELECT * FROM records WHERE ext_id = '{}'",
+        dataset::sample_uuid()
+    )
 }
 
 pub fn scenarios() -> Vec<Scenario> {
@@ -191,6 +227,73 @@ pub fn scenarios() -> Vec<Scenario> {
             label: "Large result (no LIMIT)",
             workload: Workload::Read("SELECT id, name, balance FROM users WHERE active = true"),
             iterations: 40,
+        },
+
+        Scenario {
+            category: Category::Specialised,
+            label: "Sort by UUID (top 100)",
+            workload: Workload::Read("SELECT ext_id FROM records ORDER BY ext_id LIMIT 100"),
+            iterations: 60,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "Sort by numeric DESC (top 100)",
+            workload: Workload::Read("SELECT id, amount FROM records ORDER BY amount DESC LIMIT 100"),
+            iterations: 60,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "Extreme full sort (weight)",
+            workload: Workload::Read("SELECT id FROM records ORDER BY weight"),
+            iterations: 40,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "UUID point lookup",
+            workload: Workload::ReadEach(uuid_lookup),
+            iterations: 200,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "Numeric aggregation (SUM/AVG/MIN/MAX)",
+            workload: Workload::Read(
+                "SELECT SUM(amount), AVG(amount), MIN(amount), MAX(amount) FROM records",
+            ),
+            iterations: 100,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "Numeric filter + arithmetic",
+            workload: Workload::Read(
+                "SELECT id, amount * 1.085 FROM records WHERE amount > 50000 LIMIT 100",
+            ),
+            iterations: 200,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "Enum GROUP BY",
+            workload: Workload::Read(
+                "SELECT kind, COUNT(*), AVG(amount) FROM records GROUP BY kind",
+            ),
+            iterations: 100,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "Enum filter",
+            workload: Workload::Read("SELECT * FROM records WHERE kind = 'books' LIMIT 100"),
+            iterations: 200,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "JSON field filter",
+            workload: Workload::ReadEach(json_region_filter),
+            iterations: 100,
+        },
+        Scenario {
+            category: Category::Specialised,
+            label: "JSON field projection",
+            workload: Workload::ReadEach(json_region_projection),
+            iterations: 100,
         },
 
         // writes (last, so they never disturb a read scenario)

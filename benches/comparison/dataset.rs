@@ -1,4 +1,4 @@
-//! Deterministic, ClickBench-inspired dataset
+#![allow(dead_code)]
 
 use std::env;
 
@@ -34,6 +34,19 @@ pub const SECONDARY_INDEXES: [&str; 4] = [
     "CREATE INDEX idx_orders_status ON orders(status)",
 ];
 
+pub const RECORD_KINDS: [&str; 8] = [
+    "electronics",
+    "books",
+    "clothing",
+    "home",
+    "toys",
+    "sports",
+    "grocery",
+    "auto",
+];
+
+pub const REGIONS: [&str; 4] = ["north", "south", "east", "west"];
+
 pub fn users() -> usize {
     env::var("UMBRA_BENCH_ROWS")
         .ok()
@@ -43,6 +56,99 @@ pub fn users() -> usize {
 
 pub fn orders() -> usize {
     users() * 3
+}
+
+pub fn records() -> usize {
+    users()
+}
+
+pub fn specialised_schema(engine: &str) -> Vec<String> {
+    let kinds = RECORD_KINDS
+        .iter()
+        .map(|kind| format!("\"{kind}\""))
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    match engine {
+        "Umbra" => vec![format!(
+            "CREATE TABLE records (
+                id INTEGER PRIMARY KEY,
+                ext_id UUID,
+                kind {kinds},
+                amount NUMERIC(16, 2),
+                weight REAL,
+                tags JSONB,
+                label VARCHAR(64)
+            )"
+        )],
+
+        "Postgres" => vec!["CREATE TABLE records (
+                id INTEGER PRIMARY KEY,
+                ext_id UUID,
+                kind TEXT,
+                amount NUMERIC(16, 2),
+                weight DOUBLE PRECISION,
+                tags JSONB,
+                label VARCHAR(64)
+            )"
+        .to_string()],
+
+        _ => vec!["CREATE TABLE records (
+                id INTEGER PRIMARY KEY,
+                ext_id TEXT,
+                kind TEXT,
+                amount NUMERIC,
+                weight REAL,
+                tags TEXT,
+                label VARCHAR(64)
+            )"
+        .to_string()],
+    }
+}
+
+pub fn sample_uuid() -> String {
+    Rng::new(0xC0FF_EE15_600D_F00D).uuid()
+}
+
+pub fn specialised_inserts() -> Vec<String> {
+    let count = records();
+    let mut statements = Vec::with_capacity(count);
+    let mut rng = Rng::new(0xC0FF_EE15_600D_F00D);
+
+    for id in 1..=count {
+        let ext_id = rng.uuid();
+        let kind = RECORD_KINDS[(rng.next_u64() as usize) % RECORD_KINDS.len()];
+        let amount = rng.money(0.0, 100_000.0);
+        let weight = rng.money(0.0, 1_000.0);
+        let region = REGIONS[(rng.next_u64() as usize) % REGIONS.len()];
+        let score = rng.range(0, 100);
+        let vip = rng.probability() < 0.2;
+        let tags = format!(r#"{{"region": "{region}", "score": {score}, "vip": {vip}}}"#);
+        statements.push(format!(
+            "INSERT INTO records (id, ext_id, kind, amount, weight, tags, label) \
+             VALUES ({id}, '{ext_id}', '{kind}', {amount:.2}, {weight:.2}, '{tags}', 'record_{id}')"
+        ));
+    }
+
+    statements
+}
+
+pub fn user_inserts() -> Vec<String> {
+    let users = users();
+    let mut statements = Vec::with_capacity(users);
+    let mut rng = Rng::new(0x0DDB_A11C_0FFE_E5EE);
+
+    for id in 1..=users {
+        let age = rng.range(18, 80);
+        let balance = rng.money(0.0, 100_000.0);
+        let active = rng.probability() < 0.7;
+        statements.push(format!(
+            "INSERT INTO users (id, name, email, age, balance, active, created_at) \
+             VALUES ({id}, 'User_{id}', 'user{id}@example.com', {age}, {balance:.2}, {active}, '2024-01-01 00:00:00')"
+        ));
+    }
+
+    statements
 }
 
 pub fn inserts() -> Vec<String> {
@@ -93,6 +199,18 @@ impl Rng {
 
     fn money(&mut self, low: f64, high: f64) -> f64 {
         ((low + self.probability() * (high - low)) * 100.0).round() / 100.0
+    }
+
+    fn uuid(&mut self) -> String {
+        let (hi, lo) = (self.next_u64(), self.next_u64());
+        format!(
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            hi >> 32,
+            (hi >> 16) & 0xFFFF,
+            hi & 0xFFFF,
+            lo >> 48,
+            lo & 0xFFFF_FFFF_FFFF,
+        )
     }
 
     fn probability(&mut self) -> f64 {

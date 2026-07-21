@@ -31,6 +31,14 @@ pub trait Engine {
         for insert in dataset::inserts() {
             self.exec(&insert);
         }
+
+        let name = self.name();
+        for ddl in dataset::specialised_schema(name) {
+            self.exec(&ddl);
+        }
+        for insert in dataset::specialised_inserts() {
+            self.exec(&insert);
+        }
     }
 }
 
@@ -61,7 +69,7 @@ impl Postgres {
 
         let mut client = postgres::Client::connect(&target, postgres::NoTls).ok()?;
         client
-            .batch_execute("DROP TABLE IF EXISTS users, orders")
+            .batch_execute("DROP TABLE IF EXISTS users, orders, records")
             .expect("postgres resets its schema");
 
         let mut postgres = Self { client };

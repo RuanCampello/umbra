@@ -20,7 +20,12 @@ pub struct Report {
     pub dataset_rows: usize,
 }
 
-const CATEGORIES: [Category; 3] = [Category::Basic, Category::Advanced, Category::Bottleneck];
+const CATEGORIES: [Category; 4] = [
+    Category::Basic,
+    Category::Advanced,
+    Category::Bottleneck,
+    Category::Specialised,
+];
 
 impl Report {
     pub fn render(&self) -> String {
