@@ -31,19 +31,15 @@ impl Report {
     pub fn render(&self) -> String {
         let mut out = String::new();
         out.push_str("# Umbra comparison benchmark\n\n");
+        let users = self.dataset_rows;
+        let orders = self.dataset_rows * 3;
         out.push_str(&format!(
-            "Median microseconds per operation (± median absolute deviation), {} users / \
-             {} orders, single connection, each statement parsed and executed end to end. \
-             Lower is better, **Best** is the fastest median in the row.\n\n\
-             Read this with the setup in mind:\n\
-             - Umbra and SQLite run **in memory**, Postgres is the local **on-disk** server, so \
-             it pays client/server round-trips on every call and a durable fsync on every write \
-             — its write rows are not comparable to the embedded engines'.\n\
-             - Every engine indexes `age`/`status`/`user_id`, so column-filtered scans are a \
-             like-for-like comparison.\n\n",
-            self.dataset_rows,
-            self.dataset_rows * 3,
-        ));
+            r#"Median microseconds per operation (± median absolute deviation), {users} users / {orders} orders, single connection, each statement parsed and executed end to end. Lower is better, **Best** is the fastest median in the row.
+            Read this with the setup in mind:
+            - Umbra and SQLite run **in memory**, Postgres is the local **on-disk** server, so it pays client/server round-trips on every call and a durable fsync on every write — its write rows are not comparable to the embedded engines'.
+            - Every engine indexes `age`/`status`/`user_id`, so column-filtered scans are a like-for-like comparison.
+            - Umbra and Postgres decode every column of every returned row; SQLite steps the matching rows without materialising their columns. Umbra therefore does at least as much per-row work as SQLite on every read, the comparison never flatters it.
+        "#));
 
         let mut totals = vec![0usize; self.engines.len()];
         for category in CATEGORIES {

@@ -49,3 +49,7 @@ harness = false
 name = "comparison"
 harness = false
 
+[[bench]]
+name = "concurrency"
+harness = false
+

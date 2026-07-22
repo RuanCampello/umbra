@@ -61,6 +61,14 @@ impl MvccDatabase {
         Self::with_engine(engine, false)
     }
 
+    /// Opens another session over this session's engine, for concurrent use
+    /// from another thread.
+    /// It shares all committed state, keeps its own
+    /// transaction context, and does not own the engine's lifecycle
+    pub fn session(&self) -> Self {
+        Self::with_engine(Arc::clone(self.executor.engine()), false)
+    }
+
     /// The shared engine handle, for spawning further sessions over it.
     #[cfg(test)]
     pub(crate) fn engine(&self) -> Arc<Engine> {
