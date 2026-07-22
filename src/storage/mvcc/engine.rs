@@ -22,6 +22,7 @@ use std::{
     collections::BinaryHeap,
     fs::File,
     io::Write,
+    ops::Bound,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -305,6 +306,20 @@ impl Engine {
         match self.path.as_str() {
             IN_MEMORY_PATH => None,
             path => Some(Path::new(path).join("segments").join(table)),
+        }
+    }
+
+    /// Directory for transient spill files
+    /// Durable databases spill beside their data so runs share the data filesystem, an
+    /// in-memory database falls back to the system temporary directory
+    pub fn scratch_dir(&self) -> PathBuf {
+        match self.path.as_str() {
+            IN_MEMORY_PATH => std::env::temp_dir(),
+            path => {
+                let dir = Path::new(path).join("tmp");
+                let _ = std::fs::create_dir_all(&dir);
+                dir
+            }
         }
     }
 
@@ -1020,8 +1035,8 @@ impl Engine {
         txn_id: i64,
         table: &str,
         index_name: &str,
-        start: std::ops::Bound<Value>,
-        end: std::ops::Bound<Value>,
+        start: Bound<Value>,
+        end: Bound<Value>,
     ) -> Result<Vec<(i64, Tuple)>> {
         let storage = self.version_storage(table)?;
 
@@ -1041,6 +1056,43 @@ impl Engine {
         }
 
         Ok(results)
+    }
+
+    /// Row ids of a table in an indexed column's order, for a caller that
+    /// resolves each row's visible version lazily (so a `LIMIT` can stop early)
+    ///
+    /// `None` when the order cannot be served from the in-memory index,
+    /// uncommitted local writes, cold segments, or no index on the column, so
+    /// the caller falls back to an explicit sort
+    pub fn scan_index_ordered(
+        &self,
+        txn_id: i64,
+        table: &str,
+        column: usize,
+        descending: bool,
+    ) -> Result<Option<(Arc<VersionStorage>, Vec<i64>)>> {
+        if self.has_local_writes(txn_id, table) {
+            return Ok(None);
+        }
+
+        let storage = self.version_storage(table)?;
+        if storage.cold().is_some() {
+            return Ok(None);
+        }
+
+        let Some(index_name) = self.index_for_column(table, column)? else {
+            return Ok(None);
+        };
+        let Some(index) = storage.get_index(&index_name) else {
+            return Ok(None);
+        };
+
+        let mut ids = index.find_range(Bound::Unbounded, Bound::Unbounded);
+        if descending {
+            ids.reverse();
+        }
+
+        Ok(Some((storage, ids)))
     }
 
     /// Get a single visible row by its row ID.
@@ -1554,8 +1606,6 @@ mod tests {
 
     #[test]
     fn scan_primary_index_range() {
-        use std::ops::Bound;
-
         let engine = Engine::in_memory();
         engine.open().unwrap();
 

@@ -45,10 +45,23 @@ impl Executor {
             return self.execute_aggregate(txn_id, select);
         }
 
-        // a lazy scan only pays off when a `LIMIT` can stop the pipeline early
-        // an `ORDER BY` interposes a `Sort` that drains every row, so stay eager
-        let streaming = select.limit.is_some() && select.order_by.is_empty();
-        let (schema, mut pipeline) = self.select_source(txn_id, &mut select, streaming)?;
+        // an ordered index can serve the `ORDER BY` directly, skipping the sort
+        let (schema, mut pipeline, order_satisfied) =
+            match self.index_ordered_scan(txn_id, &select)? {
+                Some((schema, source)) => (schema, source, true),
+                None => {
+                    // stream the scan whenever the consumer pulls incrementally: a
+                    // `LIMIT` that stops early, or a `Sort` fed one row at a time
+                    // rather than materialising the table into the scan *and* the sort
+                    let streaming = select.limit.is_some() || !select.order_by.is_empty();
+                    let (schema, pipeline) = self.select_source(txn_id, &mut select, streaming)?;
+                    (schema, pipeline, false)
+                }
+            };
+
+        // an `ORDER BY ... LIMIT` only needs the smallest `limit + offset` rows
+        let retain = select.limit.map(|limit| limit + select.offset.unwrap_or(0));
+        let scratch = self.engine.scratch_dir();
 
         let result_schema;
 
@@ -56,9 +69,9 @@ impl Executor {
             // lone `*` keeps the identity projection: sort on the input
             // schema, then strip the row_id prefix
             [Expression::Wildcard] => {
-                if !select.order_by.is_empty() {
+                if !order_satisfied && !select.order_by.is_empty() {
                     let comparator = build_comparator(&schema, &select.order_by);
-                    pipeline = Box::new(Sort::new(pipeline, comparator)?);
+                    pipeline = Box::new(Sort::new(pipeline, comparator, retain, &scratch)?);
                 }
 
                 let indices: Vec<_> = (1..schema.len()).collect();
@@ -75,18 +88,21 @@ impl Executor {
                 let visible = items.len();
 
                 // sort keys reference a projected column when they can,
-                // otherwise they ride along as hidden columns
+                // otherwise they ride along as hidden columns, skipped entirely
+                // when an ordered index already satisfies the `ORDER BY`
                 let mut sort_keys = Vec::with_capacity(select.order_by.len());
-                for order in &select.order_by {
-                    let position = items[..visible]
-                        .iter()
-                        .position(|item| projection_matches(item, &order.expr))
-                        .unwrap_or_else(|| {
-                            items.push(order.expr.clone());
-                            items.len() - 1
-                        });
+                if !order_satisfied {
+                    for order in &select.order_by {
+                        let position = items[..visible]
+                            .iter()
+                            .position(|item| projection_matches(item, &order.expr))
+                            .unwrap_or_else(|| {
+                                items.push(order.expr.clone());
+                                items.len() - 1
+                            });
 
-                    sort_keys.push((position, order.direction == OrderDirection::Desc));
+                        sort_keys.push((position, order.direction == OrderDirection::Desc));
+                    }
                 }
 
                 let hidden = items.len() > visible;
@@ -95,7 +111,12 @@ impl Executor {
                 pipeline = Box::new(Evaluate::new(pipeline, schema.clone(), items));
 
                 if !sort_keys.is_empty() {
-                    pipeline = Box::new(Sort::new(pipeline, comparator_for(sort_keys))?);
+                    pipeline = Box::new(Sort::new(
+                        pipeline,
+                        comparator_for(sort_keys),
+                        retain,
+                        &scratch,
+                    )?);
                 }
 
                 if hidden {
@@ -352,6 +373,68 @@ impl Executor {
         }
     }
 
+    /// The column whose index can supply the query's `ORDER BY` order directly,
+    /// when the `ORDER BY` is a single unqualified indexed column and no
+    /// `WHERE`/join forces a different access path. Static (no transaction),
+    /// so it describes the intended plan; execution still confirms the index is
+    /// usable for the snapshot.
+    fn index_ordered_column(
+        &self,
+        select: &statement::Select,
+    ) -> Result<Option<usize>, DatabaseError> {
+        if !select.joins.is_empty() || select.r#where.is_some() {
+            return Ok(None);
+        }
+        let [order] = select.order_by.as_slice() else {
+            return Ok(None);
+        };
+        let Expression::Identifier(name) = &order.expr else {
+            return Ok(None);
+        };
+
+        let table = &select.from.name;
+        let engine_schema = self.engine.schema(table)?;
+        let Some(column) = engine_schema
+            .columns
+            .iter()
+            .position(|c| c.name() == name.as_str())
+        else {
+            return Ok(None);
+        };
+
+        match self.engine.index_for_column(table, column)? {
+            Some(_) => Ok(Some(column)),
+            None => Ok(None),
+        }
+    }
+
+    /// If an index can serve the `ORDER BY` in order, returns an ordered scan so
+    /// the `Sort` can be skipped entirely. `None` falls back to an explicit sort.
+    fn index_ordered_scan(
+        &self,
+        txn_id: i64,
+        select: &statement::Select,
+    ) -> Result<Option<(Schema, Box<dyn Operator>)>, DatabaseError> {
+        let Some(column) = self.index_ordered_column(select)? else {
+            return Ok(None);
+        };
+
+        let table = &select.from.name;
+        let descending = select.order_by[0].direction == OrderDirection::Desc;
+        match self
+            .engine
+            .scan_index_ordered(txn_id, table, column, descending)?
+        {
+            Some((storage, ids)) => {
+                let schema = self.resolve_schema(table)?;
+                let source: Box<dyn Operator> =
+                    Box::new(Scan::from_ordered_ids(storage, txn_id, ids));
+                Ok(Some((schema, source)))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Executes a SELECT with aggregate functions and/or GROUP BY.
     ///
     /// Materialises the filtered rows, groups them, and evaluates each select column per group,
@@ -589,7 +672,10 @@ impl Executor {
         }
 
         if !select.order_by.is_empty() {
-            lines.push(format!("Sort ({})", join_expressions(&select.order_by)));
+            lines.push(match self.index_ordered_column(select)? {
+                Some(_) => format!("Index order ({})", join_expressions(&select.order_by)),
+                None => format!("Sort ({})", join_expressions(&select.order_by)),
+            });
         }
 
         lines.push(format!("Project ({})", join_expressions(&select.columns)));

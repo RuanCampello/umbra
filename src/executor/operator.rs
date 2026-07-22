@@ -15,6 +15,11 @@ use crate::storage::mvcc::engine::Engine;
 use crate::storage::mvcc::version::VersionStorage;
 use crate::vm::expression::evaluate_where;
 use crate::vm::planner::Tuple;
+use std::cmp::Ordering;
+use std::fs::{self, File};
+use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 /// Scans all MVCC-visible rows from a table for a given transaction.
@@ -58,15 +63,40 @@ pub(crate) struct Limit {
     skipped: usize,
 }
 
-/// Materialises all source tuples, sorts them, and yields one at a time.
+/// Sorts its input, spilling sorted runs to disk once the in-memory budget is
+/// exceeded so an arbitrarily large `ORDER BY` need not fit in memory.
 ///
-/// This is an in-memory sort only. The existing `vm::planner::Sort<File>` has
-/// an external merge sort for when tuples exceed the buffer size; that should
-/// be ported here once `Scan` moves to a streaming model instead of
-/// materialising all rows upfront.
+/// - `ORDER BY ... LIMIT k` keeps only the k smallest rows (plus any offset) in a
+///   bounded top-N buffer, O(k) memory, no spill.
+/// - a small unbounded `ORDER BY` sorts once in memory.
+/// - a large unbounded `ORDER BY` runs an external merge sort: sorted runs
+///   spill to temporary files and are k-way merged on demand
 pub(crate) struct Sort {
-    sorted: Vec<Tuple>,
-    cursor: usize,
+    comparator: Comparator,
+    output: SortOutput,
+}
+
+/// A spilled, pre-sorted run being drained during the k-way merge
+struct RunCursor {
+    reader: BufReader<File>,
+    path: PathBuf,
+}
+
+/// The current head of one run in the merge heap, tagged with its run's index
+struct HeapItem {
+    tuple: Tuple,
+    run: usize,
+}
+
+/// Where a [Sort] draws its ordered output from once the input is consumed
+enum SortOutput {
+    /// Everything fit the budget (or a `LIMIT` bounded it): sorted in place
+    Memory { sorted: Vec<Tuple>, cursor: usize },
+    /// Input outgrew the budget: min-heap merge over the (bounded) final runs
+    Merge {
+        cursors: Vec<RunCursor>,
+        heap: Vec<HeapItem>,
+    },
 }
 
 /// Yields pre-built tuples one at a time.
@@ -102,6 +132,15 @@ pub(crate) trait Operator {
 /// Rows resolved per refill of a [ScanMode::Lazy] batch
 const SCAN_CHUNK: usize = 256;
 
+/// In-memory budget a [Sort] buffers before spilling a sorted run to disk
+const SORT_RUN_BUDGET: usize = 8 << 20;
+
+/// Maximum runs merged at once, bounding open files (and heap size) during the
+/// merge, more runs than this are reduced first by bounded multi-pass merging
+const MERGE_FANIN: usize = 16;
+
+type Comparator = Box<dyn Fn(&Tuple, &Tuple) -> Ordering>;
+
 impl Scan {
     /// materialises every visible row up front
     pub fn new(engine: &Engine, txn_id: i64, table: &str) -> Result<Self, DatabaseError> {
@@ -122,6 +161,20 @@ impl Scan {
                 },
             }),
             None => Self::eager(engine, txn_id, table),
+        }
+    }
+
+    /// Resolves the given row ids in order, a batch at a time
+    /// Used to serve an `ORDER BY` from an index-ordered id list, skipping the sort
+    pub fn from_ordered_ids(storage: Arc<VersionStorage>, txn_id: i64, ids: Vec<i64>) -> Self {
+        Self {
+            mode: ScanMode::Lazy {
+                storage,
+                txn_id,
+                ids: ids.into_iter(),
+                buffer: Vec::new(),
+                cursor: 0,
+            },
         }
     }
 
@@ -288,34 +341,191 @@ impl Operator for Limit {
 }
 
 impl Sort {
+    /// `retain` bounds the output to the smallest `n` rows (a `LIMIT` plus its
+    /// offset), `None` sorts the whole input
     pub fn new(
-        mut source: Box<dyn Operator>,
-        comparator: Box<dyn Fn(&Tuple, &Tuple) -> std::cmp::Ordering>,
+        source: Box<dyn Operator>,
+        comparator: Comparator,
+        retain: Option<usize>,
+        dir: &Path,
     ) -> Result<Self, DatabaseError> {
-        let mut tuples = Vec::new();
-        while let Some(tuple) = source.next()? {
-            tuples.push(tuple);
+        match retain {
+            Some(cap) => Self::top_n(source, comparator, cap),
+            None => Self::full(source, comparator, SORT_RUN_BUDGET, MERGE_FANIN, dir),
+        }
+    }
+
+    fn top_n(
+        mut source: Box<dyn Operator>,
+        comparator: Comparator,
+        cap: usize,
+    ) -> Result<Self, DatabaseError> {
+        let mut sorted = Vec::new();
+        if cap > 0 {
+            let trim_at = cap.saturating_mul(2);
+            while let Some(tuple) = source.next()? {
+                sorted.push(tuple);
+                if sorted.len() >= trim_at {
+                    sorted.select_nth_unstable_by(cap - 1, |a, b| comparator(a, b));
+                    sorted.truncate(cap);
+                }
+            }
+            sorted.sort_by(|a, b| comparator(a, b));
+            sorted.truncate(cap);
         }
 
-        tuples.sort_by(|a, b| comparator(a, b));
+        Ok(Self {
+            comparator,
+            output: SortOutput::Memory { sorted, cursor: 0 },
+        })
+    }
+
+    fn full(
+        mut source: Box<dyn Operator>,
+        comparator: Comparator,
+        budget: usize,
+        fanin: usize,
+        dir: &Path,
+    ) -> Result<Self, DatabaseError> {
+        let mut run = Vec::new();
+        let mut run_bytes = 0;
+        let mut spills = Vec::new();
+
+        while let Some(tuple) = source.next()? {
+            run_bytes += tuple_bytes(&tuple);
+            run.push(tuple);
+            if run_bytes >= budget {
+                run.sort_unstable_by(|a, b| comparator(a, b));
+                spills.push(spill_run(&run, dir)?);
+                run.clear();
+                run_bytes = 0;
+            }
+        }
+
+        if spills.is_empty() {
+            run.sort_unstable_by(|a, b| comparator(a, b));
+            return Ok(Self {
+                comparator,
+                output: SortOutput::Memory {
+                    sorted: run,
+                    cursor: 0,
+                },
+            });
+        }
+
+        if !run.is_empty() {
+            run.sort_unstable_by(|a, b| comparator(a, b));
+            spills.push(spill_run(&run, dir)?);
+        }
+
+        // reduce to at most `fanin` runs so the final merge opens a bounded
+        // number of files and never lets the heap outgrow the fan-in
+        let compare = &*comparator;
+        while spills.len() > fanin {
+            let mut merged = Vec::with_capacity(spills.len().div_ceil(fanin));
+            let mut runs = spills.into_iter();
+            loop {
+                let group: Vec<PathBuf> = runs.by_ref().take(fanin).collect();
+                if group.is_empty() {
+                    break;
+                }
+                merged.push(merge_group(group, compare, dir)?);
+            }
+            spills = merged;
+        }
+
+        let mut cursors = spills
+            .into_iter()
+            .map(RunCursor::open)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut heap = Vec::with_capacity(cursors.len());
+        for (run, cursor) in cursors.iter_mut().enumerate() {
+            if let Some(tuple) = cursor.next_tuple()? {
+                heap_push(&mut heap, HeapItem { tuple, run }, compare);
+            }
+        }
 
         Ok(Self {
-            sorted: tuples,
-            cursor: 0,
+            comparator,
+            output: SortOutput::Merge { cursors, heap },
         })
     }
 }
 
 impl Operator for Sort {
     fn next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        if self.cursor >= self.sorted.len() {
-            return Ok(None);
+        let Self { comparator, output } = self;
+        match output {
+            SortOutput::Memory { sorted, cursor } => {
+                if *cursor >= sorted.len() {
+                    return Ok(None);
+                }
+
+                let tuple = std::mem::take(&mut sorted[*cursor]);
+                *cursor += 1;
+
+                Ok(Some(tuple))
+            }
+
+            SortOutput::Merge { cursors, heap } => {
+                let compare = &**comparator;
+                let Some(item) = heap_pop(heap, compare) else {
+                    return Ok(None);
+                };
+
+                if let Some(tuple) = cursors[item.run].next_tuple()? {
+                    heap_push(
+                        heap,
+                        HeapItem {
+                            tuple,
+                            run: item.run,
+                        },
+                        compare,
+                    );
+                }
+
+                Ok(Some(item.tuple))
+            }
+        }
+    }
+}
+
+impl RunCursor {
+    fn open(path: PathBuf) -> Result<Self, DatabaseError> {
+        let reader = BufReader::new(File::open(&path).map_err(DatabaseError::Io)?);
+        Ok(Self { reader, path })
+    }
+
+    fn next_tuple(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        let mut len_bytes = [0u8; 4];
+        match self.reader.read_exact(&mut len_bytes) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(err) => return Err(DatabaseError::Io(err)),
         }
 
-        let tuple = std::mem::take(&mut self.sorted[self.cursor]);
-        self.cursor += 1;
+        let len = u32::from_le_bytes(len_bytes) as usize;
+        let mut payload = vec![0u8; len];
+        self.reader
+            .read_exact(&mut payload)
+            .map_err(DatabaseError::Io)?;
+
+        let mut tuple = Vec::new();
+        let mut offset = 0;
+        while offset < len {
+            let (value, consumed) =
+                Value::deserialise(&payload[offset..]).map_err(DatabaseError::Io)?;
+            tuple.push(value);
+            offset += consumed;
+        }
 
         Ok(Some(tuple))
+    }
+}
+
+impl Drop for RunCursor {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -344,4 +554,219 @@ fn prepend_id(row_id: i64, tuple: Tuple) -> Tuple {
     row.push(Value::Number(row_id as i128));
     row.extend(tuple);
     row
+}
+
+fn tuple_bytes(tuple: &[Value]) -> usize {
+    tuple.iter().map(Value::serialised_size_hint).sum()
+}
+
+fn spill_path(dir: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    dir.join(format!("umbra-sort-{}-{seq}.run", std::process::id()))
+}
+
+fn write_tuple(
+    writer: &mut impl Write,
+    tuple: &[Value],
+    payload: &mut Vec<u8>,
+) -> Result<(), DatabaseError> {
+    payload.clear();
+    for value in tuple {
+        payload.extend_from_slice(&value.serialise().map_err(DatabaseError::Io)?);
+    }
+    writer
+        .write_all(&(payload.len() as u32).to_le_bytes())
+        .map_err(DatabaseError::Io)?;
+    writer.write_all(payload).map_err(DatabaseError::Io)?;
+
+    Ok(())
+}
+
+/// Writes a sorted run to a fresh spill file, one length-prefixed tuple at a
+/// time, and returns its path for the merge step to drain.
+fn spill_run(run: &[Tuple], dir: &Path) -> Result<PathBuf, DatabaseError> {
+    let path = spill_path(dir);
+    let mut writer = BufWriter::new(File::create(&path).map_err(DatabaseError::Io)?);
+    let mut payload = Vec::new();
+    for tuple in run {
+        write_tuple(&mut writer, tuple, &mut payload)?;
+    }
+    writer.flush().map_err(DatabaseError::Io)?;
+
+    Ok(path)
+}
+
+/// Merges a bounded group of sorted runs into one new run file, deleting the
+/// inputs as their cursors drop. Keeps the fan-in (open files, heap size)
+/// capped when there are more runs than [MERGE_FANIN].
+fn merge_group(
+    paths: Vec<PathBuf>,
+    compare: &dyn Fn(&Tuple, &Tuple) -> Ordering,
+    dir: &Path,
+) -> Result<PathBuf, DatabaseError> {
+    let mut cursors = paths
+        .into_iter()
+        .map(RunCursor::open)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut heap = Vec::with_capacity(cursors.len());
+    for (run, cursor) in cursors.iter_mut().enumerate() {
+        if let Some(tuple) = cursor.next_tuple()? {
+            heap_push(&mut heap, HeapItem { tuple, run }, compare);
+        }
+    }
+
+    let path = spill_path(dir);
+    let mut writer = BufWriter::new(File::create(&path).map_err(DatabaseError::Io)?);
+    let mut payload = Vec::new();
+    while let Some(item) = heap_pop(&mut heap, compare) {
+        write_tuple(&mut writer, &item.tuple, &mut payload)?;
+        if let Some(tuple) = cursors[item.run].next_tuple()? {
+            let run = item.run;
+            heap_push(&mut heap, HeapItem { tuple, run }, compare);
+        }
+    }
+    writer.flush().map_err(DatabaseError::Io)?;
+
+    Ok(path)
+}
+
+fn heap_push(
+    heap: &mut Vec<HeapItem>,
+    item: HeapItem,
+    compare: &dyn Fn(&Tuple, &Tuple) -> Ordering,
+) {
+    heap.push(item);
+    let mut child = heap.len() - 1;
+    while child > 0 {
+        let parent = (child - 1) / 2;
+        if compare(&heap[child].tuple, &heap[parent].tuple) != Ordering::Less {
+            break;
+        }
+        heap.swap(child, parent);
+        child = parent;
+    }
+}
+
+fn heap_pop(
+    heap: &mut Vec<HeapItem>,
+    compare: &dyn Fn(&Tuple, &Tuple) -> Ordering,
+) -> Option<HeapItem> {
+    if heap.is_empty() {
+        return None;
+    }
+
+    let last = heap.len() - 1;
+    heap.swap(0, last);
+    let item = heap.pop();
+
+    let len = heap.len();
+    let mut parent = 0;
+    loop {
+        let (left, right) = (2 * parent + 1, 2 * parent + 2);
+        let mut smallest = parent;
+        if left < len && compare(&heap[left].tuple, &heap[smallest].tuple) == Ordering::Less {
+            smallest = left;
+        }
+        if right < len && compare(&heap[right].tuple, &heap[smallest].tuple) == Ordering::Less {
+            smallest = right;
+        }
+        if smallest == parent {
+            break;
+        }
+        heap.swap(parent, smallest);
+        parent = smallest;
+    }
+
+    item
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asc() -> Comparator {
+        Box::new(|a: &Tuple, b: &Tuple| a[0].partial_cmp(&b[0]).unwrap())
+    }
+
+    fn dir() -> PathBuf {
+        std::env::temp_dir()
+    }
+
+    fn rows(values: &[i64]) -> Vec<Tuple> {
+        values
+            .iter()
+            .map(|&n| vec![Value::Number(n as i128)])
+            .collect()
+    }
+
+    fn drain(mut sort: Sort) -> Vec<i64> {
+        let mut out = Vec::new();
+        while let Some(tuple) = sort.next().unwrap() {
+            match &tuple[0] {
+                Value::Number(n) => out.push(*n as i64),
+                other => panic!("expected a number, got {other:?}"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn external_merge_sorts_every_row() {
+        let input = [9, 3, 7, 1, 8, 2, 6, 0, 5, 4];
+        // a zero budget spills one tuple per run, forcing the heap merge across
+        // as many runs as there are rows
+        let sort = Sort::full(
+            Box::new(Values::new(rows(&input))),
+            asc(),
+            0,
+            MERGE_FANIN,
+            &dir(),
+        )
+        .unwrap();
+        assert_eq!(drain(sort), (0..10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn external_merge_reduces_runs_over_the_fan_in() {
+        let input = [9, 3, 7, 1, 8, 2, 6, 0, 5, 4, 12, 11, 10, 15, 13, 14];
+        // fan-in 2 with one run per row forces several bounded multi-pass merges
+        let sort = Sort::full(Box::new(Values::new(rows(&input))), asc(), 0, 2, &dir()).unwrap();
+        assert_eq!(drain(sort), (0..16).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn in_memory_and_external_agree_on_duplicates() {
+        let input = [5, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+        let memory = Sort::full(
+            Box::new(Values::new(rows(&input))),
+            asc(),
+            1 << 20,
+            MERGE_FANIN,
+            &dir(),
+        )
+        .unwrap();
+        let external =
+            Sort::full(Box::new(Values::new(rows(&input))), asc(), 0, 2, &dir()).unwrap();
+        assert_eq!(drain(memory), drain(external));
+    }
+
+    #[test]
+    fn top_n_keeps_the_smallest_rows_in_order() {
+        let input = [9, 3, 7, 1, 8, 2, 6, 0, 5, 4];
+        let sort = Sort::new(Box::new(Values::new(rows(&input))), asc(), Some(3), &dir()).unwrap();
+        assert_eq!(drain(sort), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn top_n_of_zero_yields_nothing() {
+        let sort = Sort::new(
+            Box::new(Values::new(rows(&[3, 1, 2]))),
+            asc(),
+            Some(0),
+            &dir(),
+        )
+        .unwrap();
+        assert!(drain(sort).is_empty());
+    }
 }

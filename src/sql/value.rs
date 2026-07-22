@@ -502,7 +502,7 @@ impl Value {
     }
 
     #[inline]
-    fn serialised_size_hint(&self) -> usize {
+    pub(crate) fn serialised_size_hint(&self) -> usize {
         match self {
             Value::Null => 1,
             Value::Boolean(_) => 2,
