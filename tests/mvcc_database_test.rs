@@ -955,3 +955,164 @@ fn inner_join_pushes_single_table_filter_into_the_scan() {
         vec![vec![Value::String("alice".into()), Value::Number(100)]]
     );
 }
+
+#[test]
+fn full_order_by_spills_to_disk_and_stays_sorted() {
+    let mut db = MvccDatabase::in_memory().unwrap();
+    db.exec("CREATE TABLE wide (id INT PRIMARY KEY, sort_key INT, payload VARCHAR(4096));")
+        .unwrap();
+
+    // > 8 MiB of tuples in scrambled key order, so the sort must spill runs to
+    // disk and k-way merge them rather than sort in memory
+    let payload = "x".repeat(2000);
+    let total = 6000i64;
+    let mut expected = Vec::with_capacity(total as usize);
+    let mut id = 0;
+
+    while id < total {
+        let mut statement = String::from("INSERT INTO wide (id, sort_key, payload) VALUES ");
+        for row in 0..500 {
+            let key = id.wrapping_mul(2_654_435_761) % total;
+            expected.push(key);
+            if row > 0 {
+                statement.push(',');
+            }
+            statement.push_str(&format!("({id}, {key}, '{payload}')"));
+            id += 1;
+        }
+
+        statement.push(';');
+        db.exec(&statement).unwrap();
+    }
+    expected.sort();
+
+    let result = db
+        .exec("SELECT sort_key FROM wide ORDER BY sort_key;")
+        .unwrap();
+    assert_eq!(result.tuples.len(), total as usize);
+
+    let sorted: Vec<_> = result
+        .tuples
+        .iter()
+        .map(|tuple| match &tuple[0] {
+            Value::Number(n) => *n as i64,
+            other => panic!("expected a number, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(sorted, expected);
+}
+
+#[test]
+fn order_by_indexed_column_is_served_by_the_index() {
+    let mut db = MvccDatabase::in_memory().unwrap();
+    db.exec("CREATE TABLE t (id INT PRIMARY KEY, v INT);")
+        .unwrap();
+    db.exec(
+        "INSERT INTO t (id, v) VALUES \
+         (5,50),(2,20),(8,80),(1,10),(9,90),(3,30),(7,70),(4,40),(6,60);",
+    )
+    .unwrap();
+
+    let plan = db.exec("EXPLAIN SELECT id FROM t ORDER BY id;").unwrap();
+    let lines: Vec<String> = plan
+        .tuples
+        .iter()
+        .map(|t| match &t[0] {
+            Value::String(s) => s.to_string(),
+            other => panic!("plan lines are strings, got {other:?}"),
+        })
+        .collect();
+    assert!(
+        lines.iter().any(|l| l.starts_with("Index order")),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l.starts_with("Sort")), "{lines:?}");
+
+    let asc = db.exec("SELECT id FROM t ORDER BY id;").unwrap();
+    assert_eq!(
+        asc.tuples.iter().map(|t| t[0].clone()).collect::<Vec<_>>(),
+        (1..=9i128).map(Value::Number).collect::<Vec<_>>(),
+    );
+
+    let desc = db.exec("SELECT id FROM t ORDER BY id DESC;").unwrap();
+    assert_eq!(
+        desc.tuples.iter().map(|t| t[0].clone()).collect::<Vec<_>>(),
+        (1..=9i128).rev().map(Value::Number).collect::<Vec<_>>(),
+    );
+
+    let page = db
+        .exec("SELECT id FROM t ORDER BY id LIMIT 3 OFFSET 2;")
+        .unwrap();
+    assert_eq!(
+        page.tuples.iter().map(|t| t[0].clone()).collect::<Vec<_>>(),
+        vec![Value::Number(3), Value::Number(4), Value::Number(5)],
+    );
+}
+
+#[test]
+fn order_by_secondary_index_respects_mvcc_visibility() {
+    let mut db = MvccDatabase::in_memory().unwrap();
+    db.exec("CREATE TABLE t (id INT PRIMARY KEY, score INT);")
+        .unwrap();
+    db.exec("CREATE INDEX idx_score ON t(score);").unwrap();
+    db.exec("INSERT INTO t (id, score) VALUES (1,30),(2,10),(3,20),(4,50),(5,40);")
+        .unwrap();
+    db.exec("DELETE FROM t WHERE id = 4;").unwrap();
+
+    let plan = db
+        .exec("EXPLAIN SELECT score FROM t ORDER BY score;")
+        .unwrap();
+    let lines: Vec<String> = plan
+        .tuples
+        .iter()
+        .map(|t| match &t[0] {
+            Value::String(s) => s.to_string(),
+            other => panic!("plan lines are strings, got {other:?}"),
+        })
+        .collect();
+    assert!(
+        lines.iter().any(|l| l.starts_with("Index order")),
+        "{lines:?}"
+    );
+
+    // the deleted score=50 row is filtered by visibility, order stays correct
+    let ordered = db.exec("SELECT score FROM t ORDER BY score;").unwrap();
+    assert_eq!(
+        ordered
+            .tuples
+            .iter()
+            .map(|t| t[0].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            Value::Number(10),
+            Value::Number(20),
+            Value::Number(30),
+            Value::Number(40),
+        ],
+    );
+}
+
+#[test]
+fn projection_pushdown_with_where_and_order_on_unselected_columns() {
+    let mut db = MvccDatabase::in_memory().unwrap();
+    db.exec("CREATE TABLE t (id INT PRIMARY KEY, a INT, b INT, c INT, label VARCHAR(16));")
+        .unwrap();
+    db.exec(
+        "INSERT INTO t (id, a, b, c, label) VALUES \
+         (1, 10, 100, 1000, 'x'), (2, 20, 200, 2000, 'y'), (3, 30, 300, 3000, 'z');",
+    )
+    .unwrap();
+
+    // selects b/label, filters on c, orders by a — the scan must still carry
+    // a and c even though they are not projected out
+    let rows = db
+        .exec("SELECT b, label FROM t WHERE c > 1000 ORDER BY a DESC;")
+        .unwrap();
+    assert_eq!(
+        rows.tuples,
+        vec![
+            vec![Value::Number(300), Value::String("z".into())],
+            vec![Value::Number(200), Value::String("y".into())],
+        ],
+    );
+}
