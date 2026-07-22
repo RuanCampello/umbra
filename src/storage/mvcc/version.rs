@@ -595,7 +595,13 @@ impl VersionStorage {
         Some(versions.keys().copied().collect())
     }
 
-    pub fn resolve_visible_chunk(&self, ids: &[i64], txn_id: i64, out: &mut Vec<(i64, Tuple)>) {
+    pub fn resolve_visible_chunk(
+        &self,
+        ids: &[i64],
+        txn_id: i64,
+        projection: Option<&[usize]>,
+        out: &mut Vec<(i64, Tuple)>,
+    ) {
         let Some(checker) = self.visibility_checker.as_ref() else {
             return;
         };
@@ -604,7 +610,11 @@ impl VersionStorage {
         for &row_id in ids {
             if let Some(entry) = versions.get(&row_id) {
                 if let Some(version) = visible_live(entry, checker, txn_id) {
-                    out.push((row_id, version.data.clone()));
+                    let tuple = match projection {
+                        Some(cols) => cols.iter().map(|&i| version.data[i].clone()).collect(),
+                        None => version.data.clone(),
+                    };
+                    out.push((row_id, tuple));
                 }
             }
         }

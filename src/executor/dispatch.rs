@@ -159,6 +159,7 @@ impl Executor {
                     delete.r#where.as_ref(),
                     &schema,
                     false,
+                    None,
                 )?;
 
                 let result = self.delete(txn_id, &delete.from, &mut *source);
@@ -184,6 +185,7 @@ impl Executor {
                     update.r#where.as_ref(),
                     &schema,
                     false,
+                    None,
                 )?;
 
                 let mut assignments = Vec::with_capacity(update.columns.len());

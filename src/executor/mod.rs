@@ -183,7 +183,7 @@ mod tests {
         }
 
         let (reader, _auto) = exec.auto_txn().unwrap();
-        let mut scan = operator::Scan::new(exec.engine(), reader, "users").unwrap();
+        let mut scan = operator::Scan::new(exec.engine(), reader, "users", None).unwrap();
 
         let mut rows = Vec::new();
         while let Some(tuple) = scan.next().unwrap() {
@@ -216,7 +216,7 @@ mod tests {
         exec.engine().commit_transaction(txn_id).unwrap();
 
         let (reader, _) = exec.auto_txn().unwrap();
-        let scan = operator::Scan::new(exec.engine(), reader, "users").unwrap();
+        let scan = operator::Scan::new(exec.engine(), reader, "users", None).unwrap();
 
         use crate::sql::statement::{BinaryOperator, Column, Expression};
         let mut schema = crate::db::Schema::new(vec![
@@ -259,7 +259,7 @@ mod tests {
         exec.engine().commit_transaction(txn_id).unwrap();
 
         let (reader, _) = exec.auto_txn().unwrap();
-        let scan = operator::Scan::new(exec.engine(), reader, "users").unwrap();
+        let scan = operator::Scan::new(exec.engine(), reader, "users", None).unwrap();
 
         let mut project = operator::Project::new(Box::new(scan), vec![2]);
         let row = project.next().unwrap().unwrap();
@@ -289,7 +289,7 @@ mod tests {
         exec.engine().commit_transaction(txn_id).unwrap();
 
         let (reader, _) = exec.auto_txn().unwrap();
-        let scan = operator::Scan::new(exec.engine(), reader, "users").unwrap();
+        let scan = operator::Scan::new(exec.engine(), reader, "users", None).unwrap();
 
         // LIMIT 2 OFFSET 1
         let mut limit = operator::Limit::new(Box::new(scan), 2, 1);

@@ -29,6 +29,8 @@ use std::sync::Arc;
 /// downstream operators must be built with [Schema::prepend_id]
 pub(crate) struct Scan {
     mode: ScanMode,
+    /// user-column indices to keep (projection pushdown)
+    projection: Option<Vec<usize>>,
 }
 
 /// Filters tuples from a source operator using a `WHERE` clause expression.
@@ -143,13 +145,23 @@ type Comparator = Box<dyn Fn(&Tuple, &Tuple) -> Ordering>;
 
 impl Scan {
     /// materialises every visible row up front
-    pub fn new(engine: &Engine, txn_id: i64, table: &str) -> Result<Self, DatabaseError> {
-        Self::eager(engine, txn_id, table)
+    pub fn new(
+        engine: &Engine,
+        txn_id: i64,
+        table: &str,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self, DatabaseError> {
+        Self::eager(engine, txn_id, table, projection)
     }
 
     /// resolves rows a batch at a time so a downstream `LIMIT`/`Filter` can
     /// short-circuit before most rows are cloned
-    pub fn streaming(engine: &Engine, txn_id: i64, table: &str) -> Result<Self, DatabaseError> {
+    pub fn streaming(
+        engine: &Engine,
+        txn_id: i64,
+        table: &str,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self, DatabaseError> {
         match engine.scan_lazy(txn_id, table)? {
             Some((storage, ids)) => Ok(Self {
                 mode: ScanMode::Lazy {
@@ -159,14 +171,20 @@ impl Scan {
                     buffer: Vec::new(),
                     cursor: 0,
                 },
+                projection,
             }),
-            None => Self::eager(engine, txn_id, table),
+            None => Self::eager(engine, txn_id, table, projection),
         }
     }
 
     /// Resolves the given row ids in order, a batch at a time
     /// Used to serve an `ORDER BY` from an index-ordered id list, skipping the sort
-    pub fn from_ordered_ids(storage: Arc<VersionStorage>, txn_id: i64, ids: Vec<i64>) -> Self {
+    pub fn from_ordered_ids(
+        storage: Arc<VersionStorage>,
+        txn_id: i64,
+        ids: Vec<i64>,
+        projection: Option<Vec<usize>>,
+    ) -> Self {
         Self {
             mode: ScanMode::Lazy {
                 storage,
@@ -175,25 +193,33 @@ impl Scan {
                 buffer: Vec::new(),
                 cursor: 0,
             },
+            projection,
         }
     }
 
-    fn eager(engine: &Engine, txn_id: i64, table: &str) -> Result<Self, DatabaseError> {
+    fn eager(
+        engine: &Engine,
+        txn_id: i64,
+        table: &str,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self, DatabaseError> {
         let tuples = engine
             .scan(txn_id, table)?
             .into_iter()
-            .map(|(row_id, tuple)| prepend_id(row_id, tuple))
+            .map(|(row_id, tuple)| project_row(row_id, tuple, projection.as_deref()))
             .collect();
 
         Ok(Self {
             mode: ScanMode::Eager { tuples, cursor: 0 },
+            projection,
         })
     }
 }
 
 impl Operator for Scan {
     fn next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        match &mut self.mode {
+        let Self { mode, projection } = self;
+        match mode {
             ScanMode::Eager { tuples, cursor } => {
                 if *cursor >= tuples.len() {
                     return Ok(None);
@@ -224,14 +250,22 @@ impl Operator for Scan {
                 }
 
                 let mut resolved = Vec::with_capacity(batch.len());
-                storage.resolve_visible_chunk(&batch, *txn_id, &mut resolved);
+                storage.resolve_visible_chunk(
+                    &batch,
+                    *txn_id,
+                    projection.as_deref(),
+                    &mut resolved,
+                );
 
                 buffer.clear();
-                buffer.extend(
-                    resolved
-                        .into_iter()
-                        .map(|(row_id, tuple)| prepend_id(row_id, tuple)),
-                );
+                match projection {
+                    Some(_) => buffer.extend(resolved.into_iter().map(|(_, tuple)| tuple)),
+                    None => buffer.extend(
+                        resolved
+                            .into_iter()
+                            .map(|(row_id, tuple)| prepend_id(row_id, tuple)),
+                    ),
+                }
                 *cursor = 0;
             },
         }
@@ -554,6 +588,14 @@ fn prepend_id(row_id: i64, tuple: Tuple) -> Tuple {
     row.push(Value::Number(row_id as i128));
     row.extend(tuple);
     row
+}
+
+#[inline]
+fn project_row(row_id: i64, data: Tuple, projection: Option<&[usize]>) -> Tuple {
+    match projection {
+        Some(cols) => cols.iter().map(|&i| data[i].clone()).collect(),
+        None => prepend_id(row_id, data),
+    }
 }
 
 fn tuple_bytes(tuple: &[Value]) -> usize {

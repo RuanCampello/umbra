@@ -166,7 +166,7 @@ impl SchemaBuilder {
 
     /// builds the schema from parsed `CREATE TABLE` column definitions,
     /// registering enum variant lists as they appear
-    pub fn from_ast_columns(mut self, columns: &[crate::sql::statement::Column]) -> SchemaNew {
+    pub fn from_ast_columns(mut self, columns: &[statement::Column]) -> SchemaNew {
         let mut enums = Vec::new();
 
         for column in columns {
@@ -539,7 +539,7 @@ impl PartialEq for SchemaNew {
 
 // TODO: this will be removed after the transition to the new schema type
 impl Schema {
-    pub fn new(columns: Vec<crate::sql::statement::Column>) -> Self {
+    pub fn new(columns: Vec<statement::Column>) -> Self {
         let index = columns
             .iter()
             .enumerate()
@@ -553,28 +553,43 @@ impl Schema {
         }
     }
 
+    /// a schema of only the columns at `keep`, for projection pushdown
+    pub fn project(&self, keep: &[usize]) -> Self {
+        let columns: Vec<_> = keep.iter().map(|&i| self.columns[i].clone()).collect();
+        let index = columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| (col.name.clone(), i))
+            .collect();
+
+        Self {
+            columns,
+            index,
+            enums: self.enums.clone(),
+        }
+    }
+
     pub fn prepend_id(&mut self) {
         use crate::db::ROW_COL_ID;
-        use crate::sql::statement::Column;
 
         debug_assert!(
             self.columns[0].name != ROW_COL_ID,
             "schema already has {ROW_COL_ID}: {self:?}"
         );
 
-        let col = Column::new(ROW_COL_ID, Type::UnsignedBigInteger);
+        let col = statement::Column::new(ROW_COL_ID, Type::UnsignedBigInteger);
 
         self.columns.insert(0, col);
         self.index.values_mut().for_each(|idx| *idx += 1);
         self.index.insert(ROW_COL_ID.to_string(), 0);
     }
 
-    pub fn push(&mut self, col: crate::sql::statement::Column) {
+    pub fn push(&mut self, col: statement::Column) {
         self.index.insert(col.name.to_string(), self.len());
         self.columns.push(col);
     }
 
-    pub fn extend(&mut self, columns: impl IntoIterator<Item = crate::sql::statement::Column>) {
+    pub fn extend(&mut self, columns: impl IntoIterator<Item = statement::Column>) {
         for col in columns {
             self.push(col)
         }
@@ -582,7 +597,7 @@ impl Schema {
 
     pub fn extend_with_join(
         &mut self,
-        columns: impl IntoIterator<Item = crate::sql::statement::Column>,
+        columns: impl IntoIterator<Item = statement::Column>,
         join_type: &JoinType,
     ) {
         match join_type {
@@ -612,9 +627,9 @@ impl Schema {
     }
 
     fn make_nullable_if_needed(
-        columns: impl IntoIterator<Item = crate::sql::statement::Column>,
+        columns: impl IntoIterator<Item = statement::Column>,
         should_make_nullable: bool,
-    ) -> impl Iterator<Item = crate::sql::statement::Column> {
+    ) -> impl Iterator<Item = statement::Column> {
         columns.into_iter().map(move |mut col| {
             if should_make_nullable && !col.is_nullable() {
                 col.constraints.push(Constraint::Nullable);
@@ -668,7 +683,7 @@ impl Schema {
         self.columns.iter().map(|c| c.name.to_string()).collect()
     }
 
-    pub fn keys(&self) -> &crate::sql::statement::Column {
+    pub fn keys(&self) -> &statement::Column {
         &self.columns[0]
     }
 
@@ -752,20 +767,20 @@ impl From<&SchemaNew> for Schema {
     }
 }
 
-pub(crate) fn has_btree_key(columns: &[crate::sql::statement::Column]) -> bool {
+pub(crate) fn has_btree_key(columns: &[statement::Column]) -> bool {
     columns[0].constraints.contains(&Constraint::PrimaryKey)
         && !matches!(columns[0].data_type, Type::Varchar(_) | Type::Boolean)
 }
 
 pub(crate) fn umbra_schema() -> Schema {
-    use crate::sql::statement::Column;
+    use statement::Column as Col;
 
     Schema::from(&[
-        Column::new("type", Type::Varchar(255)),
-        Column::new("name", Type::Varchar(255)),
-        Column::new("root", Type::UnsignedInteger),
-        Column::new("table_name", Type::Varchar(255)),
-        Column::new("sql", Type::Varchar(65535)),
+        Col::new("type", Type::Varchar(255)),
+        Col::new("name", Type::Varchar(255)),
+        Col::new("root", Type::UnsignedInteger),
+        Col::new("table_name", Type::Varchar(255)),
+        Col::new("sql", Type::Varchar(65535)),
     ])
 }
 

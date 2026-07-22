@@ -45,16 +45,21 @@ impl Executor {
             return self.execute_aggregate(txn_id, select);
         }
 
+        // the base columns this query actually reads, so the scan need not
+        // materialise the rest (projection pushdown); `None` reads the full row
+        let projection = self.scan_projection(&select)?;
+
         // an ordered index can serve the `ORDER BY` directly, skipping the sort
         let (schema, mut pipeline, order_satisfied) =
-            match self.index_ordered_scan(txn_id, &select)? {
+            match self.index_ordered_scan(txn_id, &select, projection.as_deref())? {
                 Some((schema, source)) => (schema, source, true),
                 None => {
                     // stream the scan whenever the consumer pulls incrementally: a
                     // `LIMIT` that stops early, or a `Sort` fed one row at a time
                     // rather than materialising the table into the scan *and* the sort
                     let streaming = select.limit.is_some() || !select.order_by.is_empty();
-                    let (schema, pipeline) = self.select_source(txn_id, &mut select, streaming)?;
+                    let (schema, pipeline) =
+                        self.select_source(txn_id, &mut select, streaming, projection.as_deref())?;
                     (schema, pipeline, false)
                 }
             };
@@ -179,6 +184,7 @@ impl Executor {
             base_pushed.as_ref(),
             &base_filter_schema,
             false,
+            None,
         )?;
         let mut rows = Vec::new();
         while let Some(tuple) = source.next()? {
@@ -228,6 +234,7 @@ impl Executor {
                         Some(&pushed),
                         &right_filter_schema,
                         false,
+                        None,
                     )?;
 
                     let mut right_rows = Vec::new();
@@ -343,6 +350,7 @@ impl Executor {
         txn_id: i64,
         select: &mut statement::Select,
         streaming: bool,
+        projection: Option<&[usize]>,
     ) -> Result<(Schema, Box<dyn Operator>), DatabaseError> {
         match self.joined_source(txn_id, select)? {
             Some((schema, rows)) => {
@@ -356,20 +364,69 @@ impl Executor {
             }
             None => {
                 let table = &select.from.name;
-                let schema = self.resolve_schema(table)?;
+                let full = self.resolve_schema(table)?;
                 if let Some(predicate) = select.r#where.as_mut() {
-                    dealias_predicate(predicate, &select.columns, &schema);
+                    dealias_predicate(predicate, &select.columns, &full);
                 }
+                let schema = match projection {
+                    Some(cols) => full.project(&keep_with_row_id(cols)),
+                    None => full,
+                };
                 let source = self.filtered_source(
                     txn_id,
                     table,
                     select.r#where.as_ref(),
                     &schema,
                     streaming,
+                    projection,
                 )?;
 
                 Ok((schema, source))
             }
+        }
+    }
+
+    fn scan_projection(
+        &self,
+        select: &statement::Select,
+    ) -> Result<Option<Vec<usize>>, DatabaseError> {
+        if !select.joins.is_empty() {
+            return Ok(None);
+        }
+
+        let mut names = Vec::new();
+        let mut understood = true;
+        for column in &select.columns {
+            understood &= collect_columns(column, &mut names);
+        }
+        if let Some(predicate) = &select.r#where {
+            understood &= collect_columns(predicate, &mut names);
+        }
+        for order in &select.order_by {
+            understood &= collect_columns(&order.expr, &mut names);
+        }
+        if !understood {
+            return Ok(None);
+        }
+
+        let engine_schema = self.engine.schema(&select.from.name)?;
+        let mut indices = Vec::with_capacity(names.len());
+        for name in &names {
+            match engine_schema
+                .columns
+                .iter()
+                .position(|c| c.name() == name.as_str())
+            {
+                Some(index) => indices.push(index),
+                None => return Ok(None),
+            }
+        }
+
+        indices.sort_unstable();
+        indices.dedup();
+        match indices.is_empty() {
+            true => Ok(None),
+            false => Ok(Some(indices)),
         }
     }
 
@@ -414,6 +471,7 @@ impl Executor {
         &self,
         txn_id: i64,
         select: &statement::Select,
+        projection: Option<&[usize]>,
     ) -> Result<Option<(Schema, Box<dyn Operator>)>, DatabaseError> {
         let Some(column) = self.index_ordered_column(select)? else {
             return Ok(None);
@@ -426,9 +484,17 @@ impl Executor {
             .scan_index_ordered(txn_id, table, column, descending)?
         {
             Some((storage, ids)) => {
-                let schema = self.resolve_schema(table)?;
-                let source: Box<dyn Operator> =
-                    Box::new(Scan::from_ordered_ids(storage, txn_id, ids));
+                let full = self.resolve_schema(table)?;
+                let schema = match projection {
+                    Some(cols) => full.project(&keep_with_row_id(cols)),
+                    None => full,
+                };
+                let source: Box<dyn Operator> = Box::new(Scan::from_ordered_ids(
+                    storage,
+                    txn_id,
+                    ids,
+                    projection.map(<[usize]>::to_vec),
+                ));
                 Ok(Some((schema, source)))
             }
             None => Ok(None),
@@ -445,7 +511,7 @@ impl Executor {
         txn_id: i64,
         mut select: statement::Select,
     ) -> Result<(Schema, Vec<Tuple>), DatabaseError> {
-        let (schema, mut pipeline) = self.select_source(txn_id, &mut select, false)?;
+        let (schema, mut pipeline) = self.select_source(txn_id, &mut select, false, None)?;
 
         let mut rows = Vec::new();
         while let Some(tuple) = pipeline.next()? {
@@ -537,16 +603,18 @@ impl Executor {
         predicate: Option<&Expression>,
         schema: &Schema,
         streaming: bool,
+        projection: Option<&[usize]>,
     ) -> Result<Box<dyn Operator>, DatabaseError> {
         let indexed = match predicate {
-            Some(predicate) => self.indexed_rows(txn_id, table, predicate)?,
+            Some(predicate) => self.indexed_rows(txn_id, table, predicate, projection)?,
             None => None,
         };
 
+        let owned = || projection.map(<[usize]>::to_vec);
         let mut source: Box<dyn Operator> = match indexed {
             Some(rows) => Box::new(Values::new(rows)),
-            None if streaming => Box::new(Scan::streaming(&self.engine, txn_id, table)?),
-            None => Box::new(Scan::new(&self.engine, txn_id, table)?),
+            None if streaming => Box::new(Scan::streaming(&self.engine, txn_id, table, owned())?),
+            None => Box::new(Scan::new(&self.engine, txn_id, table, owned())?),
         };
 
         if let Some(predicate) = predicate {
@@ -565,6 +633,7 @@ impl Executor {
         txn_id: i64,
         table: &str,
         predicate: &Expression,
+        projection: Option<&[usize]>,
     ) -> Result<Option<Vec<Tuple>>, DatabaseError> {
         if self.engine.has_local_writes(txn_id, table) {
             return Ok(None);
@@ -617,18 +686,23 @@ impl Executor {
             }
         };
 
-        let mut rows: Vec<_> = matches
+        // we dedup by row id before projecting, since projection drops it :D
+        let mut matches = matches;
+        matches.sort_unstable_by_key(|(row_id, _)| *row_id);
+        matches.dedup_by_key(|(row_id, _)| *row_id);
+
+        let rows = matches
             .into_iter()
-            .map(|(row_id, tuple)| {
-                let mut row = Vec::with_capacity(tuple.len() + 1);
-                row.push(Value::Number(row_id as i128));
-                row.extend(tuple);
-                row
+            .map(|(row_id, tuple)| match projection {
+                Some(cols) => cols.iter().map(|&i| tuple[i].clone()).collect(),
+                None => {
+                    let mut row = Vec::with_capacity(tuple.len() + 1);
+                    row.push(Value::Number(row_id as i128));
+                    row.extend(tuple);
+                    row
+                }
             })
             .collect();
-
-        rows.sort_unstable_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(Ordering::Equal));
-        rows.dedup_by(|a, b| a[0] == b[0]);
 
         Ok(Some(rows))
     }
@@ -1098,6 +1172,39 @@ fn column_position(schema: &Schema, expr: &Expression) -> Option<usize> {
         Expression::Alias { expr, .. } => column_position(schema, expr),
         _ => None,
     }
+}
+
+fn collect_columns(expr: &Expression, out: &mut Vec<String>) -> bool {
+    match expr {
+        Expression::Identifier(name) => {
+            out.push(name.clone());
+            true
+        }
+        Expression::QualifiedIdentifier { column, .. } => {
+            out.push(column.clone());
+            true
+        }
+        Expression::Path { head, .. } => {
+            out.push(head.clone());
+            true
+        }
+        Expression::Value(_) => true,
+        Expression::Wildcard => false,
+        Expression::UnaryOperation { expr, .. }
+        | Expression::IsNull { expr, .. }
+        | Expression::Nested(expr)
+        | Expression::Alias { expr, .. } => collect_columns(expr, out),
+        Expression::BinaryOperation { left, right, .. } => {
+            collect_columns(left, out) && collect_columns(right, out)
+        }
+        Expression::Function { args, .. } => args.iter().all(|arg| collect_columns(arg, out)),
+    }
+}
+
+/// Maps user-column indices (into the stored row) to their positions in the
+/// executor schema, which carries the `row_id` at index 0.
+fn keep_with_row_id(user_columns: &[usize]) -> Vec<usize> {
+    user_columns.iter().map(|&i| i + 1).collect()
 }
 
 #[inline]
