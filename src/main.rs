@@ -9,5 +9,9 @@ fn main() -> umbra::Result<()> {
         .unwrap_or(8000);
     let address = SocketAddr::from(([127, 0, 0, 1], port));
 
-    umbra::tcp::server::start(address, file)
+    let max_resident_chunks = env::args()
+        .nth(3)
+        .map(|chunks| chunks.parse::<usize>().expect("Invalid chunk budget"));
+
+    umbra::tcp::server::start_with_budget(address, file, max_resident_chunks)
 }

@@ -3,25 +3,34 @@ use std::{
     mem,
     net::{SocketAddr, TcpListener, TcpStream},
     path::Path,
-    sync::Arc,
     thread,
 };
 
 use crate::{
     db::{DatabaseError, MvccDatabase},
-    storage::mvcc::engine::Engine,
+    storage::engine::Engine,
     tcp::{
         pool::ThreadPool,
         protocol::{self, Response},
     },
 };
 
-/// Starts the database rooted at the given directory and listens on the given address.
+/// starts the database rooted at the given directory and listens on the given address
 pub fn start<Dir: AsRef<Path>>(address: SocketAddr, dir: Dir) -> Result<(), DatabaseError> {
+    start_with_budget(address, dir, None)
+}
+
+/// [start] keeping at most `max_resident_chunks` chunks of 1024 rows in memory
+pub fn start_with_budget<Dir: AsRef<Path>>(
+    address: SocketAddr,
+    dir: Dir,
+    max_resident_chunks: Option<usize>,
+) -> Result<(), DatabaseError> {
     // the engine is opened once and shared: every connection runs its own
-    // session over it, so transactions no longer serialise on a global lock.
+    // session over it, so transactions no longer serialise on a global lock
     // a static lifetime is fine, the engine lives until the process exits
-    let engine: &'static Arc<Engine> = &*Box::leak(Box::new(MvccDatabase::open_engine(&dir)?));
+    let engine: &'static Engine =
+        &*Box::leak(Box::new(MvccDatabase::open_engine(&dir, max_resident_chunks)?));
     println!("Database initialised on {}", dir.as_ref().display());
 
     let pool = ThreadPool::new(8);
@@ -33,7 +42,7 @@ pub fn start<Dir: AsRef<Path>>(address: SocketAddr, dir: Dir) -> Result<(), Data
             let stream = &mut stream.unwrap();
             stream.set_nodelay(true).unwrap();
 
-            if let Err(err) = handle(stream, Arc::clone(engine)) {
+            if let Err(err) = handle(stream, engine.clone()) {
                 eprintln!(
                     "Error on thread {:?} while processing connection: {err:#?}",
                     thread::current().id()
@@ -45,7 +54,7 @@ pub fn start<Dir: AsRef<Path>>(address: SocketAddr, dir: Dir) -> Result<(), Data
     Ok(())
 }
 
-fn handle(stream: &mut TcpStream, engine: Arc<Engine>) -> Result<(), DatabaseError> {
+fn handle(stream: &mut TcpStream, engine: Engine) -> Result<(), DatabaseError> {
     let connection = stream.peer_addr().unwrap().to_string();
     println!("Connection from: {connection}");
 
@@ -72,7 +81,7 @@ fn handle(stream: &mut TcpStream, engine: Arc<Engine>) -> Result<(), DatabaseErr
                     protocol::serialize(&Response::Err(format!("UTF-8 decode error: {err}")));
                 stream.write_all(&packet.unwrap())?;
                 continue;
-            }
+            },
         };
 
         let result = db.exec(&statement);
@@ -88,7 +97,7 @@ fn handle(stream: &mut TcpStream, engine: Arc<Engine>) -> Result<(), DatabaseErr
                 if db.active_transaction() {
                     db.rollback()?;
                 }
-            }
+            },
         };
     }
 

@@ -16,8 +16,8 @@
 use std::{array::TryFromSliceError, fmt::Display, num::TryFromIntError};
 
 use crate::{
-    db::{DatabaseError, QuerySet},
-    sql::statement::{Column, Type, Value, NUMERIC_ANY},
+    db::{Column, DatabaseError, QuerySet},
+    sql::statement::{NUMERIC_ANY, Type, Value},
     storage::tuple,
 };
 
@@ -52,20 +52,18 @@ pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
             packed.push(b'+');
             packed.extend_from_slice(&(u16::try_from(query_set.schema.len())?).to_le_bytes());
 
-            for column in &query_set.schema.columns {
-                packed.extend_from_slice(&(u16::try_from(column.name.len())?).to_le_bytes());
-                packed.extend_from_slice(column.name.as_bytes());
+            for column in query_set.schema.columns.iter() {
+                packed.extend_from_slice(&(u16::try_from(column.name().len())?).to_le_bytes());
+                packed.extend_from_slice(column.name().as_bytes());
 
-                packed.push(u8::from(&column.data_type));
-                if let Type::Varchar(length) = column.data_type {
+                packed.push(u8::from(&column.column_type()));
+                if let Type::Varchar(length) = column.column_type() {
                     packed.extend_from_slice(&(length as u32).to_le_bytes());
                 }
 
-                if let Type::Enum(id) = column.data_type {
+                if let Type::Enum(_) = column.column_type() {
                     column
-                        .type_def
-                        .as_ref()
-                        .or(query_set.schema.get_enum(id))
+                        .variants()
                         .map(|vars| {
                             let count = vars.len().min(255) as u8;
                             packed.push(count);
@@ -80,22 +78,26 @@ pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
                         .unwrap_or_else(|| packed.push(0));
                 }
 
-                packed.push(if column.is_nullable() { 1 } else { 0 })
+                packed.push(if column.is_nullable() {
+                    1
+                } else {
+                    0
+                })
             }
 
             packed.extend_from_slice(&(u32::try_from(query_set.tuples.len())?).to_le_bytes());
             query_set.tuples.iter().for_each(|tuple| {
                 packed.extend_from_slice(&tuple::serialize_tuple(&query_set.schema, tuple))
             });
-        }
+        },
         Response::Empty(affected_rows) => {
             packed.push(b'!');
             packed.extend_from_slice(&(u32::try_from(*affected_rows)?).to_le_bytes());
-        }
+        },
         Response::Err(err) => {
             packed.push(b'-');
             packed.extend_from_slice(err.as_bytes());
-        }
+        },
     }
 
     let content_len = u32::try_from(packed[4..].len())?;
@@ -128,13 +130,13 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                         let max_chars = u32::from_le_bytes(buff) as usize;
                         cursor += 4;
                         Type::Varchar(max_chars)
-                    }
+                    },
                     byte if byte == STRING_CATEGORY | 0x1 => Type::Text,
                     byte if byte == STRING_CATEGORY | 0x2 => Type::Enum(0),
 
                     content => {
                         Type::try_from(&content).map_err(|_| EncodingError::InvalidType(content))?
-                    }
+                    },
                 };
                 cursor += 1;
 
@@ -175,13 +177,15 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
                 let nullable = content[cursor] != 0;
                 cursor += 1;
 
-                let mut column = match nullable {
+                let column = match nullable {
                     true => Column::nullable(&name, data_type),
                     _ => Column::new(&name, data_type),
                 };
 
-                column.type_def = type_def;
-                query_set.schema.push(column);
+                query_set.schema.push(match type_def {
+                    Some(variants) => column.with_variants(variants),
+                    None => column,
+                });
             }
 
             let num_tuples = u32::from_le_bytes(content[cursor..cursor + 4].try_into()?);
@@ -195,11 +199,11 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
 
             query_set.display_enums();
             Response::QuerySet(query_set)
-        }
+        },
         b'!' => {
             let affected_rows = u32::from_le_bytes(content[1..].try_into()?) as usize;
             Response::Empty(affected_rows)
-        }
+        },
         b'-' => Response::Err(String::from_utf8(Vec::from(&content[1..])).unwrap()),
         prefix => Err(EncodingError::InvalidPrefix(prefix))?,
     })
@@ -296,7 +300,7 @@ impl From<Result<QuerySet, DatabaseError>> for Response {
                 };
 
                 Response::Empty(affected_rows)
-            }
+            },
 
             Ok(query_set) => Response::QuerySet(query_set),
             Err(err) => Response::Err(err.to_string()),
@@ -319,8 +323,8 @@ impl From<TryFromSliceError> for EncodingError {
 #[cfg(test)]
 mod tests {
     use crate::{
-        db::{QuerySet, Schema},
-        sql::statement::{Column, Type, Value},
+        db::{Column, QuerySet, Schema},
+        sql::statement::{Type, Value},
     };
 
     use super::*;
@@ -390,5 +394,18 @@ mod tests {
         assert_eq!(deserialize(&packet[4..])?, Response::Err(err));
 
         Ok(())
+    }
+
+    #[test]
+    fn writes_report_how_many_rows_they_affected() {
+        let mut db = crate::db::MvccDatabase::in_memory().unwrap();
+        let mut run = |sql: &str| Response::from(db.exec(sql));
+
+        run("CREATE TABLE t (id INT PRIMARY KEY, v INT);");
+        assert_eq!(run("INSERT INTO t (id, v) VALUES (1, 1), (2, 2), (3, 3);"), Response::Empty(3));
+        assert_eq!(run("UPDATE t SET v = 9 WHERE id >= 2;"), Response::Empty(2));
+        assert_eq!(run("DELETE FROM t WHERE id = 1;"), Response::Empty(1));
+        assert_eq!(run("DELETE FROM t WHERE id = 1;"), Response::Empty(0));
+        assert!(matches!(run("SELECT * FROM t WHERE id = 1;"), Response::QuerySet(_)));
     }
 }
