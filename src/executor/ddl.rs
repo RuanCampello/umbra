@@ -1,16 +1,13 @@
-//! DDL execution dispatch.
-//!
-//! Handles `CREATE TABLE` and `DROP TABLE` by delegating directly to the
-//! MVCC [`Engine`](crate::storage::mvcc::engine::Engine).
+//! DDL execution: catalogue changes go straight to the engine
 
 use super::Executor;
-use crate::db::{DatabaseError, SchemaNew as Schema};
+use crate::db::{DatabaseError, Schema};
 
 impl Executor {
-    /// Creates a table in the engine and returns the stored schema.
     #[inline(always)]
-    pub fn create_table(&self, schema: Schema) -> Result<Schema, DatabaseError> {
-        Ok(self.engine.create_table(schema)?)
+    pub fn create_table(&self, name: &str, schema: Schema) -> Result<(), DatabaseError> {
+        self.engine.create_table(name, schema)?;
+        Ok(())
     }
 
     #[inline(always)]

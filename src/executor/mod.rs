@@ -1,31 +1,15 @@
-//! SQL executor module.
-//!
-//! This replaces the `Planner<File>`-coupled pipeline with a clean executor
-//! that talks directly to the MVCC [`Engine`](crate::storage::mvcc::engine::Engine).
-//!
-//! # Architecture
+//! SQL executor: runs analysed statements against the storage [Engine](crate::storage::engine::Engine)
 //!
 //! ```text
-//! SQL → Parser → Analyzer → Optimizer
-//!                               ↓
-//!                      ┌────────────────┐
-//!                      │    Executor    │
-//!                      └────────┬───────┘
-//!                               │ dispatches
-//!                     ┌─────────┼──────────┐
-//!                     ▼         ▼          ▼
-//!                   DDL       DML       Query
-//!                    │         │          │
-//!                    ▼         ▼          ▼
-//!                Engine    Engine    Operator pipeline
-//!              (create/  (insert/  (Scan → Filter → Project → Sort → Limit)
-//!               drop)    update/         │
-//!                        delete)         ▼
-//!                                  VersionStorage (MVCC-aware scans)
+//! SQL → Parser → Analyzer → Optimiser → Executor ─┬─ DDL   → Engine (catalogue)
+//!                                                 ├─ DML   → Transaction (insert/update/delete)
+//!                                                 └─ Query → operators (Scan → Filter → Sort → …)
 //! ```
+//!
+//! Every statement runs in the session's explicit transaction or, when there is none, in its own
+//! auto-committed one
 
-#![allow(unused)]
-
+mod aggregate;
 pub(crate) mod ddl;
 pub(crate) mod dispatch;
 pub(crate) mod dml;
@@ -33,560 +17,356 @@ pub(crate) mod operator;
 pub(crate) mod query;
 
 use crate::db::DatabaseError;
-use crate::storage::mvcc::{engine::Engine, MvccError};
-use std::sync::Arc;
+use crate::sql::Value;
+use crate::storage::engine::Engine;
+use crate::storage::engine::error::EngineError;
+use crate::storage::engine::transaction::{IsolationLevel, Transaction};
 
-/// SQL query executor backed by the MVCC engine.
-///
-/// Owns an `Arc<Engine>` and manages the transaction lifecycle.
-/// Each call runs within an auto-committed transaction unless an explicit
-/// transaction is active.
+/// Executes statements for one session
 pub(crate) struct Executor {
-    engine: Arc<Engine>,
-    /// The active explicit transaction, if any (`txn_id`, `begin_seq`).
-    active_txn: Option<(i64, i64)>,
+    engine: Engine,
+    /// The explicit transaction, if one is open
+    txn: Option<Transaction>,
+    /// Level of transactions this session starts by default
+    level: IsolationLevel,
+    /// `SET TRANSACTION` override for the next (or current, before its first statement) one
+    next_level: Option<IsolationLevel>,
+    /// Statements run in the explicit transaction so far
+    statements: usize,
     /// Set when a statement fails inside an explicit transaction, the block
-    /// then rejects everything except `COMMIT`/`ROLLBACK`.
+    /// then rejects everything except `COMMIT`/`ROLLBACK`
     aborted: bool,
 }
 
+/// a result row
+/// the row id leads unless a projection dropped it
+pub(crate) type Tuple = Vec<Value>;
+
 impl Executor {
-    pub fn new(engine: Arc<Engine>) -> Self {
+    pub fn new(engine: Engine) -> Self {
         Self {
             engine,
-            active_txn: None,
+            txn: None,
+            level: IsolationLevel::default(),
+            next_level: None,
+            statements: 0,
             aborted: false,
         }
     }
 
-    pub fn engine(&self) -> &Arc<Engine> {
+    pub fn engine(&self) -> &Engine {
         &self.engine
     }
 
-    /// Whether an explicit transaction is in progress.
+    /// whether an explicit transaction is in progress
     pub fn has_active_transaction(&self) -> bool {
-        self.active_txn.is_some()
+        self.txn.is_some()
     }
 
-    pub fn begin_transaction(&mut self) -> Result<(), MvccError> {
-        if self.active_txn.is_some() {
-            return Err(MvccError::Other(
-                "cannot start a transaction while there's one in progress".into(),
-            ));
+    pub fn begin_transaction(
+        &mut self,
+        level: Option<IsolationLevel>,
+    ) -> Result<(), DatabaseError> {
+        let msg = "cannot start a transaction while there's one in progress";
+        if self.txn.is_some() {
+            return Err(DatabaseError::Other(msg.into()));
         }
 
-        let (txn_id, seq) = self.engine.begin_transaction()?;
-        self.active_txn = Some((txn_id, seq));
-
-        Ok(())
+        let level = level.or(self.next_level.take()).unwrap_or(self.level);
+        self.txn = Some(self.engine.begin(level));
+        Ok(self.statements = 0)
     }
 
-    pub fn commit(&mut self) -> Result<(), MvccError> {
-        let (txn_id, _) = self.take_txn()?;
-        self.engine.commit_transaction(txn_id)
+    pub fn commit(&mut self) -> Result<(), DatabaseError> {
+        self.take_txn()?.commit().map_err(DatabaseError::from)
     }
 
-    pub fn rollback(&mut self) -> Result<(), MvccError> {
-        let (txn_id, _) = self.take_txn()?;
-        self.engine.rollback_transaction(txn_id)
+    pub fn rollback(&mut self) -> Result<(), DatabaseError> {
+        Ok(self.take_txn()?.rollback())
     }
 
-    /// Start a short-lived auto-commit transaction if none is active.
-    /// Returns the `txn_id` and whether it should be auto-committed.
-    pub fn auto_txn(&mut self) -> Result<(i64, bool), MvccError> {
-        match self.active_txn {
-            Some((txn_id, _)) => Ok((txn_id, false)),
-            None => {
-                let (txn_id, _) = self.engine.begin_transaction()?;
-                Ok((txn_id, true))
-            }
+    /// `SET TRANSACTION ISOLATION LEVEL`: for the current transaction while it has run nothing, otherwise for the next one
+    /// `session` changes the default instead
+    pub fn set_isolation(
+        &mut self,
+        level: IsolationLevel,
+        session: bool,
+    ) -> Result<(), DatabaseError> {
+        if session {
+            self.level = level;
+            return Ok(());
+        }
+
+        match &self.txn {
+            Some(_) if self.statements > 0 => Err(DatabaseError::Other(
+                "SET TRANSACTION ISOLATION LEVEL must be called before any query".into(),
+            )),
+            Some(_) => Ok(self.txn = Some(self.engine.begin(level))),
+            None => Ok(self.next_level = Some(level)),
         }
     }
 
-    fn take_txn(&mut self) -> Result<(i64, i64), MvccError> {
-        self.active_txn
+    /// runs `run` in the explicit transaction, or in a fresh one committed on success and rolled back on failure
+    pub fn with_txn<R>(
+        &mut self,
+        run: impl FnOnce(&Self, &mut Transaction) -> Result<R, DatabaseError>,
+    ) -> Result<R, DatabaseError> {
+        match self.txn.take() {
+            Some(mut txn) => {
+                if txn.level() == IsolationLevel::ReadCommitted {
+                    txn.refresh_snapshot();
+                }
+
+                self.statements += 1;
+                let result = run(self, &mut txn);
+                self.txn = Some(txn);
+                result
+            },
+            _ => {
+                let level = self.next_level.take().unwrap_or(self.level);
+                let mut txn = self.engine.begin(level);
+
+                match run(self, &mut txn) {
+                    Ok(result) => {
+                        txn.commit()?;
+                        Ok(result)
+                    },
+                    Err(error) => {
+                        txn.rollback();
+                        Err(error)
+                    },
+                }
+            },
+        }
+    }
+
+    fn take_txn(&mut self) -> Result<Transaction, DatabaseError> {
+        self.txn
             .take()
-            .ok_or(MvccError::Other("no active transaction".into()))
+            .ok_or_else(|| DatabaseError::Other("no active transaction".into()))
     }
 }
 
-impl From<MvccError> for DatabaseError {
-    fn from(err: MvccError) -> Self {
-        match err {
-            MvccError::Io(io) => DatabaseError::Io(io),
-            MvccError::NotOpen => DatabaseError::Other("MVCC engine is not open".into()),
-            MvccError::TableNotFound => {
-                DatabaseError::Sql(crate::db::SqlError::InvalidTable("(mvcc)".into()))
-            }
-            MvccError::WriteConflict => {
-                DatabaseError::Other("write-write conflict detected".into())
-            }
-            MvccError::DuplicatedKey(value) => {
-                DatabaseError::Sql(crate::db::SqlError::DuplicatedKey(value))
-            }
-            MvccError::Wal(e) => DatabaseError::Other(format!("WAL error: {e:?}")),
-            MvccError::Other(msg) => DatabaseError::Other(msg),
+impl From<EngineError> for DatabaseError {
+    fn from(error: EngineError) -> Self {
+        use crate::db::SqlError;
+        use EngineError::*;
+
+        match error {
+            Io(io) => DatabaseError::Io(io),
+            Corrupt(message) => DatabaseError::Corrupted(message),
+            TableNotFound(table) => DatabaseError::Sql(SqlError::InvalidTable(table)),
+            ColumnNotFound(column) => DatabaseError::Sql(SqlError::InvalidColumn(column)),
+            DuplicatedKey(value) => DatabaseError::Sql(SqlError::DuplicatedKey(value)),
+            error @ (WriteConflict | SerializationFailure) => {
+                DatabaseError::Conflict(error.to_string())
+            },
+            error => DatabaseError::Other(error.to_string()),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::dispatch::ExecResult;
     use super::*;
     use crate::db::SchemaBuilder;
-    use crate::sql::{statement::Type, Value};
+    use crate::sql::statement::{
+        Assignment, BinaryOperator, Delete, Expression, OrderBy, OrderDirection, Select, Statement,
+        TableRef, Type, Update,
+    };
     use operator::Operator;
 
     fn setup() -> Executor {
-        let engine = Arc::new(Engine::in_memory());
-        engine.open().unwrap();
-
-        Executor::new(engine)
-    }
-
-    fn create_users_table(exec: &Executor) {
-        let schema = SchemaBuilder::new("users")
+        let exec = Executor::new(Engine::in_memory());
+        let schema = SchemaBuilder::new()
             .primary("id", Type::Integer)
             .add("name", Type::Text)
             .build();
+        exec.create_table("users", schema).unwrap();
+        exec
+    }
 
-        exec.create_table(schema).unwrap();
+    fn seed(exec: &mut Executor, rows: &[(i128, &str)]) {
+        let values = rows
+            .iter()
+            .map(|&(id, name)| vec![Value::Number(id), Value::String(name.into())])
+            .collect();
+        exec.with_txn(|exec, txn| exec.insert(txn, "users", values, false)).unwrap();
+    }
+
+    fn scan(exec: &mut Executor) -> Vec<Tuple> {
+        exec.with_txn(|exec, txn| {
+            let table = exec.engine.table("users")?;
+            let mut scan = operator::Scan::new(txn.scan(&table), None);
+            let mut rows = Vec::new();
+            while let Some(tuple) = scan.next()? {
+                rows.push(tuple);
+            }
+            Ok(rows)
+        })
+        .unwrap()
+    }
+
+    fn select(table: &str) -> Select {
+        Select {
+            columns: vec![Expression::Wildcard],
+            from: TableRef { name: table.into(), alias: None },
+            joins: vec![],
+            r#where: None,
+            order_by: vec![],
+            group_by: vec![],
+            limit: None,
+            offset: None,
+        }
+    }
+
+    fn id_equals(id: i128) -> Expression {
+        Expression::BinaryOperation {
+            left: Box::new(Expression::Identifier("id".into())),
+            operator: BinaryOperator::Eq,
+            right: Box::new(Expression::Value(Value::Number(id))),
+        }
     }
 
     #[test]
-    fn ddl_create_table() {
-        let exec = setup();
-        create_users_table(&exec);
-
-        assert!(exec.engine().does_table_exists("users").unwrap());
-    }
-
-    #[test]
-    fn insert_and_scan() {
+    fn scan_filter_project_and_limit_operators() {
         let mut exec = setup();
-        create_users_table(&exec);
+        seed(&mut exec, &[(1, "alice"), (2, "bob"), (3, "charlie")]);
 
-        let (txn_id, auto) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![
-                vec![Value::Number(1), Value::String("alice".into())],
-                vec![Value::Number(2), Value::String("bob".into())],
-            ],
-            false,
-        )
-        .unwrap();
-
-        if auto {
-            exec.engine().commit_transaction(txn_id).unwrap();
-        }
-
-        let (reader, _auto) = exec.auto_txn().unwrap();
-        let mut scan = operator::Scan::new(exec.engine(), reader, "users", None).unwrap();
-
-        let mut rows = Vec::new();
-        while let Some(tuple) = scan.next().unwrap() {
-            rows.push(tuple);
-        }
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][0], Value::Number(1));
+        let rows = scan(&mut exec);
+        assert_eq!(rows.len(), 3);
         assert_eq!(rows[0][2], Value::String("alice".into()));
-        assert_eq!(rows[1][2], Value::String("bob".into()));
-    }
 
-    #[test]
-    fn filter_operator() {
-        let mut exec = setup();
-        create_users_table(&exec);
-
-        let (txn_id, _) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![
-                vec![Value::Number(1), Value::String("alice".into())],
-                vec![Value::Number(2), Value::String("bob".into())],
-                vec![Value::Number(3), Value::String("charlie".into())],
-            ],
-            false,
-        )
-        .unwrap();
-        exec.engine().commit_transaction(txn_id).unwrap();
-
-        let (reader, _) = exec.auto_txn().unwrap();
-        let scan = operator::Scan::new(exec.engine(), reader, "users", None).unwrap();
-
-        use crate::sql::statement::{BinaryOperator, Column, Expression};
         let mut schema = crate::db::Schema::new(vec![
-            Column::new("id", Type::Integer),
-            Column::new("name", Type::Text),
+            crate::db::Column::new("id", Type::Integer),
+            crate::db::Column::new("name", Type::Text),
         ]);
         schema.prepend_id();
 
-        // WHERE id > 1
-        let predicate = Expression::BinaryOperation {
-            left: Box::new(Expression::Identifier("id".into())),
-            operator: BinaryOperator::Gt,
-            right: Box::new(Expression::Value(Value::Number(1))),
-        };
+        let names = exec
+            .with_txn(|exec, txn| {
+                let table = exec.engine.table("users")?;
+                let source = Box::new(operator::Scan::new(txn.scan(&table), None));
+                let predicate = Expression::BinaryOperation {
+                    left: Box::new(Expression::Identifier("id".into())),
+                    operator: BinaryOperator::Gt,
+                    right: Box::new(Expression::Value(Value::Number(1))),
+                };
+                let filter = Box::new(operator::Filter::new(source, schema, predicate));
+                let project = Box::new(operator::Project::new(filter, vec![2]));
+                let mut limit = operator::Limit::new(project, 1, 1);
 
-        let mut filter = operator::Filter::new(Box::new(scan), schema, predicate);
-        let mut rows = Vec::new();
-        while let Some(tuple) = filter.next().unwrap() {
-            rows.push(tuple);
-        }
+                let mut rows = Vec::new();
+                while let Some(tuple) = limit.next()? {
+                    rows.push(tuple);
+                }
+                Ok(rows)
+            })
+            .unwrap();
 
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][2], Value::String("bob".into()));
-        assert_eq!(rows[1][2], Value::String("charlie".into()));
-    }
-
-    #[test]
-    fn project_operator() {
-        let mut exec = setup();
-        create_users_table(&exec);
-
-        let (txn_id, _) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![vec![Value::Number(1), Value::String("alice".into())]],
-            false,
-        )
-        .unwrap();
-        exec.engine().commit_transaction(txn_id).unwrap();
-
-        let (reader, _) = exec.auto_txn().unwrap();
-        let scan = operator::Scan::new(exec.engine(), reader, "users", None).unwrap();
-
-        let mut project = operator::Project::new(Box::new(scan), vec![2]);
-        let row = project.next().unwrap().unwrap();
-
-        assert_eq!(row.len(), 1);
-        assert_eq!(row[0], Value::String("alice".into()));
-        assert!(project.next().unwrap().is_none());
-    }
-
-    #[test]
-    fn limit_operator() {
-        let mut exec = setup();
-        create_users_table(&exec);
-
-        let (txn_id, _) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![
-                vec![Value::Number(1), Value::String("a".into())],
-                vec![Value::Number(2), Value::String("b".into())],
-                vec![Value::Number(3), Value::String("c".into())],
-            ],
-            false,
-        )
-        .unwrap();
-        exec.engine().commit_transaction(txn_id).unwrap();
-
-        let (reader, _) = exec.auto_txn().unwrap();
-        let scan = operator::Scan::new(exec.engine(), reader, "users", None).unwrap();
-
-        // LIMIT 2 OFFSET 1
-        let mut limit = operator::Limit::new(Box::new(scan), 2, 1);
-
-        let mut rows = Vec::new();
-        while let Some(tuple) = limit.next().unwrap() {
-            rows.push(tuple);
-        }
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][2], Value::String("b".into()));
-        assert_eq!(rows[1][2], Value::String("c".into()));
+        assert_eq!(names, [vec![Value::String("charlie".into())]]);
     }
 
     #[test]
     fn explicit_transaction_lifecycle() {
         let mut exec = setup();
-        create_users_table(&exec);
 
-        exec.begin_transaction().unwrap();
+        exec.begin_transaction(None).unwrap();
         assert!(exec.has_active_transaction());
+        assert!(exec.begin_transaction(None).is_err());
 
         exec.commit().unwrap();
         assert!(!exec.has_active_transaction());
 
-        exec.begin_transaction().unwrap();
+        exec.begin_transaction(None).unwrap();
         exec.rollback().unwrap();
         assert!(!exec.has_active_transaction());
     }
 
     #[test]
-    fn double_begin_errors() {
+    fn update_and_delete_target_matched_rows_only() {
         let mut exec = setup();
-
-        exec.begin_transaction().unwrap();
-        assert!(exec.begin_transaction().is_err());
-
-        exec.rollback().unwrap();
-    }
-
-    #[test]
-    fn update_with_where_targets_matched_rows_only() {
-        use super::dispatch::ExecResult;
-        use crate::sql::statement::{Assignment, BinaryOperator, Expression, Statement, Update};
-
-        let mut exec = setup();
-        create_users_table(&exec);
-
         // user ids deliberately differ from row ids to catch offset bugs
-        let (txn_id, _) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![
-                vec![Value::Number(10), Value::String("a".into())],
-                vec![Value::Number(20), Value::String("b".into())],
-            ],
-            false,
-        )
-        .unwrap();
-        exec.engine().commit_transaction(txn_id).unwrap();
+        seed(&mut exec, &[(10, "a"), (20, "b"), (30, "c")]);
 
-        let stmt = Statement::Update(Update {
+        let update = Statement::Update(Update {
             table: "users".into(),
             columns: vec![Assignment {
                 identifier: "name".into(),
                 value: Expression::Value(Value::String("updated".into())),
             }],
-            r#where: Some(Expression::BinaryOperation {
-                left: Box::new(Expression::Identifier("id".into())),
-                operator: BinaryOperator::Eq,
-                right: Box::new(Expression::Value(Value::Number(20))),
-            }),
+            r#where: Some(id_equals(20)),
             returning: vec![],
         });
+        assert!(matches!(exec.execute(update).unwrap(), ExecResult::Affected(1)));
 
-        let ExecResult::Affected(affected) = exec.execute(stmt).unwrap() else {
-            panic!("UPDATE must report affected rows");
-        };
-        assert_eq!(affected, 1);
+        let delete =
+            Statement::Delete(Delete { from: "users".into(), r#where: Some(id_equals(10)) });
+        assert!(matches!(exec.execute(delete).unwrap(), ExecResult::Affected(1)));
 
-        let (reader, _) = exec.auto_txn().unwrap();
-        let rows = exec.engine().scan(reader, "users").unwrap();
+        let rows = scan(&mut exec);
         assert_eq!(rows.len(), 2);
-        assert_eq!(
-            rows[0].1,
-            vec![Value::Number(10), Value::String("a".into())]
-        );
-        assert_eq!(
-            rows[1].1,
-            vec![Value::Number(20), Value::String("updated".into())]
-        );
-    }
-
-    #[test]
-    fn delete_with_where_targets_matched_rows_only() {
-        use super::dispatch::ExecResult;
-        use crate::sql::statement::{BinaryOperator, Delete, Expression, Statement};
-
-        let mut exec = setup();
-        create_users_table(&exec);
-
-        let (txn_id, _) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![
-                vec![Value::Number(10), Value::String("a".into())],
-                vec![Value::Number(20), Value::String("b".into())],
-            ],
-            false,
-        )
-        .unwrap();
-        exec.engine().commit_transaction(txn_id).unwrap();
-
-        let stmt = Statement::Delete(Delete {
-            from: "users".into(),
-            r#where: Some(Expression::BinaryOperation {
-                left: Box::new(Expression::Identifier("id".into())),
-                operator: BinaryOperator::Eq,
-                right: Box::new(Expression::Value(Value::Number(10))),
-            }),
-        });
-
-        let ExecResult::Affected(affected) = exec.execute(stmt).unwrap() else {
-            panic!("DELETE must report affected rows");
-        };
-        assert_eq!(affected, 1);
-
-        let (reader, _) = exec.auto_txn().unwrap();
-        let rows = exec.engine().scan(reader, "users").unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].0, 2);
-        assert_eq!(rows[0].1[0], Value::Number(20));
+        assert_eq!(rows[0][1..], [Value::Number(20), Value::String("updated".into())]);
+        assert_eq!(rows[1][1..], [Value::Number(30), Value::String("c".into())]);
     }
 
     #[test]
     fn execution_error_aborts_explicit_transaction() {
-        use super::dispatch::ExecResult;
-        use crate::sql::statement::{Expression, Select, Statement, TableRef};
-
         let mut exec = setup();
-        create_users_table(&exec);
 
-        let select = |table: &str| {
-            Statement::Select(Select {
-                columns: vec![Expression::Wildcard],
-                from: TableRef {
-                    name: table.into(),
-                    alias: None,
-                },
-                joins: vec![],
-                r#where: None,
-                order_by: vec![],
-                group_by: vec![],
-                limit: None,
-                offset: None,
-            })
-        };
+        exec.begin_transaction(None).unwrap();
+        assert!(exec.execute(Statement::Select(select("missing"))).is_err());
+        assert!(exec.execute(Statement::Select(select("users"))).is_err());
 
-        exec.begin_transaction().unwrap();
-        assert!(exec.execute(select("missing")).is_err());
-
-        // block is aborted: even valid statements are rejected
-        assert!(exec.execute(select("users")).is_err());
-
-        // ROLLBACK clears the aborted state and ends the block
-        assert!(matches!(
-            exec.execute(Statement::Rollback).unwrap(),
-            ExecResult::Ok
-        ));
+        assert!(matches!(exec.execute(Statement::Rollback).unwrap(), ExecResult::Ok));
         assert!(!exec.has_active_transaction());
-
-        let (reader, _) = exec.auto_txn().unwrap();
-        assert!(exec.engine().scan(reader, "users").is_ok());
+        assert!(exec.execute(Statement::Select(select("users"))).is_ok());
     }
 
     #[test]
-    fn select_wildcard() {
+    fn select_projection_order_and_limit() {
         let mut exec = setup();
-        create_users_table(&exec);
+        seed(&mut exec, &[(3, "charlie"), (1, "alice"), (2, "bob")]);
 
-        let (txn_id, _) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![
-                vec![Value::Number(1), Value::String("alice".into())],
-                vec![Value::Number(2), Value::String("bob".into())],
-            ],
-            false,
-        )
-        .unwrap();
-        exec.engine().commit_transaction(txn_id).unwrap();
+        let mut ordered = select("users");
+        ordered.order_by = vec![OrderBy {
+            expr: Expression::Identifier("id".into()),
+            direction: OrderDirection::Asc,
+        }];
+        ordered.limit = Some(2);
 
-        let (reader, _) = exec.auto_txn().unwrap();
-        use crate::sql::statement::{Expression, Select, TableRef};
-
-        let select = Select {
-            columns: vec![Expression::Wildcard],
-            from: TableRef {
-                name: "users".into(),
-                alias: None,
-            },
-            joins: vec![],
-            r#where: None,
-            order_by: vec![],
-            group_by: vec![],
-            limit: None,
-            offset: None,
-        };
-
-        let (_, rows) = exec.execute_select(reader, select).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][1], Value::String("alice".into()));
-    }
-
-    #[test]
-    fn select_with_projection() {
-        let mut exec = setup();
-        create_users_table(&exec);
-
-        let (txn_id, _) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![vec![Value::Number(1), Value::String("alice".into())]],
-            false,
-        )
-        .unwrap();
-        exec.engine().commit_transaction(txn_id).unwrap();
-
-        let (reader, _) = exec.auto_txn().unwrap();
-        use crate::sql::statement::{Expression, Select, TableRef};
-
-        let select = Select {
-            columns: vec![Expression::Identifier("name".into())],
-            from: TableRef {
-                name: "users".into(),
-                alias: None,
-            },
-            joins: vec![],
-            r#where: None,
-            order_by: vec![],
-            group_by: vec![],
-            limit: None,
-            offset: None,
-        };
-
-        let (_, rows) = exec.execute_select(reader, select).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].len(), 1);
-        assert_eq!(rows[0][0], Value::String("alice".into()));
-    }
-
-    #[test]
-    fn select_order_by_and_limit() {
-        let mut exec = setup();
-        create_users_table(&exec);
-
-        let (txn_id, _) = exec.auto_txn().unwrap();
-        exec.insert(
-            txn_id,
-            "users",
-            vec![
-                vec![Value::Number(3), Value::String("charlie".into())],
-                vec![Value::Number(1), Value::String("alice".into())],
-                vec![Value::Number(2), Value::String("bob".into())],
-            ],
-            false,
-        )
-        .unwrap();
-        exec.engine().commit_transaction(txn_id).unwrap();
-
-        let (reader, _) = exec.auto_txn().unwrap();
-        use crate::sql::statement::{Expression, OrderBy, OrderDirection, Select, TableRef};
-
-        let select = Select {
-            columns: vec![Expression::Wildcard],
-            from: TableRef {
-                name: "users".into(),
-                alias: None,
-            },
-            joins: vec![],
-            r#where: None,
-            order_by: vec![OrderBy {
-                expr: Expression::Identifier("id".into()),
-                direction: OrderDirection::Asc,
-            }],
-            group_by: vec![],
-            limit: Some(2),
-            offset: None,
-        };
-
-        let (_, rows) = exec.execute_select(reader, select).unwrap();
+        let (_, rows) = exec.with_txn(|exec, txn| exec.execute_select(txn, ordered)).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][0], Value::Number(1));
         assert_eq!(rows[1][0], Value::Number(2));
+
+        let mut projected = select("users");
+        projected.columns = vec![Expression::Identifier("name".into())];
+        let (_, rows) = exec.with_txn(|exec, txn| exec.execute_select(txn, projected)).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| row.len() == 1));
+    }
+
+    #[test]
+    fn set_transaction_applies_before_the_first_statement_only() {
+        let mut exec = setup();
+
+        exec.begin_transaction(None).unwrap();
+        exec.set_isolation(IsolationLevel::Serializable, false).unwrap();
+        assert_eq!(exec.txn.as_ref().unwrap().level(), IsolationLevel::Serializable);
+
+        exec.execute(Statement::Select(select("users"))).unwrap();
+        assert!(exec.set_isolation(IsolationLevel::ReadCommitted, false).is_err());
+        exec.rollback().unwrap();
+
+        exec.set_isolation(IsolationLevel::ReadCommitted, false).unwrap();
+        exec.begin_transaction(None).unwrap();
+        assert_eq!(exec.txn.as_ref().unwrap().level(), IsolationLevel::ReadCommitted);
+        exec.rollback().unwrap();
+
+        exec.begin_transaction(None).unwrap();
+        assert_eq!(exec.txn.as_ref().unwrap().level(), IsolationLevel::Snapshot);
+        exec.rollback().unwrap();
     }
 }
