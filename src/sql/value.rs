@@ -1,7 +1,7 @@
-//! SQL Value types and binary serialisation.
+//! SQL Value types and binary serialisation
 //!
 //! This module defines the core runtime value types used throughout the database,
-//! including [`Value`] for storing column data and [`Temporal`] for date/time values.
+//! including [Value] for storing column data and [Temporal] for date/time values
 //!
 //! # Binary Serialisation Format
 //!
@@ -31,11 +31,11 @@
 //! └─────┴──────────┴────────┴───────────────────┘
 
 use super::statement::UnaryOperator;
+use crate::core::Serialize;
 use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
-use crate::core::Serialize;
 use crate::vm::expression::TypeError;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
@@ -44,8 +44,8 @@ use std::io::{self, Error, ErrorKind};
 use std::ops::Neg;
 use std::sync::Arc;
 
-/// Type tags for binary serialisation format.
-/// Tags 11-255 are reserved for future types.
+/// Type tags for binary serialisation format
+/// Tags 11-255 are reserved for future types
 mod tags {
     pub const NULL: u8 = 0;
     pub const BOOLEAN: u8 = 1;
@@ -61,14 +61,14 @@ mod tags {
     // Tags 11-255 reserved for future types
 }
 
-/// Temporal sub-tags for Date/Time/DateTime discrimination.
+/// Temporal sub-tags for Date/Time/DateTime discrimination
 mod temporal_tags {
     pub const DATE: u8 = 0;
     pub const TIME: u8 = 1;
     pub const DATETIME: u8 = 2;
 }
 
-/// Number size hints for variable-width integer encoding.
+/// Number size hints for variable-width integer encoding
 mod number_sizes {
     pub const I16: u8 = 2;
     pub const I32: u8 = 4;
@@ -76,26 +76,26 @@ mod number_sizes {
     pub const I128: u8 = 16;
 }
 
-/// A runtime value stored in a table row or returned in a query.
+/// A runtime value stored in a table row or returned in a query
 ///
 /// This enum represents a *concrete value* associated with a column,
-/// typically used in query results, expression evaluation, and row serialisation.
+/// typically used in query results, expression evaluation, and row serialisation
 ///
 /// For example:
 /// - A row with a `VARCHAR` column might store `Value::String("hello".into())`.
 /// - A `DATE` column would store `Value::Temporal(Temporal::Date(...))`.
 ///
-/// `Value` is the counterpart to `Type`:  
-/// - `Type` defines what *kind* of value is allowed.  
-/// - `Value` holds the *actual* data.
+/// `Value` is the counterpart to `Type`:
+/// - `Type` defines what *kind* of value is allowed
+/// - `Value` holds the *actual* data
 ///
-/// This separation allows the system to validate values against schema definitions at runtime.
+/// This separation allows the system to validate values against schema definitions at runtime
 ///
 /// ## Equality semantics
 ///
 /// `Value` implements [`PartialEq`] for deep equality:
-/// - Two values are equal only if they are the same variant and hold exactly equal contents.
-///   For example, `Value::Number(5) == Value::Number(5)` is true,  
+/// - Two values are equal only if they are the same variant and hold exactly equal contents
+///   For example, `Value::Number(5) == Value::Number(5)` is true,
 ///   but `Value::Number(5) == Value::Float(5.0)` is also true, because they can be coerced
 ///   losslessly from integer to float.
 ///
@@ -124,12 +124,12 @@ pub enum Value {
     Null,
 }
 
-/// Date/Time related types.
+/// Date/Time related types
 ///
-/// This enum wraps actual values of date/time types, such as a specific calendar date or a time of day.
-/// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level.
+/// This enum wraps actual values of date/time types, such as a specific calendar date or a time of day
+/// It distinguishes between `DATE`, `TIME`, and `TIMESTAMP` at the value level
 ///
-/// Values of this type are stored in the `Value::Temporal` variant.
+/// Values of this type are stored in the `Value::Temporal` variant
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum Temporal {
     Date(NaiveDate),
@@ -141,7 +141,7 @@ pub trait Coerce: Sized {
     fn coerce_to(self, other: Self) -> (Self, Self);
 }
 
-/// Literally "NULL" in hex.
+/// Literally "NULL" in hex
 const NULL_HASH: u32 = 0x4E554C4C;
 
 impl Value {
@@ -166,10 +166,8 @@ impl Value {
 
         matches!(
             (self, other),
-            (
-                Float(_) | Number(_) | Numeric(_),
-                Float(_) | Number(_) | Numeric(_)
-            ) | (Temporal(_), Interval(_))
+            (Float(_) | Number(_) | Numeric(_), Float(_) | Number(_) | Numeric(_))
+                | (Temporal(_), Interval(_))
                 | (Interval(_), Temporal(_))
         )
     }
@@ -192,31 +190,27 @@ impl Value {
         }
     }
 
-    /// Serialise a Value to a self-describing binary format.
-    ///
-    /// The format is designed for fast serialisation/deserialisation without
-    /// requiring schema information. Integers use variable-width encoding
-    /// to minimize space while maintaining performance.
-    ///
-    /// # Performance
-    ///
-    /// This method is optimised for:
-    /// - Minimal allocations (pre-sized Vec)
-    /// - Direct byte operations (no intermediate formats)
-    /// - Branch prediction (common cases first)
+    /// serialise a value to a self-describing binary format
     #[inline]
     pub fn serialise(&self) -> io::Result<Vec<u8>> {
-        // pre-allocate based on expected size
         let mut buf = Vec::with_capacity(self.serialised_size_hint());
+        self.serialise_into(&mut buf);
+        Ok(buf)
+    }
 
+    /// appends the self-delimiting encoding of the value to `buf`
+    #[inline]
+    pub fn serialise_into(&self, buf: &mut Vec<u8>) {
         buf.push(self.tag());
 
         match self {
-            Value::Null => {}
-
+            Value::Null => {},
             Value::Boolean(b) => {
-                buf.push(if *b { 1 } else { 0 });
-            }
+                buf.push(match *b {
+                    true => 1,
+                    _ => 0,
+                });
+            },
 
             Value::Number(n) => {
                 const I16_MIN: i128 = i16::MIN as _;
@@ -232,61 +226,56 @@ impl Value {
                     I16_MIN..=I16_MAX => {
                         buf.push(number_sizes::I16);
                         buf.extend_from_slice(&(*n as i16).to_le_bytes());
-                    }
+                    },
 
                     I32_MIN..=I32_MAX => {
                         buf.push(number_sizes::I32);
                         buf.extend_from_slice(&(*n as i32).to_le_bytes());
-                    }
+                    },
 
                     I64_MIN..=I64_MAX => {
                         buf.push(number_sizes::I64);
                         buf.extend_from_slice(&(*n as i64).to_le_bytes());
-                    }
+                    },
 
                     _ => {
                         buf.push(number_sizes::I128);
                         buf.extend_from_slice(&n.to_le_bytes());
-                    }
+                    },
                 }
-            }
+            },
             Value::Float(f) => buf.extend_from_slice(&f.to_le_bytes()),
             Value::String(s) => {
                 buf.extend_from_slice(&(s.len() as u32).to_le_bytes());
                 buf.extend_from_slice(s.as_bytes());
-            }
+            },
             Value::Temporal(t) => match t {
                 Temporal::Date(d) => {
                     buf.push(temporal_tags::DATE);
-                    d.serialize(&mut buf);
-                }
+                    d.serialize(buf);
+                },
                 Temporal::Time(t) => {
                     buf.push(temporal_tags::TIME);
-                    t.serialize(&mut buf);
-                }
+                    t.serialize(buf);
+                },
                 Temporal::DateTime(dt) => {
                     buf.push(temporal_tags::DATETIME);
-                    dt.serialize(&mut buf);
-                }
+                    dt.serialize(buf);
+                },
             },
 
             Value::Uuid(u) => buf.extend_from_slice(u.as_ref()),
-            Value::Interval(i) => i.serialize(&mut buf),
-            Value::Numeric(n) => n.serialize(&mut buf),
+            Value::Interval(i) => i.serialize(buf),
+            Value::Numeric(n) => n.serialize(buf),
             Value::Enum(e) => buf.push(*e),
             Value::Blob(b) => {
                 buf.extend_from_slice(&(b.len() as u32).to_le_bytes());
                 buf.extend_from_slice(b);
-            }
+            },
         }
-
-        Ok(buf)
     }
 
-    /// Deserialise a Value from binary format.
-    ///
-    /// Returns the deserialised Value and the number of bytes consumed.
-    /// This allows efficient parsing of consecutive values.
+    /// deserialise a value from binary format
     #[inline]
     pub fn deserialise(data: &[u8]) -> io::Result<(Self, usize)> {
         if data.is_empty() {
@@ -305,7 +294,7 @@ impl Value {
                 }
 
                 (Value::Boolean(content[0] != 0), 2)
-            }
+            },
 
             tags::NUMBER => {
                 if content.is_empty() {
@@ -321,33 +310,33 @@ impl Value {
                         }
                         let n = i16::from_le_bytes([payload[0], payload[1]]);
                         (Value::Number(n as i128), 4)
-                    }
+                    },
                     number_sizes::I32 => {
                         if payload.len() < 4 {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated i32"));
                         }
                         let n = i32::from_le_bytes(payload[..4].try_into().unwrap());
                         (Value::Number(n as i128), 6)
-                    }
+                    },
                     number_sizes::I64 => {
                         if payload.len() < 8 {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated i64"));
                         }
                         let n = i64::from_le_bytes(payload[..8].try_into().unwrap());
                         (Value::Number(n as i128), 10)
-                    }
+                    },
                     number_sizes::I128 => {
                         if payload.len() < 16 {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated i128"));
                         }
                         let n = i128::from_le_bytes(payload[..16].try_into().unwrap());
                         (Value::Number(n), 18)
-                    }
+                    },
                     _ => return Err(Error::new(ErrorKind::InvalidData, "Invalid number size")),
                 };
 
                 (value, consumed)
-            }
+            },
 
             tags::FLOAT => {
                 if content.len() < 8 {
@@ -356,14 +345,11 @@ impl Value {
                 let f = f64::from_le_bytes(content[..8].try_into().unwrap());
 
                 (Value::Float(f), 9)
-            }
+            },
 
             tags::STRING => {
                 if content.len() < 4 {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Truncated string length",
-                    ));
+                    return Err(Error::new(ErrorKind::InvalidData, "Truncated string length"));
                 }
                 let len = u32::from_le_bytes(content[..4].try_into().unwrap()) as usize;
                 if content.len() < 4 + len {
@@ -373,14 +359,11 @@ impl Value {
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
                 (Value::String(s.into()), 5 + len)
-            }
+            },
 
             tags::TEMPORAL => {
                 if content.is_empty() {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Missing temporal sub-tag",
-                    ));
+                    return Err(Error::new(ErrorKind::InvalidData, "Missing temporal sub-tag"));
                 }
                 let sub_tag = content[0];
                 let payload = &content[1..];
@@ -394,7 +377,7 @@ impl Value {
                         let date = NaiveDate::try_from(bytes)?;
 
                         (Value::Temporal(Temporal::Date(date)), 6)
-                    }
+                    },
                     temporal_tags::TIME => {
                         if payload.len() < 3 {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated time"));
@@ -403,7 +386,7 @@ impl Value {
                         let time = NaiveTime::from(bytes);
 
                         (Value::Temporal(Temporal::Time(time)), 5)
-                    }
+                    },
                     temporal_tags::DATETIME => {
                         if payload.len() < 7 {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated datetime"));
@@ -413,23 +396,20 @@ impl Value {
                         let dt = NaiveDateTime::try_from((date_bytes, time_bytes))?;
 
                         (Value::Temporal(Temporal::DateTime(dt)), 9)
-                    }
+                    },
                     _ => {
-                        return Err(Error::new(
-                            ErrorKind::InvalidData,
-                            "Invalid temporal sub-tag",
-                        ))
-                    }
+                        return Err(Error::new(ErrorKind::InvalidData, "Invalid temporal sub-tag"));
+                    },
                 }
-            }
+            },
 
             tags::UUID => {
                 if content.len() < 16 {
                     return Err(Error::new(ErrorKind::InvalidData, "Truncated UUID"));
                 }
-                let bytes: [u8; 16] = content[..16].try_into().unwrap();
+                let bytes: [u8; _] = content[..16].try_into().unwrap();
                 (Value::Uuid(Uuid::from_bytes(bytes)), 17)
-            }
+            },
 
             tags::INTERVAL => {
                 if content.len() < 16 {
@@ -441,7 +421,7 @@ impl Value {
 
                 let interval = Interval::new(months, days, microseconds);
                 (Value::Interval(interval), 17)
-            }
+            },
 
             tags::NUMERIC => {
                 // numeric uses its own variable-length format
@@ -463,23 +443,20 @@ impl Value {
                     let ndigits = u16::from_le_bytes(content[8..10].try_into().unwrap()) as usize;
                     let total_len = 8 + 6 + ndigits * 2;
                     if content.len() < total_len {
-                        return Err(Error::new(
-                            ErrorKind::InvalidData,
-                            "Truncated numeric digits",
-                        ));
+                        return Err(Error::new(ErrorKind::InvalidData, "Truncated numeric digits"));
                     }
                     let n = Numeric::from_serialized_bytes(&content[..total_len])
                         .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
                     (Value::Numeric(n), 1 + total_len)
                 }
-            }
+            },
 
             tags::ENUM => {
                 if content.is_empty() {
                     return Err(Error::new(ErrorKind::InvalidData, "Missing enum value"));
                 }
                 (Value::Enum(content[0]), 2)
-            }
+            },
 
             tags::BLOB => {
                 if content.len() < 4 {
@@ -490,14 +467,14 @@ impl Value {
                     return Err(Error::new(ErrorKind::InvalidData, "Truncated blob data"));
                 }
                 (Value::Blob(content[4..4 + len].to_vec()), 5 + len)
-            }
+            },
 
             _ => {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     format!("Unknown type tag: {}", tag),
-                ))
-            }
+                ));
+            },
         })
     }
 
@@ -590,11 +567,11 @@ impl Coerce for Value {
                         _ => {
                             let (left, right) = from.coerce_to(parsed);
                             (Value::Temporal(left), Value::Temporal(right))
-                        }
+                        },
                     },
                     _ => (self, other),
                 }
-            }
+            },
 
             // String <-> UUID coercion
             (Value::Uuid(_), Value::String(s)) => match std::str::FromStr::from_str(s) {
@@ -638,12 +615,10 @@ impl PartialEq for Value {
             (Arbitrary(a), Arbitrary(b)) => a == b,
             (Arbitrary(a), Number(n)) | (Number(n), Arbitrary(a)) => {
                 a == &crate::core::numeric::Numeric::from(*n)
-            }
+            },
             (Arbitrary(a), Float(f)) | (Float(f), Arbitrary(a)) => {
-                crate::core::numeric::Numeric::try_from(*f)
-                    .map(|f| &f == a)
-                    .unwrap_or(false)
-            }
+                crate::core::numeric::Numeric::try_from(*f).map(|f| &f == a).unwrap_or(false)
+            },
             (String(a), String(b)) => a == b,
             (Boolean(a), Boolean(b)) => a == b,
             (Temporal(a), Temporal(b)) => a == b,
@@ -673,6 +648,19 @@ impl Ord for Value {
             (Value::Uuid(a), Value::Uuid(b)) => a.cmp(b),
             (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
             (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
+            // numbers of different representations order by value, as PartialEq compares them
+            (Value::Number(a), Value::Float(b)) => (*a as f64).total_cmp(b),
+            (Value::Float(a), Value::Number(b)) => a.total_cmp(&(*b as f64)),
+            (Value::Numeric(a), Value::Number(b)) => a.cmp(&Numeric::from(*b)),
+            (Value::Number(a), Value::Numeric(b)) => Numeric::from(*a).cmp(b),
+            (Value::Numeric(a), Value::Float(b)) => match Numeric::try_from(*b) {
+                Ok(b) => a.cmp(&b),
+                Err(_) => f64::from(a.clone()).total_cmp(b),
+            },
+            (Value::Float(a), Value::Numeric(b)) => match Numeric::try_from(*a) {
+                Ok(a) => a.cmp(b),
+                Err(_) => a.total_cmp(&f64::from(b.clone())),
+            },
             (Value::Enum(a), Value::Enum(b)) => a.cmp(b),
             (Value::Blob(a), Value::Blob(b)) => a.cmp(b),
             (Value::Blob(_), _) => std::cmp::Ordering::Greater,
@@ -738,10 +726,7 @@ impl Neg for Value {
             Value::Float(float) => Ok(Value::Float(-float)),
             Value::Numeric(num) => Ok(Value::Numeric(-num)),
             Value::Null => Ok(Value::Null),
-            v => Err(TypeError::CannotApplyUnary {
-                operator: UnaryOperator::Minus,
-                value: v,
-            }),
+            v => Err(TypeError::CannotApplyUnary { operator: UnaryOperator::Minus, value: v }),
         }
     }
 }
@@ -752,7 +737,10 @@ impl Display for Value {
             Value::String(string) => write!(f, "\"{string}\""),
             Value::Number(number) => write!(f, "{number}"),
             Value::Float(float) => write!(f, "{float}"),
-            Value::Boolean(bool) => f.write_str(if *bool { "TRUE" } else { "FALSE" }),
+            Value::Boolean(bool) => f.write_str(match *bool {
+                true => "TRUE",
+                _ => "FALSE",
+            }),
             Value::Temporal(temporal) => write!(f, "{temporal}"),
             Value::Uuid(uuid) => write!(f, "{uuid}"),
             Value::Interval(interval) => write!(f, "{interval}"),
@@ -761,7 +749,7 @@ impl Display for Value {
             Value::Blob(blob) => {
                 use crate::core::json::Jsonb;
                 write!(f, "{}", Jsonb::new(blob.len(), Some(blob)))
-            }
+            },
             Value::Null => f.write_str("NULL"),
         }
     }

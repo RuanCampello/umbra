@@ -9,10 +9,10 @@ use crate::core::date::interval::Interval;
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
-use crate::db::{Ctx, DatabaseError, Schema, SqlError, TableMetadata, DB_METADATA, ROW_COL_ID};
+use crate::db::{Ctx, DB_METADATA, DatabaseError, ROW_COL_ID, Schema, SqlError, TableMetadata};
 use crate::sql::statement::{
-    BinaryOperator, Constraint, Create, Drop, Expression, Statement, Type, UnaryOperator, Value,
-    NUMERIC_ANY,
+    BinaryOperator, Constraint, Create, Drop, Expression, NUMERIC_ANY, Statement, Type,
+    UnaryOperator, Value,
 };
 use crate::vm::expression::{TypeError, VmType};
 use std::collections::{HashMap, HashSet};
@@ -45,11 +45,9 @@ pub enum AlreadyExists {
 type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
 
 pub(crate) trait AnalyzeCtx {
-    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)>;
-
-    /// Resolves a qualified identifier `table.column`.
-    /// Default implementation ignores the table.
-    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)>;
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, Type)>;
+    /// resolves a qualified identifier `table.column`
+    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, Type)>;
 }
 
 pub(in crate::sql) fn analyze<'s>(
@@ -59,18 +57,15 @@ pub(in crate::sql) fn analyze<'s>(
     match statement {
         Statement::Create(Create::Table { name, columns }) => {
             match ctx.metadata(name) {
-                Err(DatabaseError::Sql(SqlError::InvalidTable(_))) => {
-                    // we'll create the table if it does not exist
-                }
+                // we'll create the table if it does not exist
+                Err(DatabaseError::Sql(SqlError::InvalidTable(_))) => {},
                 Ok(_) => {
                     return Err(SqlError::Analyzer(AnalyzerError::AlreadyExists(
                         AlreadyExists::Table(name.into()),
                     ))
                     .into());
-                }
-                Err(e) => {
-                    return Err(e);
-                }
+                },
+                Err(e) => return Err(e),
             };
 
             let mut primary_key = false;
@@ -93,7 +88,7 @@ pub(in crate::sql) fn analyze<'s>(
                     primary_key = true;
                 }
             }
-        }
+        },
 
         Statement::Create(Create::Index { table, name, .. }) => {
             let metadata = ctx.metadata(table)?;
@@ -101,61 +96,51 @@ pub(in crate::sql) fn analyze<'s>(
             if metadata.indexes.iter().any(|idx| idx.name.eq(name)) {
                 return Err(AnalyzerError::AlreadyExists(AlreadyExists::Index(name.into())).into());
             }
-        }
+        },
 
-        Statement::Insert(Insert {
-            into,
-            values: rows,
-            columns,
-            returning,
-        }) => {
+        Statement::Insert(Insert { into, values: rows, columns, returning }) => {
             let metadata = ctx.metadata(into)?;
             if into.eq(DB_METADATA) {
                 return Err(AnalyzerError::MetadataAssignment.into());
             }
 
-            // PERFORMANCE: there's a lot of things here, maybe check the performance
-            let schema = metadata.key_only_schema();
+            let key = &metadata.schema.columns[..1];
             let columns_provided_by_user = !columns.is_empty();
 
-            let columns: Vec<&str> = match !columns_provided_by_user {
-                true => schema
-                    .columns
+            let columns: Vec<_> = match !columns_provided_by_user {
+                true => key
                     .iter()
-                    .filter(|col| col.name.ne(ROW_COL_ID) && !col.is_nullable())
-                    .map(|col| col.name.as_str())
+                    .filter(|col| col.name().ne(ROW_COL_ID) && !col.is_nullable())
+                    .map(|col| col.name())
                     .collect(),
-                false => columns.iter().map(String::as_str).collect(),
+                _ => columns.iter().map(String::as_str).collect(),
             };
-
-            let column_set: HashSet<&str> = columns.iter().copied().collect();
 
             for row in rows {
                 if columns_provided_by_user && row.len().ne(&columns.len()) {
                     return Err(AnalyzerError::MissingCols.into());
                 }
 
-                let mut seen = HashSet::new();
-                for &col in &columns {
+                for (position, &col) in columns.iter().enumerate() {
                     if col.eq(ROW_COL_ID) {
                         return Err(AnalyzerError::MetadataAssignment.into());
                     }
                     if metadata.schema.index_of(col).is_none() {
                         return Err(SqlError::InvalidColumn(col.into()).into());
                     }
-                    if !seen.insert(col) {
+                    if columns[..position].contains(&col) {
                         return Err(AnalyzerError::DuplicateCols(col.into()).into());
                     }
                 }
 
-                for col in &schema.columns {
-                    if col.name == ROW_COL_ID {
+                for col in key {
+                    if col.name() == ROW_COL_ID {
                         continue;
                     }
 
                     if !col.is_nullable()
-                        && !col.data_type.can_be_autogen()
-                        && !column_set.contains(col.name.as_str())
+                        && !col.column_type().can_be_autogen()
+                        && !columns.contains(&col.name())
                     {
                         return Err(AnalyzerError::MissingCols.into());
                     }
@@ -172,7 +157,7 @@ pub(in crate::sql) fn analyze<'s>(
                     analyze_expression(&metadata.schema, None, expr)?;
                 }
             }
-        }
+        },
 
         Statement::Select(Select {
             columns,
@@ -193,7 +178,7 @@ pub(in crate::sql) fn analyze<'s>(
             for join in joins {
                 let join_metadata = ctx.metadata(&join.table.name)?;
                 tables.insert(join.table.key(), join_metadata.schema.clone());
-                schema.extend(join_metadata.schema.columns.clone());
+                schema.extend(join_metadata.schema.columns.iter().cloned());
             }
 
             let (aliases, columns): (HashMap<_, _>, Vec<_>) = columns.iter().fold(
@@ -249,9 +234,8 @@ pub(in crate::sql) fn analyze<'s>(
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
-                let substituted = order
-                    .expr
-                    .substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
+                let substituted =
+                    order.expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
                 match joins.is_empty() {
                     true => analyze_expression(&schema, None, &substituted)?,
                     _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?,
@@ -267,7 +251,7 @@ pub(in crate::sql) fn analyze<'s>(
                     _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?,
                 };
             }
-        }
+        },
 
         Statement::Delete(Delete { from, r#where }) => {
             let metadata = ctx.metadata(from)?;
@@ -277,14 +261,8 @@ pub(in crate::sql) fn analyze<'s>(
             }
 
             analyze_where(&metadata.schema, r#where)?;
-        }
-
-        Statement::Update(Update {
-            r#where,
-            table,
-            columns,
-            returning,
-        }) => {
+        },
+        Statement::Update(Update { r#where, table, columns, returning }) => {
             let metadata = ctx.metadata(table)?;
             if table.eq(DB_METADATA) {
                 return Err(AnalyzerError::MetadataAssignment.into());
@@ -301,14 +279,12 @@ pub(in crate::sql) fn analyze<'s>(
                 };
                 analyze_expression(&metadata.schema, None, expr)?;
             }
-        }
-
+        },
         Statement::Drop(Drop::Table(name)) => {
             ctx.metadata(name)?;
-        }
-
+        },
         Statement::Explain(statement) => analyze(statement, ctx)?,
-        _ => {}
+        _ => {},
     }
 
     Ok(())
@@ -324,12 +300,9 @@ fn analyze_assignment<'exp>(
         return Err(AnalyzerError::RowIdAssignment.into());
     }
 
-    let idx = table
-        .schema
-        .index_of(column)
-        .ok_or(SqlError::InvalidColumn(column.into()))?;
+    let idx = table.schema.index_of(column).ok_or(SqlError::InvalidColumn(column.into()))?;
     let column = &table.schema.columns[idx];
-    let data_type = column.data_type;
+    let data_type = column.column_type();
     let expect_type = VmType::from(&data_type);
 
     let evaluate_type = match allow_id {
@@ -337,13 +310,13 @@ fn analyze_assignment<'exp>(
         false => analyze_expression(&Schema::empty(), Some(&data_type), value)?,
     };
 
-    if let (Type::Enum(id), Expression::Value(Value::String(str))) = (data_type, value) {
-        let variants = column.type_def.as_ref().or(table.schema.get_enum(id));
+    if let (Type::Enum(_), Expression::Value(Value::String(str))) = (data_type, value) {
+        let variants = column.variants();
 
         if let Some(variants) = variants {
             if !variants.iter().any(|v| v.as_str() == &**str) {
                 return Err(SqlError::Type(TypeError::InvalidEnumVariant {
-                    allowed: variants.clone(),
+                    allowed: variants.to_vec(),
                     found: str.to_string(),
                 }));
             }
@@ -376,22 +349,21 @@ fn analyze_assignment<'exp>(
     Ok(())
 }
 
-/// Check if a given expression contains aggregate functions (recursively)
+/// check if a given expression contains aggregate functions
 pub(crate) fn contains_aggregate(expr: &Expression) -> bool {
+    use Expression::*;
     match expr {
-        Expression::Function { func, args } => {
+        Function { func, args } => {
             // if this is an aggregate function, return true
             if func.is_aggr() {
                 return true;
             }
             args.iter().any(contains_aggregate)
-        }
-        Expression::BinaryOperation { left, right, .. } => {
+        },
+        BinaryOperation { left, right, .. } => {
             contains_aggregate(left) || contains_aggregate(right)
-        }
-        Expression::UnaryOperation { expr, .. }
-        | Expression::Nested(expr)
-        | Expression::Alias { expr, .. } => contains_aggregate(expr),
+        },
+        UnaryOperation { expr, .. } | Nested(expr) | Alias { expr, .. } => contains_aggregate(expr),
         _ => false,
     }
 }
@@ -424,7 +396,7 @@ fn is_functionally_dependent(
                 Some(table) => (table, name.as_str()),
                 _ => return false,
             }
-        }
+        },
         _ => return false,
     };
 
@@ -435,8 +407,8 @@ fn is_functionally_dependent(
     let keys = schema
         .columns
         .iter()
-        .filter(|c| c.constraints.contains(&Constraint::PrimaryKey))
-        .map(|c| c.name.as_str())
+        .filter(|c| c.is_primary_key())
+        .map(|c| c.name())
         .collect::<Vec<_>>();
 
     // if there are no primary keys, there is no functional dependency
@@ -446,10 +418,7 @@ fn is_functionally_dependent(
 
     for key in keys {
         let key_in_group = group_by.iter().any(|g| match g {
-            Expression::QualifiedIdentifier {
-                table: t,
-                column: c,
-            } => table == t && key == c,
+            Expression::QualifiedIdentifier { table: t, column: c } => table == t && key == c,
             Expression::Identifier(col) => col == key,
             _ => false,
         });
@@ -463,31 +432,29 @@ fn is_functionally_dependent(
 }
 
 impl AnalyzeCtx for Schema {
-    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
-        self.index_of(ident)
-            .map(|idx| (idx, &self.columns[idx].data_type))
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, Type)> {
+        self.index_of(ident).map(|idx| (idx, self.columns[idx].column_type()))
     }
 
-    fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, &Type)> {
-        self.last_index_of(column)
-            .map(|idx| (idx, &self.columns[idx].data_type))
+    fn resolve_qualified_identifier(&self, _table: &str, column: &str) -> Option<(usize, Type)> {
+        self.last_index_of(column).map(|idx| (idx, self.columns[idx].column_type()))
     }
 }
 
 impl<'s> AnalyzeCtx for JoinCtx<'s> {
-    fn resolve_identifier(&self, ident: &str) -> Option<(usize, &Type)> {
+    fn resolve_identifier(&self, ident: &str) -> Option<(usize, Type)> {
         self.schema
             .index_of(ident)
-            .map(|idx| (idx, &self.schema.columns[idx].data_type))
+            .map(|idx| (idx, self.schema.columns[idx].column_type()))
     }
 
-    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, &Type)> {
+    fn resolve_qualified_identifier(&self, table: &str, column: &str) -> Option<(usize, Type)> {
         if let Some(schema) = self.tables.get(table) {
             if schema.index_of(column).is_some() {
                 return self
                     .schema
                     .last_index_of(column)
-                    .map(|idx| (idx, &self.schema.columns[idx].data_type));
+                    .map(|idx| (idx, self.schema.columns[idx].column_type()));
             }
         }
 
@@ -508,6 +475,9 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError> {
     Ok(match expr {
+        Expression::Column(_) | Expression::JsonPath { .. } => {
+            unreachable!("columns are bound by the executor, after analysis")
+        },
         Expression::Value(value) => analyze_value(value, data_type)?,
         Expression::Identifier(column) => {
             let data_type = ctx
@@ -519,13 +489,13 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             // String, but inside the engine, we treat it as a Number.
             match data_type {
                 Type::Uuid => VmType::String,
-                r#type => r#type.into(),
+                r#type => VmType::from(&r#type),
             }
-        }
+        },
         Expression::QualifiedIdentifier { table, column } => {
             // table.column
             if let Some((_, data_type)) = ctx.resolve_qualified_identifier(table, column) {
-                return Ok(VmType::from(data_type));
+                return Ok(VmType::from(&data_type));
             }
 
             // maybe a json
@@ -539,21 +509,17 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 table: table.into(),
                 column: column.into(),
             });
-        }
-
+        },
         Expression::Path { .. } => VmType::Blob,
 
-        Expression::BinaryOperation {
-            operator,
-            left,
-            right,
-        } => {
-            fn get_hint<'e, C: AnalyzeCtx>(ctx: &'e C, expr: &'e Expression) -> Option<&'e Type> {
+        Expression::BinaryOperation { operator, left, right } => {
+            use BinaryOperator::*;
+            fn get_hint<C: AnalyzeCtx>(ctx: &C, expr: &Expression) -> Option<Type> {
                 match expr {
                     Expression::Identifier(column)
                     | Expression::QualifiedIdentifier { column, .. } => {
                         ctx.resolve_identifier(column).map(|(_, ty)| ty)
-                    }
+                    },
                     _ => None,
                 }
             }
@@ -565,23 +531,23 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 // null on left: get the right type, then analyze the left with that info
                 (true, false) => {
                     let right_type = analyze_expression(ctx, data_type, right)?;
-                    let left_type = analyze_expression(ctx, get_hint(ctx, right), left)?;
+                    let left_type = analyze_expression(ctx, get_hint(ctx, right).as_ref(), left)?;
 
                     (left_type, right_type)
-                }
+                },
                 // null on right: get the left type, then analyze the right with that info
                 (false, true) => {
                     let left_type = analyze_expression(ctx, data_type, left)?;
-                    let right_type = analyze_expression(ctx, get_hint(ctx, left), right)?;
+                    let right_type = analyze_expression(ctx, get_hint(ctx, left).as_ref(), right)?;
 
                     (left_type, right_type)
-                }
+                },
                 // both are null or non-null: analyze normally
                 _ => {
                     let left_type = analyze_expression(ctx, data_type, left)?;
                     let right_type = analyze_expression(ctx, data_type, right)?;
                     (left_type, right_type)
-                }
+                },
             };
 
             if !are_types_compatible(operator, &left_type, &right_type) {
@@ -593,23 +559,13 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             }
 
             match operator {
-                BinaryOperator::Eq
-                | BinaryOperator::Neq
-                | BinaryOperator::Lt
-                | BinaryOperator::LtEq
-                | BinaryOperator::Gt
-                | BinaryOperator::GtEq => VmType::Bool,
-                BinaryOperator::Like if left_type.eq(&VmType::String) => VmType::Bool,
-                BinaryOperator::And | BinaryOperator::Or if left_type.eq(&VmType::Bool) => {
-                    VmType::Bool
-                }
-                BinaryOperator::Plus
-                | BinaryOperator::Minus
-                | BinaryOperator::Div
-                | BinaryOperator::Mul => result_type(left_type, right_type),
+                Eq | Neq | Lt | LtEq | Gt | GtEq => VmType::Bool,
+                Like if left_type.eq(&VmType::String) => VmType::Bool,
+                And | Or if left_type.eq(&VmType::Bool) => VmType::Bool,
+                Plus | Minus | Div | Mul => result_type(left_type, right_type),
                 _ => unreachable!("unexpected operation state"),
             }
-        }
+        },
 
         Expression::UnaryOperation { operator, expr } => {
             if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
@@ -629,8 +585,8 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                             return Err(SqlError::Type(TypeError::ExpectedType {
                                 expected: VmType::Numeric,
                                 found: *expr.clone(),
-                            }))
-                        }
+                            }));
+                        },
                     };
 
                     analyze_numeric(&numeric, data_type)?;
@@ -651,7 +607,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                     found: *expr.clone(),
                 }))?,
             }
-        }
+        },
 
         Expression::Function { func, args } => {
             if let Some((min, max)) = func.size_of_args() {
@@ -669,18 +625,18 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             }
 
             return Ok(func.return_type(arg_types.first().unwrap_or(&VmType::Float)));
-        }
+        },
 
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
             analyze_expression(ctx, data_type, expr)?
-        }
+        },
         Expression::IsNull { expr, .. } => {
             analyze_expression(ctx, data_type, expr)?;
             VmType::Bool
-        }
+        },
         Expression::Wildcard => {
-            return Err(SqlError::Other("Unexpected wildcard expression (*)".into()))
-        }
+            return Err(SqlError::Other("Unexpected wildcard expression (*)".into()));
+        },
     })
 }
 
@@ -691,24 +647,22 @@ fn analyze_where_with_join<'exp>(
     aliases: &HashMap<String, &'exp Expression>,
     no_joins: bool,
 ) -> Result<(), SqlError> {
-    let Some(expr) = r#where else { return Ok(()) };
+    let Some(expr) = r#where else {
+        return Ok(());
+    };
 
     let substituted = expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
 
     let result = match no_joins {
         true => analyze_expression(schema, None, &substituted)?,
-        false => analyze_expression(&JoinCtx::new(schema, tables), None, &substituted)?,
+        _ => analyze_expression(&JoinCtx::new(schema, tables), None, &substituted)?,
     };
 
     if let VmType::Bool = result {
         return Ok(());
     }
 
-    Err(TypeError::ExpectedType {
-        expected: VmType::Bool,
-        found: expr.clone(),
-    }
-    .into())
+    Err(TypeError::ExpectedType { expected: VmType::Bool, found: expr.clone() }.into())
 }
 
 fn analyze_value(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlError> {
@@ -720,7 +674,7 @@ fn analyze_value(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlEr
         (Value::Numeric(n), Some(t @ Type::Numeric(_, _))) => analyze_numeric(n, t)?,
         (Value::Number(n), Some(t @ Type::Numeric(_, _))) => {
             analyze_numeric(&Numeric::from(*n), t)?
-        }
+        },
         (Value::Float(f), Some(t @ Type::Numeric(_, _))) => match Numeric::try_from(*f) {
             Ok(n) => analyze_numeric(&n, t)?,
             _ => VmType::Float,
@@ -748,17 +702,15 @@ fn analyze_where<'exp>(
     schema: &'exp Schema,
     r#where: &'exp Option<Expression>,
 ) -> Result<(), DatabaseError> {
-    let Some(expr) = r#where else { return Ok(()) };
+    let Some(expr) = r#where else {
+        return Ok(());
+    };
 
     if let VmType::Bool = analyze_expression(schema, None, expr)? {
         return Ok(());
     }
 
-    Err(TypeError::ExpectedType {
-        expected: VmType::Bool,
-        found: expr.clone(),
-    }
-    .into())
+    Err(TypeError::ExpectedType { expected: VmType::Bool, found: expr.clone() }.into())
 }
 
 fn analyze_string(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
@@ -766,31 +718,31 @@ fn analyze_string(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
         Type::Date => {
             NaiveDate::parse_str(s)?;
             Ok(VmType::Date)
-        }
+        },
         Type::DateTime => {
             NaiveDateTime::parse_str(s)?;
             Ok(VmType::Date)
-        }
+        },
         Type::Time => {
             NaiveTime::parse_str(s)?;
             Ok(VmType::Date)
-        }
+        },
         Type::Uuid => {
             Uuid::from_str(s)?;
             Ok(VmType::Number)
-        }
+        },
         Type::Interval => {
             Interval::from_str(s).map_err(TypeError::InvalidInterval)?;
             Ok(VmType::Interval)
-        }
+        },
         Type::Jsonb => {
-            use crate::core::json::{from_value_to_jsonb, Conv};
+            use crate::core::json::{Conv, from_value_to_jsonb};
             let value = Value::String(s.to_string().into());
 
             from_value_to_jsonb(&value, Conv::Strict)
                 .map_err(|e| SqlError::Other(format!("Malformed JSON: {s} ({e})")))?;
             Ok(VmType::Blob)
-        }
+        },
         _ => Ok(VmType::String),
     }
 }
@@ -881,19 +833,19 @@ impl Display for AnalyzerError {
             AnalyzerError::AlreadyExists(name) => f.write_str(&name.to_string()),
             AnalyzerError::MultiplePrimaryKeys => {
                 write!(f, "a table can only have one primary key")
-            }
+            },
             AnalyzerError::RowIdAssignment => {
                 write!(f, "row id column cannot be manually assigned")
-            }
+            },
             AnalyzerError::MetadataAssignment => {
                 write!(
                     f,
                     "table {DB_METADATA} is reserved for internal use, it cannot be manually assigned"
                 )
-            }
+            },
             AnalyzerError::Overflow(data_type, max) => {
                 write!(f, "value of type {data_type} is larger than max size {max}")
-            }
+            },
         }
     }
 }
@@ -1058,11 +1010,7 @@ mod tests {
             VALUES (420, 'Meeting', '2021-01-01 12:00:00'), (69, 'Data backup', '2025-05-07 23:59:59');
         "#;
 
-        let analyze = Analyze {
-            sql,
-            ctx: &[CTX],
-            expected: Ok(()),
-        };
+        let analyze = Analyze { sql, ctx: &[CTX], expected: Ok(()) };
 
         analyze.assert()
     }
@@ -1088,11 +1036,7 @@ mod tests {
         ];
 
         for (sql, err) in cases {
-            let analyze = Analyze {
-                sql,
-                ctx,
-                expected: Err(SqlError::Type(err).into()),
-            };
+            let analyze = Analyze { sql, ctx, expected: Err(SqlError::Type(err).into()) };
 
             analyze.assert()?;
         }
@@ -1186,11 +1130,7 @@ mod tests {
         ];
 
         for (sql, err) in cases {
-            let analyze = Analyze {
-                sql,
-                ctx,
-                expected: Err(SqlError::Type(err).into()),
-            };
+            let analyze = Analyze { sql, ctx, expected: Err(SqlError::Type(err).into()) };
 
             analyze.assert()?;
         }
@@ -1233,11 +1173,7 @@ mod tests {
         Analyze {
             ctx: &[CTX],
             sql: "SELECT * FROM users WHERE 1 + 1;",
-            expected: Err(TypeError::ExpectedType {
-                expected: VmType::Bool,
-                found,
-            }
-            .into()),
+            expected: Err(TypeError::ExpectedType { expected: VmType::Bool, found }.into()),
         }
         .assert()
     }
@@ -1256,12 +1192,7 @@ mod tests {
                 (5, 10.5, -250);
             "#;
 
-        Analyze {
-            ctx: &[CTX],
-            sql,
-            expected: Ok(()),
-        }
-        .assert()
+        Analyze { ctx: &[CTX], sql, expected: Ok(()) }.assert()
     }
 
     #[test]
@@ -1290,24 +1221,14 @@ mod tests {
 
         let sql = "SELECT * FROM temporal_data WHERE event_date < '1970-01-01';";
 
-        Analyze {
-            ctx: &[CTX],
-            sql,
-            expected: Ok(()),
-        }
-        .assert()
+        Analyze { ctx: &[CTX], sql, expected: Ok(()) }.assert()
     }
 
     #[test]
     fn uuid_column() -> AnalyzerResult {
         let create_stmt = "CREATE TABLE contracts (id UUID, name VARCHAR(30));";
 
-        Analyze {
-            sql: create_stmt,
-            ctx: &[],
-            expected: Ok(()),
-        }
-        .assert()?;
+        Analyze { sql: create_stmt, ctx: &[], expected: Ok(()) }.assert()?;
 
         Analyze {
             sql: "INSERT INTO contracts (id, name) VALUES ('not-a-uuid', 'really-good-name');",
@@ -1462,10 +1383,7 @@ mod tests {
     #[test]
     fn insert_large_text() -> AnalyzerResult {
         Analyze {
-            sql: &format!(
-                "INSERT INTO t (id, notes) VALUES (1, '{}');",
-                "x".repeat(10000)
-            ),
+            sql: &format!("INSERT INTO t (id, notes) VALUES (1, '{}');", "x".repeat(10000)),
             ctx: &["CREATE TABLE t (id INT PRIMARY KEY, notes TEXT);"],
             expected: Ok(()),
         }

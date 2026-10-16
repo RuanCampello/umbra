@@ -35,69 +35,55 @@ use crate::{
 /// ```
 pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(), DatabaseError> {
     match statement {
-        Statement::Select(Select {
-            columns,
-            from,
-            joins,
-            ..
-        }) if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) => {
-            let metadata = ctx.metadata(&from.name)?;
-            let mut identifiers: Vec<Expression> = metadata
-                .schema
-                .columns
-                .iter()
-                .filter(|&col| col.name.ne(&ROW_COL_ID))
-                .cloned()
-                .map(|col| Expression::Identifier(col.name))
-                .collect();
+        Statement::Select(Select { columns, from, joins, .. })
+            if columns.iter().any(|expr| expr.eq(&Expression::Wildcard)) =>
+        {
+            // with joins, names repeat across tables: each column is qualified by its table and
+            // keeps its bare name as the output name
+            let qualify = !joins.is_empty();
+            let reference = |table: &str, column: &str| match qualify {
+                true => Expression::Alias {
+                    alias: column.to_string(),
+                    expr: Box::new(Expression::QualifiedIdentifier {
+                        table: table.to_string(),
+                        column: column.to_string(),
+                    }),
+                },
+                _ => Expression::Identifier(column.to_string()),
+            };
 
-            for join in joins {
-                let metadata = ctx.metadata(&join.table.name)?;
+            let mut identifiers = Vec::new();
+            for table in std::iter::once(&*from).chain(joins.iter().map(|join| &join.table)) {
+                let metadata = ctx.metadata(&table.name)?;
                 identifiers.extend(
                     metadata
                         .schema
                         .columns
                         .iter()
-                        .filter(|col| col.name.ne(&ROW_COL_ID))
-                        .cloned()
-                        .map(|col| Expression::Identifier(col.name)),
-                )
+                        .filter(|col| col.name() != ROW_COL_ID)
+                        .map(|col| reference(table.key(), col.name())),
+                );
             }
 
             expand_wildcard_with_identifier(columns, identifiers);
-        }
-        Statement::Insert(Insert {
-            values,
-            columns,
-            into,
-            returning,
-        }) => {
+        },
+        Statement::Insert(Insert { values, columns, into, returning }) => {
             let metadata = ctx.metadata(into)?;
 
             if columns.is_empty() {
                 *columns = metadata.schema.columns_ids();
             }
 
-            if metadata.schema.columns[0].name.eq(&ROW_COL_ID) {
-                if columns[0].ne(&ROW_COL_ID) {
-                    columns.insert(0, ROW_COL_ID.to_string());
-                }
-
-                values.iter_mut().for_each(|values| {
-                    let row_id = metadata.next_id();
-                    values.insert(0, Expression::Value(Value::Number(row_id.into())));
-                });
-            }
-
             // columns needing auto generated values (UUID or SERIAl variants)
-            let auto_inserts: Vec<(usize, String, Type)> = metadata
+            let auto_inserts: Vec<_> = metadata
                 .schema
                 .columns
                 .iter()
                 .enumerate()
                 .filter_map(|(idx, col)| {
-                    match col.data_type.can_be_autogen() && !columns.contains(&col.name) {
-                        true => Some((idx, col.name.clone(), col.data_type)),
+                    let named = columns.iter().any(|column| column == col.name());
+                    match col.column_type().can_be_autogen() && !named {
+                        true => Some((idx, col.name().to_string(), col.column_type())),
                         false => None,
                     }
                 })
@@ -129,37 +115,33 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                     (idx != sorted_idx).then_some(sorted_idx)
                 } {
                     columns.swap(idx, sorted_idx);
-                    values
-                        .iter_mut()
-                        .for_each(|values| values.swap(idx, sorted_idx));
+                    values.iter_mut().for_each(|values| values.swap(idx, sorted_idx));
                 }
             });
 
-            let identifiers: Vec<Expression> = metadata
+            let identifiers: Vec<_> = metadata
                 .schema
                 .columns
                 .iter()
-                .map(|col| Expression::Identifier(col.name.clone()))
+                .map(|col| Expression::Identifier(col.name().to_string()))
                 .collect();
 
             expand_wildcard_with_identifier(returning, identifiers);
-        }
-        Statement::Update(Update {
-            table, returning, ..
-        }) => {
+        },
+        Statement::Update(Update { table, returning, .. }) => {
             let metadata = ctx.metadata(table)?;
 
             let identifiers: Vec<_> = metadata
                 .schema
                 .columns
                 .iter()
-                .map(|col| Expression::Identifier(col.name.clone()))
+                .map(|col| Expression::Identifier(col.name().to_string()))
                 .collect();
 
             expand_wildcard_with_identifier(returning, identifiers);
-        }
+        },
         Statement::Explain(inner) => prepare(&mut *inner, ctx)?,
-        _ => {}
+        _ => {},
     };
 
     Ok(())

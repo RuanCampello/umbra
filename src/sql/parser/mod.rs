@@ -12,8 +12,8 @@ mod queries;
 mod tokenizer;
 mod tokens;
 
-use crate::core::date::interval::Interval;
 use crate::core::date::ExtractKind;
+use crate::core::date::interval::Interval;
 use crate::core::json;
 use crate::sql::parser::tokenizer::{Location, TokenWithLocation, Tokenizer, TokenizerError};
 use crate::sql::parser::tokens::Token;
@@ -22,7 +22,7 @@ use crate::sql::statement::{
     Insert, JoinClause, JoinType, PathSegment, Select, Statement, Type, UnaryOperator, Update,
     Value,
 };
-use crate::sql::statement::{TableRef, NUMERIC_ANY};
+use crate::sql::statement::{IsolationLevel, NUMERIC_ANY, TableRef};
 
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -86,6 +86,19 @@ impl<'input> Parser<'input> {
     }
 
     pub fn parse_statement(&mut self) -> ParserResult<Statement> {
+        // words only meaningful at the start of a statement stay identifiers elsewhere
+        if self.consume_word("CHECKPOINT") {
+            self.expect_token(Token::Semicolon)?;
+            return Ok(Statement::Checkpoint);
+        }
+
+        if self.consume_word("START") {
+            self.expect_keyword(Keyword::Transaction)?;
+            let level = self.parse_isolation()?;
+            self.expect_token(Token::Semicolon)?;
+            return Ok(Statement::StartTransaction(level));
+        }
+
         let statement = match self.expect_one(&Self::supported_statements())? {
             Keyword::Select => Statement::Select(Select::parse(self)?),
             Keyword::Create => Statement::Create(Create::parse(self)?),
@@ -94,9 +107,22 @@ impl<'input> Parser<'input> {
             Keyword::Drop => Statement::Drop(Drop::parse(self)?),
             Keyword::Delete => Statement::Delete(Delete::parse(self)?),
             Keyword::Start => {
+                self.consume_optional(Token::Keyword(Keyword::Transaction));
+                Statement::StartTransaction(self.parse_isolation()?)
+            },
+            Keyword::Set => {
+                let session = self.consume_word("SESSION");
+                if session {
+                    self.expect_word("CHARACTERISTICS")?;
+                    self.expect_keyword(Keyword::As)?;
+                }
+
                 self.expect_keyword(Keyword::Transaction)?;
-                Statement::StartTransaction
-            }
+                match self.parse_isolation()? {
+                    Some(level) => Statement::SetIsolation { level, session },
+                    None => return Err(self.expected_word("ISOLATION")),
+                }
+            },
             Keyword::Commit => Statement::Commit,
             Keyword::Rollback => Statement::Rollback,
             Keyword::Explain => return Ok(Statement::Explain(Box::new(self.parse_statement()?))),
@@ -107,17 +133,67 @@ impl<'input> Parser<'input> {
                         return Err(self.error(ErrorKind::Expected {
                             expected: Token::String(String::new()),
                             found: token,
-                        }))
-                    }
+                        }));
+                    },
                 };
 
                 Statement::Source(path)
-            }
+            },
             _ => unreachable!(),
         };
 
         self.expect_token(Token::Semicolon)?;
         Ok(statement)
+    }
+
+    /// an optional `ISOLATION LEVEL <level>` clause
+    fn parse_isolation(&mut self) -> ParserResult<Option<IsolationLevel>> {
+        if !self.consume_word("ISOLATION") {
+            return Ok(None);
+        }
+
+        self.expect_word("LEVEL")?;
+        let level = match () {
+            _ if self.consume_word("READ") => {
+                self.expect_word("COMMITTED")?;
+                IsolationLevel::ReadCommitted
+            },
+            _ if self.consume_word("REPEATABLE") => {
+                self.expect_word("READ")?;
+                IsolationLevel::Snapshot
+            },
+            _ if self.consume_word("SNAPSHOT") => IsolationLevel::Snapshot,
+            _ if self.consume_word("SERIALIZABLE") => IsolationLevel::Serializable,
+            _ => {
+                return Err(self
+                    .expected_word("READ COMMITTED | REPEATABLE READ | SNAPSHOT | SERIALIZABLE"));
+            },
+        };
+
+        Ok(Some(level))
+    }
+
+    /// consumes the next token when it is the identifier `word`
+    fn consume_word(&mut self, word: &str) -> bool {
+        match self.peek_token() {
+            Some(Ok(Token::Identifier(found))) if found.eq_ignore_ascii_case(word) => {
+                let _ = self.next_token();
+                true
+            },
+            _ => false,
+        }
+    }
+
+    fn expect_word(&mut self, word: &str) -> ParserResult<()> {
+        match self.consume_word(word) {
+            true => Ok(()),
+            _ => Err(self.expected_word(word)),
+        }
+    }
+
+    fn expected_word(&mut self, word: &str) -> ParserError {
+        let found = self.next_token().unwrap_or(Token::Eof);
+        self.error(ErrorKind::Expected { expected: Token::Identifier(word.into()), found })
     }
 
     fn parse_ident(&mut self) -> ParserResult<String> {
@@ -187,7 +263,7 @@ impl<'input> Parser<'input> {
                         right: Box::new(end),
                     }),
                 });
-            }
+            },
             Token::Keyword(Keyword::In) => {
                 self.next_token()?;
                 let values =
@@ -213,30 +289,20 @@ impl<'input> Parser<'input> {
                         right: Box::new(value),
                     }),
                 }));
-            }
+            },
             Token::Keyword(Keyword::Is) => {
                 let negated = self.consume_optional(Token::Keyword(Keyword::Not));
                 self.expect_keyword(Keyword::Null)?;
 
-                return Ok(Expression::IsNull {
-                    expr: Box::new(left),
-                    negated,
-                });
-            }
+                return Ok(Expression::IsNull { expr: Box::new(left), negated });
+            },
             token => {
-                return Err(self.error(ErrorKind::Expected {
-                    expected: Token::Eq,
-                    found: token,
-                }))
-            }
+                return Err(self.error(ErrorKind::Expected { expected: Token::Eq, found: token }));
+            },
         };
 
         let right = Box::new(self.parse_expr(Some(precedence))?);
-        Ok(Expression::BinaryOperation {
-            operator: op,
-            left: Box::new(left),
-            right,
-        })
+        Ok(Expression::BinaryOperation { operator: op, left: Box::new(left), right })
     }
 
     fn parse_pref(&mut self) -> ParserResult<Expression> {
@@ -251,22 +317,22 @@ impl<'input> Parser<'input> {
                     json::from_value_to_jsonb(&Value::String(json_text.into()), json::Conv::Strict)
                         .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
                 Ok(Expression::Value(Value::Blob(jsonb.data())))
-            }
+            },
             Token::LeftBracket => {
                 let json_text = self.parse_json_array()?;
                 let jsonb =
                     json::from_value_to_jsonb(&Value::String(json_text.into()), json::Conv::Strict)
                         .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
                 Ok(Expression::Value(Value::Blob(jsonb.data())))
-            }
+            },
             Token::Keyword(Keyword::Interval) => self.parse_interval(),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
                 self.parse_datetime(keyword)
-            }
+            },
             Token::Keyword(func) if func.is_function() => {
                 self.expect_token(Token::LeftParen)?;
                 self.parse_func(func)
-            }
+            },
 
             Token::Mul => Ok(Expression::Wildcard),
             Token::LeftParen => {
@@ -274,17 +340,13 @@ impl<'input> Parser<'input> {
                 self.expect_token(Token::RightParen)?;
 
                 Ok(Expression::Nested(Box::new(expr)))
-            }
+            },
             Token::Number(number) => match number.contains(".") {
                 true => Ok(Expression::Value(Value::Float(
-                    number
-                        .parse::<f64>()
-                        .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
+                    number.parse::<f64>().map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
                 ))),
                 _ => Ok(Expression::Value(Value::Number(
-                    number
-                        .parse()
-                        .map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
+                    number.parse().map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
                 ))),
             },
             Token::Identifier(identifier) => {
@@ -313,7 +375,7 @@ impl<'input> Parser<'input> {
                                     })
                                 })?;
                                 segments.push(PathSegment::Index(idx));
-                            }
+                            },
                             Token::Minus => {
                                 let token = self.next_token()?;
                                 let idx = match token {
@@ -324,23 +386,23 @@ impl<'input> Parser<'input> {
                                                 found: Token::Number(n),
                                             })
                                         })?
-                                    }
+                                    },
                                     other => {
                                         return Err(self.error(ErrorKind::Expected {
                                             expected: Token::Number(Default::default()),
                                             found: other,
-                                        }))
-                                    }
+                                        }));
+                                    },
                                 };
                                 segments.push(PathSegment::Index(-idx));
-                            }
+                            },
                             Token::Mul => segments.push(PathSegment::Wildcard),
                             other => {
                                 return Err(self.error(ErrorKind::Expected {
                                     expected: Token::Number(Default::default()),
                                     found: other,
-                                }))
-                            }
+                                }));
+                            },
                         };
 
                         self.expect_token(Token::RightBracket)?;
@@ -356,12 +418,9 @@ impl<'input> Parser<'input> {
                         table: identifier,
                         column: column.clone(),
                     }),
-                    _ => Ok(Expression::Path {
-                        head: identifier,
-                        segments,
-                    }),
+                    _ => Ok(Expression::Path { head: identifier, segments }),
                 }
-            }
+            },
             token @ (Token::Minus | Token::Plus) => {
                 let op = match token {
                     Token::Minus => UnaryOperator::Minus,
@@ -371,7 +430,7 @@ impl<'input> Parser<'input> {
 
                 let expr = Box::new(self.parse_expr(Some(UNARY_ARITHMETIC_OPERATOR))?);
                 Ok(Expression::UnaryOperation { operator: op, expr })
-            }
+            },
             token => Err(self.error(ErrorKind::ExpectedOneOf {
                 expected: vec![
                     Token::Identifier(Default::default()),
@@ -427,8 +486,8 @@ impl<'input> Parser<'input> {
                         Token::Keyword(Keyword::Null),
                     ],
                     found: other,
-                }))
-            }
+                }));
+            },
         })
     }
 
@@ -453,8 +512,8 @@ impl<'input> Parser<'input> {
                             Token::Keyword(Keyword::None),
                         ],
                         found: other,
-                    }))
-                }
+                    }));
+                },
             };
 
             self.expect_token(Token::Colon)?;
@@ -521,19 +580,14 @@ impl<'input> Parser<'input> {
                 Keyword::Primary => {
                     self.expect_keyword(Keyword::Key)?;
                     constraints.push(Constraint::PrimaryKey);
-                }
+                },
                 Keyword::Unique => constraints.push(Constraint::Unique),
                 Keyword::Nullable => constraints.push(Constraint::Nullable),
                 _ => unreachable!(),
             }
         }
 
-        Ok(Column {
-            name,
-            data_type,
-            constraints,
-            type_def,
-        })
+        Ok(Column { name, data_type, constraints, type_def })
     }
 
     fn parse_type(&mut self) -> ParserResult<Type> {
@@ -554,7 +608,7 @@ impl<'input> Parser<'input> {
                     (Keyword::Uuid, _) => Ok(Type::Uuid),
                     _ => unreachable!("unknown integer"),
                 }
-            }
+            },
             Keyword::Varchar => {
                 self.expect_token(Token::LeftParen)?;
 
@@ -567,17 +621,17 @@ impl<'input> Parser<'input> {
                         return Err(self.error(ErrorKind::Expected {
                             expected: Token::Number(Default::default()),
                             found: token,
-                        }))?
-                    }
+                        }))?;
+                    },
                 };
 
                 self.expect_token(Token::RightParen)?;
                 Ok(Type::Varchar(len))
-            }
+            },
             Keyword::Double => {
                 self.expect_keyword(Keyword::Precision)?;
                 Ok(Type::DoublePrecision)
-            }
+            },
             Keyword::Numeric => self.parse_numeric(),
             Keyword::Real => Ok(Type::Real),
             Keyword::Bool => Ok(Type::Boolean),
@@ -605,8 +659,8 @@ impl<'input> Parser<'input> {
                         return Err(self.error(ErrorKind::Expected {
                             expected: Token::String(String::new()),
                             found: t,
-                        }))
-                    }
+                        }));
+                    },
                 }
             }
 
@@ -626,8 +680,8 @@ impl<'input> Parser<'input> {
                 return Err(self.error(ErrorKind::Expected {
                     expected: Token::String(String::new()),
                     found: token,
-                }))
-            }
+                }));
+            },
         };
 
         let interval = Interval::from_str(value.as_str())
@@ -656,7 +710,7 @@ impl<'input> Parser<'input> {
 
                 self.expect_token(Token::RightParen)?;
                 Type::Numeric(precision, scale)
-            }
+            },
 
             _ => Type::Numeric(NUMERIC_ANY, NUMERIC_ANY),
         })
@@ -686,11 +740,7 @@ impl<'input> Parser<'input> {
         self.expect_keyword(Keyword::On)?;
         let on = self.parse_expr(None)?;
 
-        Ok(Some(JoinClause {
-            join_type,
-            table,
-            on,
-        }))
+        Ok(Some(JoinClause { join_type, table, on }))
     }
 
     fn parse_usize_by_keyword(&mut self, keyword: Keyword) -> ParserResult<Option<usize>> {
@@ -737,13 +787,10 @@ impl<'input> Parser<'input> {
             _ => self.parse_separated_tokens(
                 |p| {
                     let expr = p.parse_expr(None)?;
-                    match p.consume_optional(Token::Keyword(Keyword::As)) {
-                        false => Ok(expr),
-                        _ => Ok(Expression::Alias {
-                            alias: p.parse_ident()?,
-                            expr: Box::new(expr),
-                        }),
-                    }
+                    Ok(match p.consume_optional(Token::Keyword(Keyword::As)) {
+                        false => expr,
+                        _ => Expression::Alias { alias: p.parse_ident()?, expr: Box::new(expr) },
+                    })
                 },
                 false,
             ),
@@ -812,9 +859,7 @@ impl<'input> Parser<'input> {
         let value_str = self.parse_ident()?;
 
         let parsed = Temporal::try_from(value_str.as_str()).map_err(|e| {
-            self.error(ErrorKind::FormatError(format!(
-                "Invalid date/time format: {e:?}"
-            )))
+            self.error(ErrorKind::FormatError(format!("Invalid date/time format: {e:?}")))
         })?;
 
         let valid_for_keyword = matches!(
@@ -861,7 +906,7 @@ impl<'input> Parser<'input> {
                         r#for.unwrap_or(Expression::Value(Value::Number(-1))),
                     ],
                 })
-            }
+            },
 
             Keyword::Extract => {
                 let kind_str = self.parse_ident()?;
@@ -882,7 +927,7 @@ impl<'input> Parser<'input> {
                     func: Function::Extract,
                     args: vec![Expression::Value(Value::String(kind_str.into())), from],
                 })
-            }
+            },
 
             keyword
                 if matches!(
@@ -893,11 +938,8 @@ impl<'input> Parser<'input> {
                 let args = self.parse_separated_tokens(|p| p.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
 
-                Ok(Expression::Function {
-                    func: Function::try_from(&keyword).unwrap(),
-                    args,
-                })
-            }
+                Ok(Expression::Function { func: Function::try_from(&keyword).unwrap(), args })
+            },
             Keyword::Ascii => self.parse_unary_func(Function::Ascii),
             Keyword::Position => {
                 let needle = self.parse_pref()?;
@@ -905,11 +947,8 @@ impl<'input> Parser<'input> {
                 let haystack = self.parse_pref()?;
                 self.expect_token(Token::RightParen)?;
 
-                Ok(Expression::Function {
-                    func: Function::Position,
-                    args: vec![needle, haystack],
-                })
-            }
+                Ok(Expression::Function { func: Function::Position, args: vec![needle, haystack] })
+            },
             keyword if keyword.is_function() => {
                 let value = self.parse_closing_expr()?;
 
@@ -917,7 +956,7 @@ impl<'input> Parser<'input> {
                     func: Function::try_from(&keyword).unwrap(),
                     args: vec![value],
                 })
-            }
+            },
             Keyword::Count => self.parse_unary_func(Function::Count),
             Keyword::Sum => self.parse_unary_func(Function::Sum),
             Keyword::Avg => self.parse_unary_func(Function::Avg),
@@ -931,10 +970,7 @@ impl<'input> Parser<'input> {
     fn parse_unary_func(&mut self, func: Function) -> ParserResult<Expression> {
         let expr = self.parse_expr(None)?;
         self.expect_token(Token::RightParen)?;
-        Ok(Expression::Function {
-            func,
-            args: vec![expr],
-        })
+        Ok(Expression::Function { func, args: vec![expr] })
     }
 
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
@@ -948,19 +984,14 @@ impl<'input> Parser<'input> {
     }
 
     fn expect_token(&mut self, expected: Token) -> ParserResult<Token> {
-        self.next_token()
-            .and_then(|token| match token.eq(&expected) {
-                true => Ok(token),
-                false => Err(self.error(ErrorKind::Expected {
-                    expected,
-                    found: token,
-                })),
-            })
+        self.next_token().and_then(|token| match token.eq(&expected) {
+            true => Ok(token),
+            _ => Err(self.error(ErrorKind::Expected { expected, found: token })),
+        })
     }
 
     fn expect_keyword(&mut self, expected: Keyword) -> ParserResult<Keyword> {
-        self.expect_token(Token::Keyword(expected))
-            .map(|_| expected)
+        self.expect_token(Token::Keyword(expected)).map(|_| expected)
     }
 
     fn skip_whitespaces(&mut self) {
@@ -982,7 +1013,7 @@ impl<'input> Parser<'input> {
                 let token = self.tokenizer.next().unwrap()?;
                 self.location = token.location;
                 Ok(token.token)
-            }
+            },
         }
     }
 
@@ -997,7 +1028,7 @@ impl<'input> Parser<'input> {
                     expected: Self::tokens_from_keywords(keywords),
                     found: token,
                 }))
-            }
+            },
             keyword => Ok(keyword),
         }
     }
@@ -1011,10 +1042,7 @@ impl<'input> Parser<'input> {
         let mut consume_keyword =
             |op: &Keyword| -> bool { self.consume_optional(Token::Keyword(*op)) };
 
-        *keywords
-            .into_iter()
-            .find(|key| consume_keyword(key))
-            .unwrap_or(&Keyword::None)
+        *keywords.into_iter().find(|key| consume_keyword(key)).unwrap_or(&Keyword::None)
     }
 
     fn consume_optional(&mut self, optional: Token) -> bool {
@@ -1022,17 +1050,13 @@ impl<'input> Parser<'input> {
             Some(Ok(token)) if token == &optional => {
                 let _ = self.next_token();
                 true
-            }
+            },
             _ => false,
         }
     }
 
     fn error(&self, kind: ErrorKind) -> ParserError {
-        ParserError {
-            kind,
-            input: self.input.to_string(),
-            location: self.location,
-        }
+        ParserError { kind, input: self.input.to_string(), location: self.location }
     }
 
     fn tokens_from_keywords<'key, K>(keywords: &'key K) -> Vec<Token>
@@ -1042,8 +1066,9 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_statements() -> [Keyword; 11] {
+    const fn supported_statements() -> [Keyword; 12] {
         [
+            Keyword::Set,
             Keyword::Select,
             Keyword::Create,
             Keyword::Update,
@@ -1107,12 +1132,12 @@ impl Display for ParserError {
             Some(line) => {
                 f.write_str(line)?;
                 self.location.col.saturating_sub(1)
-            }
+            },
             None => {
                 let line = self.input.lines().last().unwrap();
                 f.write_str(line)?;
                 line.chars().count()
-            }
+            },
         };
 
         write!(f, "\n{}^", String::from(" ").repeat(whitespaces))
@@ -1153,33 +1178,21 @@ impl Display for ErrorKind {
 
                 if expected.len() > 1 {
                     one_of.push_str(" or ");
-                    one_of.push_str(&ErrorKind::expected_token_str(
-                        &expected[expected.len() - 1],
-                    ));
+                    one_of.push_str(&ErrorKind::expected_token_str(&expected[expected.len() - 1]));
                 }
 
                 write!(f, "Expected {one_of} but found '{found}' instead")
-            }
+            },
             ErrorKind::InvalidValue { clause, found } => {
                 write!(f, "{clause} received an invalid value: {found}")
-            }
+            },
         }
     }
 }
 
 impl From<TokenizerError> for ParserError {
-    fn from(
-        TokenizerError {
-            kind,
-            location,
-            input,
-        }: TokenizerError,
-    ) -> Self {
-        Self {
-            input,
-            kind: ErrorKind::TokenizerError(kind),
-            location,
-        }
+    fn from(TokenizerError { kind, location, input }: TokenizerError) -> Self {
+        Self { input, kind: ErrorKind::TokenizerError(kind), location }
     }
 }
 
@@ -1239,10 +1252,7 @@ mod tests {
         assert_eq!(
             statement,
             Ok(Statement::Select(
-                SelectBuilder::default()
-                    .from("users")
-                    .select(Expression::Wildcard)
-                    .into()
+                SelectBuilder::default().from("users").select(Expression::Wildcard).into()
             ))
         );
     }
@@ -1429,10 +1439,7 @@ mod tests {
                     ],
                 }),
                 Statement::Select(
-                    Select::builder()
-                        .from("employees")
-                        .select(Expression::Wildcard)
-                        .into()
+                    Select::builder().from("employees").select(Expression::Wildcard).into()
                 )
             ]
         );

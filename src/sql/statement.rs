@@ -1,18 +1,16 @@
 //! SQL statements and types declaration.
 //! See [this](https://en.wikipedia.org/wiki/Abstract_syntax_tree)
-//! to reach out about statements and/or AST.
+//! to reach out about statements and/or AST
 
 use super::Keyword;
 use crate::core::date::interval::Interval;
-use crate::db::{IndexMetadata, TableMetadata};
-use crate::index;
 use crate::vm::expression::VmType;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::Hash;
 use std::ops::Neg;
 
-/// SQL statements.
+/// SQL statements
 #[derive(Debug, PartialEq)]
 pub(crate) enum Statement {
     Create(Create),
@@ -23,12 +21,29 @@ pub(crate) enum Statement {
     Drop(Drop),
     Source(String),
     Commit,
-    StartTransaction,
+    /// `BEGIN`/`START TRANSACTION`, optionally with its isolation level
+    StartTransaction(Option<IsolationLevel>),
+    /// `SET TRANSACTION …` (`session: false`) or `SET SESSION CHARACTERISTICS AS TRANSACTION …`
+    SetIsolation {
+        level: IsolationLevel,
+        session: bool,
+    },
+    Checkpoint,
     Rollback,
     Explain(Box<Self>),
 }
 
-/// The `UPDATE` assignment instruction.
+/// Transaction isolation levels
+/// `REPEATABLE READ` is an alias of `SNAPSHOT`
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum IsolationLevel {
+    ReadCommitted,
+    #[default]
+    Snapshot,
+    Serializable,
+}
+
+/// The `UPDATE` assignment instruction
 #[derive(Debug, PartialEq)]
 pub(crate) struct Assignment {
     pub identifier: String,
@@ -47,21 +62,9 @@ pub struct Column {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Create {
     Database(String),
-    Sequence {
-        name: String,
-        r#type: Type,
-        table: String,
-    },
-    Table {
-        name: String,
-        columns: Vec<Column>,
-    },
-    Index {
-        name: String,
-        table: String,
-        column: String,
-        unique: bool,
-    },
+    Sequence { name: String, r#type: Type, table: String },
+    Table { name: String, columns: Vec<Column> },
+    Index { name: String, table: String, column: String, unique: bool },
 }
 
 #[derive(Debug, PartialEq)]
@@ -158,6 +161,15 @@ pub enum Expression {
         negated: bool,
     },
     Nested(Box<Self>),
+    /// a column reference the executor bound to its position in the rows it evaluates
+    /// never produced by the parser
+    Column(usize),
+    /// a json path into a bound column (`$.key[0]...`), built once by the executor
+    /// never produced by the parser
+    JsonPath {
+        column: usize,
+        path: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
@@ -457,28 +469,20 @@ impl Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Statement::Create(create) => match create {
-                Create::Sequence {
-                    name,
-                    r#type,
-                    table,
-                } => write!(f, "CREATE SEQUENCE {name} AS {type} OWNED BY {table}")?,
+                Create::Sequence { name, r#type, table } => {
+                    write!(f, "CREATE SEQUENCE {name} AS {type} OWNED BY {table}")?
+                },
                 Create::Table { name, columns } => {
-                    write!(f, "CREATE TABLE {name} ({})", join(columns, ", "))?;
-                }
-
-                Create::Database(name) => {
-                    write!(f, "CREATE DATABASE {name}")?;
-                }
-
-                Create::Index {
-                    name,
-                    table,
-                    column,
-                    unique,
-                } => {
-                    let unique = if *unique { "UNIQUE" } else { "" };
+                    write!(f, "CREATE TABLE {name} ({})", join(columns, ", "))?
+                },
+                Create::Database(name) => write!(f, "CREATE DATABASE {name}")?,
+                Create::Index { name, table, column, unique } => {
+                    let unique = match unique {
+                        true => "UNIQUE",
+                        _ => "",
+                    };
                     write!(f, "CREATE {unique} INDEX {name} ON {table}({column})")?;
-                }
+                },
             },
 
             Statement::Select(Select {
@@ -525,21 +529,16 @@ impl Display for Statement {
                 if let Some(offset) = offset {
                     write!(f, " OFFSET {offset}")?;
                 }
-            }
+            },
 
             Statement::Delete(Delete { from, r#where }) => {
                 write!(f, "DELETE FROM {from}")?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
                 }
-            }
+            },
 
-            Statement::Update(Update {
-                table,
-                columns,
-                r#where,
-                returning,
-            }) => {
+            Statement::Update(Update { table, columns, r#where, returning }) => {
                 write!(f, "UPDATE {table} SET {}", join(columns, ", "))?;
                 if let Some(expr) = r#where {
                     write!(f, " WHERE {expr}")?;
@@ -548,24 +547,16 @@ impl Display for Statement {
                 if !returning.is_empty() {
                     write!(f, "RETURNING {}", join(returning, ", "))?;
                 }
-            }
+            },
 
-            Statement::Insert(Insert {
-                into,
-                columns,
-                values,
-                returning,
-            }) => {
+            Statement::Insert(Insert { into, columns, values, returning }) => {
                 let columns = match columns.is_empty() {
                     true => String::from(" "),
                     false => format!(" ({}) ", join(columns, ", ")),
                 };
 
                 let values = join(
-                    &values
-                        .iter()
-                        .map(|row| format!("({})", join(row, ", ")))
-                        .collect::<Vec<_>>(),
+                    &values.iter().map(|row| format!("({})", join(row, ", "))).collect::<Vec<_>>(),
                     ", ",
                 );
 
@@ -573,16 +564,24 @@ impl Display for Statement {
                 if !returning.is_empty() {
                     write!(f, "RETURNING {}", join(returning, ", "))?;
                 }
-            }
-
+            },
             Statement::Drop(drop) => {
                 match drop {
                     Drop::Table(name) => write!(f, "DROP TABLE {name}")?,
                     Drop::Database(name) => write!(f, "DROP DATABASE {name}")?,
                 };
-            }
-
-            Statement::StartTransaction => f.write_str("BEGIN TRANSACTION")?,
+            },
+            Statement::StartTransaction(None) => f.write_str("BEGIN TRANSACTION")?,
+            Statement::StartTransaction(Some(level)) => {
+                write!(f, "BEGIN TRANSACTION ISOLATION LEVEL {level}")?
+            },
+            Statement::SetIsolation { level, session: false } => {
+                write!(f, "SET TRANSACTION ISOLATION LEVEL {level}")?
+            },
+            Statement::SetIsolation { level, session: true } => {
+                write!(f, "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL {level}")?
+            },
+            Statement::Checkpoint => f.write_str("CHECKPOINT")?,
             Statement::Commit => f.write_str("COMMIT")?,
             Statement::Rollback => f.write_str("ROLLBACK")?,
             Statement::Source(source) => write!(f, "SOURCE '{source}'")?,
@@ -601,14 +600,6 @@ impl Expression {
         }
     }
 
-    pub(in crate::sql) fn unwrap_name(&self) -> Cow<'_, str> {
-        match self {
-            Expression::Alias { alias, .. } => Cow::Borrowed(alias),
-            Expression::Nested(expr) => expr.unwrap_name(),
-            expr => Cow::Owned(expr.to_string()),
-        }
-    }
-
     pub(in crate::sql) fn as_identifier(&self) -> Option<&str> {
         if let Self::Identifier(alias) = self {
             return Some(alias);
@@ -617,125 +608,41 @@ impl Expression {
         None
     }
 
-    /// Recursively substitutes identifiers that refer to aliases with their actual expressions.
-    /// This enables using `SELECT` aliases in `WHERE/ORDER BY/GROUP BY` clauses.
+    /// recursively substitutes identifiers that refer to aliases with their actual expressions
+    /// this enables using `SELECT` aliases in `WHERE/ORDER BY/GROUP BY` clauses
     pub(in crate::sql) fn substitute_aliases<F>(&self, resolve_alias: F) -> Self
     where
         F: Fn(&str) -> Option<Expression> + Copy,
     {
+        use Expression::*;
         match self {
-            Expression::Identifier(ident) => match resolve_alias(ident) {
+            Identifier(ident) => match resolve_alias(ident) {
                 Some(aliased_expr) => aliased_expr.substitute_aliases(resolve_alias),
                 _ => self.clone(),
             },
-
-            Expression::BinaryOperation {
-                operator,
-                left,
-                right,
-            } => Expression::BinaryOperation {
+            BinaryOperation { operator, left, right } => BinaryOperation {
                 operator: *operator,
                 left: Box::new(left.substitute_aliases(resolve_alias)),
                 right: Box::new(right.substitute_aliases(resolve_alias)),
             },
-
-            Expression::UnaryOperation { operator, expr } => Expression::UnaryOperation {
+            UnaryOperation { operator, expr } => UnaryOperation {
                 operator: *operator,
                 expr: Box::new(expr.substitute_aliases(resolve_alias)),
             },
-
-            Expression::IsNull { expr, negated } => Expression::IsNull {
+            IsNull { expr, negated } => IsNull {
                 expr: Box::new(expr.substitute_aliases(resolve_alias)),
                 negated: *negated,
             },
-
-            Expression::Function { func, args } => Expression::Function {
+            Function { func, args } => Function {
                 func: *func,
-                args: args
-                    .iter()
-                    .map(|a| a.substitute_aliases(resolve_alias))
-                    .collect(),
+                args: args.iter().map(|a| a.substitute_aliases(resolve_alias)).collect(),
             },
-
-            Expression::Alias { expr, alias } => Expression::Alias {
+            Alias { expr, alias } => Alias {
                 expr: Box::new(expr.substitute_aliases(resolve_alias)),
                 alias: alias.clone(),
             },
-
-            Expression::Nested(expr) => {
-                Expression::Nested(Box::new(expr.substitute_aliases(resolve_alias)))
-            }
-
+            Nested(expr) => Nested(Box::new(expr.substitute_aliases(resolve_alias))),
             _ => self.clone(),
-        }
-    }
-}
-
-impl JoinClause {
-    pub(in crate::sql) fn index_cadidate(
-        &self,
-        right_table: &TableMetadata,
-    ) -> Option<(IndexMetadata, Expression)> {
-        match &self.on {
-            Expression::BinaryOperation {
-                left: l,
-                operator: BinaryOperator::Eq,
-                right: r,
-            } => {
-                let (right_key_expr, left_key_expr) = match (
-                    Self::is_col_of_table(l, self.table.key()),
-                    Self::is_col_of_table(r, self.table.key()),
-                ) {
-                    (true, _) => (Some(l.as_ref()), r.as_ref()),
-                    (_, true) => (Some(r.as_ref()), l.as_ref()),
-                    _ => (None, l.as_ref()), // left_key_expr value here doesn't matter since right_key_expr is None
-                };
-
-                match right_key_expr {
-                    Some(right_key) => match right_key {
-                        Expression::Identifier(col_name)
-                        | Expression::QualifiedIdentifier {
-                            column: col_name, ..
-                        } => {
-                            // find if there is an index on this column in the right table
-                            if let Some(idx) = right_table
-                                .indexes
-                                .iter()
-                                .find(|idx| idx.column.name == *col_name)
-                            {
-                                return Some((idx.clone(), left_key_expr.clone()));
-                            }
-
-                            // check if the column is the primary key of the right table
-                            // if so, we can treat the table itself as an index
-                            if right_table.schema.columns[0].name == *col_name {
-                                let pk_index = IndexMetadata {
-                                    name: index!(primary on (right_table.name)),
-                                    root: right_table.root,
-                                    column: right_table.schema.columns[0].clone(),
-                                    schema: right_table.schema.clone(),
-                                    unique: true,
-                                };
-                                return Some((pk_index, left_key_expr.clone()));
-                            }
-
-                            None
-                        }
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn is_col_of_table(expr: &Expression, table: &str) -> bool {
-        match expr {
-            Expression::QualifiedIdentifier { table: t, .. } => t == table,
-            // TODO: maybe we need to verify better this
-            Expression::Identifier(_) => true,
-            _ => false,
         }
     }
 }
@@ -757,14 +664,11 @@ impl Display for Column {
         match &self.type_def {
             Some(variants) => {
                 write!(f, "{} ", self.name)?;
-                let def = variants
-                    .iter()
-                    .map(|v| format!("\"{v}\""))
-                    .collect::<Vec<_>>()
-                    .join(" | ");
+                let variants = variants.iter().map(|v| format!("\"{v}\"")).collect::<Vec<_>>();
+                let def = variants.join(" | ");
 
                 write!(f, "{def}")?;
-            }
+            },
             None => write!(f, "{} {}", self.name, self.data_type)?,
         };
 
@@ -787,15 +691,15 @@ impl Display for Expression {
         match self {
             Self::Identifier(ident) => f.write_str(ident),
             Self::QualifiedIdentifier { table, column } => write!(f, "{table}.{column}"),
+            Self::Column(position) => write!(f, "#{position}"),
+            Self::JsonPath { column, path } => write!(f, "#{column}{}", &path[1..]),
             Self::Value(value) => write!(f, "{value}"),
             Self::Wildcard => f.write_str("*"),
             Self::UnaryOperation { operator, expr } => write!(f, "{operator}{expr}"),
             Self::Nested(expr) => write!(f, "({expr})"),
-            Self::BinaryOperation {
-                operator,
-                left,
-                right,
-            } => write!(f, "{left} {operator} {right}"),
+            Self::BinaryOperation { operator, left, right } => {
+                write!(f, "{left} {operator} {right}")
+            },
             Self::Path { head, segments } => {
                 f.write_str(head)?;
                 for seg in segments {
@@ -806,7 +710,7 @@ impl Display for Expression {
                     }
                 }
                 Ok(())
-            }
+            },
             Self::Function { func, args } => {
                 let mut args = args.iter();
                 write!(f, "{func}(")?;
@@ -817,7 +721,7 @@ impl Display for Expression {
                     }
                 }
                 write!(f, ")")
-            }
+            },
             Self::Alias { expr, alias } => write!(f, "{expr} AS {alias}"),
             Self::IsNull { expr, negated } => match negated {
                 false => write!(f, "{expr} IS NULL"),
@@ -913,41 +817,30 @@ impl Function {
         }
     }
 
-    /// Returns the `VmType` that this function returns.
+    /// returns the `VmType` that this function returns
     pub const fn return_type(&self, input: &VmType) -> VmType {
+        use Function::*;
         match self {
-            Self::Substring | Self::Concat | Self::TypeOf => VmType::String,
-
-            Self::Count | Self::UuidV4 | Self::Ascii | Self::Position | Self::Extract => {
-                VmType::Number
-            }
-
-            Self::Sqrt | Self::Power => match input {
+            Substring | Concat | TypeOf => VmType::String,
+            Count | UuidV4 | Ascii | Position | Extract => VmType::Number,
+            Sqrt | Power => match input {
                 VmType::Numeric => VmType::Numeric,
                 _ => VmType::Float,
             },
-
-            Self::Avg | Self::Sum => match input {
+            Avg | Sum => match input {
                 VmType::Number | VmType::Numeric => VmType::Numeric,
                 _ => *input,
             },
-
-            Self::Abs | Self::Sign | Self::Trunc | Self::Min | Self::Max | Self::Coalesce => *input,
+            Abs | Sign | Trunc | Min | Max | Coalesce => *input,
         }
     }
 
     pub const fn is_math(&self) -> bool {
-        matches!(
-            self,
-            Self::Trunc | Self::Abs | Self::Sqrt | Self::Sign | Self::Power
-        )
+        matches!(self, Self::Trunc | Self::Abs | Self::Sqrt | Self::Sign | Self::Power)
     }
 
     pub const fn is_aggr(&self) -> bool {
-        matches!(
-            self,
-            Self::Count | Self::Sum | Self::Avg | Self::Min | Self::Max
-        )
+        matches!(self, Self::Count | Self::Sum | Self::Avg | Self::Min | Self::Max)
     }
 
     pub(in crate::sql) const fn is_unary(&self) -> bool {
@@ -975,10 +868,16 @@ macro_rules! define_function_mapping {
             type Err = ();
 
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                let upper = s.to_uppercase();
-                match upper.as_str() {
-                    $($str => Ok(Function::$variant),)*
-                    _ => Err(()),
+                Self::from_uppercase(&s.to_uppercase()).ok_or(())
+            }
+        }
+
+        impl Function {
+            /// the function named `upper`, already in upper case
+            pub(crate) fn from_uppercase(upper: &str) -> Option<Self> {
+                match upper {
+                    $($str => Some(Function::$variant),)*
+                    _ => None,
                 }
             }
         }
@@ -1171,10 +1070,7 @@ impl Display for OrderBy {
 
 impl From<Expression> for OrderBy {
     fn from(expr: Expression) -> Self {
-        Self {
-            expr,
-            direction: Default::default(),
-        }
+        Self { expr, direction: Default::default() }
     }
 }
 
@@ -1216,4 +1112,14 @@ pub(crate) fn join<'t, T: Display + 't>(
     }
 
     joined
+}
+
+impl Display for IsolationLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ReadCommitted => "READ COMMITTED",
+            Self::Snapshot => "SNAPSHOT",
+            Self::Serializable => "SERIALIZABLE",
+        })
+    }
 }

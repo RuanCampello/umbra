@@ -186,7 +186,7 @@ impl Display for Token {
                     _ => unreachable!(),
                 };
                 f.write_str(s)
-            }
+            },
         }
     }
 }
@@ -325,11 +325,20 @@ impl FromStr for Keyword {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use crate::sql::statement::Function;
 
-        if let Ok(function) = s.parse::<Function>() {
+        // PERFORMANCE: keywords and function names are short ASCII words, upper-cased on the stack
+        let mut buffer = [0u8; 32];
+        let Some(upper) = buffer.get_mut(..s.len()).filter(|_| s.is_ascii()) else {
+            return Ok(Keyword::None);
+        };
+        upper.copy_from_slice(s.as_bytes());
+        upper.make_ascii_uppercase();
+        let upper = std::str::from_utf8(upper).expect("ASCII stays UTF-8");
+
+        if let Some(function) = Function::from_uppercase(upper) {
             return Ok(Keyword::from(function));
         }
 
-        let keyword = match s.to_uppercase().as_str() {
+        let keyword = match upper {
             "SELECT" => Keyword::Select,
             "CREATE" => Keyword::Create,
             "UPDATE" => Keyword::Update,
