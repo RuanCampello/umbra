@@ -1,59 +1,17 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::db::Schema;
 
-use crate::collections::hash::HashMap;
-use crate::db::{DatabaseError, RowId, Schema};
-use crate::sql::analyzer::AnalyzerError;
-use crate::sql::statement::{Column, Type};
-use crate::storage::btree::{
-    BTreeKeyCmp, BitMapSizedCmp, BitMapStringCmp, FixedSizeCmp, VarlenaCmp,
-};
-use crate::storage::page::PageNumber;
-use crate::storage::tuple::{byte_len_of_type, utf_8_length_bytes};
-
-/// That's all the information we've from a table during runtime.
-/// We save this to the database metadata table at page zero.
-/// Then we load into this structure in a form of primitive cache to do our operations
-/// without hitting the database it self.
+/// What the analyzer and statement preparation know about a table
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TableMetadata {
-    pub root: PageNumber,
     pub name: String,
     pub schema: Schema,
     pub indexes: Vec<IndexMetadata>,
-    pub serials: HashMap<String, SequenceMetadata>,
-    pub(in crate::db) row_id: RowId,
-    /// Number of rows in this table. Used by the cost-based optimiser.
-    pub count: usize,
 }
 
-/// The information we know about the table indexes during runtime.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct IndexMetadata {
-    pub root: PageNumber,
     pub name: String,
-    pub column: Column,
-    pub schema: Schema,
-    /// This is an illusion because we only support `UNIQUE` indexes :)
     pub(crate) unique: bool,
-}
-
-/// The data we need to know about the table sequences during runtime.
-#[derive(Debug)]
-pub(crate) struct SequenceMetadata {
-    pub root: PageNumber,
-    pub name: String,
-    pub value: AtomicU64,
-    pub data_type: Type,
-}
-
-/// That our dispatch for relation types.
-/// Some [planners](crate::vm::planner::Planner) need to deal with table Btrees and index Btrees but we only know which at runtime.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Relation {
-    Index(IndexMetadata),
-    Table(TableMetadata),
-    #[allow(unused)]
-    Sequence(SequenceMetadata),
 }
 
 #[macro_export]
@@ -70,203 +28,16 @@ pub(crate) enum Relation {
 /// parenthesis.
 macro_rules! index {
     // ── PRIMARY ───────────────────────────────────────────────────────
-    (primary on ( $table:expr )) => {{
-        format!("{}_pk_index", $table)
-    }};
+    (primary on ( $table:expr )) => {{ format!("{}_pk_index", $table) }};
 
-    (primary on $table:ident) => {{
-        format!("{}_pk_index", stringify!($table))
-    }};
+    (primary on $table:ident) => {{ format!("{}_pk_index", stringify!($table)) }};
 
     // ── UNIQUE ────────────────────────────────────────────────────────
-    (unique on ( $table:expr ) ( $col:expr )) => {{
-        format!("{}_{}_uq_index", $table, $col)
-    }};
+    (unique on ( $table:expr ) ( $col:expr )) => {{ format!("{}_{}_uq_index", $table, $col) }};
 
-    (unique on $table:ident ( $col:ident )) => {{
-        format!("{}_{}_uq_index", stringify!($table), stringify!($col))
-    }};
+    (unique on $table:ident ( $col:ident )) => {{ format!("{}_{}_uq_index", stringify!($table), stringify!($col)) }};
 
-    (unique on $table:ident ( $col:expr )) => {{
-        format!("{}_{}_uq_index", stringify!($table), $col)
-    }};
+    (unique on $table:ident ( $col:expr )) => {{ format!("{}_{}_uq_index", stringify!($table), $col) }};
 
-    (unique on ( $table:expr ) ( $col:ident )) => {{
-        format!("{}_{}_uq_index", $table, stringify!($col))
-    }};
-}
-
-macro_rules! sequence {
-    // ── SEQUENCE ────────────────────────────────────────────────────────
-    (sequence on ($table:expr) ($col:expr)) => {{
-        format!("{}_{}_seq", $table, $col)
-    }};
-}
-
-impl TableMetadata {
-    pub fn next_id(&mut self) -> RowId {
-        let row_id = self.row_id;
-        self.row_id += 1;
-        row_id
-    }
-
-    pub fn next_val(&mut self, table: &str, column: &str) -> Result<u64, DatabaseError> {
-        let sequence_name = sequence!(sequence on (table) (column));
-        let sequence = self
-            .serials
-            .get(&sequence_name)
-            .expect("Failed to get next_val for this column");
-
-        let max = sequence.data_type.max();
-        let current = sequence.value.fetch_add(1, Ordering::Relaxed);
-
-        if current >= max as u64 {
-            return Err(AnalyzerError::Overflow(sequence.data_type, max).into());
-        }
-
-        Ok(current + 1)
-    }
-
-    pub fn comp(&self) -> Result<BTreeKeyCmp, DatabaseError> {
-        let pk = self.schema.columns[0].data_type;
-        match self.schema.has_nullable() {
-            true => {
-                let bitmap_len = self.schema.null_bitmap_len();
-                match pk {
-                    Type::Varchar(max) => Ok(BTreeKeyCmp::MapStr(BitMapStringCmp {
-                        bitmap_len,
-                        prefix_len: max,
-                    })),
-                    Type::Text => Ok(BTreeKeyCmp::Varlena(VarlenaCmp)),
-                    _ => Ok(BTreeKeyCmp::MapMem(BitMapSizedCmp {
-                        bitmap_len,
-                        key_size: byte_len_of_type(&pk),
-                    })),
-                }
-            }
-
-            _ => match self.schema.columns[0].data_type {
-                Type::Text => Ok(BTreeKeyCmp::Varlena(VarlenaCmp)),
-                _ => FixedSizeCmp::try_from(&self.schema.columns[0].data_type)
-                    .map(BTreeKeyCmp::Mem)
-                    .map_err(|_| {
-                        DatabaseError::Corrupted(format!(
-                            "Table {} is using a non-int Btree key with type {:#?}",
-                            self.name, self.schema.columns[0].data_type
-                        ))
-                    }),
-            },
-        }
-    }
-
-    pub fn key_only_schema(&self) -> Schema {
-        Schema::new(vec![self.schema.columns[0].clone()])
-    }
-}
-
-impl Relation {
-    pub fn root(&self) -> PageNumber {
-        match self {
-            Self::Sequence(seq) => seq.root,
-            Self::Index(idx) => idx.root,
-            Self::Table(table) => table.root,
-        }
-    }
-
-    pub fn comp(&self) -> BTreeKeyCmp {
-        match self {
-            Self::Sequence(seq) => BTreeKeyCmp::from(&seq.data_type),
-            Self::Index(idx) => {
-                let first = &idx.schema.columns[0].data_type;
-
-                match first {
-                    Type::Varchar(max) => match idx.schema.has_nullable() {
-                        false => BTreeKeyCmp::from(first),
-                        true => {
-                            let bitmap_len = idx.schema.null_bitmap_len();
-                            BTreeKeyCmp::MapStr(BitMapStringCmp {
-                                bitmap_len,
-                                prefix_len: utf_8_length_bytes(*max),
-                            })
-                        }
-                    },
-                    _ => BTreeKeyCmp::from(first),
-                }
-            }
-            Self::Table(table) => {
-                let pk = &table.schema.columns[0].data_type;
-
-                match &table.schema.has_nullable() {
-                    false => BTreeKeyCmp::from(pk),
-                    _ => {
-                        let bitmap_len = table.schema.null_bitmap_len();
-
-                        match pk {
-                            Type::Varchar(max) => BTreeKeyCmp::MapStr(BitMapStringCmp {
-                                bitmap_len,
-                                prefix_len: utf_8_length_bytes(*max),
-                            }),
-                            Type::Text => BTreeKeyCmp::Varlena(VarlenaCmp),
-                            _ => BTreeKeyCmp::MapMem(BitMapSizedCmp {
-                                bitmap_len,
-                                key_size: byte_len_of_type(pk),
-                            }),
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn schema(&self) -> &Schema {
-        match self {
-            Self::Sequence(_) => panic!("Sequence does not have a schema"),
-            Self::Index(idx) => &idx.schema,
-            Self::Table(table) => &table.schema,
-        }
-    }
-
-    pub fn kind(&self) -> &str {
-        match self {
-            Self::Sequence(_) => "sequence",
-            Self::Index(_) => "index",
-            Self::Table(_) => "table",
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Sequence(seq) => &seq.name,
-            Self::Index(idx) => &idx.name,
-            Self::Table(table) => &table.name,
-        }
-    }
-
-    pub fn index(&self) -> usize {
-        match self {
-            Self::Sequence(_) => 2,
-            Self::Index(_) => 1,
-            Self::Table(_) => 0,
-        }
-    }
-}
-
-impl PartialEq for SequenceMetadata {
-    fn eq(&self, other: &Self) -> bool {
-        self.root == other.root
-            && self.name == other.name
-            && self.data_type == other.data_type
-            && self.value.load(Ordering::SeqCst) == other.value.load(Ordering::SeqCst)
-    }
-}
-
-impl Clone for SequenceMetadata {
-    fn clone(&self) -> Self {
-        Self {
-            data_type: self.data_type.clone(),
-            name: self.name.clone(),
-            value: AtomicU64::new(self.value.load(Ordering::Relaxed)),
-            root: self.root,
-        }
-    }
+    (unique on ( $table:expr ) ( $col:ident )) => {{ format!("{}_{}_uq_index", $table, stringify!($col)) }};
 }

@@ -1,13 +1,13 @@
 use crate::{
     core::{
-        date::{interval::Interval, NaiveDate, NaiveDateTime, NaiveTime, Parse},
+        Serialize,
+        date::{NaiveDate, NaiveDateTime, NaiveTime, Parse, interval::Interval},
         json::{self, Conv, Jsonb},
         numeric::Numeric,
         uuid::Uuid,
-        Serialize,
     },
-    db::{RowId, Schema},
-    sql::statement::{Column, Temporal, Type, Value},
+    db::Schema,
+    sql::statement::{Temporal, Type, Value},
 };
 use std::{
     io::{self, Read},
@@ -21,7 +21,7 @@ trait ValueSerialize {
     fn serialize(&self, buff: &mut Vec<u8>, to: &Type);
 }
 
-/// Returns the byte length of a given SQL [`Type`].
+/// Returns the byte length of a given SQL [Type]
 #[inline(always)]
 pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     match data_type {
@@ -39,7 +39,7 @@ pub(crate) const fn byte_len_of_type(data_type: &Type) -> usize {
     }
 }
 
-/// Returns the length of bytes needed to storage a given `Varchar` [`Type`].
+/// returns the length of bytes needed to storage a given [Type::Varchar]
 pub(crate) const fn utf_8_length_bytes(max_size: usize) -> usize {
     match max_size {
         0..64 => 1,
@@ -48,11 +48,11 @@ pub(crate) const fn utf_8_length_bytes(max_size: usize) -> usize {
     }
 }
 
-/// Returns the size in bytes of the varlena header, given its first byte.
+/// Returns the size in bytes of the varlena header, given its first byte
 /// If the first byte less than 127: 1-byte header (short string, length is the first byte)
 /// If the first byte greater or equal to 128: 4-byte header (long string, length is in the next 3 bytes)
 ///
-/// *Note*: the first byte being equal to 0x7f is reserved and cannot be used.
+/// *Note*: the first byte being equal to 0x7f is reserved and cannot be used
 const fn varlena_header_len(byte: u8) -> usize {
     match byte < 0x7f {
         true => 1,
@@ -72,7 +72,7 @@ pub(crate) fn serialize(r#type: &Type, value: &Value) -> Vec<u8> {
     buff
 }
 
-fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
+pub(crate) fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
     match value {
         Value::String(string) => match r#type {
             Type::Varchar(max) => {
@@ -85,20 +85,20 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
 
                 buff.extend_from_slice(&b_len[..len_prefix]);
                 buff.extend_from_slice(string.as_bytes());
-            }
+            },
 
             Type::Jsonb => {
                 let json = json::from_value_to_jsonb(value, Conv::NotStrict)
                     .expect("JSON serialisation should not fail");
                 serialize_into(buff, r#type, &Value::Blob(json.data()))
-            }
+            },
 
             _ => string.to_string().serialize(buff, r#type),
         },
         Value::Boolean(_) | Value::Float(_) | Value::Number(_) if matches!(r#type, Type::Jsonb) => {
             let json = json::from_value_to_jsonb(value, Conv::Strict).unwrap();
             serialize_into(buff, r#type, &Value::Blob(json.data()))
-        }
+        },
         Value::Number(n) => n.serialize(buff, r#type),
         Value::Float(f) => f.serialize(buff, r#type),
         Value::Boolean(b) => b.serialize(buff, r#type),
@@ -112,29 +112,25 @@ fn serialize_into(buff: &mut Vec<u8>, r#type: &Type, value: &Value) {
                 let len = blob.len();
                 match len < 127 {
                     true => buff.push(len as u8),
-                    false => {
+                    _ => {
                         buff.push(0x80);
                         buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
-                    }
+                    },
                 }
 
                 buff.extend_from_slice(blob);
-            }
+            },
             _ => unreachable!("Unsupported type {} for Blob value", r#type),
         },
         Value::Null => panic!("NULL values cannot be serialised"),
     }
 }
 
-pub(crate) fn deserialize_row_id(buff: &[u8]) -> RowId {
-    RowId::from_be_bytes(buff[..mem::size_of::<RowId>()].try_into().unwrap())
-}
-
 pub(crate) fn serialize_tuple<'value>(
     schema: &Schema,
     values: impl IntoIterator<Item = &'value Value> + Copy,
 ) -> Vec<u8> {
-    use crate::sql::statement::Column;
+    use crate::db::Column;
 
     let mut buff = Vec::new();
 
@@ -150,35 +146,27 @@ pub(crate) fn serialize_tuple<'value>(
             buff.extend_from_slice(&bitmap);
 
             |(_, value)| !value.is_null()
-        }
+        },
         false => |_| true, // no filter needed
     };
-    schema
-        .columns
-        .iter()
-        .zip(values)
-        .filter(filter)
-        .for_each(|(col, val)| match (col.data_type, val) {
+    schema.columns.iter().zip(values).filter(filter).for_each(|(col, val)| {
+        match (col.column_type(), val) {
             (Type::Enum(id), Value::String(s)) => {
-                let variants = schema
-                    .get_enum(id)
-                    .or(col.type_def.as_ref())
+                let variants = col
+                    .variants()
                     .unwrap_or_else(|| panic!("Enum variants not found in schema for id: {id}"));
-                let idx = variants
-                    .iter()
-                    .position(|v| v.as_str() == &**s)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Invalid enum variant: '{s}'. Expected one of: {:?}",
-                            variants.join(", ")
-                        )
-                    }) as u8;
+
+                let idx = variants.iter().position(|v| v.as_str() == &**s).unwrap_or_else(|| {
+                    let variants = variants.join(", ");
+                    panic!("Invalid enum variant: '{s}'. Expected one of: {variants:?}")
+                }) as u8;
 
                 buff.push(idx)
-            }
+            },
 
-            _ => serialize_into(&mut buff, &col.data_type, val),
-        });
+            _ => serialize_into(&mut buff, &col.column_type(), val),
+        }
+    });
 
     buff
 }
@@ -200,31 +188,40 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                     return None;
                 }
                 // special handling for Jsonb to ensure we use the correct serialisation logic
-                if matches!(col.data_type, Type::Jsonb) {
+                if matches!(col.column_type(), Type::Jsonb) {
                     let json = json::from_value_to_jsonb(&tuple[idx], Conv::NotStrict).unwrap();
                     let len = json.len();
-                    let header_len = if len < 127 { 1 } else { 4 };
+                    let header_len = match len < 127 {
+                        true => 1,
+                        _ => 4,
+                    };
                     return Some(header_len + len);
                 }
 
                 Some(match &tuple[idx] {
-                    Value::String(str) => match col.data_type {
+                    Value::String(str) => match col.column_type() {
                         Type::Varchar(max) => utf_8_length_bytes(max) + str.len(),
                         Type::Text => {
                             let len = str.len();
-                            let header_len = if len < 127 { 1 } else { 4 };
+                            let header_len = match len < 127 {
+                                true => 1,
+                                _ => 4,
+                            };
                             header_len + len
-                        }
-                        _ => byte_len_of_type(&col.data_type),
+                        },
+                        _ => byte_len_of_type(&col.column_type()),
                     },
                     Value::Numeric(num) => num.size(),
                     Value::Blob(blob) => {
                         let len = blob.len();
-                        let header_len = if len < 127 { 1 } else { 4 };
+                        let header_len = match len < 127 {
+                            true => 1,
+                            _ => 4,
+                        };
                         header_len + len
-                    }
+                    },
                     Value::Float(_) | Value::Number(_)
-                        if matches!(col.data_type, Type::Numeric(_, _)) =>
+                        if matches!(col.column_type(), Type::Numeric(_, _)) =>
                     {
                         let num = match &tuple[idx] {
                             Value::Float(f) => Numeric::try_from(*f).unwrap(),
@@ -232,15 +229,15 @@ pub(crate) fn size_of(tuple: &[Value], schema: &Schema) -> usize {
                             _ => unsafe { std::hint::unreachable_unchecked() },
                         };
                         num.size()
-                    }
-                    _ => match &col.data_type {
+                    },
+                    _ => match &col.column_type() {
                         Type::Text => {
                             let len = tuple[idx].to_string().len();
                             match len < 127 {
                                 true => 1 + len,
                                 _ => 4 + len,
                             }
-                        }
+                        },
                         typ => byte_len_of_type(typ),
                     },
                 })
@@ -255,16 +252,12 @@ pub(crate) fn read_from(reader: &mut impl Read, schema: &Schema) -> io::Result<V
             let mut bitmap = vec![0u8; bitmap_size];
             reader.read_exact(&mut bitmap)?;
             Some(bitmap)
-        }
-
-        false => None,
+        },
+        _ => None,
     };
 
     let values = schema.columns.iter().enumerate().map(|(i, col)| {
-        if bitmap
-            .as_ref()
-            .is_some_and(|b| (b[i / 8] & (1 << (i % 8))) != 0)
-        {
+        if bitmap.as_ref().is_some_and(|b| (b[i / 8] & (1 << (i % 8))) != 0) {
             return Ok(Value::Null);
         }
 
@@ -284,7 +277,7 @@ fn read_varlena(reader: &mut impl Read) -> io::Result<(usize, Vec<u8>)> {
             reader.read_exact(&mut header[1..4])?;
             let be = [0, header[1], header[2], header[3]];
             u32::from_be_bytes(be) as usize
-        }
+        },
         true => header[0] as usize,
     };
 
@@ -293,8 +286,8 @@ fn read_varlena(reader: &mut impl Read) -> io::Result<(usize, Vec<u8>)> {
     Ok((length, buf))
 }
 
-fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
-    match col.data_type {
+fn read_value(reader: &mut impl Read, col: &crate::db::Column) -> io::Result<Value> {
+    match col.column_type() {
         Type::Varchar(size) => {
             let mut len = [0; mem::size_of::<usize>()];
             let prefix = utf_8_length_bytes(size);
@@ -306,10 +299,10 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             reader.read_exact(&mut string)?;
 
             // SAFETY: all VARCHAR bytes are written via rust string values,
-            // which are guaranteed to be valid utf-8. the round-trip of the storage cannot corrupt
-            // bytes, so the O(n) check is redundant.
+            // which are guaranteed to be valid utf-8
+            // the round-trip of the storage cannot corrupt bytes, so the O(n) check is redundant
             unsafe { Ok(Value::String(String::from_utf8_unchecked(string).into())) }
-        }
+        },
 
         Type::Text => unsafe {
             let (_, buf) = read_varlena(reader)?;
@@ -322,13 +315,12 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             let (_, buf) = read_varlena(reader)?;
 
             let json = Jsonb::from_data(&buf);
-            let element_type = json
-                .element_type()
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+            let element_type =
+                json.element_type().map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
             json::from_json_to_value(json, element_type, json::OutputFlag::ElementType)
                 .map_err(|e| Error::new(ErrorKind::InvalidData, e))
-        }
+        },
 
         Type::Numeric(_, _) => {
             let mut header = [0; 8];
@@ -353,81 +345,77 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
                         digits.push(i16::from_le_bytes(chunk.try_into().unwrap()));
                     }
 
-                    Ok(Value::Numeric(Numeric::Long {
-                        weight,
-                        digits,
-                        sign_dscale,
-                    }))
-                }
+                    Ok(Value::Numeric(Numeric::Long { weight, digits, sign_dscale }))
+                },
                 _ => unreachable!("Invalid numeric tag: {tag}"),
             }
-        }
+        },
 
         Type::Boolean => {
             let mut byte = [0; byte_len_of_type(&Type::Boolean)];
             reader.read_exact(&mut byte)?;
             Ok(Value::Boolean(byte[0] != 0))
-        }
+        },
 
         Type::SmallInt => {
             let mut buf = [0; byte_len_of_type(&Type::SmallInt)];
             reader.read_exact(&mut buf)?;
             let n = i16::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
-        }
+        },
 
         Type::UnsignedSmallInt | Type::SmallSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedSmallInt)];
             reader.read_exact(&mut buf)?;
             let n = u16::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
-        }
+        },
 
         Type::Integer => {
             let mut buf = [0; byte_len_of_type(&Type::Integer)];
             reader.read_exact(&mut buf)?;
             let n = i32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
-        }
+        },
 
         Type::UnsignedInteger | Type::Serial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedInteger)];
             reader.read_exact(&mut buf)?;
             let n = u32::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
-        }
+        },
 
         Type::BigInteger => {
             let mut buf = [0; byte_len_of_type(&Type::BigInteger)];
             reader.read_exact(&mut buf)?;
             let n = i64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
-        }
+        },
 
         Type::UnsignedBigInteger | Type::BigSerial => {
             let mut buf = [0; byte_len_of_type(&Type::UnsignedBigInteger)];
             reader.read_exact(&mut buf)?;
             let n = u64::from_be_bytes(buf) as i128;
             Ok(Value::Number(n))
-        }
+        },
 
         Type::Uuid => {
             let mut buf = [0; byte_len_of_type(&Type::Uuid)];
             reader.read_exact(&mut buf)?;
             Ok(Value::Uuid(Uuid::from_bytes(buf)))
-        }
+        },
 
         Type::Real => {
             let mut bytes = [0; byte_len_of_type(&Type::Real)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Float(f32::from_be_bytes(bytes).into()))
-        }
+        },
 
         Type::DoublePrecision => {
             let mut bytes = [0; byte_len_of_type(&Type::DoublePrecision)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Float(f64::from_be_bytes(bytes)))
-        }
+        },
 
         Type::Interval => {
             let mut bytes = [0; byte_len_of_type(&Type::Interval)];
@@ -438,19 +426,19 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             let microseconds = i64::from_le_bytes(bytes[8..16].try_into().unwrap());
 
             Ok(Value::Interval(Interval::new(months, days, microseconds)))
-        }
+        },
 
         Type::Date => {
             let mut bytes = [0; byte_len_of_type(&Type::Date)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Temporal(NaiveDate::try_from(bytes)?.into()))
-        }
+        },
 
         Type::Time => {
             let mut bytes = [0; byte_len_of_type(&Type::Time)];
             reader.read_exact(&mut bytes)?;
             Ok(Value::Temporal(NaiveTime::from(bytes).into()))
-        }
+        },
 
         Type::DateTime => {
             let mut date_bytes = [0; byte_len_of_type(&Type::Date)];
@@ -461,13 +449,13 @@ fn read_value(reader: &mut impl Read, col: &Column) -> io::Result<Value> {
             let bytes = (date_bytes, time_bytes);
 
             Ok(Value::Temporal(NaiveDateTime::try_from(bytes)?.into()))
-        }
+        },
 
         Type::Enum(_) => {
             let mut byte = [0; 1];
             reader.read_exact(&mut byte)?;
             Ok(Value::Enum(byte[0]))
-        }
+        },
     }
 }
 
@@ -500,18 +488,18 @@ impl ValueSerialize for String {
                         // 4 byte header: 0x80 + 3 bytes BE length
                         buff.push(0x80);
                         buff.extend_from_slice(&(len as u32).to_be_bytes()[1..]);
-                    }
+                    },
                 }
 
                 // then we add the string content itself
                 buff.extend_from_slice(bytes);
-            }
+            },
             Type::Date => NaiveDate::parse_str(self).unwrap().serialize(buff),
             Type::Time => NaiveTime::parse_str(self).unwrap().serialize(buff),
             Type::DateTime => NaiveDateTime::parse_str(self).unwrap().serialize(buff),
             Type::Interval => {
                 ValueSerialize::serialize(&Interval::from_str(self).unwrap(), buff, &Type::Interval)
-            }
+            },
             Type::Uuid => buff.extend_from_slice(Uuid::from_str(self).unwrap().as_ref()),
             Type::Enum(_) => unimplemented!(),
             _ => unreachable!("Unsupported type {to} for String value"),
@@ -526,7 +514,7 @@ impl ValueSerialize for i128 {
                 let b_len = byte_len_of_type(to);
                 let be_bytes = self.to_be_bytes();
                 buff.extend_from_slice(&be_bytes[be_bytes.len() - b_len..]);
-            }
+            },
             typ if typ.is_float() => match typ {
                 Type::Real => buff.extend_from_slice(&(*self as f32).to_be_bytes()),
                 Type::DoublePrecision => buff.extend_from_slice(&(*self as f64).to_be_bytes()),
@@ -544,7 +532,7 @@ impl ValueSerialize for i128 {
                     buff.extend_from_slice(&(bytes.len() as u32).to_be_bytes()[1..]);
                 }
                 buff.extend_from_slice(bytes);
-            }
+            },
             _ => unreachable!("Unsupported type {to} for i128 value"),
         }
     }
@@ -561,7 +549,7 @@ impl ValueSerialize for f64 {
             typ if typ.is_integer() => {
                 let value = *self as i128;
                 value.serialize(buff, typ);
-            }
+            },
             Type::Numeric(_, _) => Numeric::try_from(*self)
                 .expect("Invalid float for numeric conversion")
                 .serialize(buff),
@@ -611,7 +599,7 @@ impl ValueSerialize for Interval {
                 buff.extend_from_slice(&self.months.to_le_bytes());
                 buff.extend_from_slice(&self.days.to_le_bytes());
                 buff.extend_from_slice(&self.microseconds.to_le_bytes());
-            }
+            },
             _ => unreachable!("Unsupported type {to} for Interval"),
         }
     }
@@ -619,11 +607,9 @@ impl ValueSerialize for Interval {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-
-    use crate::sql::statement::Column;
-
     use super::*;
+    use crate::db::Column;
+    use std::io::Cursor;
 
     fn round_trip(r#type: Type, value: &Value) -> Value {
         let mut buff = Vec::new();
@@ -678,11 +664,7 @@ mod tests {
             let schema = Schema::new(vec![Column::new("t", Type::Text)]);
             let row = read_from(&mut cursor, &schema).unwrap();
 
-            assert_eq!(
-                row[0],
-                Value::String(s.clone().into()),
-                "Failed roundtrip for text: {s:?}",
-            );
+            assert_eq!(row[0], Value::String(s.clone().into()), "Failed roundtrip for text: {s:?}",);
         }
     }
 }

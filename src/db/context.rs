@@ -59,7 +59,7 @@ impl Context {
                 }
 
                 self.move_to_head(idx);
-            }
+            },
 
             _ => {
                 if self.map.len() >= self.capacity {
@@ -72,20 +72,15 @@ impl Context {
                         let idx = self.entries.len();
                         self.entries.push(None);
                         idx
-                    }
+                    },
                 };
 
-                let entry = Entry {
-                    key: key.clone(),
-                    value: metadata,
-                    prev: None,
-                    next: None,
-                };
+                let entry = Entry { key: key.clone(), value: metadata, prev: None, next: None };
 
                 self.entries[index] = Some(entry);
                 self.map.insert(key, index);
                 self.push_front(index);
-            }
+            },
         }
     }
 
@@ -93,15 +88,6 @@ impl Context {
     /// This does NOT update the LRU order (peek operation).
     pub(super) fn contains(&self, table: &str) -> bool {
         self.map.contains_key(table)
-    }
-
-    /// Removes a table from the context.
-    pub fn invalidate(&mut self, table: &str) {
-        if let Some(index) = self.map.remove(table) {
-            self.remove_node(index);
-            self.entries[index] = None;
-            self.free_indices.push(index);
-        }
     }
 
     fn move_to_head(&mut self, index: usize) {
@@ -124,7 +110,7 @@ impl Context {
                 if let Some(head_entry) = &mut self.entries[head_idx] {
                     head_entry.prev = Some(index);
                 }
-            }
+            },
             _ => self.tail = Some(index),
         }
 
@@ -142,7 +128,7 @@ impl Context {
                 if let Some(prev_entry) = &mut self.entries[prev_idx] {
                     prev_entry.next = next;
                 }
-            }
+            },
             _ => self.head = next,
         }
 
@@ -151,7 +137,7 @@ impl Context {
                 if let Some(next_entry) = &mut self.entries[next_idx] {
                     next_entry.prev = prev;
                 }
-            }
+            },
             _ => self.tail = prev,
         }
     }
@@ -174,7 +160,6 @@ impl TryFrom<&[&str]> for Context {
 
     fn try_from(statements: &[&str]) -> Result<Self, Self::Error> {
         let mut context = Self::new();
-        let mut root = 1;
 
         for sql in statements {
             use crate::sql::{
@@ -187,19 +172,14 @@ impl TryFrom<&[&str]> for Context {
                 Statement::Create(Create::Table { name, columns }) => {
                     use crate::db::Schema;
 
-                    let mut schema = Schema::from(&columns);
+                    let mut schema = Schema::from_definition(&columns);
                     schema.prepend_id();
 
                     let mut metadata = TableMetadata {
-                        root,
                         name: name.clone(),
-                        row_id: 1,
                         schema,
                         indexes: vec![],
-                        serials: HashMap::default(),
-                        count: 0,
                     };
-                    root += 1;
 
                     columns.iter().for_each(|col| {
                         col.constraints.iter().for_each(|constraint| {
@@ -211,41 +191,20 @@ impl TryFrom<&[&str]> for Context {
                                 _ => unreachable!("This ain't a index")
                             };
 
-                            let mut index_col = col.clone();
-                            let mut pk_col = columns[0].clone();
-
-                            index_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
-                            pk_col.constraints.retain(|c| !matches!(c, Constraint::Nullable));
-
                             metadata.indexes.push(IndexMetadata {
-                                column: col.clone(),
-                                schema: Schema::new(vec![index_col, pk_col]),
                                 name: index,
-                                root,
                                 unique: true,
                             });
-
-                            root += 1;
                         })
                     });
 
                     context.insert(metadata);
                 }
-                Statement::Create(Create::Index { name, column, unique, .. }) if unique => {
-                    use crate::db::{IndexMetadata, Schema};
+                Statement::Create(Create::Index { name, unique, .. }) if unique => {
+                    use crate::db::IndexMetadata;
 
                     let table = context.metadata(&name)?;
-                    let index_col = &table.schema.columns[table.schema.index_of(&column).unwrap()];
-
-                    table.indexes.push(IndexMetadata{
-                        column: index_col.clone(),
-                        schema: Schema::new(vec![index_col.clone(), table.schema.columns[0].clone()]),
-                        name,
-                        root,
-                        unique,
-                    });
-
-                    root += 1;
+                    table.indexes.push(IndexMetadata { name, unique });
                 }
 
                 statement => {
@@ -259,6 +218,10 @@ impl TryFrom<&[&str]> for Context {
 }
 
 impl Ctx for Context {
+    fn next_serial(&mut self, _table: &str, _column: usize) -> Result<i128, DatabaseError> {
+        Ok(1)
+    }
+
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
         self.map
             .get(table)
