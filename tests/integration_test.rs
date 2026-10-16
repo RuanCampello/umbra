@@ -28,15 +28,8 @@ impl Default for State {
     #[track_caller]
     fn default() -> Self {
         let caller = std::panic::Location::caller();
-        let path = format!(
-            "{}-{}.db",
-            Path::new(caller.file())
-                .file_stem()
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            caller.line()
-        );
+        let stem = Path::new(caller.file()).file_stem().unwrap().to_str().unwrap();
+        let path = format!("{}-{}.db", stem, caller.line());
         let path = Path::new(path.as_str());
 
         Self::new(path)
@@ -162,26 +155,10 @@ fn test_comparison_on_floats() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![
-                Value::Boolean(false),
-                Value::Boolean(false),
-                Value::Boolean(true)
-            ],
-            vec![
-                Value::Boolean(true),
-                Value::Boolean(false),
-                Value::Boolean(false)
-            ],
-            vec![
-                Value::Boolean(false),
-                Value::Boolean(true),
-                Value::Boolean(false)
-            ],
-            vec![
-                Value::Boolean(false),
-                Value::Boolean(true),
-                Value::Boolean(false)
-            ]
+            vec![Value::Boolean(false), Value::Boolean(false), Value::Boolean(true)],
+            vec![Value::Boolean(true), Value::Boolean(false), Value::Boolean(false)],
+            vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(false)],
+            vec![Value::Boolean(false), Value::Boolean(true), Value::Boolean(false)]
         ]
     );
 
@@ -235,10 +212,7 @@ fn date_ordering() -> Result<()> {
     let query = db.exec("SELECT event_name FROM temporal_data WHERE event_time > '00:00:00';")?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec![Value::String("Future Event".into())],
-            vec![Value::String("Midday".into())]
-        ]
+        vec![vec![Value::String("Future Event".into())], vec![Value::String("Midday".into())]]
     );
 
     Ok(())
@@ -348,10 +322,7 @@ fn select_with_in() -> Result<()> {
             vec![Value::String("Jon".into()), Value::String("Chase".into())],
             vec![Value::String("Ed".into()), Value::String("Chase".into())],
             vec![Value::String("Susan".into()), Value::String("Davis".into())],
-            vec![
-                Value::String("Jennifer".into()),
-                Value::String("Davis".into())
-            ],
+            vec![Value::String("Jennifer".into()), Value::String("Davis".into())],
             vec![Value::String("Susan".into()), Value::String("Davis".into())],
         ]
     );
@@ -381,18 +352,9 @@ fn select_with_like() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![
-                Value::String("Jennifer".into()),
-                Value::String("Smith".into()),
-            ],
-            vec![
-                Value::String("Jenny".into()),
-                Value::String("Johnson".into())
-            ],
-            vec![
-                Value::String("Jenifer".into()),
-                Value::String("Miller".into())
-            ]
+            vec![Value::String("Jennifer".into()), Value::String("Smith".into()),],
+            vec![Value::String("Jenny".into()), Value::String("Johnson".into())],
+            vec![Value::String("Jenifer".into()), Value::String("Miller".into())]
         ],
     );
 
@@ -513,21 +475,11 @@ fn concat_function() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![Value::String(
-                "John Doe (john.doe@example.com) 123-456-7890".into()
-            )],
-            vec![Value::String(
-                "Jane Smith (jane.smith@example.com) 987-654-3210".into()
-            )],
-            vec![Value::String(
-                "Bob Johnson (bob.johnson@example.com) 555-1234".into()
-            )],
-            vec![Value::String(
-                "Alice Brown (alice.brown@example.com) 555-1235".into()
-            )],
-            vec![Value::String(
-                "Charlie Davis (charlie.davis@example.com) 987-654-3210".into()
-            )]
+            vec![Value::String("John Doe (john.doe@example.com) 123-456-7890".into())],
+            vec![Value::String("Jane Smith (jane.smith@example.com) 987-654-3210".into())],
+            vec![Value::String("Bob Johnson (bob.johnson@example.com) 555-1234".into())],
+            vec![Value::String("Alice Brown (alice.brown@example.com) 555-1235".into())],
+            vec![Value::String("Charlie Davis (charlie.davis@example.com) 987-654-3210".into())]
         ]
     );
 
@@ -548,12 +500,12 @@ fn position_function() -> Result<()> {
     )?;
 
     let inserts = [
-            "INSERT INTO films (title, description) VALUES ('The Matrix', 'A computer hacker learns about the true nature of reality.');",
-            "INSERT INTO films (title, description) VALUES ('Inception', 'A thief who steals corporate secrets through dream-sharing technology.');",
-            "INSERT INTO films (title, description) VALUES ('Interstellar', 'A team of explorers travel through a wormhole in space.');",
-            "INSERT INTO films (title, description) VALUES ('The Prestige', 'Two stage magicians engage in a battle to create the ultimate illusion.');",
-            "INSERT INTO films (title, description) VALUES ('Memento', 'A man with short-term memory loss attempts to track down his wifes murderer.');"
-        ];
+        "INSERT INTO films (title, description) VALUES ('The Matrix', 'A computer hacker learns about the true nature of reality.');",
+        "INSERT INTO films (title, description) VALUES ('Inception', 'A thief who steals corporate secrets through dream-sharing technology.');",
+        "INSERT INTO films (title, description) VALUES ('Interstellar', 'A team of explorers travel through a wormhole in space.');",
+        "INSERT INTO films (title, description) VALUES ('The Prestige', 'Two stage magicians engage in a battle to create the ultimate illusion.');",
+        "INSERT INTO films (title, description) VALUES ('Memento', 'A man with short-term memory loss attempts to track down his wifes murderer.');",
+    ];
 
     for insert in inserts {
         db.exec(insert)?;
@@ -687,10 +639,7 @@ fn count_function_on_empty() -> Result<()> {
     let query = db.exec("SELECT COUNT(*) FROM product;")?;
     assert_eq!(query.tuples, vec![vec![Value::Number(0)]]);
 
-    assert_eq!(
-        db.exec("SELECT COUNT(id) FROM product;")?.tuples,
-        vec![vec![Value::Number(0)]]
-    );
+    assert_eq!(db.exec("SELECT COUNT(id) FROM product;")?.tuples, vec![vec![Value::Number(0)]]);
     Ok(())
 }
 
@@ -716,10 +665,7 @@ fn aggregate_functions() -> Result<()> {
         db.exec("SELECT AVG(price) FROM sales;")?.tuples,
         vec![vec![Value::Float(28.74)]]
     );
-    assert_eq!(
-        db.exec("SELECT MIN(price) FROM sales;")?.tuples,
-        vec![vec![Value::Float(5.0)]]
-    );
+    assert_eq!(db.exec("SELECT MIN(price) FROM sales;")?.tuples, vec![vec![Value::Float(5.0)]]);
     assert_eq!(
         db.exec("SELECT MAX(price) FROM sales;")?.tuples,
         vec![vec![Value::Float(100.00)]]
@@ -744,10 +690,7 @@ fn typeof_function() -> Result<()> {
 
     for (column, r#type) in cases {
         let query = db.exec(&format!("SELECT typeof({column}) FROM employees;"))?;
-        assert_eq!(
-            query.tuples,
-            vec![vec![Value::String(r#type.to_string().into())]]
-        )
+        assert_eq!(query.tuples, vec![vec![Value::String(r#type.to_string().into())]])
     }
 
     Ok(())
@@ -806,11 +749,7 @@ fn group_by_distinct_behaviour() -> Result<()> {
 
     assert_eq!(
         query.tuples,
-        vec![
-            vec![Value::Number(1)],
-            vec![Value::Number(2)],
-            vec![Value::Number(3)]
-        ]
+        vec![vec![Value::Number(1)], vec![Value::Number(2)], vec![Value::Number(3)]]
     );
 
     Ok(())
@@ -1042,31 +981,11 @@ fn select_alias_with_group_by() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![
-                Value::String("Alice".into()),
-                Value::Number(2),
-                Value::Float(34.0)
-            ],
-            vec![
-                Value::String("Bob".into()),
-                Value::Number(1),
-                Value::Float(16.0)
-            ],
-            vec![
-                Value::String("Carol".into()),
-                Value::Number(1),
-                Value::Float(25.0)
-            ],
-            vec![
-                Value::String("Dave".into()),
-                Value::Number(1),
-                Value::Float(34.0)
-            ],
-            vec![
-                Value::String("Eve".into()),
-                Value::Number(1),
-                Value::Float(8.0)
-            ],
+            vec![Value::String("Alice".into()), Value::Number(2), Value::Float(34.0)],
+            vec![Value::String("Bob".into()), Value::Number(1), Value::Float(16.0)],
+            vec![Value::String("Carol".into()), Value::Number(1), Value::Float(25.0)],
+            vec![Value::String("Dave".into()), Value::Number(1), Value::Float(34.0)],
+            vec![Value::String("Eve".into()), Value::Number(1), Value::Float(8.0)],
         ]
     );
 
@@ -1148,13 +1067,7 @@ fn complete_alias_with_group_and_order() -> Result<()> {
                 8.into(),
                 temporal!("2019-11-20")?,
             ],
-            vec![
-                "HR".into(),
-                1.into(),
-                68000f64.into(),
-                6.into(),
-                temporal!("2021-01-05")?,
-            ]
+            vec!["HR".into(), 1.into(), 68000f64.into(), 6.into(), temporal!("2021-01-05")?,]
         ]
     );
 
@@ -1193,11 +1106,7 @@ fn text_column_ordering() -> Result<()> {
     let query = db.exec("SELECT name FROM users ORDER BY name DESC;")?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["Carol".into()],
-            vec!["Bob".into()],
-            vec!["Alice".into()]
-        ]
+        vec![vec!["Carol".into()], vec!["Bob".into()], vec!["Alice".into()]]
     );
 
     Ok(())
@@ -1214,12 +1123,7 @@ fn text_string_functions() -> Result<()> {
     let query = db.exec("SELECT SUBSTRING(name FROM 2 FOR 2) FROM users ORDER BY id;")?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["li".into()],
-            vec!["ob".into()],
-            vec!["ar".into()],
-            vec!["av".into()]
-        ]
+        vec![vec!["li".into()], vec!["ob".into()], vec!["ar".into()], vec!["av".into()]]
     );
 
     let query = db.exec("SELECT CONCAT(name, '_user') FROM users ORDER BY id;")?;
@@ -1438,10 +1342,7 @@ fn nullable_aggregation() -> Result<()> {
         FROM employees;
     "#,
     )?;
-    assert_eq!(
-        &query.tuples,
-        &vec![vec![10.into(), 9.into(), 8.into(), 8.into(), 6.into()]],
-    );
+    assert_eq!(&query.tuples, &vec![vec![10.into(), 9.into(), 8.into(), 8.into(), 6.into()]],);
 
     let query = db.exec(
         r#"
@@ -1496,14 +1397,7 @@ fn nullable_aggregation() -> Result<()> {
                 22000.0.into(),
                 4.6.into()
             ],
-            vec![
-                "HR".into(),
-                1.into(),
-                1.into(),
-                65000.0.into(),
-                0.0.into(),
-                0.0.into()
-            ],
+            vec!["HR".into(), 1.into(), 1.into(), 65000.0.into(), 0.0.into(), 0.0.into()],
             vec![
                 "Marketing".into(),
                 2.into(),
@@ -1512,22 +1406,8 @@ fn nullable_aggregation() -> Result<()> {
                 9000.0.into(),
                 2.0.into()
             ],
-            vec![
-                "Sales".into(),
-                2.into(),
-                1.into(),
-                27500.0.into(),
-                11000.0.into(),
-                2.5.into()
-            ],
-            vec![
-                Value::Null,
-                2.into(),
-                1.into(),
-                36000.0.into(),
-                0.0.into(),
-                2.5.into()
-            ]
+            vec!["Sales".into(), 2.into(), 1.into(), 27500.0.into(), 11000.0.into(), 2.5.into()],
+            vec![Value::Null, 2.into(), 1.into(), 36000.0.into(), 0.0.into(), 2.5.into()]
         ]
     );
 
@@ -1538,10 +1418,7 @@ fn nullable_aggregation() -> Result<()> {
     assert!(query.tuples.is_empty());
 
     let query = db.exec("SELECT name FROM employees WHERE department IS NULL;")?;
-    assert_eq!(
-        query.tuples,
-        vec![vec!["Eva Brown".into()], vec!["Ivy Chen".into()]]
-    );
+    assert_eq!(query.tuples, vec![vec!["Eva Brown".into()], vec!["Ivy Chen".into()]]);
 
     Ok(())
 }
@@ -1881,10 +1758,7 @@ fn simple_join() -> Result<()> {
 
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["Apple".into(), "Apple".into()],
-            vec!["Orange".into(), "Orange".into()]
-        ]
+        vec![vec!["Apple".into(), "Apple".into()], vec!["Orange".into(), "Orange".into()]]
     );
 
     let query = db.exec(
@@ -2127,18 +2001,9 @@ fn self_join() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![
-                Value::String("Alice".into()),
-                Value::String("The Boss".into())
-            ],
-            vec![
-                Value::String("Bob".into()),
-                Value::String("The Boss".into())
-            ],
-            vec![
-                Value::String("Charlie".into()),
-                Value::String("Alice".into())
-            ],
+            vec![Value::String("Alice".into()), Value::String("The Boss".into())],
+            vec![Value::String("Bob".into()), Value::String("The Boss".into())],
+            vec![Value::String("Charlie".into()), Value::String("Alice".into())],
         ]
     );
 
@@ -2325,36 +2190,11 @@ fn offset() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![
-                24.into(),
-                54.into(),
-                13.into(),
-                temporal!("2023-01-15 08:25:00")?,
-            ],
-            vec![
-                18.5.into(),
-                63.into(),
-                7.5.into(),
-                temporal!("2023-01-15 08:30:00")?
-            ],
-            vec![
-                22.into(),
-                55.5.into(),
-                12.into(),
-                temporal!("2023-01-15 08:35:00")?
-            ],
-            vec![
-                21.5.into(),
-                58.into(),
-                10.5.into(),
-                temporal!("2023-01-15 08:40:00")?
-            ],
-            vec![
-                23.5.into(),
-                53.into(),
-                13.5.into(),
-                temporal!("2023-01-15 08:45:00")?
-            ]
+            vec![24.into(), 54.into(), 13.into(), temporal!("2023-01-15 08:25:00")?,],
+            vec![18.5.into(), 63.into(), 7.5.into(), temporal!("2023-01-15 08:30:00")?],
+            vec![22.into(), 55.5.into(), 12.into(), temporal!("2023-01-15 08:35:00")?],
+            vec![21.5.into(), 58.into(), 10.5.into(), temporal!("2023-01-15 08:40:00")?],
+            vec![23.5.into(), 53.into(), 13.5.into(), temporal!("2023-01-15 08:45:00")?]
         ]
     );
 
@@ -2392,31 +2232,19 @@ fn pagination_pattern() -> Result<()> {
     let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 0;")?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec![Value::Number(1)],
-            vec![Value::Number(2)],
-            vec![Value::Number(3)]
-        ]
+        vec![vec![Value::Number(1)], vec![Value::Number(2)], vec![Value::Number(3)]]
     );
 
     let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 3;")?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec![Value::Number(4)],
-            vec![Value::Number(5)],
-            vec![Value::Number(6)]
-        ]
+        vec![vec![Value::Number(4)], vec![Value::Number(5)], vec![Value::Number(6)]]
     );
 
     let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 6;")?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec![Value::Number(7)],
-            vec![Value::Number(8)],
-            vec![Value::Number(9)]
-        ]
+        vec![vec![Value::Number(7)], vec![Value::Number(8)], vec![Value::Number(9)]]
     );
 
     let query = db.exec("SELECT value FROM data LIMIT 3 OFFSET 9;")?;
@@ -2539,10 +2367,7 @@ fn complex_where_with_join() -> Result<()> {
     )?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["Carol".into(), 1000.into()],
-            vec!["Alice".into(), 500.into()],
-        ]
+        vec![vec!["Carol".into(), 1000.into()], vec!["Alice".into(), 500.into()],]
     );
 
     Ok(())
@@ -2606,10 +2431,7 @@ fn multiple_chained_joins() -> Result<()> {
     )?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["USA".into(), 3.into()],
-            vec!["Canada".into(), 1.into()],
-        ]
+        vec![vec!["USA".into(), 3.into()], vec!["Canada".into(), 1.into()],]
     );
 
     Ok(())
@@ -2663,11 +2485,7 @@ fn join_with_null_values() -> Result<()> {
     )?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["Laptop".into()],
-            vec!["Phone".into()],
-            vec!["T-shirt".into()],
-        ]
+        vec![vec!["Laptop".into()], vec!["Phone".into()], vec!["T-shirt".into()],]
     );
 
     Ok(())
@@ -2798,10 +2616,7 @@ fn min_max_on_different_types() -> Result<()> {
         "#,
     )?;
     let query = db.exec("SELECT MIN(event_date), MAX(event_date) FROM date_test;")?;
-    assert_eq!(
-        query.tuples,
-        vec![vec![temporal!("2020-06-30")?, temporal!("2025-12-25")?]]
-    );
+    assert_eq!(query.tuples, vec![vec![temporal!("2020-06-30")?, temporal!("2025-12-25")?]]);
 
     Ok(())
 }
@@ -2833,10 +2648,7 @@ fn nested_aggregate_expressions() -> Result<()> {
     )?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["A".into(), 15.0.into()],
-            vec!["B".into(), 150.0.into()],
-        ]
+        vec![vec!["A".into(), 15.0.into()], vec!["B".into(), 150.0.into()],]
     );
 
     let query = db.exec(
@@ -2849,10 +2661,7 @@ fn nested_aggregate_expressions() -> Result<()> {
     )?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["A".into(), 10.0.into()],
-            vec!["B".into(), 100.0.into()],
-        ]
+        vec![vec!["A".into(), 10.0.into()], vec!["B".into(), 100.0.into()],]
     );
 
     Ok(())
@@ -2886,10 +2695,7 @@ fn limit_with_aggregate_functions() -> Result<()> {
     )?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["Widget C".into(), 550.0.into()],
-            vec!["Widget A".into(), 350.0.into()],
-        ]
+        vec![vec!["Widget C".into(), 550.0.into()], vec!["Widget A".into(), 350.0.into()],]
     );
 
     let query = db.exec(
@@ -2903,10 +2709,7 @@ fn limit_with_aggregate_functions() -> Result<()> {
     )?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["North".into(), 3.into()],
-            vec!["South".into(), 2.into()],
-        ]
+        vec![vec!["North".into(), 3.into()], vec!["South".into(), 2.into()],]
     );
 
     Ok(())
@@ -2921,10 +2724,7 @@ fn numeric_storage() -> Result<()> {
 
     let query = db.exec("SELECT balance FROM account ORDER BY id LIMIT 3;")?;
 
-    assert_eq!(
-        query.tuples,
-        vec![vec![100.into()], vec![100.5.into()], vec![0.into()]]
-    );
+    assert_eq!(query.tuples, vec![vec![100.into()], vec![100.5.into()], vec![0.into()]]);
 
     Ok(())
 }
@@ -2949,10 +2749,7 @@ fn numeric_ordering_and_join() -> Result<()> {
 
     assert_eq!(
         query.tuples,
-        vec![
-            vec![1.into(), (1.20 * 10.0).into()],
-            vec![2.into(), (2.50 * 3.0).into()]
-        ]
+        vec![vec![1.into(), (1.20 * 10.0).into()], vec![2.into(), (2.50 * 3.0).into()]]
     );
 
     Ok(())
@@ -3064,10 +2861,10 @@ fn returning() -> Result<()> {
     )?;
 
     assert_eq!(query.schema.len(), 4);
-    assert_eq!(query.schema.columns[0].name, "product_name");
-    assert_eq!(query.schema.columns[1].name, "before_price");
-    assert_eq!(query.schema.columns[2].name, "after_price");
-    assert_eq!(query.schema.columns[3].name, "price_increase");
+    assert_eq!(query.schema.columns[0].name(), "product_name");
+    assert_eq!(query.schema.columns[1].name(), "before_price");
+    assert_eq!(query.schema.columns[2].name(), "after_price");
+    assert_eq!(query.schema.columns[3].name(), "price_increase");
 
     assert_eq!(
         query.tuples,
@@ -3078,18 +2875,8 @@ fn returning() -> Result<()> {
                 numeric(10499895, 4),
                 numeric(4999, 2),
             ],
-            vec![
-                "Wireless Mouse".into(),
-                numeric(2995, 2),
-                numeric(314475, 4),
-                numeric(149, 2),
-            ],
-            vec![
-                "USB Cable".into(),
-                numeric(1299, 2),
-                numeric(136395, 4),
-                numeric(064, 2),
-            ],
+            vec!["Wireless Mouse".into(), numeric(2995, 2), numeric(314475, 4), numeric(149, 2),],
+            vec!["USB Cable".into(), numeric(1299, 2), numeric(136395, 4), numeric(064, 2),],
         ]
     );
 
@@ -3200,10 +2987,7 @@ fn enum_ordering() -> Result<()> {
     )?;
 
     let query = db.exec("SELECT name FROM tasks ORDER BY urgency;")?;
-    assert_eq!(
-        query.tuples,
-        vec![vec!["b".into()], vec!["c".into()], vec!["a".into()]]
-    );
+    assert_eq!(query.tuples, vec![vec!["b".into()], vec!["c".into()], vec!["a".into()]]);
 
     Ok(())
 }
@@ -3235,23 +3019,13 @@ fn jsonb() -> Result<()> {
     let query = db.exec("SELECT metadata.city FROM users;")?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec!["NYC".into()],
-            vec![Value::Null],
-            vec![Value::Null],
-            vec!["London".into()],
-        ]
+        vec![vec!["NYC".into()], vec![Value::Null], vec![Value::Null], vec!["London".into()],]
     );
 
     let query = db.exec(r#"SELECT metadata.age FROM users ORDER BY id;"#)?;
     assert_eq!(
         query.tuples,
-        vec![
-            vec![30.into()],
-            vec![25.into()],
-            vec![35.into()],
-            vec![21.into()]
-        ]
+        vec![vec![30.into()], vec![25.into()], vec![35.into()], vec![21.into()]]
     );
 
     let query = db.exec("SELECT metadata.hobbies[*] FROM users WHERE name = 'Carol';")?;
@@ -3315,10 +3089,7 @@ fn text_indexing() -> Result<()> {
         JOIN student AS s ON e.sid = s.sid;
     "#,
     );
-    assert_eq!(
-        query.unwrap_err(),
-        SqlError::InvalidGroupBy("e.cid".to_string()).into(),
-    );
+    assert_eq!(query.unwrap_err(), SqlError::InvalidGroupBy("e.cid".to_string()).into(),);
 
     Ok(())
 }
@@ -3410,16 +3181,10 @@ fn null_in_between() -> Result<()> {
     assert_eq!(query.len(), 3, "NULL should be excluded from BETWEEN");
 
     let query = db.exec("SELECT * FROM items WHERE value BETWEEN NULL AND 20;")?;
-    assert!(
-        query.is_empty(),
-        "BETWEEN with a NULL lower bound should yield zero items"
-    );
+    assert!(query.is_empty(), "BETWEEN with a NULL lower bound should yield zero items");
 
     let query = db.exec("SELECT * FROM items WHERE value BETWEEN 0 AND NULL;")?;
-    assert!(
-        query.is_empty(),
-        "BETWEEN with a NULL upper bound should yield zero items"
-    );
+    assert!(query.is_empty(), "BETWEEN with a NULL upper bound should yield zero items");
 
     Ok(())
 }
@@ -3448,44 +3213,93 @@ fn null_in_aggregate_functions() -> Result<()> {
     db.exec("INSERT INTO scores (score) VALUES (10), (20), (NULL), (30), (NULL);")?;
 
     let query = db.exec("SELECT COUNT(*) FROM scores;")?;
-    assert_eq!(
-        query.tuples,
-        vec![vec![Value::Number(5)]],
-        "COUNT(*) must include NULLs"
-    );
+    assert_eq!(query.tuples, vec![vec![Value::Number(5)]], "COUNT(*) must include NULLs");
 
     let query = db.exec("SELECT COUNT(score) FROM scores;")?;
-    assert_eq!(
-        query.tuples,
-        vec![vec![Value::Number(3)]],
-        "COUNT(field) must exclude NULLs"
-    );
+    assert_eq!(query.tuples, vec![vec![Value::Number(3)]], "COUNT(field) must exclude NULLs");
 
     let query = db.exec("SELECT SUM(score) FROM scores;")?;
-    assert_eq!(
-        query.tuples,
-        vec![vec![Value::Number(60)]],
-        "SUM(field) must exclude NULLs"
-    );
+    assert_eq!(query.tuples, vec![vec![Value::Number(60)]], "SUM(field) must exclude NULLs");
 
     let query = db.exec("SELECT AVG(score) FROM scores;")?;
-    assert_eq!(
-        query.tuples,
-        vec![vec![Value::Number(20)]],
-        "AVG(field) must exclude NULLs"
-    );
+    assert_eq!(query.tuples, vec![vec![Value::Number(20)]], "AVG(field) must exclude NULLs");
 
     let query = db.exec("SELECT MIN(score), MAX(score) FROM scores;")?;
-    assert_eq!(
-        query.tuples[0][0],
-        Value::Number(10),
-        "MIN should ignore NULL"
-    );
-    assert_eq!(
-        query.tuples[0][1],
-        Value::Number(30),
-        "MAX should ignore NULL"
-    );
+    assert_eq!(query.tuples[0][0], Value::Number(10), "MIN should ignore NULL");
+    assert_eq!(query.tuples[0][1], Value::Number(30), "MAX should ignore NULL");
+
+    Ok(())
+}
+
+/// ternary logic partitioning (Rigger & Su, OOPSLA 2020): for any predicate `p`, the rows where it
+/// is true, false and unknown partition the table
+#[test]
+fn ternary_logic_partitioning_holds_on_every_access_path() -> Result<()> {
+    let mut db = State::default();
+    db.exec(
+        "CREATE TABLE tlp (id INT PRIMARY KEY, a INT NULLABLE, b VARCHAR(10) NULLABLE, c INT);",
+    )?;
+
+    let rows: Vec<_> = (0..200)
+        .map(|i| {
+            let a = match i % 5 {
+                0 => "NULL".to_string(),
+                _ => ((i * 7) % 23).to_string(),
+            };
+            let b = match i % 4 {
+                0 => "NULL".to_string(),
+                n => format!("'{}{}'", ["x", "name", "nope"][n - 1], i % 3),
+            };
+            format!("({i}, {a}, {b}, {})", i % 10)
+        })
+        .collect();
+    db.exec(&format!("INSERT INTO tlp (id, a, b, c) VALUES {};", rows.join(", ")))?;
+
+    let predicates = [
+        "a > 10",
+        "a < 5",
+        "a = 7",
+        "a >= 3 AND a <= 15",
+        "c = 4",
+        "c > 6",
+        "b = 'x1'",
+        "b LIKE 'n%'",
+        "a > 10 OR c = 2",
+        "c = 1 OR c = 3",
+        "a = c",
+        "a + c > 12",
+        "id >= 50 AND id < 120",
+    ];
+
+    let count = |db: &mut State, filter: &str| -> Result<i128> {
+        let result = db.exec(&format!("SELECT COUNT(*) FROM tlp WHERE {filter};"))?;
+        match result.tuples[0][0] {
+            Value::Number(n) => Ok(n),
+            ref other => panic!("COUNT(*) gave {other:?}"),
+        }
+    };
+
+    let mut selected = Vec::new();
+    for indexed in [false, true] {
+        if indexed {
+            db.exec("CREATE INDEX tlp_a ON tlp(a);")?;
+            db.exec("CREATE INDEX tlp_c ON tlp(c);")?;
+        }
+
+        for (n, predicate) in predicates.iter().enumerate() {
+            let partitions = count(&mut db, predicate)?
+                + count(&mut db, &format!("({predicate}) = FALSE"))?
+                + count(&mut db, &format!("({predicate}) IS NULL"))?;
+            assert_eq!(partitions, 200, "{predicate} (indexed: {indexed})");
+
+            let ids =
+                db.exec(&format!("SELECT id FROM tlp WHERE {predicate} ORDER BY id;"))?.tuples;
+            match indexed {
+                false => selected.push(ids),
+                true => assert_eq!(ids, selected[n], "{predicate} differs once indexed"),
+            }
+        }
+    }
 
     Ok(())
 }

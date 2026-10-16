@@ -34,22 +34,7 @@ impl State {
     }
 
     fn client(&self) -> Client {
-        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
-        let mut retries = 50;
-
-        loop {
-            match TcpStream::connect(addr) {
-                Ok(stream) => {
-                    stream.set_nodelay(true).expect("Failed to set nodelay");
-                    return Client { stream };
-                }
-                Err(_) if retries > 0 => {
-                    retries -= 1;
-                    thread::sleep(Duration::from_millis(20));
-                }
-                Err(e) => panic!("Failed to connect to server at {addr}: {e}"),
-            }
-        }
+        connect(self.port)
     }
 }
 
@@ -70,19 +55,20 @@ impl Default for State {
             umbra::tcp::server::start(addr, server_db_path).unwrap()
         });
 
-        Self {
-            path: db_path,
-            port,
-        }
+        Self { path: db_path, port }
     }
 }
 
 impl Client {
     fn exec(&mut self, query: &str) -> umbra::db::QuerySet {
-        self.stream
-            .write_all(&(query.len() as u32).to_le_bytes())
-            .unwrap();
+        match self.send(query) {
+            Response::QuerySet(tuples) => tuples,
+            _ => QuerySet::default(),
+        }
+    }
 
+    fn send(&mut self, query: &str) -> Response {
+        self.stream.write_all(&(query.len() as u32).to_le_bytes()).unwrap();
         self.stream.write_all(query.as_bytes()).unwrap();
 
         let mut len = [0u8; 4];
@@ -92,16 +78,32 @@ impl Client {
         let mut content = vec![0u8; len];
         self.stream.read_exact(&mut content).unwrap();
 
-        match tcp::deserialize(&content).unwrap() {
-            Response::QuerySet(tuples) => tuples,
-            _ => QuerySet::default(),
-        }
+        tcp::deserialize(&content).unwrap()
     }
 }
 
 impl Drop for State {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn connect(port: u16) -> Client {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut retries = 250;
+
+    loop {
+        match TcpStream::connect(addr) {
+            Ok(stream) => {
+                stream.set_nodelay(true).expect("Failed to set nodelay");
+                return Client { stream };
+            },
+            _ if retries > 0 => {
+                retries -= 1;
+                thread::sleep(Duration::from_millis(20));
+            },
+            Err(e) => panic!("Failed to connect to server at {addr}: {e}"),
+        }
     }
 }
 
@@ -130,31 +132,13 @@ fn join_over_tcp() {
     assert_eq!(
         query.tuples,
         vec![
-            vec![
-                "John Doe".into(),
-                75000.into(),
-                "Engineering".into(),
-                "New York".into()
-            ],
-            vec![
-                "Jane Smith".into(),
-                65000.into(),
-                "Sales".into(),
-                "Chicago".into()
-            ],
-            vec![
-                "Bob Johnson".into(),
-                80000.into(),
-                "Engineering".into(),
-                "New York".into()
-            ]
+            vec!["John Doe".into(), 75000.into(), "Engineering".into(), "New York".into()],
+            vec!["Jane Smith".into(), 65000.into(), "Sales".into(), "Chicago".into()],
+            vec!["Bob Johnson".into(), 80000.into(), "Engineering".into(), "New York".into()]
         ]
     )
 }
 
-/// Under MVCC read-committed a reader never blocks on another connection's
-/// open transaction: it sees the last committed snapshot at once and the
-/// in-flight uncommitted insert stays invisible until that transaction commits.
 #[test]
 fn concurrent_reads_do_not_block_on_open_transactions() {
     let server = State::new("sql/employees-and-departments.sql");
@@ -175,9 +159,7 @@ fn concurrent_reads_do_not_block_on_open_transactions() {
         release_rx.recv().unwrap();
         client_a.exec("COMMIT;");
     });
-    pending_rx
-        .recv()
-        .expect("client A failed to open its transaction");
+    pending_rx.recv().expect("client A failed to open its transaction");
 
     let mut client_b = server.client();
     let start = std::time::Instant::now();
@@ -188,10 +170,7 @@ fn concurrent_reads_do_not_block_on_open_transactions() {
         duration < std::time::Duration::from_millis(500),
         "the read must not wait on the open transaction"
     );
-    assert!(
-        query.tuples.is_empty(),
-        "the uncommitted insert must stay invisible"
-    );
+    assert!(query.tuples.is_empty(), "the uncommitted insert must stay invisible");
 
     release_tx.send(()).unwrap();
     handler.join().unwrap();
@@ -235,10 +214,7 @@ fn concurrent_inserts_are_atomic() {
     ids.sort_unstable();
 
     let expected: Vec<_> = (1..=500).map(|n| vec![Value::Number(n)]).collect();
-    assert_eq!(
-        ids, expected,
-        "every serial from 1 to 500 present exactly once"
-    );
+    assert_eq!(ids, expected, "every serial from 1 to 500 present exactly once");
 }
 
 #[test]
@@ -270,10 +246,7 @@ fn numeric_joins_aggregation() {
     ];
 
     for (idx, (category, total)) in categories.iter().enumerate() {
-        assert_eq!(
-            query.tuples[idx],
-            vec![Value::from(*category), numeric(*total, 2)]
-        )
+        assert_eq!(query.tuples[idx], vec![Value::from(*category), numeric(*total, 2)])
     }
 }
 
@@ -435,12 +408,7 @@ fn jsonb_comprehensive() {
     );
     assert_eq!(
         query.tuples,
-        vec![vec![
-            "Alice".into(),
-            "NYC".into(),
-            30.into(),
-            Value::Boolean(true)
-        ]]
+        vec![vec!["Alice".into(), "NYC".into(), 30.into(), Value::Boolean(true)]]
     );
 
     let query = db.exec(
@@ -467,11 +435,7 @@ fn jsonb_comprehensive() {
     );
     assert_eq!(
         query.tuples,
-        vec![vec![
-            "Heidi".into(),
-            Value::Boolean(true),
-            "Amsterdam".into()
-        ]]
+        vec![vec!["Heidi".into(), Value::Boolean(true), "Amsterdam".into()]]
     );
 
     let query = db.exec(
@@ -514,10 +478,7 @@ fn jsonb_comprehensive() {
         FROM users
         WHERE metadata.address.zip IS NOT NULL;"#,
     );
-    assert_eq!(
-        query.tuples,
-        vec![vec!["Bob".into(), "Main St".into(), 10001.into()]],
-    );
+    assert_eq!(query.tuples, vec![vec!["Bob".into(), "Main St".into(), 10001.into()]],);
 }
 
 #[test]
@@ -614,4 +575,18 @@ fn project_requests() {
 
     let query = db.exec("SELECT * FROM requests WHERE priority < 'critical';");
     println!("{query}")
+}
+
+#[test]
+fn writes_report_affected_rows_over_tcp() {
+    let server = State::new("sql/employees-and-departments.sql");
+    let mut db = server.client();
+
+    db.send("CREATE TABLE tallies (id INT PRIMARY KEY, n INT);");
+    assert_eq!(
+        db.send("INSERT INTO tallies (id, n) VALUES (1, 0), (2, 0), (3, 0), (4, 0);"),
+        Response::Empty(4)
+    );
+    assert_eq!(db.send("UPDATE tallies SET n = 1 WHERE id <= 3;"), Response::Empty(3));
+    assert_eq!(db.send("DELETE FROM tallies WHERE n = 0;"), Response::Empty(1));
 }
