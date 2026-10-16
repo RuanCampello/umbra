@@ -26,7 +26,6 @@ const SEEDS: [u64; 2] = [0x243f6a8885a308d3, 0x13198a2e03707344];
 const PREVENT_TRIVIAL_ZERO_COLLAPSE: u64 = 0xa4093822299f31d0;
 
 pub type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasher>;
-pub type HashSet<V> = std::collections::HashSet<V, BuildHasher>;
 
 #[macro_export]
 macro_rules! hash_set {

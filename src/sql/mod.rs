@@ -33,7 +33,6 @@ pub use value::Value;
 pub(crate) mod analyzer;
 pub(crate) mod optimiser;
 pub(crate) mod parser;
-pub(crate) mod query;
 
 mod prepare;
 pub mod statement;

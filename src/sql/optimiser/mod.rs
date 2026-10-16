@@ -1,17 +1,11 @@
 //! That's the very last part before execution, right after [`super::analyzer`].
 //! Here, we try to minimise the operations of a given statement.
 
-#![allow(unused)]
-
 use crate::db::SqlError;
 use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
 use crate::vm::expression::resolve_only_expression;
 
 use super::statement::{Delete, Insert, Select, Update};
-
-mod bloom;
-mod cost;
-mod statistics;
 
 /// Tries to simplify the given statement applying heuristic-based rules.
 pub(crate) fn simplify(statement: &mut Statement) -> Result<(), SqlError> {
