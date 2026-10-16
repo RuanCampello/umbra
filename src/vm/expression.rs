@@ -6,8 +6,8 @@ use crate::core::numeric::{Numeric, NumericError};
 use crate::core::uuid::UuidError;
 use crate::db::{Schema, SqlError};
 use crate::sql::statement::{
-    BinaryOperator, Coerce, Expression, Function, PathSegment, Temporal, Type, UnaryOperator,
-    Value, NUMERIC_ANY,
+    BinaryOperator, Coerce, Expression, Function, NUMERIC_ANY, PathSegment, Temporal, Type,
+    UnaryOperator, Value,
 };
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
@@ -35,26 +35,11 @@ pub enum VmError {
 
 #[derive(Debug, PartialEq)]
 pub enum TypeError {
-    CannotApplyUnary {
-        operator: UnaryOperator,
-        value: Value,
-    },
-    CannotApplyBinary {
-        left: Expression,
-        operator: BinaryOperator,
-        right: Expression,
-    },
-    ExpectedType {
-        expected: VmType,
-        found: Expression,
-    },
-    ExpectedOneOfTypes {
-        expected: Vec<VmType>,
-    },
-    InvalidEnumVariant {
-        allowed: Vec<String>,
-        found: String,
-    },
+    CannotApplyUnary { operator: UnaryOperator, value: Value },
+    CannotApplyBinary { left: Expression, operator: BinaryOperator, right: Expression },
+    ExpectedType { expected: VmType, found: Expression },
+    ExpectedOneOfTypes { expected: Vec<VmType> },
+    InvalidEnumVariant { allowed: Vec<String>, found: String },
     InvalidDate(DateParseError),
     InvalidInterval(IntervalParseError),
     ExtractError(ExtractError),
@@ -84,6 +69,126 @@ macro_rules! impl_value_extractor {
     };
 }
 
+/// rewrites the column references of `expr` that resolve in `schema` into [Expression::Column]
+/// positions, and the literals combined with a bound UUID, temporal, enum or NUMERIC column into
+/// the value [resolve_expression] would convert them to on every row
+/// references that do not resolve stay as they are, so evaluating the bound expression fails or succeeds exactly as before
+pub(crate) fn bind(expr: &mut Expression, schema: &Schema) {
+    match expr {
+        Expression::Identifier(column) => {
+            if let Some(position) = schema.index_of(column) {
+                *expr = Expression::Column(position);
+            }
+        },
+        Expression::QualifiedIdentifier { table, column } => {
+            let index = format!("{table}.{column}");
+            let position = schema.index_of(&index).or_else(|| schema.last_index_of(column));
+            let document = schema.index_of(table).or_else(|| schema.last_index_of(table));
+
+            match (position, document) {
+                (Some(position), _) => *expr = Expression::Column(position),
+                (_, Some(column_position)) => {
+                    *expr = Expression::JsonPath {
+                        column: column_position,
+                        path: format!("$.{column}"),
+                    }
+                },
+                _ => {},
+            }
+        },
+        Expression::Path { head, segments } => {
+            let qualified = match segments.first() {
+                Some(PathSegment::Key(first)) => schema.index_of(&format!("{head}.{first}")),
+                _ => None,
+            };
+            let (position, remaining) = match qualified {
+                Some(position) => (position, &segments[1..]),
+                _ => match schema.index_of(head) {
+                    Some(position) => (position, &segments[..]),
+                    _ => return,
+                },
+            };
+
+            *expr = match remaining.is_empty() {
+                true => Expression::Column(position),
+                _ => Expression::JsonPath { column: position, path: json_path(remaining) },
+            };
+        },
+        Expression::BinaryOperation { left, right, .. } => {
+            bind(left, schema);
+            bind(right, schema);
+            fold_literal(left, right, schema);
+            fold_literal(right, left, schema);
+        },
+        Expression::Function { func: Function::TypeOf, .. } => {},
+        Expression::Function { args, .. } => args.iter_mut().for_each(|arg| bind(arg, schema)),
+        Expression::UnaryOperation { expr, .. }
+        | Expression::IsNull { expr, .. }
+        | Expression::Nested(expr)
+        | Expression::Alias { expr, .. } => bind(expr, schema),
+        Expression::Value(_)
+        | Expression::Wildcard
+        | Expression::Column(_)
+        | Expression::JsonPath { .. } => {},
+    }
+}
+
+/// the JSON path text of `segments`, rooted at `$`
+fn json_path(segments: &[PathSegment]) -> String {
+    let mut path = String::from("$");
+    for segment in segments {
+        match segment {
+            PathSegment::Key(key) => {
+                path.push('.');
+                path.push_str(key);
+            },
+            PathSegment::Index(idx) => {
+                path.push('[');
+                path.push_str(&idx.to_string());
+                path.push(']');
+            },
+            PathSegment::Wildcard => path.push_str(".*"),
+        }
+    }
+    path
+}
+
+fn fold_literal(column: &Expression, literal: &mut Expression, schema: &Schema) {
+    let (Expression::Column(position), Expression::Value(value)) = (column, &*literal) else {
+        return;
+    };
+
+    let column = &schema.columns[*position];
+    let folded = match (column.column_type(), value) {
+        (Type::Uuid, Value::String(string)) => string.parse().ok().map(Value::Uuid),
+        (Type::Enum(_), Value::String(string)) => column
+            .variants()
+            .and_then(|variants| variants.iter().position(|variant| **variant == **string))
+            .and_then(|variant| u8::try_from(variant).ok())
+            .map(Value::Enum),
+        (r#type @ (Type::Date | Type::Time | Type::DateTime), Value::String(string)) => {
+            match (r#type, Temporal::try_from(&**string)) {
+                (Type::Date, Ok(date @ Temporal::Date(_)))
+                | (Type::Time, Ok(date @ Temporal::Time(_)))
+                | (Type::DateTime, Ok(date @ Temporal::DateTime(_))) => Some(date),
+                (Type::Date, Ok(Temporal::DateTime(at))) => Some(Temporal::Date(at.into())),
+                (Type::Time, Ok(Temporal::DateTime(at))) => Some(Temporal::Time(at.into())),
+                _ => None,
+            }
+            .map(Value::Temporal)
+        },
+        // writes store NUMERIC columns as `Numeric`, and every operation converts a number
+        // operand exactly like this
+        (Type::Numeric(..), Value::Number(n)) => Some(Value::Numeric(Numeric::from(*n))),
+        (Type::Numeric(..), Value::Float(f)) => Numeric::try_from(*f).ok().map(Value::Numeric),
+        _ => None,
+    };
+
+    if let Some(folded) = folded {
+        *literal = Expression::Value(folded);
+    }
+}
+
 pub(crate) fn resolve_expression(
     val: &[Value],
     schema: &Schema,
@@ -91,9 +196,16 @@ pub(crate) fn resolve_expression(
 ) -> Result<Value, SqlError> {
     match expression {
         Expression::Value(value) => Ok(value.clone()),
+        Expression::Column(position) => Ok(val[*position].clone()),
+        Expression::JsonPath { column, path } => match &val[*column] {
+            Value::Null => Ok(Value::Null),
+            document => {
+                json::get_path(document, path, json::OutputFlag::ElementType).or(Ok(Value::Null))
+            },
+        },
         Expression::Identifier(column) => match schema.index_of(column) {
             Some(idx) => Ok(val[idx].clone()),
-            None => Err(SqlError::InvalidColumn(column.clone())),
+            _ => Err(SqlError::InvalidColumn(column.clone())),
         },
         Expression::Path { head, segments } => {
             let (base_value, remaining_segments) = match segments.first() {
@@ -101,12 +213,12 @@ pub(crate) fn resolve_expression(
                     let qualified = format!("{head}.{first_key}");
                     match schema.index_of(&qualified) {
                         Some(idx) => (val[idx].clone(), &segments[1..]),
-                        None => (
+                        _ => (
                             resolve_expression(val, schema, &Expression::Identifier(head.clone()))?,
                             &segments[..],
                         ),
                     }
-                }
+                },
                 _ => (
                     resolve_expression(val, schema, &Expression::Identifier(head.clone()))?,
                     &segments[..],
@@ -121,24 +233,9 @@ pub(crate) fn resolve_expression(
                 return Ok(base_value);
             }
 
-            let mut path = String::from("$");
-            for seg in remaining_segments {
-                match seg {
-                    PathSegment::Key(key) => {
-                        path.push('.');
-                        path.push_str(key);
-                    }
-                    PathSegment::Index(idx) => {
-                        path.push('[');
-                        path.push_str(&idx.to_string());
-                        path.push(']');
-                    }
-                    PathSegment::Wildcard => path.push_str(".*"),
-                }
-            }
-
+            let path = json_path(remaining_segments);
             json::get_path(&base_value, &path, json::OutputFlag::ElementType).or(Ok(Value::Null))
-        }
+        },
         Expression::QualifiedIdentifier { column, table } => {
             let idx = schema
                 .index_of(&format!("{table}.{column}"))
@@ -148,9 +245,8 @@ pub(crate) fn resolve_expression(
                 Some(idx) => Ok(val[idx].clone()),
                 None => {
                     // Check if `table` matches a column name. If so, treat `column` as a path key on that column.
-                    if let Some(idx) = schema
-                        .index_of(table)
-                        .or_else(|| schema.last_index_of(table))
+                    if let Some(idx) =
+                        schema.index_of(table).or_else(|| schema.last_index_of(table))
                     {
                         let base_value = val[idx].clone();
                         if matches!(base_value, Value::Null) {
@@ -166,134 +262,41 @@ pub(crate) fn resolve_expression(
                         table: table.into(),
                         column: column.into(),
                     })
-                }
+                },
             }
-        }
+        },
         Expression::UnaryOperation { operator, expr } => {
             let value = resolve_expression(val, schema, expr)?;
             Ok(match operator {
                 UnaryOperator::Minus => value.neg()?,
                 _ => value,
             })
-        }
-        Expression::BinaryOperation {
-            left,
-            operator,
-            right,
-        } => {
+        },
+        Expression::BinaryOperation { left, operator, right } => {
+            // PERFORMANCE: bound operands of one kind (or `NULL`) need no coercion, so no copies
+            if let (Some(left), Some(right)) = (borrowed(val, left), borrowed(val, right)) {
+                if !coerces(left, right) {
+                    return apply(left, *operator, right);
+                }
+            }
+
             let left_val = resolve_expression(val, schema, left)?;
             let right_val = resolve_expression(val, schema, right)?;
 
             let (left, right) = try_coerce_enum(left, left_val, right, right_val, schema)?;
             let (left, right) = left.coerce_to(right);
 
-            if matches!(left, Value::Null) || matches!(right, Value::Null) {
-                return Ok(three_valued_logic(&left, &right, operator));
-            }
-
-            let mismatched_types = || {
-                SqlError::Type(TypeError::CannotApplyBinary {
-                    left: Expression::Value(left.clone()),
-                    operator: *operator,
-                    right: Expression::Value(right.clone()),
-                })
-            };
-
-            let is_compatible = match operator {
-                BinaryOperator::Plus
-                | BinaryOperator::Minus
-                | BinaryOperator::Mul
-                | BinaryOperator::Div => left.is_compatible(&right),
-
-                // for comparisons and other operations, our custom `PartialEq` impl
-                // handles coercion and different types correctly. we don't need a strict
-                // discriminant check; we let the operation itself determine compatibility.
-                _ => true,
-            };
-
-            if !is_compatible {
-                return Err(mismatched_types());
-            }
-
-            Ok(match operator {
-                BinaryOperator::Eq => Value::Boolean(left == right),
-                BinaryOperator::Neq => Value::Boolean(left != right),
-                BinaryOperator::Lt => Value::Boolean(left < right),
-                BinaryOperator::LtEq => Value::Boolean(left <= right),
-                BinaryOperator::Gt => Value::Boolean(left > right),
-                BinaryOperator::GtEq => Value::Boolean(left >= right),
-                BinaryOperator::Like => match (left, right) {
-                    (Value::String(left), Value::String(right)) => {
-                        Value::Boolean(functions::like(&left, &right))
-                    }
-                    _ => Value::Boolean(false),
-                },
-
-                logical @ (BinaryOperator::And | BinaryOperator::Or) => {
-                    let (Value::Boolean(left), Value::Boolean(right)) = (&left, &right) else {
-                        return Err(mismatched_types());
-                    };
-
-                    match logical {
-                        BinaryOperator::And => Value::Boolean(*left && *right),
-                        BinaryOperator::Or => Value::Boolean(*left || *right),
-                        _ => unsafe { unreachable_unchecked() },
-                    }
-                }
-
-                arithmetic => match (&left, &right) {
-                    (Value::Temporal(t), Value::Interval(i))
-                    | (Value::Interval(i), Value::Temporal(t)) => match arithmetic {
-                        BinaryOperator::Plus => Value::Temporal(*t + *i),
-                        BinaryOperator::Minus => Value::Temporal(*t - *i),
-                        _ => return Err(mismatched_types()),
-                    },
-
-                    _ => {
-                        let result = match arithmetic {
-                            BinaryOperator::Plus => &left + &right,
-                            BinaryOperator::Minus => &left - &right,
-                            BinaryOperator::Mul => &left * &right,
-                            BinaryOperator::Div => {
-                                // check for division by zero
-
-                                if right.is_zero() {
-                                    let left_val = match &left {
-                                        Value::Number(n) => *n,
-                                        Value::Float(f) => *f as i128,
-                                        _ => 0,
-                                    };
-                                    return Err(VmError::DivisionByZero(left_val, 0).into());
-                                }
-
-                                &left / &right
-                            }
-
-                            _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
-                        };
-
-                        result.ok_or_else(mismatched_types)?
-                    }
-                },
-            })
-        }
+            apply(&left, *operator, &right)
+        },
 
         Expression::Function { func, args } => match func {
             Function::Substring => {
-                let string: String = get_value(val, schema, &args[0])?;
+                let string = get_value::<String>(val, schema, &args[0])?;
+                let start = get_value::<i128>(val, schema, &args[1]).ok().map(|num| num as usize);
+                let count = get_value::<i128>(val, schema, &args[2]).ok().map(|num| num as isize);
 
-                let start = get_value::<i128>(val, schema, &args[1])
-                    .ok()
-                    .map(|num| num as usize);
-
-                let count = get_value::<i128>(val, schema, &args[2])
-                    .ok()
-                    .map(|num| num as isize);
-
-                Ok(Value::String(
-                    functions::substring(&string, start, count).into(),
-                ))
-            }
+                Ok(Value::String(functions::substring(&string, start, count).into()))
+            },
             Function::Extract => {
                 let kind = get_value::<String>(val, schema, &args[0])?;
                 let kind = ExtractKind::try_from(kind).unwrap();
@@ -305,31 +308,48 @@ pub(crate) fn resolve_expression(
                     _ => {
                         return Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
                             expected: vec![VmType::Date, VmType::Interval],
-                        }))
-                    }
+                        }));
+                    },
                 };
 
                 Ok(Value::Number(result as i128))
-            }
+            },
             Function::Ascii => {
-                let string: String = get_value(val, schema, &args[0])?;
-
+                let string = get_value::<String>(val, schema, &args[0])?;
                 Ok(Value::Number(functions::ascii(&string) as i128))
-            }
+            },
             Function::Concat => {
-                let strings: Vec<String> = args
-                    .iter()
-                    .map(|arg| get_value(val, schema, arg))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut joined = String::new();
+                for arg in args {
+                    let resolved;
+                    let value = match borrowed(val, arg) {
+                        Some(value) => value,
+                        _ => {
+                            resolved = resolve_expression(val, schema, arg)?;
+                            &resolved
+                        },
+                    };
 
-                Ok(Value::String(functions::concat(&strings).into()))
-            }
+                    match value {
+                        Value::String(string) => joined.push_str(string),
+                        _ => {
+                            let typ = TypeError::ExpectedType {
+                                expected: VmType::String,
+                                found: arg.clone(),
+                            };
+                            return Err(SqlError::Type(typ));
+                        },
+                    }
+                }
+
+                Ok(Value::String(joined.into()))
+            },
             Function::Position => {
-                let pat: String = get_value(val, schema, &args[0])?;
-                let string: String = get_value(val, schema, &args[1])?;
+                let pat = get_value::<String>(val, schema, &args[0])?;
+                let string = get_value::<String>(val, schema, &args[1])?;
 
                 Ok(Value::Number(functions::position(&string, &pat) as i128))
-            }
+            },
             Function::Coalesce => {
                 for arg in args {
                     let value = resolve_expression(val, schema, arg)?;
@@ -339,61 +359,57 @@ pub(crate) fn resolve_expression(
                 }
 
                 Ok(Value::Null)
-            }
+            },
             Function::Abs => {
                 let value = resolve_expression(val, schema, &args[0])?;
                 math::abs(&value)
-            }
+            },
             Function::Sqrt => {
                 let value = resolve_expression(val, schema, &args[0])?;
                 math::sqrt(&value)
-            }
+            },
             Function::Power => {
                 let base = resolve_expression(val, schema, &args[0])?;
                 let expoent = resolve_expression(val, schema, &args[1])?;
                 math::power(&base, &expoent)
-            }
+            },
             Function::Trunc => {
                 let value = resolve_expression(val, schema, &args[0])?;
-                let decimals = args
-                    .get(1)
-                    .and_then(|arg| resolve_expression(val, schema, arg).ok());
+                let decimals =
+                    args.get(1).and_then(|arg| resolve_expression(val, schema, arg).ok());
 
                 math::trunc(&value, decimals)
-            }
+            },
             Function::Sign => {
                 let value = resolve_expression(val, schema, &args[0])?;
                 math::sign(&value)
-            }
+            },
             Function::TypeOf => {
                 let type_of = match &args[0] {
+                    Expression::Column(position) => {
+                        Ok(schema.columns[*position].column_type().to_string())
+                    },
                     Expression::Identifier(name) => {
                         let idx = schema
                             .index_of(name)
                             .ok_or_else(|| SqlError::InvalidColumn(name.into()))?;
-                        Ok(schema.columns[idx].data_type.to_string())
-                    }
-                    _ => Err(SqlError::Other(
-                        "Expected identifier for typeof function".into(),
-                    )),
+                        Ok(schema.columns[idx].column_type().to_string())
+                    },
+                    _ => Err(SqlError::Other("Expected identifier for typeof function".into())),
                 }?;
 
                 Ok(Value::String(type_of.into()))
-            }
+            },
             func => unimplemented!("function {func} handling is not yet implemented"),
         },
         Expression::IsNull { expr, negated } => {
             let expr = resolve_expression(val, schema, expr)?;
-            let is_null = matches!(expr, Value::Null);
-
-            Ok(Value::Boolean(if *negated { !is_null } else { is_null }))
-        }
+            Ok(Value::Boolean(matches!(expr, Value::Null) ^ *negated))
+        },
         Expression::Nested(expr) | Expression::Alias { expr, .. } => {
             resolve_expression(val, schema, expr)
-        }
-        Expression::Wildcard => {
-            unreachable!("Wildcards should have been resolved by now")
-        }
+        },
+        Expression::Wildcard => unreachable!("Wildcards should have been resolved by now"),
     }
 }
 
@@ -434,18 +450,17 @@ pub(crate) fn evaluate_where(
     tuple: &[Value],
     expr: &Expression,
 ) -> Result<bool, SqlError> {
-    if let Expression::BinaryOperation {
-        operator,
-        left,
-        right,
-    } = expr
-    {
+    if let Expression::BinaryOperation { operator, left, right } = expr {
         match operator {
             BinaryOperator::And if !evaluate_where(schema, tuple, left)? => return Ok(false),
             BinaryOperator::And => return evaluate_where(schema, tuple, right),
             BinaryOperator::Or if evaluate_where(schema, tuple, left)? => return Ok(true),
             BinaryOperator::Or => return evaluate_where(schema, tuple, right),
-            _ => {}
+            _ => {},
+        }
+
+        if let Some(result) = compare_bound(tuple, left, *operator, right) {
+            return Ok(result);
         }
     }
 
@@ -460,8 +475,165 @@ pub(crate) fn evaluate_where(
     }
 }
 
+// PERFORMANCE: `column op literal` on borrowed values, when [bind] left both sides of one kind
+// so [resolve_expression] would coerce nothing
+// `None` defers to it
+#[inline]
+fn compare_bound(
+    tuple: &[Value],
+    left: &Expression,
+    operator: BinaryOperator,
+    right: &Expression,
+) -> Option<bool> {
+    let (left, right) = match (left, right) {
+        (Expression::Column(column), Expression::Value(value)) => (&tuple[*column], value),
+        (Expression::Value(value), Expression::Column(column)) => (value, &tuple[*column]),
+        (Expression::Column(a), Expression::Column(b)) => (&tuple[*a], &tuple[*b]),
+        _ => return None,
+    };
+
+    let numeric =
+        |value: &Value| matches!(value, Value::Number(_) | Value::Float(_) | Value::Numeric(_));
+
+    let comparable = !left.is_null()
+        && !right.is_null()
+        && (mem::discriminant(left) == mem::discriminant(right) || numeric(left) && numeric(right));
+
+    if !comparable {
+        return None;
+    }
+
+    match operator {
+        BinaryOperator::Eq => Some(left == right),
+        BinaryOperator::Neq => Some(left != right),
+        BinaryOperator::Lt => Some(left < right),
+        BinaryOperator::LtEq => Some(left <= right),
+        BinaryOperator::Gt => Some(left > right),
+        BinaryOperator::GtEq => Some(left >= right),
+        BinaryOperator::Like => match (left, right) {
+            (Value::String(left), Value::String(right)) => Some(functions::like(left, right)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `left operator right` once both are coerced: three-valued logic over `NULL`, comparisons,
+/// `LIKE`, logic and arithmetic
+fn apply(left: &Value, operator: BinaryOperator, right: &Value) -> Result<Value, SqlError> {
+    if matches!(left, Value::Null) || matches!(right, Value::Null) {
+        return Ok(three_valued_logic(left, right, &operator));
+    }
+
+    let mismatched_types = || {
+        SqlError::Type(TypeError::CannotApplyBinary {
+            left: Expression::Value(left.clone()),
+            operator,
+            right: Expression::Value(right.clone()),
+        })
+    };
+
+    let is_compatible = match operator {
+        BinaryOperator::Plus
+        | BinaryOperator::Minus
+        | BinaryOperator::Mul
+        | BinaryOperator::Div => left.is_compatible(right),
+
+        _ => true,
+    };
+
+    if !is_compatible {
+        return Err(mismatched_types());
+    }
+
+    Ok(match operator {
+        BinaryOperator::Eq => Value::Boolean(left == right),
+        BinaryOperator::Neq => Value::Boolean(left != right),
+        BinaryOperator::Lt => Value::Boolean(left < right),
+        BinaryOperator::LtEq => Value::Boolean(left <= right),
+        BinaryOperator::Gt => Value::Boolean(left > right),
+        BinaryOperator::GtEq => Value::Boolean(left >= right),
+        BinaryOperator::Like => match (left, right) {
+            (Value::String(left), Value::String(right)) => {
+                Value::Boolean(functions::like(left, right))
+            },
+            _ => Value::Boolean(false),
+        },
+
+        logical @ (BinaryOperator::And | BinaryOperator::Or) => {
+            let (Value::Boolean(left), Value::Boolean(right)) = (left, right) else {
+                return Err(mismatched_types());
+            };
+
+            match logical {
+                BinaryOperator::And => Value::Boolean(*left && *right),
+                BinaryOperator::Or => Value::Boolean(*left || *right),
+                _ => unsafe { unreachable_unchecked() },
+            }
+        },
+
+        arithmetic => match (left, right) {
+            (Value::Temporal(t), Value::Interval(i)) | (Value::Interval(i), Value::Temporal(t)) => {
+                match arithmetic {
+                    BinaryOperator::Plus => Value::Temporal(*t + *i),
+                    BinaryOperator::Minus => Value::Temporal(*t - *i),
+                    _ => return Err(mismatched_types()),
+                }
+            },
+
+            _ => {
+                let result = match arithmetic {
+                    BinaryOperator::Plus => left + right,
+                    BinaryOperator::Minus => left - right,
+                    BinaryOperator::Mul => left * right,
+                    BinaryOperator::Div => {
+                        // check for division by zero
+
+                        if right.is_zero() {
+                            let left_val = match left {
+                                Value::Number(n) => *n,
+                                Value::Float(f) => *f as i128,
+                                _ => 0,
+                            };
+                            return Err(VmError::DivisionByZero(left_val, 0).into());
+                        }
+
+                        left / right
+                    },
+
+                    _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
+                };
+
+                result.ok_or_else(mismatched_types)?
+            },
+        },
+    })
+}
+
+/// whether [try_coerce_enum] or [Coerce::coerce_to] would change `left` or `right`
+#[inline]
+const fn coerces(left: &Value, right: &Value) -> bool {
+    matches!(
+        (left, right),
+        (Value::Float(_), Value::Number(_))
+            | (Value::Number(_), Value::Float(_))
+            | (Value::String(_), Value::Temporal(_) | Value::Uuid(_) | Value::Enum(_))
+            | (Value::Temporal(_) | Value::Uuid(_) | Value::Enum(_), Value::String(_))
+    )
+}
+
+/// the value `expr` denotes without evaluation: a bound column or a literal
+#[inline]
+fn borrowed<'v>(tuple: &'v [Value], expr: &'v Expression) -> Option<&'v Value> {
+    match expr {
+        Expression::Column(position) => Some(&tuple[*position]),
+        Expression::Value(value) => Some(value),
+        _ => None,
+    }
+}
+
 #[inline(always)]
-/// Uses 3VL matching to short-circuit correctly logical expressions with `Value::Null`
+/// uses 3VL matching to short-circuit correctly logical expressions with `Value::Null`
 const fn three_valued_logic(left: &Value, right: &Value, operator: &BinaryOperator) -> Value {
     match operator {
         BinaryOperator::Or => match (left, right) {
@@ -485,24 +657,21 @@ fn try_coerce_enum(
 ) -> Result<(Value, Value), SqlError> {
     let get_variants = |expr: &Expression| {
         let idx = match expr {
+            Expression::Column(position) => Some(*position),
             Expression::Identifier(column) => schema.index_of(column),
-            Expression::QualifiedIdentifier { table, column } => schema
-                .index_of(&format!("{table}.{column}"))
-                .or(schema.last_index_of(column)),
+            Expression::QualifiedIdentifier { table, column } => {
+                schema.index_of(&format!("{table}.{column}")).or(schema.last_index_of(column))
+            },
             _ => None,
         }?;
 
-        let col = schema.columns.get(idx)?;
-        match col.data_type {
-            Type::Enum(id) => schema.get_enum(id).or(col.type_def.as_ref()),
-            _ => None,
-        }
+        schema.columns.get(idx)?.variants()
     };
 
-    let string_to_enum = |s: &str, variants: &Vec<String>| -> Result<Value, SqlError> {
+    let string_to_enum = |s: &str, variants: &[String]| -> Result<Value, SqlError> {
         let idx = variants.iter().position(|v| v == s).ok_or_else(|| {
             SqlError::Type(TypeError::InvalidEnumVariant {
-                allowed: variants.clone(),
+                allowed: variants.to_vec(),
                 found: s.to_string(),
             })
         })?;
@@ -545,7 +714,7 @@ impl From<&Type> for VmType {
             float if float.is_float() => VmType::Float,
             number if matches!(number, Type::Uuid) || number.is_integer() || number.is_serial() => {
                 VmType::Number
-            }
+            },
             _ => panic!("Cannot convert type {value} to VmType"),
         }
     }
@@ -637,22 +806,15 @@ impl PartialEq for VmType {
 impl Display for TypeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypeError::CannotApplyBinary {
-                operator,
-                right,
-                left,
-            } => {
-                write!(
-                    f,
-                    "Cannot apply binary operator {operator:#?} to {left:#?} and {right:#?}"
-                )
-            }
+            TypeError::CannotApplyBinary { operator, right, left } => {
+                write!(f, "Cannot apply binary operator {operator:#?} to {left:#?} and {right:#?}")
+            },
             TypeError::CannotApplyUnary { operator, value } => {
                 write!(f, "Cannot apply unary operator {operator:#?} to {value:#?}")
-            }
+            },
             TypeError::ExpectedType { expected, found } => {
                 write!(f, "Expected {expected:#?} but found {found:?}")
-            }
+            },
             TypeError::ExpectedOneOfTypes { expected } => {
                 write!(f, "Expected one of ")?;
 
@@ -665,11 +827,10 @@ impl Display for TypeError {
                 }
 
                 Ok(())
-            }
-            TypeError::InvalidEnumVariant { allowed, found } => write!(
-                f,
-                "Invalid input value '{found}' for enum. Allowed: {allowed:?}"
-            ),
+            },
+            TypeError::InvalidEnumVariant { allowed, found } => {
+                write!(f, "Invalid input value '{found}' for enum. Allowed: {allowed:?}")
+            },
             TypeError::ExtractError(err) => err.fmt(f),
             TypeError::InvalidDate(err) => err.fmt(f),
             TypeError::UuidError(err) => err.fmt(f),
