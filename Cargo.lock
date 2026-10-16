@@ -1286,7 +1286,6 @@ version = "2.0.0"
 dependencies = [
  "criterion",
  "fake",
- "libc",
  "postgres",
  "rusqlite",
 ]

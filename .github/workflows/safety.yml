@@ -46,7 +46,6 @@ jobs:
         if: always()
         run: cargo test --all-features --target x86_64-unknown-linux-gnu
         env:
-          LSAN_OPTIONS: "suppressions=lsan-suppressions.txt"
           RUSTFLAGS: "-Z sanitizer=leak"
 
   miri:
@@ -62,12 +61,8 @@ jobs:
         with:
           toolchain: ${{ env.NIGHTLY }}
           components: miri
-      - name: cargo miri test (storage)
-        run: cargo miri test core::storage
-      - name: cargo miri test (memory reclamation)
-        run: cargo miri test core::collections::reclamation
-        env:
-          MIRIFLAGS: "-Zmiri-disable-isolation"
+      - name: cargo miri test (unsafe modules)
+        run: cargo miri test --lib -- collections::smallvec core::crc32c
   #loom:
   #  runs-on: ubuntu-latest
   #  steps:
