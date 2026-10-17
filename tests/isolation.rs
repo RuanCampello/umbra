@@ -442,8 +442,8 @@ fn bank_transfers_conserve_the_total_in_every_snapshot() {
         let mut db = MvccDatabase::in_memory().unwrap();
         db.exec("CREATE TABLE accounts (id INT PRIMARY KEY, balance INT);").unwrap();
         let rows: Vec<_> = (0..ACCOUNTS).map(|id| format!("({id}, {START})")).collect();
-        db.exec(&format!("INSERT INTO accounts (id, balance) VALUES {};", rows.join(", ")))
-            .unwrap();
+        let sql = format!("INSERT INTO accounts (id, balance) VALUES {};", rows.join(", "));
+        db.exec(&sql).unwrap();
 
         let barrier = Barrier::new(8);
         thread::scope(|scope| {
@@ -563,10 +563,19 @@ enum Edge {
     Anti,
 }
 
+/// transactions per worker in the list-append runs: `UMBRA_HISTORY_TXNS` raises it for long runs
+fn history_length() -> u64 {
+    std::env::var("UMBRA_HISTORY_TXNS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(150)
+}
+
 /// runs random list-append transactions from several threads and returns the history plus the
 /// final list of every key
 fn list_append_history(level: &str, seed: u64) -> (Vec<Recorded>, Vec<Vec<i64>>) {
     const KEYS: u64 = 4;
+    let transactions = history_length();
 
     let mut db = MvccDatabase::in_memory().unwrap();
     db.exec("CREATE TABLE lists (id BIGINT PRIMARY KEY, k BIGINT, pos BIGINT, v BIGINT);")
@@ -582,7 +591,7 @@ fn list_append_history(level: &str, seed: u64) -> (Vec<Recorded>, Vec<Vec<i64>>)
                 let mut rng = Rng::new(seed * 1_000 + worker);
                 barrier.wait();
 
-                for txn in 0..150u64 {
+                for txn in 0..transactions {
                     let mut ops = Vec::new();
                     let mut run = |db: &mut MvccDatabase, ops: &mut Vec<Op>| -> Result<(), DatabaseError> {
                         db.exec(&format!("BEGIN ISOLATION LEVEL {level};"))?;
@@ -596,7 +605,7 @@ fn list_append_history(level: &str, seed: u64) -> (Vec<Recorded>, Vec<Vec<i64>>)
                             ops.push(Op::Read(key, list));
 
                             if rng.below(2) == 0 {
-                                let value = ((worker * 1_000 + txn) * 10 + op) as i64;
+                                let value = ((worker * 1_000_000 + txn) * 10 + op) as i64;
                                 db.exec(&format!(
                                     "INSERT INTO lists (id, k, pos, v) VALUES ({}, {key}, {len}, {value});",
                                     key * 1_000_000 + len
@@ -632,17 +641,25 @@ fn list_append_history(level: &str, seed: u64) -> (Vec<Recorded>, Vec<Vec<i64>>)
 /// elle's list-append inference: version order from the final lists, `ww` between consecutive
 /// appends, `wr` from the writer of a read's last element, `rw` to the writer of the element right
 /// after a read's end
-fn dependency_graph(history: &[Recorded], finals: &[Vec<i64>]) -> Vec<Vec<(usize, Edge)>> {
+///
+/// fails with the anomaly when a committed read is not a prefix of its key's order, sees an aborted
+/// append (G1a), or sees an append its writer followed with another to the same key (G1b)
+fn dependency_graph(
+    history: &[Recorded],
+    finals: &[Vec<i64>],
+) -> Result<Vec<Vec<(usize, Edge)>>, String> {
     let mut writer = std::collections::HashMap::new();
     let mut aborted = std::collections::HashSet::new();
+    let mut last_append = std::collections::HashMap::new();
 
     for (txn, recorded) in history.iter().enumerate() {
         for op in &recorded.ops {
-            if let Op::Append(_, value) = op {
+            if let Op::Append(key, value) = op {
                 match recorded.committed {
                     true => writer.insert(*value, txn),
                     false => aborted.insert(*value).then_some(txn),
                 };
+                last_append.insert((txn, *key), *value);
             }
         }
     }
@@ -666,12 +683,19 @@ fn dependency_graph(history: &[Recorded], finals: &[Vec<i64>]) -> Vec<Vec<(usize
                 continue;
             };
             let full = &finals[*key as usize];
-
-            assert!(full.starts_with(list), "incompatible order: read {list:?} of final {full:?}");
-            assert!(list.iter().all(|v| !aborted.contains(v)), "G1a: read an aborted append");
+            if list.iter().any(|v| aborted.contains(v)) {
+                return Err(format!("G1a: read {list:?} holds an aborted append"));
+            }
+            if !full.starts_with(list) {
+                return Err(format!("incompatible order: read {list:?} of final {full:?}"));
+            }
 
             if let Some(last) = list.last() {
-                edge(writer[last], txn, Edge::Read);
+                let source = writer[last];
+                if source != txn && last_append.get(&(source, *key)) != Some(last) {
+                    return Err(format!("G1b: read {list:?} ends on an intermediate append"));
+                }
+                edge(source, txn, Edge::Read);
             }
             if let Some(next) = full.get(list.len()) {
                 edge(txn, writer[next], Edge::Anti);
@@ -679,7 +703,7 @@ fn dependency_graph(history: &[Recorded], finals: &[Vec<i64>]) -> Vec<Vec<(usize
         }
     }
 
-    graph
+    Ok(graph)
 }
 
 /// whether `to` reaches `from` over edges accepted by `allowed`
@@ -721,13 +745,21 @@ fn cycle_through(
 
 #[test]
 fn list_append_histories_contain_no_forbidden_cycles() {
+    // `UMBRA_HISTORY_SEED` replays or varies the schedules of a long run
+    let base = std::env::var("UMBRA_HISTORY_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
     for (level, seed) in [("READ COMMITTED", 3), ("SNAPSHOT", 5), ("SERIALIZABLE", 9)] {
+        let seed = seed + base;
         let (history, finals) = list_append_history(level, seed);
         let committed = history.iter().filter(|r| r.committed).count();
         assert!(committed > history.len() / 4, "{level}: too few commits to say anything");
         assert!(committed < history.len(), "{level}: no contention, nothing was tested");
 
-        let graph = dependency_graph(&history, &finals);
+        let graph = dependency_graph(&history, &finals)
+            .unwrap_or_else(|anomaly| panic!("{level} seed {seed}: {anomaly}"));
         let no_anti = |e: Edge| e != Edge::Anti;
 
         assert!(!cycle_through(&graph, no_anti, Edge::Write), "{level} seed {seed}: G0/G1c");
@@ -752,7 +784,7 @@ fn the_history_checker_detects_known_anomalies() {
         committed(vec![Op::Append(0, 1), Op::Append(1, 2)]),
         committed(vec![Op::Read(0, vec![1]), Op::Read(1, vec![])]),
     ];
-    let graph = dependency_graph(&skew, &[vec![1], vec![2]]);
+    let graph = dependency_graph(&skew, &[vec![1], vec![2]]).unwrap();
     assert!(cycle_through(&graph, no_anti, Edge::Anti), "G-single missed");
 
     // write skew: each reads the list the other appends to, empty
@@ -760,13 +792,43 @@ fn the_history_checker_detects_known_anomalies() {
         committed(vec![Op::Read(0, vec![]), Op::Append(1, 2)]),
         committed(vec![Op::Read(1, vec![]), Op::Append(0, 1)]),
     ];
-    let graph = dependency_graph(&write_skew, &[vec![1], vec![2]]);
+    let graph = dependency_graph(&write_skew, &[vec![1], vec![2]]).unwrap();
     assert!(!cycle_through(&graph, no_anti, Edge::Anti), "G2 is not G-single");
     assert!(cycle_through(&graph, |_| true, Edge::Anti), "G2 missed");
 
     // serial: T1 appends, T2 reads it, nothing to report
     let serial = [committed(vec![Op::Append(0, 1)]), committed(vec![Op::Read(0, vec![1])])];
-    let graph = dependency_graph(&serial, &[vec![1]]);
+    let graph = dependency_graph(&serial, &[vec![1]]).unwrap();
     assert!(!cycle_through(&graph, |_| true, Edge::Anti));
     assert!(!cycle_through(&graph, |_| true, Edge::Read));
+
+    // G0: two transactions append to both lists in opposite orders
+    let g0 = [
+        committed(vec![Op::Append(0, 1), Op::Append(1, 4)]),
+        committed(vec![Op::Append(0, 2), Op::Append(1, 3)]),
+    ];
+    let graph = dependency_graph(&g0, &[vec![1, 2], vec![3, 4]]).unwrap();
+    assert!(cycle_through(&graph, |e| e == Edge::Write, Edge::Write), "G0 missed");
+
+    // G1c: each reads the other's append, a cycle of wr edges
+    let g1c = [
+        committed(vec![Op::Append(0, 1), Op::Read(1, vec![2])]),
+        committed(vec![Op::Append(1, 2), Op::Read(0, vec![1])]),
+    ];
+    let graph = dependency_graph(&g1c, &[vec![1], vec![2]]).unwrap();
+    assert!(cycle_through(&graph, no_anti, Edge::Read), "G1c missed");
+
+    // G1a: a committed read sees an aborted append
+    let g1a = [
+        Recorded { ops: vec![Op::Append(0, 1)], committed: false },
+        committed(vec![Op::Read(0, vec![1])]),
+    ];
+    assert!(dependency_graph(&g1a, &[vec![]]).is_err_and(|e| e.starts_with("G1a")));
+
+    // G1b: a read ends on an append its writer followed with another to the same list
+    let g1b = [
+        committed(vec![Op::Append(0, 1), Op::Append(0, 2)]),
+        committed(vec![Op::Read(0, vec![1])]),
+    ];
+    assert!(dependency_graph(&g1b, &[vec![1, 2]]).is_err_and(|e| e.starts_with("G1b")));
 }
