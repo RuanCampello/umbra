@@ -84,9 +84,7 @@ impl Engine for Umbra {
     }
 
     fn exec(&mut self, sql: &str) {
-        self.db
-            .exec(&terminated(sql))
-            .expect("umbra runs the statement");
+        self.db.exec(&terminated(sql)).expect("umbra runs the statement");
     }
 
     fn query(&mut self, sql: &str) -> Result<usize, String> {
@@ -97,10 +95,7 @@ impl Engine for Umbra {
     }
 
     fn write(&mut self, sql: &str) -> Result<(), String> {
-        self.db
-            .exec(&terminated(sql))
-            .map(|_| ())
-            .map_err(|err| format!("{err:?}"))
+        self.db.exec(&terminated(sql)).map(|_| ()).map_err(|err| format!("{err:?}"))
     }
 }
 
@@ -114,28 +109,25 @@ impl Engine for Sqlite {
     }
 
     fn exec(&mut self, sql: &str) {
-        self.connection
-            .execute(sql, [])
-            .expect("sqlite runs the statement");
+        self.connection.execute(sql, []).expect("sqlite runs the statement");
     }
 
     fn query(&mut self, sql: &str) -> Result<usize, String> {
-        let mut statement = self
-            .connection
-            .prepare(sql)
-            .map_err(|err| err.to_string())?;
+        let mut statement = self.connection.prepare(sql).map_err(|err| err.to_string())?;
+        let columns = statement.column_count();
         let count = statement
-            .query_map([], |_| Ok(()))
+            .query_map([], |row| {
+                Ok(for column in 0..columns {
+                    std::hint::black_box(row.get_ref(column)?);
+                })
+            })
             .map_err(|err| err.to_string())?
             .count();
         Ok(count)
     }
 
     fn write(&mut self, sql: &str) -> Result<(), String> {
-        self.connection
-            .execute(sql, [])
-            .map(|_| ())
-            .map_err(|err| err.to_string())
+        self.connection.execute(sql, []).map(|_| ()).map_err(|err| err.to_string())
     }
 }
 
@@ -145,9 +137,7 @@ impl Engine for Postgres {
     }
 
     fn exec(&mut self, sql: &str) {
-        self.client
-            .batch_execute(sql)
-            .expect("postgres runs the statement");
+        self.client.batch_execute(sql).expect("postgres runs the statement");
     }
 
     fn query(&mut self, sql: &str) -> Result<usize, String> {
@@ -158,9 +148,6 @@ impl Engine for Postgres {
     }
 
     fn write(&mut self, sql: &str) -> Result<(), String> {
-        self.client
-            .execute(sql, &[])
-            .map(|_| ())
-            .map_err(|err| err.to_string())
+        self.client.execute(sql, &[]).map(|_| ()).map_err(|err| err.to_string())
     }
 }

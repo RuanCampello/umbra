@@ -1,9 +1,9 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rusqlite::Connection;
 use std::fs;
 use std::hint::black_box;
 use std::time::Duration;
-use umbra::db::Database;
+use umbra::db::MvccDatabase;
 
 const SETUP_SQL: &str = r#"
     CREATE TABLE customers (
@@ -14,7 +14,7 @@ const SETUP_SQL: &str = r#"
         country VARCHAR(50),
         registration_date DATE
     );
-    
+
     CREATE TABLE products (
         product_id SERIAL PRIMARY KEY,
         product_name VARCHAR(100),
@@ -22,7 +22,7 @@ const SETUP_SQL: &str = r#"
         unit_price REAL,
         stock_quantity INT
     );
-    
+
     CREATE TABLE orders (
         order_id SERIAL PRIMARY KEY,
         customer_id INT,
@@ -30,7 +30,7 @@ const SETUP_SQL: &str = r#"
         total_amount REAL,
         status VARCHAR(20)
     );
-    
+
     CREATE TABLE order_items (
         item_id SERIAL PRIMARY KEY,
         order_id INT,
@@ -84,12 +84,9 @@ fn generate_test_data(num_customers: usize, num_products: usize, num_orders: usi
     statements
 }
 
-fn setup_umbra(db: &mut Database<std::fs::File>, statements: &[String]) {
-    let tables: Vec<&str> = SETUP_SQL
-        .split(';')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
+fn setup_umbra(db: &mut MvccDatabase, statements: &[String]) {
+    let tables: Vec<&str> =
+        SETUP_SQL.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 
     for table in tables {
         let stmt = format!("{};", table);
@@ -103,13 +100,11 @@ fn setup_umbra(db: &mut Database<std::fs::File>, statements: &[String]) {
 
 fn setup_sqlite(conn: &Connection, statements: &[String]) {
     for table in SETUP_SQL.split(';').filter(|s| !s.trim().is_empty()) {
-        conn.execute(table, [])
-            .expect("Failed to create table in SQLite");
+        conn.execute(table, []).expect("Failed to create table in SQLite");
     }
 
     for stmt in statements {
-        conn.execute(stmt, [])
-            .expect("Failed to insert data in SQLite");
+        conn.execute(stmt, []).expect("Failed to insert data in SQLite");
     }
 }
 
@@ -130,7 +125,7 @@ fn benchmark_simple_join(c: &mut Criterion) {
         let statements = generate_test_data(*size, 50, *size * 2);
 
         let _ = fs::remove_file("bench_umbra.db");
-        let mut umbra_db = Database::init("bench_umbra.db").unwrap();
+        let mut umbra_db = MvccDatabase::init("bench_umbra.db").unwrap();
         setup_umbra(&mut umbra_db, &statements);
 
         group.bench_with_input(BenchmarkId::new("Umbra", size), size, |b, _| {
@@ -140,7 +135,7 @@ fn benchmark_simple_join(c: &mut Criterion) {
                     Err(err) => {
                         eprintln!("{err}");
                         panic!()
-                    }
+                    },
                 };
                 black_box(result);
             });
@@ -186,7 +181,7 @@ fn benchmark_complex_join_with_aggregation(c: &mut Criterion) {
         let statements = generate_test_data(*size, 50, *size * 2);
 
         let _ = fs::remove_file("bench_umbra.db");
-        let mut umbra_db = Database::init("bench_umbra.db").unwrap();
+        let mut umbra_db = MvccDatabase::init("bench_umbra.db").unwrap();
         setup_umbra(&mut umbra_db, &statements);
 
         group.bench_with_input(BenchmarkId::new("Umbra", size), size, |b, _| {
@@ -243,7 +238,7 @@ fn benchmark_multiple_joins(c: &mut Criterion) {
         let statements = generate_test_data(*size, 50, *size * 2);
 
         let _ = fs::remove_file("bench_umbra.db");
-        let mut umbra_db = Database::init("bench_umbra.db").unwrap();
+        let mut umbra_db = MvccDatabase::init("bench_umbra.db").unwrap();
         setup_umbra(&mut umbra_db, &statements);
 
         group.bench_with_input(BenchmarkId::new("Umbra", size), size, |b, _| {
@@ -296,7 +291,7 @@ fn benchmark_join_with_group_by(c: &mut Criterion) {
         let statements = generate_test_data(*size, 50, *size * 2);
 
         let _ = fs::remove_file("bench_umbra.db");
-        let mut umbra_db = Database::init("bench_umbra.db").unwrap();
+        let mut umbra_db = MvccDatabase::init("bench_umbra.db").unwrap();
         setup_umbra(&mut umbra_db, &statements);
 
         group.bench_with_input(BenchmarkId::new("Umbra", size), size, |b, _| {

@@ -28,13 +28,15 @@ fn main() {
         None => eprintln!("postgres unreachable, comparing umbra vs SQLite only"),
     }
 
-    let names: Vec<_> = engines
-        .iter()
-        .map(|engine| engine.name().to_string())
-        .collect();
+    let names: Vec<_> = engines.iter().map(|engine| engine.name().to_string()).collect();
     let mut rows = Vec::new();
+    let only = std::env::var("UMBRA_BENCH_ONLY").ok();
 
     for case in scenario::scenarios() {
+        if only.as_ref().is_some_and(|only| !case.label.contains(only.as_str())) {
+            continue;
+        }
+
         eprintln!("  {}", case.label);
         let cells = engines
             .iter_mut()
@@ -48,15 +50,13 @@ fn main() {
         });
     }
 
-    let report = Report {
-        engines: names,
-        rows,
-        dataset_rows: dataset::users(),
-    };
+    let report = Report { engines: names, rows, dataset_rows: dataset::users() };
 
     let markdown = report.render();
-    fs::write(OUTPUT, &markdown).expect("the report is written");
-    eprintln!("\nreport written to {OUTPUT}\n");
+    if only.is_none() {
+        fs::write(OUTPUT, &markdown).expect("the report is written");
+        eprintln!("\nreport written to {OUTPUT}\n");
+    }
     println!("{markdown}");
 }
 
@@ -66,7 +66,7 @@ fn measure(engine: &mut dyn Engine, workload: &Workload, iterations: usize) -> C
         Workload::ReadEach(build) => {
             let sql = build(engine.name());
             measure_read(engine, &sql, iterations)
-        }
+        },
         Workload::Write(build) => Cell {
             timing: Some(harness::time(iterations, |i| {
                 let _ = engine.write(&build(i));
@@ -84,14 +84,8 @@ fn measure_read(engine: &mut dyn Engine, sql: &str, iterations: usize) -> Cell {
                     let _ = engine.query(sql);
                 })
             }));
-            Cell {
-                timing: timing.ok(),
-                rows: Some(count),
-            }
-        }
-        _ => Cell {
-            timing: None,
-            rows: None,
+            Cell { timing: timing.ok(), rows: Some(count) }
         },
+        _ => Cell { timing: None, rows: None },
     }
 }

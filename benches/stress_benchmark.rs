@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
-use umbra::db::Database;
+use umbra::db::MvccDatabase;
 
 const DB_PATH: &str = "stress_test.db";
 
@@ -11,7 +11,7 @@ fn main() {
     }
 
     println!("Initialising Database...");
-    let mut db = Database::init(DB_PATH).expect("Failed to init DB");
+    let mut db = MvccDatabase::init(DB_PATH).expect("Failed to init DB");
 
     db.exec(
         "CREATE TABLE users (

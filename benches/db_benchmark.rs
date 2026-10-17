@@ -1,5 +1,6 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use fake::{
+    Dummy, Fake, Faker,
     faker::{
         address::en::{CountryName, Latitude, Longitude, ZipCode},
         boolean::en::Boolean,
@@ -7,14 +8,13 @@ use fake::{
         internet::en::{FreeEmail, IPv4, MACAddress, UserAgent, Username},
         lorem::en::Sentence,
     },
-    Dummy, Fake, Faker,
 };
 use rusqlite::Connection;
-use std::{cell::RefCell, fs::File};
-use umbra::db::Database;
+use std::cell::RefCell;
+use umbra::db::MvccDatabase;
 
 thread_local! {
-    static DISK_DB: RefCell<Option<Database<File>>> = RefCell::new(None);
+    static DISK_DB: RefCell<Option<MvccDatabase>> = RefCell::new(None);
 }
 
 #[derive(Debug, Dummy)]
@@ -83,13 +83,14 @@ const CREATE_TABLE: &str = r#"
 
 fn with_disk_database_mut<F, R>(f: F) -> R
 where
-    F: FnOnce(&mut Database<File>) -> R,
+    F: FnOnce(&mut MvccDatabase) -> R,
 {
     DISK_DB.with(|cell| {
         let mut borrowed = cell.borrow_mut();
         if borrowed.is_none() {
             *borrowed = Some(
-                Database::init("benchmark.db").expect("Could not initialise benchmark database"),
+                MvccDatabase::init("benchmark.db")
+                    .expect("Could not initialise benchmark database"),
             );
         }
         f(borrowed.as_mut().unwrap())
@@ -108,15 +109,12 @@ fn insert_benchmark(c: &mut Criterion) {
             b.iter(|| insert_record(db, &record));
         });
 
-        db.exec("DROP TABLE records;")
-            .expect("Could not drop table after benchmark");
+        db.exec("DROP TABLE records;").expect("Could not drop table after benchmark");
     });
 
     let connection = Connection::open("benchmark-sqlite.db")
         .expect("Could not initialise benchmark database for sqlite");
-    connection
-        .execute(CREATE_TABLE, [])
-        .expect("Could not create sqlite table");
+    connection.execute(CREATE_TABLE, []).expect("Could not create sqlite table");
 
     group.bench_function("single_insert_sqlite", |b| {
         b.iter(|| insert_record_sqlite(&connection, &record))
@@ -178,7 +176,7 @@ fn insert_benchmark(c: &mut Criterion) {
 //    assert_eq!(umbra_len, sqlite_len);
 //}
 //
-fn insert_record(db: &mut Database<File>, record: &Record) {
+fn insert_record(db: &mut MvccDatabase, record: &Record) {
     let Record {
         username,
         email,
@@ -210,8 +208,7 @@ fn insert_record(db: &mut Database<File>, record: &Record) {
         );"
     );
 
-    db.exec(input.as_str())
-        .expect("Failed to insert into database table");
+    db.exec(input.as_str()).expect("Failed to insert into database table");
 }
 
 fn insert_record_sqlite(conn: &Connection, record: &Record) {
