@@ -18,7 +18,7 @@ use crate::index;
 use crate::sql::Value;
 use crate::storage::engine::checkpoint::Manifest;
 use crate::storage::engine::chunk::Cold;
-use crate::storage::engine::clock::Clock;
+use crate::storage::engine::clock::{Clock, TXN_FLAG};
 use crate::storage::engine::error::{EngineError, Result};
 use crate::storage::engine::index::{Holder, Index};
 use crate::storage::engine::io::{DirectoryLock, OsStorage, Storage};
@@ -43,7 +43,9 @@ pub(in crate::storage::engine) struct Inner {
     clock: Clock,
     /// The commit critical section: timestamps, commit summaries, SERIALIZABLE snapshots
     commits: Mutex<Commits>,
-    catalog: RwLock<HashMap<String, Arc<Table>>>,
+    /// Every version of each table name, oldest first: all but the newest carry a drop stamp, and
+    /// a view resolves the one it sees
+    catalog: RwLock<HashMap<String, Vec<Arc<Table>>>>,
     next_table_id: AtomicU32,
     /// Bumped on every catalogue change so sessions can drop cached metadata
     epoch: AtomicU64,
@@ -182,29 +184,24 @@ impl Engine {
         Transaction::new(Arc::clone(&self.inner), level)
     }
 
+    /// the table `name` denotes for the newest committed state
     pub fn table(&self, name: &str) -> Result<Arc<Table>> {
-        self.inner
-            .catalog
-            .read()
-            .expect("catalogue poisoned")
-            .get(name)
-            .cloned()
-            .ok_or_else(|| EngineError::TableNotFound(name.to_string()))
+        self.inner.resolve(name, self.inner.latest())
     }
 
+    /// the table `name` denotes for `view` (a transaction's [Transaction::catalogue_view])
+    pub fn table_in(&self, name: &str, view: View) -> Result<Arc<Table>> {
+        self.inner.resolve(name, view)
+    }
+
+    /// the tables of the newest committed state
+    #[cfg(test)]
     pub fn tables(&self) -> Vec<Arc<Table>> {
-        self.inner
-            .catalog
-            .read()
-            .expect("catalogue poisoned")
-            .values()
-            .cloned()
-            .collect()
+        self.inner.visible_tables(self.inner.latest())
     }
 
     /// where sorts spill: beside the data for durable databases, the system temporary directory
-    /// otherwise
-    /// spills create it when they first need it
+    /// otherwise spills create it when they first need it
     pub fn scratch_dir(&self) -> PathBuf {
         match &self.inner.disk {
             Some(disk) => disk.dir.join("tmp"),
@@ -217,66 +214,28 @@ impl Engine {
         self.inner.epoch.load(Ordering::Acquire)
     }
 
+    /// [Transaction::create_table] in a transaction of its own
+    #[cfg(test)]
     pub fn create_table(&self, name: &str, schema: Schema) -> Result<Arc<Table>> {
-        let mut catalog = self.inner.catalog.write().expect("catalogue poisoned");
-        if catalog.contains_key(name) {
-            return Err(EngineError::TableExists(name.to_string()));
-        }
-
-        let id = self.inner.next_table_id.fetch_add(1, Ordering::Relaxed);
-        let table = new_table(id, name.to_string(), schema, self.inner.cold.clone());
-        let schema = table.schema.clone();
-        let ddl = Ddl::CreateTable { table: id, name: name.to_string(), schema };
-
-        self.inner.ddl(&ddl, || {
-            catalog.insert(table.name().to_string(), Arc::clone(&table));
-        })?;
-
-        Ok(table)
+        let mut txn = self.begin(IsolationLevel::Snapshot);
+        let table = txn.create_table(name, schema)?;
+        txn.commit().map(|()| table)
     }
 
+    /// [Transaction::drop_table] in a transaction of its own
+    #[cfg(test)]
     pub fn drop_table(&self, name: &str) -> Result<()> {
-        let mut catalog = self.inner.catalog.write().expect("catalogue poisoned");
-        let table = catalog
-            .get(name)
-            .cloned()
-            .ok_or_else(|| EngineError::TableNotFound(name.to_string()))?;
-
-        self.inner.ddl(&Ddl::DropTable { table: table.id }, || {
-            catalog.remove(name);
-            table.mark_dropped();
-        })
+        let mut txn = self.begin(IsolationLevel::Snapshot);
+        txn.drop_table(name)?;
+        txn.commit()
     }
 
-    /// registers the index (so concurrent writers maintain it), then back-fills the key of every
-    /// version, a unique index is refused when two rows' newest versions share a key
+    /// [Transaction::create_index] in a transaction of its own
+    #[cfg(test)]
     pub fn create_index(&self, name: &str, table: &str, column: &str, unique: bool) -> Result<()> {
-        let table = self.table(table)?;
-        let column = table
-            .schema
-            .columns
-            .iter()
-            .position(|c| c.name() == column)
-            .ok_or_else(|| EngineError::ColumnNotFound(column.to_string()))?;
-
-        if table.index(name).is_some() {
-            return Err(EngineError::IndexExists(name.to_string()));
-        }
-
-        let index = Arc::new(Index::new(name, column, unique));
-        table.add_index(Arc::clone(&index));
-        table.for_each_version(|id, row| index.insert_unchecked(row[column].clone(), id));
-
-        if unique {
-            if let Some(key) = duplicated_key(&table, &index) {
-                table.remove_index(name);
-                return Err(EngineError::DuplicatedKey(key));
-            }
-        }
-
-        let ddl = Ddl::CreateIndex { table: table.id, column, unique, name: name.to_string() };
-
-        self.inner.ddl(&ddl, || ())
+        let mut txn = self.begin(IsolationLevel::Snapshot);
+        txn.create_index(name, table, column, unique)?;
+        txn.commit()
     }
 
     /// writes a consistent image of every table at the newest visible timestamp `C`, makes it the
@@ -287,16 +246,14 @@ impl Engine {
             return Ok(self.inner.clock.visible());
         };
 
-        if log.is_poisoned() {
-            return Err(EngineError::Poisoned);
+        if let Some(error) = log.poisoned() {
+            return Err(error);
         }
 
         let mut current = disk.checkpoint.lock().expect("checkpoint lock poisoned");
-        let (tables, (ts, lsn)) = {
-            let catalog = self.inner.catalog.read().expect("catalogue poisoned");
-            let tables: Vec<_> = catalog.values().cloned().collect();
-            (tables, self.inner.clock.pin())
-        };
+        // a table dropped after the pinned timestamp is still visible there: its replay range may hold commits into it
+        let (ts, lsn) = self.inner.clock.pin();
+        let tables = self.inner.visible_tables(View { snapshot: ts, marker: 0 });
 
         let written = match current.0 == ts && ts != 0 {
             true => Ok(false),
@@ -316,8 +273,13 @@ impl Engine {
     /// checkpoint once enough log accumulated
     pub fn maintain(&self) -> Result<usize> {
         let watermark = self.inner.clock.watermark();
-        let reclaimed = self
-            .tables()
+        self.inner.catalog.write().expect("catalogue poisoned").retain(|_, versions| {
+            versions.retain(|table| !table.is_dropped() || table.dropped() > watermark);
+            !versions.is_empty()
+        });
+
+        let tables = self.inner.all_tables();
+        let reclaimed = tables
             .iter()
             .map(|table| table.sweep(watermark, |id, rows| table.forget(id, rows)))
             .sum();
@@ -326,7 +288,7 @@ impl Engine {
 
         if let Some(cold) = &self.inner.cold {
             cold.advance();
-            evict_coldest(cold, &self.tables(), watermark);
+            evict_coldest(cold, &tables, watermark);
         }
 
         if let (Some(disk), Some(log)) = (&self.inner.disk, &self.inner.log) {
@@ -353,12 +315,16 @@ impl Engine {
         let signal = Arc::clone(&stop);
 
         let handle = std::thread::spawn(move || {
+            // consecutive failed rounds (a full disk failing every checkpoint) double the wait, up
+            // to 64 intervals
+            let mut failures = 0;
             loop {
                 {
                     let (stopped, wake) = &*signal;
                     let stopped = stopped.lock().expect("maintenance poisoned");
+                    let delay = interval * (1 << failures);
                     let (stopped, _) = wake
-                        .wait_timeout_while(stopped, interval, |stopped| !*stopped)
+                        .wait_timeout_while(stopped, delay, |stopped| !*stopped)
                         .expect("maintenance poisoned");
 
                     if *stopped {
@@ -366,10 +332,9 @@ impl Engine {
                     }
                 }
 
-                match weak.upgrade() {
-                    Some(inner) => {
-                        let _ = Engine { inner }.maintain();
-                    },
+                match weak.upgrade().map(|inner| Engine { inner }.maintain()) {
+                    Some(Ok(_)) => failures = 0,
+                    Some(_) => failures = (failures + 1).min(6),
                     _ => return,
                 }
             }
@@ -397,7 +362,7 @@ impl Engine {
         let catalog = recovered
             .tables
             .into_values()
-            .map(|table| (table.name().to_string(), table))
+            .map(|table| (table.name().to_string(), vec![table]))
             .collect();
 
         Self {
@@ -434,31 +399,102 @@ impl Inner {
         self.commits.lock().expect("commit lock poisoned")
     }
 
-    /// logs a catalogue change in commit order, waits until durable, applies it, publishes it
-    fn ddl<T>(&self, ddl: &Ddl, apply: impl FnOnce() -> T) -> Result<T> {
-        let mut payload = record::encode_ddl(ddl);
+    /// a view of the newest committed state
+    #[inline]
+    fn latest(&self) -> View {
+        View { snapshot: self.clock.visible(), marker: 0 }
+    }
 
-        let (ts, end) = {
-            let mut commits = self.commits();
-            if self.log.as_ref().is_some_and(Log::is_poisoned) {
-                return Err(EngineError::Poisoned);
+    fn catalog(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, Vec<Arc<Table>>>> {
+        self.catalog.read().expect("catalogue poisoned")
+    }
+
+    /// the version of `name` that `view` sees
+    pub(super) fn resolve(&self, name: &str, view: View) -> Result<Arc<Table>> {
+        visible_version(&self.catalog(), name, view)
+    }
+
+    fn visible_tables(&self, view: View) -> Vec<Arc<Table>> {
+        let catalog = self.catalog();
+        let visible = catalog
+            .values()
+            .filter_map(|versions| versions.iter().rev().find(|table| table.visible_to(view)));
+        visible.cloned().collect()
+    }
+
+    /// every version of every table, for maintenance
+    fn all_tables(&self) -> Vec<Arc<Table>> {
+        self.catalog().values().flatten().cloned().collect()
+    }
+
+    pub(super) fn create_table(
+        &self,
+        name: &str,
+        schema: Schema,
+        view: View,
+        level: IsolationLevel,
+    ) -> Result<Arc<Table>> {
+        let mut catalog = self.catalog.write().expect("catalogue poisoned");
+        let versions = catalog.entry(name.to_string()).or_default();
+
+        if let Some(newest) = versions.last() {
+            let (created, dropped) = (newest.created(), newest.dropped());
+            let pending = |stamp: u64| stamp & TXN_FLAG != 0 && stamp != view.marker;
+            let newest_wins = level == IsolationLevel::ReadCommitted;
+
+            match () {
+                _ if pending(created) || pending(dropped) => {
+                    return Err(EngineError::WriteConflict);
+                },
+                _ if dropped == 0 && (newest_wins || view.sees(created)) => {
+                    return Err(EngineError::TableExists(name.to_string()));
+                },
+                _ if dropped == 0 => return Err(EngineError::SerializationFailure),
+                _ if newest_wins || view.sees(dropped) => {},
+                _ => return Err(EngineError::SerializationFailure),
             }
-
-            commits.last += 1;
-            record::stamp_timestamp(&mut payload, commits.last);
-            let end = self.log.as_ref().map(|log| log.append(Kind::Ddl, &payload));
-            (commits.last, end)
-        };
-
-        if let (Some(log), Some(end)) = (&self.log, end) {
-            log.wait(end)?;
         }
 
-        let applied = apply();
-        self.epoch.fetch_add(1, Ordering::Release);
-        self.clock.publish(ts, end.unwrap_or(0));
+        let id = self.next_table_id.fetch_add(1, Ordering::Relaxed);
+        let table = new_table(id, name.to_string(), schema, self.cold.clone());
+        table.stamp_created(view.marker);
+        versions.push(Arc::clone(&table));
 
-        Ok(applied)
+        Ok(table)
+    }
+
+    /// stamps the version of `name` that `view` sees as dropped by its marker
+    pub(super) fn drop_table(
+        &self,
+        name: &str,
+        view: View,
+        level: IsolationLevel,
+    ) -> Result<Arc<Table>> {
+        let catalog = self.catalog.write().expect("catalogue poisoned");
+        let table = visible_version(&catalog, name, view)?;
+
+        match table.dropped() {
+            0 => {
+                table.stamp_dropped(view.marker);
+                Ok(table)
+            },
+            dropped if dropped & TXN_FLAG != 0 => Err(EngineError::WriteConflict),
+            _ if level == IsolationLevel::ReadCommitted => {
+                Err(EngineError::TableNotFound(name.to_string()))
+            },
+            _ => Err(EngineError::SerializationFailure),
+        }
+    }
+
+    /// removes a version whose creating transaction did not commit
+    pub(super) fn forget_table(&self, table: &Arc<Table>) {
+        let mut catalog = self.catalog.write().expect("catalogue poisoned");
+        if let Some(versions) = catalog.get_mut(table.name()) {
+            versions.retain(|version| !Arc::ptr_eq(version, table));
+            if versions.is_empty() {
+                catalog.remove(table.name());
+            }
+        }
     }
 }
 
@@ -525,32 +561,37 @@ impl Maintenance {
 }
 
 impl Recovered {
+    /// replays a commit: its catalogue changes, then its row writes, skipping writes into tables the same commit dropped
     fn apply(&mut self, kind: Kind, payload: &[u8]) -> Result<()> {
-        let ts = match kind {
-            Kind::Commit => record::decode_commit(payload, |ts, table, id, change| {
-                let table = self.tables.get(&table).ok_or_else(|| {
-                    EngineError::Corrupt(format!("commit into unknown table {table}"))
-                })?;
-
-                match change {
-                    Change::Put(row) => table.recover_put(id, row, ts),
-                    Change::Delete => table.recover_delete(id),
-                }
-                Ok(())
-            })?,
-            Kind::Ddl => {
-                let (ts, ddl) = record::decode_ddl(payload)?;
-                self.apply_ddl(ddl);
-                ts
-            },
-        };
-
+        assert_eq!(kind, Kind::Commit, "the log replays only commits");
+        let mut commit = record::decode_commit(payload)?;
+        let ts = commit.ts;
         if ts <= self.last_ts {
-            return Err(EngineError::Corrupt(format!(
-                "log timestamp {ts} does not follow {}",
-                self.last_ts
-            )));
+            let msg = format!("log timestamp {ts} does not follow {}", self.last_ts);
+            return Err(EngineError::Corrupt(msg));
         }
+
+        let mut dropped = Vec::new();
+        for ddl in std::mem::take(&mut commit.ddl) {
+            if let Ddl::DropTable { table } = &ddl {
+                dropped.push(*table);
+            }
+            self.apply_ddl(ddl);
+        }
+
+        commit.writes(|table, id, change| {
+            let Some(table) = self.tables.get(&table) else {
+                return match dropped.contains(&table) {
+                    true => Ok(()),
+                    _ => Err(EngineError::Corrupt(format!("commit into unknown table {table}"))),
+                };
+            };
+
+            Ok(match change {
+                Change::Put(row) => table.recover_put(id, row, ts),
+                Change::Delete => table.recover_delete(id),
+            })
+        })?;
 
         Ok(self.last_ts = ts)
     }
@@ -589,13 +630,33 @@ impl Recovered {
     }
 }
 
-/// a table with its primary-key index
+/// the version of `name` in `catalog` that `view` sees
+fn visible_version(
+    catalog: &HashMap<String, Vec<Arc<Table>>>,
+    name: &str,
+    view: View,
+) -> Result<Arc<Table>> {
+    catalog
+        .get(name)
+        .and_then(|versions| versions.iter().rev().find(|table| table.visible_to(view)))
+        .cloned()
+        .ok_or_else(|| EngineError::TableNotFound(name.to_string()))
+}
+
+/// a table with the unique indexes of its primary key and UNIQUE columns
 fn new_table(id: u32, name: String, schema: Schema, cold: Option<Arc<Cold>>) -> Arc<Table> {
     let table = Arc::new(Table::new(id, name, schema, cold));
 
     if let Some(column) = table.schema.primary_column_index() {
         let name = index!(primary on (table.name()));
         table.add_index(Arc::new(Index::new(name, column, true)));
+    }
+
+    for (position, column) in table.schema.columns.iter().enumerate() {
+        if column.is_unique() && !column.is_primary_key() {
+            let name = index!(unique on (table.name()) (column.name()));
+            table.add_index(Arc::new(Index::new(name, position, true)));
+        }
     }
 
     table
@@ -659,7 +720,7 @@ mod tests {
     use super::*;
     use crate::db::SchemaBuilder;
     use crate::sql::statement::Type;
-    use crate::storage::engine::io::memory::MemoryStorage;
+    use crate::storage::engine::io::memory::{Loss, MemoryStorage, Op};
     use crate::storage::engine::table::{Row, RowId};
     use std::sync::Barrier;
     use std::thread;
@@ -769,6 +830,28 @@ mod tests {
         cycle("z");
 
         assert!(index.len() <= 2, "{} entries once the snapshot is gone", index.len());
+    }
+
+    #[test]
+    fn a_read_committed_write_to_a_vanished_row_skips_it_and_commits() {
+        let (engine, table) = engine();
+        let ids = insert(&engine, &table, &[(1, "a"), (2, "b")]);
+
+        let mut statement = engine.begin(IsolationLevel::ReadCommitted);
+        assert_eq!(name(&mut statement, &table, ids[0]).as_deref(), Some("a"));
+
+        let mut deleter = engine.begin(IsolationLevel::Snapshot);
+        deleter.delete(&table, ids[0]).unwrap();
+        deleter.commit().unwrap();
+
+        // a new statement takes a fresh snapshot, so maintenance may reclaim the deleted row
+        statement.refresh_snapshot();
+        engine.maintain().unwrap();
+
+        assert!(matches!(statement.delete(&table, ids[0]), Err(EngineError::Stale(None))));
+        statement.update(&table, ids[1], row(2, "b2")).unwrap();
+        statement.commit().expect("a stale row is skipped, not fatal");
+        assert_eq!(names(&mut engine.begin(IsolationLevel::Snapshot), &table), ["b2"]);
     }
 
     #[test]
@@ -1347,6 +1430,74 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_racing_drop_table_aborts_and_the_database_still_opens() {
+        let storage = disk();
+        {
+            let engine = reopen(&storage);
+            let table = users(&engine);
+            insert(&engine, &table, &[(1, "a")]);
+
+            let mut writer = engine.begin(IsolationLevel::Snapshot);
+            writer.insert(&table, row(2, "b")).unwrap();
+
+            storage.hold(Op::Sync);
+            thread::scope(|scope| {
+                let dropper = scope.spawn(|| engine.drop_table("users"));
+                while storage.waiting() == 0 {
+                    thread::yield_now();
+                }
+
+                // the drop record is logged and waits for its sync: the commit races it
+                let log = engine.inner.log.as_ref().unwrap();
+                let logged = log.end();
+                let committer = scope.spawn(move || writer.commit());
+                while !committer.is_finished() && log.end() == logged {
+                    thread::yield_now();
+                }
+
+                storage.release();
+                dropper.join().unwrap().unwrap();
+                let committed = committer.join().unwrap();
+                assert!(
+                    matches!(committed, Err(EngineError::TableNotFound(_))),
+                    "a commit ordered after the drop must abort, got {committed:?}"
+                );
+            });
+        }
+
+        let engine =
+            Engine::open_with(Arc::new(storage.clone()), Path::new("db"), Config::default(), None)
+                .expect("the log replays after a drop raced a commit");
+        assert!(engine.table("users").is_err());
+    }
+
+    #[test]
+    fn a_checkpoint_behind_a_drop_still_images_the_dropped_table() {
+        let storage = disk();
+        let engine = reopen(&storage);
+        let table = users(&engine);
+        insert(&engine, &table, &[(1, "a")]);
+        let id = table.id;
+
+        // an in-flight commit: its timestamp is taken but not published, so visibility lags
+        let reserved = {
+            let mut commits = engine.inner.commits();
+            commits.last += 1;
+            commits.last
+        };
+        engine.drop_table("users").unwrap();
+        let pinned = engine.checkpoint().unwrap();
+        assert!(pinned < reserved, "the checkpoint pins a timestamp before the drop");
+
+        let manifest = checkpoint::Manifest::read(&storage, Path::new("db")).unwrap().unwrap();
+        assert!(
+            manifest.tables.contains(&id),
+            "replay from the pinned point may still touch the dropped table"
+        );
+        engine.inner.clock.publish(reserved, 0);
+    }
+
+    #[test]
     fn reused_slots_replay_from_the_log_and_from_images() {
         let storage = disk();
         {
@@ -1410,16 +1561,28 @@ mod tests {
         let mut txn = engine.begin(IsolationLevel::Snapshot);
         txn.insert(&table, row(2, "lost")).unwrap();
         storage.fail_at(2);
-        assert!(matches!(txn.commit(), Err(EngineError::Poisoned)));
+        match txn.commit() {
+            Err(EngineError::Poisoned(cause)) => assert!(cause.contains("sync"), "{cause}"),
+            other => panic!("{other:?}"),
+        }
 
-        assert_eq!(all_names(&engine, "users"), ["durable"]);
+        assert_eq!(
+            all_names(&engine, "users"),
+            ["durable"],
+            "a poisoned engine still serves reads"
+        );
         let mut next = engine.begin(IsolationLevel::Snapshot);
         next.insert(&table, row(3, "refused")).unwrap();
-        assert!(matches!(next.commit(), Err(EngineError::Poisoned)));
+        assert!(matches!(next.commit(), Err(EngineError::Poisoned(_))));
         assert!(matches!(
             engine.create_table("t", SchemaBuilder::new().primary("id", Type::Integer).build()),
-            Err(EngineError::Poisoned)
+            Err(EngineError::Poisoned(_))
         ));
+        assert!(matches!(engine.checkpoint(), Err(EngineError::Poisoned(_))));
+
+        let operations = storage.operations();
+        engine.close().unwrap();
+        assert_eq!(storage.operations(), operations, "close writes no checkpoint once poisoned");
 
         drop(engine);
         storage.reboot(false);
@@ -1463,6 +1626,233 @@ mod tests {
 
         let engine = reopen(&storage);
         assert_eq!(engine.table("s").unwrap().next_serial(0), 4);
+    }
+
+    #[test]
+    fn concurrent_create_index_with_one_name_registers_one_index() {
+        let engine = reopen(&disk());
+        let table = users(&engine);
+        let rows: Vec<_> = (0..200).map(|id| (id, "x")).collect();
+        insert(&engine, &table, &rows);
+
+        for round in 0..50 {
+            let name = format!("idx_{round}");
+            let barrier = Barrier::new(2);
+            let created: Vec<_> = thread::scope(|scope| {
+                let racers: Vec<_> = (0..2)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            engine.create_index(&name, "users", "name", false)
+                        })
+                    })
+                    .collect();
+                racers.into_iter().map(|racer| racer.join().unwrap()).collect()
+            });
+
+            assert_eq!(
+                created.iter().filter(|outcome| outcome.is_ok()).count(),
+                1,
+                "round {round}"
+            );
+            assert_eq!(table.indexes().iter().filter(|index| index.name == name).count(), 1);
+        }
+    }
+
+    #[test]
+    fn a_create_index_whose_record_fails_leaves_no_index() {
+        let storage = disk();
+        let engine = reopen(&storage);
+        let table = users(&engine);
+        insert(&engine, &table, &[(1, "a")]);
+
+        storage.fail_at(1);
+        assert!(engine.create_index("idx_name", "users", "name", false).is_err());
+        assert!(
+            table.index("idx_name").is_none(),
+            "a failed DDL must not leave the index behind"
+        );
+    }
+
+    #[test]
+    fn a_commit_durable_before_rotation_fails_is_acknowledged() {
+        let storage = disk();
+        let config = Config { segment_size: 1, ..Config::default() };
+        {
+            let engine = reopen_with(&storage, config.clone());
+            let table = users(&engine);
+
+            // the commit appends (1) and syncs (2); rotating to a new segment then fails (3)
+            storage.fail_at(3);
+            let mut txn = engine.begin(IsolationLevel::Snapshot);
+            txn.insert(&table, row(1, "durable")).unwrap();
+            assert!(txn.commit().is_ok(), "the commit was durable before the rotation failed");
+
+            let mut next = engine.begin(IsolationLevel::Snapshot);
+            next.insert(&table, row(2, "after")).unwrap();
+            assert!(next.commit().is_ok(), "the next flush retries the rotation");
+        }
+
+        storage.reboot(false);
+        let engine = reopen_with(&storage, config);
+        assert_eq!(all_names(&engine, "users"), ["durable", "after"]);
+    }
+
+    #[test]
+    fn a_commit_whose_write_fails_fails_alone_and_the_engine_goes_on() {
+        let storage = disk();
+        let engine = reopen(&storage);
+        let table = users(&engine);
+        insert(&engine, &table, &[(1, "durable")]);
+
+        // the write is the commit's first operation; it fails after writing half its bytes
+        let mut txn = engine.begin(IsolationLevel::Snapshot);
+        txn.insert(&table, row(2, "lost")).unwrap();
+        storage.fail_at(1);
+        assert!(matches!(txn.commit(), Err(EngineError::Io(_))));
+        assert_eq!(all_names(&engine, "users"), ["durable"]);
+
+        // its key is free again, and visibility moved past its timestamp
+        insert(&engine, &table, &[(2, "after")]);
+        assert_eq!(all_names(&engine, "users"), ["durable", "after"]);
+        engine
+            .create_table("t", SchemaBuilder::new().primary("id", Type::Integer).build())
+            .unwrap();
+        drop(engine);
+
+        storage.reboot(false);
+        let engine = reopen(&storage);
+        assert_eq!(all_names(&engine, "users"), ["durable", "after"]);
+        assert!(engine.table("t").is_ok());
+    }
+
+    #[test]
+    fn commits_behind_a_failed_write_fail_and_later_ones_are_visible() {
+        let storage = disk();
+        let engine = reopen(&storage);
+        let table = users(&engine);
+        insert(&engine, &table, &[(1, "durable")]);
+
+        let mut first = engine.begin(IsolationLevel::Snapshot);
+        first.insert(&table, row(2, "first")).unwrap();
+        let mut behind = engine.begin(IsolationLevel::Snapshot);
+        behind.insert(&table, row(3, "behind")).unwrap();
+
+        storage.hold(Op::Append);
+        thread::scope(|scope| {
+            let leader = scope.spawn(|| first.commit());
+            while storage.waiting() == 0 {
+                thread::yield_now();
+            }
+
+            // logged while the leader's write is in flight
+            let log = engine.inner.log.as_ref().unwrap();
+            let logged = log.end();
+            let follower = scope.spawn(move || behind.commit());
+            while log.end() == logged {
+                thread::yield_now();
+            }
+
+            storage.fail_at(1);
+            storage.release();
+            assert!(matches!(leader.join().unwrap(), Err(EngineError::Io(_))));
+            assert!(matches!(follower.join().unwrap(), Err(EngineError::Io(_))));
+        });
+
+        insert(&engine, &table, &[(4, "later")]);
+        assert_eq!(all_names(&engine, "users"), ["durable", "later"]);
+        drop(engine);
+
+        storage.reboot(false);
+        assert_eq!(all_names(&reopen(&storage), "users"), ["durable", "later"]);
+    }
+
+    #[test]
+    fn a_drop_table_whose_record_fails_leaves_the_table() {
+        let storage = disk();
+        let engine = reopen(&storage);
+        let table = users(&engine);
+        insert(&engine, &table, &[(1, "a")]);
+
+        storage.fail_at(1);
+        assert!(matches!(engine.drop_table("users"), Err(EngineError::Io(_))));
+        assert!(!table.is_dropped());
+        insert(&engine, &table, &[(2, "b")]);
+        drop(engine);
+
+        storage.reboot(false);
+        assert_eq!(all_names(&reopen(&storage), "users"), ["a", "b"]);
+    }
+
+    #[test]
+    fn a_create_table_whose_record_fails_leaves_no_table() {
+        let storage = disk();
+        let engine = reopen(&storage);
+
+        storage.fail_at(1);
+        assert!(matches!(users_named_with_text(&engine, "t"), Err(EngineError::Io(_))));
+        assert!(engine.table("t").is_err());
+        users_named_with_text(&engine, "t").unwrap();
+        put(&engine, "t", &[(1, "a")]).unwrap();
+        drop(engine);
+
+        storage.reboot(false);
+        assert_eq!(all_names(&reopen(&storage), "t"), ["a"]);
+    }
+
+    #[test]
+    fn a_dropped_table_is_reclaimed_once_no_snapshot_sees_it() {
+        let engine = reopen(&disk());
+        let table = users(&engine);
+        insert(&engine, &table, &[(1, "a")]);
+        let versions = |engine: &Engine| engine.inner.all_tables().len();
+
+        let pinned = engine.begin(IsolationLevel::Snapshot);
+        engine.drop_table("users").unwrap();
+        engine.maintain().unwrap();
+        assert_eq!(versions(&engine), 1, "a snapshot from before the drop still sees the table");
+
+        drop(pinned);
+        engine.maintain().unwrap();
+        assert_eq!(versions(&engine), 0);
+    }
+
+    #[test]
+    fn a_failed_checkpoint_keeps_the_previous_one() {
+        // every operation of the second checkpoint fails in turn, the engine and the previous checkpoint survive each
+        let operations = {
+            let storage = disk();
+            let engine = reopen(&storage);
+            let table = users(&engine);
+            insert(&engine, &table, &[(1, "a")]);
+            engine.checkpoint().unwrap();
+            insert(&engine, &table, &[(2, "b")]);
+            let before = storage.operations();
+            engine.checkpoint().unwrap();
+            storage.operations() - before
+        };
+
+        for failure in 1..=operations {
+            let storage = disk();
+            let engine = reopen(&storage);
+            let table = users(&engine);
+            insert(&engine, &table, &[(1, "a")]);
+            engine.checkpoint().unwrap();
+            insert(&engine, &table, &[(2, "b")]);
+
+            storage.fail_at(failure);
+            let _ = engine.checkpoint();
+            insert(&engine, &table, &[(3, "c")]);
+            assert!(!engine.inner.log.as_ref().unwrap().is_poisoned(), "failure at {failure}");
+            drop(engine);
+
+            storage.reboot(false);
+            assert_eq!(
+                all_names(&reopen(&storage), "users"),
+                ["a", "b", "c"],
+                "failure at {failure}"
+            );
+        }
     }
 
     fn reopen_with(storage: &MemoryStorage, config: Config) -> Engine {
@@ -1677,7 +2067,8 @@ mod tests {
         txn.commit()
     }
 
-    /// a sequential workload touching every record kind, two checkpoints and a drop
+    /// a sequential workload touching every record kind: three checkpoints, two drops, indexes on
+    /// live and dropped tables, deletes whose slots are reused
     fn crash_workload() -> Vec<Step> {
         vec![
             |e| users_named_with_text(e, "a"),
@@ -1697,7 +2088,48 @@ mod tests {
             |e| put(e, "a", &[(6, "six")]),
             |e| users_named_with_text(e, "b"),
             |e| put(e, "b", &[(12, "twelve")]),
+            |e| e.create_index("b_name", "b", "name", false),
+            |e| rewrite(e, "a", |k| (k > 3).then_some("kept")),
+            |e| e.maintain().map(|_| ()),
+            |e| put(e, "a", &[(1, "reborn"), (2, "again")]),
+            |e| e.checkpoint().map(|_| ()),
+            |e| e.drop_table("b"),
+            |e| put(e, "a", &[(7, "seven")]),
+            |e| create_filled(e, "c", &[(1, "c1"), (2, "c2")]),
+            |e| e.checkpoint().map(|_| ()),
+            |e| recreate_filled(e, "c", &[(3, "c3")]),
+            |e| put(e, "a", &[(8, "eight")]),
         ]
+    }
+
+    /// creates `name`, fills it and indexes it, in one transaction
+    fn create_filled(engine: &Engine, name: &str, rows: &[(i128, &str)]) -> Result<()> {
+        let schema = SchemaBuilder::new()
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+        let mut txn = engine.begin(IsolationLevel::Snapshot);
+        let table = txn.create_table(name, schema)?;
+        for &(id, text) in rows {
+            txn.insert(&table, row(id, text))?;
+        }
+        txn.create_index(&format!("{name}_name"), name, "name", false)?;
+        txn.commit()
+    }
+
+    /// drops `name` and creates it again with `rows`, in one transaction
+    fn recreate_filled(engine: &Engine, name: &str, rows: &[(i128, &str)]) -> Result<()> {
+        let schema = SchemaBuilder::new()
+            .primary("id", Type::Integer)
+            .nullable("name", Type::Text)
+            .build();
+        let mut txn = engine.begin(IsolationLevel::Snapshot);
+        txn.drop_table(name)?;
+        let table = txn.create_table(name, schema)?;
+        for &(id, text) in rows {
+            txn.insert(&table, row(id, text))?;
+        }
+        txn.commit()
     }
 
     fn users_named_with_text(engine: &Engine, name: &str) -> Result<()> {
@@ -1758,7 +2190,7 @@ mod tests {
         assert!(operations > 40, "the workload exercises too little I/O");
 
         for crash in 1..=operations {
-            for torn in [false, true] {
+            for loss in [Loss::Clean, Loss::Torn, Loss::Garbled, Loss::Reordered] {
                 let storage = disk();
                 storage.crash_at(crash);
 
@@ -1767,17 +2199,105 @@ mod tests {
                     _ => 0,
                 };
 
-                storage.reboot(torn);
+                storage.reboot_with(loss);
                 let recovered = contents(&open(&storage).unwrap());
                 let allowed = &expected[acknowledged..(acknowledged + 2).min(expected.len())];
 
                 assert!(
                     allowed.contains(&recovered),
-                    "crash before operation {crash} (torn: {torn}), {acknowledged} steps acknowledged: {recovered:?}"
+                    "crash before operation {crash} ({loss:?}), {acknowledged} steps acknowledged: {recovered:?}"
                 );
 
                 let again = contents(&open(&storage).unwrap());
                 assert_eq!(again, recovered, "recovery is not idempotent");
+            }
+        }
+    }
+
+    /// SQLite's I/O-error loops over the crash workload: the `n`-th operation fails once, or every
+    /// operation from the `n`-th on fails
+    /// after a reboot the database holds exactly the steps that
+    /// succeeded, plus possibly the one that failed (a failed `fsync` leaves durability unknown)
+    /// after a single failure the engine keeps working unless that failure was a sync
+    #[test]
+    fn io_failures_at_every_operation_lose_nothing_acknowledged() {
+        // a one-byte segment rotates the log on every flush
+        for config in [Config::default(), Config { segment_size: 1, ..Config::default() }] {
+            fault_sweep(config);
+        }
+    }
+
+    fn fault_sweep(config: Config) {
+        let workload = crash_workload();
+        let operations = {
+            let storage = disk();
+            let setup = storage.operations();
+            let engine = reopen_with(&storage, config.clone());
+            workload.iter().for_each(|step| step(&engine).unwrap());
+            storage.operations() - setup
+        };
+
+        for failure in 1..=operations {
+            for persistent in [false, true] {
+                let storage = disk();
+                match persistent {
+                    true => storage.fail_from(failure),
+                    false => storage.fail_at(failure),
+                }
+
+                let opened = Engine::open_with(
+                    Arc::new(storage.clone()),
+                    Path::new("db"),
+                    config.clone(),
+                    None,
+                );
+                let outcomes: Vec<_> = match &opened {
+                    Ok(engine) => workload.iter().map(|step| step(engine).is_ok()).collect(),
+                    Err(_) => vec![false; workload.len()],
+                };
+
+                // one failed operation stops the engine only when it was a sync (durability unknown)
+                // otherwise the engine still commits, visibly
+                if let (false, Ok(engine)) = (persistent, &opened) {
+                    let failed = storage.failed();
+                    match engine.inner.log.as_ref().unwrap().is_poisoned() {
+                        true => assert_eq!(
+                            failed,
+                            [Op::Sync],
+                            "failure at operation {failure} stopped the engine"
+                        ),
+                        false => {
+                            users_named_with_text(engine, "probe").unwrap();
+                            put(engine, "probe", &[(1, "after")]).unwrap();
+                            assert_eq!(
+                                contents(engine)["probe"].len(),
+                                1,
+                                "failure at operation {failure}"
+                            );
+                        },
+                    }
+                }
+                drop(opened);
+
+                // the model replays what succeeded, the first failing step may have landed too
+                let model = |with_failed: bool| {
+                    let engine = Engine::in_memory();
+                    let first_failed = outcomes.iter().position(|ok| !ok);
+                    for (position, step) in workload.iter().enumerate() {
+                        if outcomes[position] || (with_failed && Some(position) == first_failed) {
+                            let _ = step(&engine);
+                        }
+                    }
+                    contents(&engine)
+                };
+
+                storage.reboot(false);
+                let mut recovered = contents(&reopen_with(&storage, config.clone()));
+                recovered.remove("probe");
+                assert!(
+                    recovered == model(false) || recovered == model(true),
+                    "failure at operation {failure} (persistent: {persistent}), outcomes {outcomes:?}: {recovered:?}"
+                );
             }
         }
     }
@@ -1865,6 +2385,24 @@ mod tests {
 
         engine.maintain().unwrap();
         assert!(resident(&engine) <= 1);
+        assert_eq!(all_names(&engine, "users").len(), 5_000);
+    }
+
+    #[test]
+    fn a_chunk_whose_cold_write_fails_stays_resident() {
+        let storage = disk();
+        let engine = budgeted(&storage, 1);
+        populated(&engine, 5_000);
+
+        storage.fail_from(1);
+        engine.maintain().unwrap();
+        assert_eq!(resident(&engine), 5, "no chunk is evicted without its cold file");
+        assert_eq!(all_names(&engine, "users").len(), 5_000);
+
+        storage.reboot(false);
+        let engine = budgeted(&storage, 1);
+        engine.maintain().unwrap();
+        assert_eq!(resident(&engine), 1, "eviction resumes once writes succeed");
         assert_eq!(all_names(&engine, "users").len(), 5_000);
     }
 

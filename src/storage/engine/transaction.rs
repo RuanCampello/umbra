@@ -7,19 +7,21 @@
 //! are dropped once no SERIALIZABLE snapshot can predate them
 
 use crate::collections::hash::HashMap;
+use crate::db::Schema;
 use crate::sql::Value;
 pub(crate) use crate::sql::statement::IsolationLevel;
 use crate::storage::engine::{
-    Inner,
+    Inner, duplicated_key,
     error::{EngineError, Result},
     index::Index,
-    log::{Kind, Log},
-    record,
+    log::{Kind, Log, Unlogged},
+    record::{self, Ddl},
     table::{Row, RowId, Table, TableScan, View, Writer, Written},
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 /// An open transaction, owned by its session
 /// Dropping it rolls back
@@ -32,13 +34,45 @@ pub(crate) struct Transaction {
     view: View,
     writes: Vec<Write>,
     written: HashMap<(u32, RowId), usize>,
+    /// The distinct tables of `writes`, so commit checks drops per table, not per row
+    tables: Vec<Arc<Table>>,
     /// Index entries this transaction added: (write, index, key)
     keys: Vec<(usize, Arc<Index>, Value)>,
+    /// Catalogue changes in the order they ran, with the table each touched
+    ddl: Vec<(Ddl, Arc<Table>)>,
+    /// Open savepoints, oldest first
+    savepoints: Vec<Savepoint>,
+    /// Foreign-key checks to validate at commit
+    guards: Vec<Guard>,
+    /// Snapshots registered by [Transaction::constraint_view], so commits after them stay summarised
+    validating: Vec<u64>,
     /// Read predicates per table id, SERIALIZABLE only
     reads: Option<HashMap<u32, Reads>>,
     /// READ COMMITTED: newest stamps the statement re-checked after [EngineError::Stale]
     rechecked: HashMap<(u32, RowId), u64>,
     state: State,
+}
+
+/// A foreign-key check that a commit after its snapshot can invalidate: with `present`, a row of
+/// `table` held `key` in `column` and must keep holding it (the referenced row)
+/// otherwise none did and none may come to (rows referring to a deleted key)
+struct Guard {
+    snapshot: u64,
+    table: u32,
+    column: usize,
+    key: Value,
+    present: bool,
+}
+
+/// How far the transaction had got when a savepoint was taken
+struct Savepoint {
+    name: String,
+    writes: usize,
+    keys: usize,
+    ddl: usize,
+    tables: usize,
+    /// Image each earlier write had when the savepoint was taken, recorded when it is first written again
+    overwritten: HashMap<usize, Option<Row>>,
 }
 
 pub(crate) struct Write {
@@ -84,7 +118,8 @@ pub(crate) struct Summary {
 pub(crate) struct Commits {
     pub last: u64,
     recent: VecDeque<Arc<Summary>>,
-    /// Snapshots of active SERIALIZABLE transactions
+    /// Snapshots whose later commits must stay summarised: active SERIALIZABLE transactions and
+    /// foreign-key checks
     serializable: BTreeMap<u64, u32>,
 }
 
@@ -128,7 +163,12 @@ impl Transaction {
             view,
             writes: Vec::new(),
             written: HashMap::default(),
+            tables: Vec::new(),
             keys: Vec::new(),
+            ddl: Vec::new(),
+            savepoints: Vec::new(),
+            guards: Vec::new(),
+            validating: Vec::new(),
             reads,
             rechecked: HashMap::default(),
             state: State::Active,
@@ -138,6 +178,199 @@ impl Transaction {
     #[inline]
     pub fn level(&self) -> IsolationLevel {
         self.level
+    }
+
+    /// the view table names resolve against: this transaction's snapshot with its own catalogue
+    /// changes
+    #[inline]
+    pub fn catalogue_view(&self) -> View {
+        self.view
+    }
+
+    /// the table `name` denotes for this transaction
+    pub fn table(&self, name: &str) -> Result<Arc<Table>> {
+        self.inner.resolve(name, self.view)
+    }
+
+    /// every table this transaction sees
+    pub fn tables(&self) -> Vec<Arc<Table>> {
+        self.inner.visible_tables(self.view)
+    }
+
+    pub fn create_table(&mut self, name: &str, schema: Schema) -> Result<Arc<Table>> {
+        self.check()?;
+
+        let created = self.inner.create_table(name, schema, self.view, self.level);
+        let table = self.guard(created)?;
+        let ddl = Ddl::CreateTable {
+            table: table.id,
+            name: name.into(),
+            schema: table.schema.clone(),
+        };
+        self.ddl.push((ddl, Arc::clone(&table)));
+
+        Ok(table)
+    }
+
+    pub fn drop_table(&mut self, name: &str) -> Result<()> {
+        self.check()?;
+
+        let dropped = self.inner.drop_table(name, self.view, self.level);
+        let table = self.guard(dropped)?;
+        self.ddl.push((Ddl::DropTable { table: table.id }, table));
+
+        Ok(())
+    }
+
+    /// a view of the newest committed state with this transaction's writes, for foreign-key checks
+    /// registered so the commits after it stay summarised until this transaction ends
+    pub fn constraint_view(&mut self) -> View {
+        let mut commits = self.inner.commits();
+        let snapshot = self.inner.clock.visible();
+        *commits.serializable.entry(snapshot).or_default() += 1;
+        self.validating.push(snapshot);
+
+        View { snapshot, marker: self.view.marker }
+    }
+
+    /// whether a row of `table` holds `key` in `column` under `view`
+    /// that row must still hold it when this transaction commits
+    pub fn referenced(
+        &mut self,
+        view: View,
+        table: &Arc<Table>,
+        column: usize,
+        key: &Value,
+    ) -> bool {
+        self.guard_key(view, table, column, key, true);
+        !self.holding(view, table, column, key).is_empty()
+    }
+
+    /// the rows of `table` holding `key` in `column` under `view`
+    /// no other row may come to hold it before this transaction commits
+    pub fn referencing(
+        &mut self,
+        view: View,
+        table: &Arc<Table>,
+        column: usize,
+        key: &Value,
+    ) -> Vec<(RowId, Row)> {
+        self.guard_key(view, table, column, key, false);
+        self.holding(view, table, column, key)
+    }
+
+    fn guard_key(&mut self, view: View, table: &Table, column: usize, key: &Value, present: bool) {
+        let guard = Guard {
+            snapshot: view.snapshot,
+            table: table.id,
+            column,
+            key: key.clone(),
+            present,
+        };
+        self.guards.push(guard);
+    }
+
+    fn holding(
+        &self,
+        view: View,
+        table: &Arc<Table>,
+        column: usize,
+        key: &Value,
+    ) -> Vec<(RowId, Row)> {
+        let mut rows = Vec::new();
+        match table.index_on(column) {
+            Some(index) => {
+                IndexProbe { table: Arc::clone(table), index, view }.find(key, &mut rows)
+            },
+            _ => {
+                let mut scan = table.scan(view);
+                while scan.next_batch(&mut rows) {}
+                rows.retain(|(_, row)| row[column] == *key);
+            },
+        }
+        rows
+    }
+
+    pub fn savepoint(&mut self, name: &str) -> Result<()> {
+        self.check()?;
+
+        Ok(self.savepoints.push(Savepoint {
+            name: name.to_string(),
+            writes: self.writes.len(),
+            keys: self.keys.len(),
+            ddl: self.ddl.len(),
+            tables: self.tables.len(),
+            overwritten: HashMap::default(),
+        }))
+    }
+
+    /// undoes everything since the newest savepoint called `name`, which stays open, and revives a
+    /// doomed transaction
+    pub fn rollback_to(&mut self, name: &str) -> Result<()> {
+        let position = self
+            .savepoints
+            .iter()
+            .rposition(|savepoint| savepoint.name == name)
+            .ok_or_else(|| EngineError::NoSavepoint(name.to_string()))?;
+        self.savepoints.truncate(position + 1);
+
+        let savepoint = self.savepoints.last_mut().expect("savepoint just found");
+        let overwritten = std::mem::take(&mut savepoint.overwritten);
+        let (writes, keys, ddl, tables) =
+            (savepoint.writes, savepoint.keys, savepoint.ddl, savepoint.tables);
+        let marker = self.view.marker;
+
+        self.writes[writes..]
+            .iter()
+            .for_each(|write| write.table.unlink(write.id, marker));
+        for (position, after) in overwritten {
+            let write = &mut self.writes[position];
+            write.table.restore(write.id, marker, after.clone());
+            write.after = after;
+        }
+
+        for (write, index, key) in self.keys.drain(keys..) {
+            let Write { table, id, .. } = &self.writes[write];
+            index.remove_if(&key, *id, || !table.carries(*id, index.column, &key));
+        }
+
+        self.undo_ddl(ddl);
+        for write in self.writes.drain(writes..) {
+            self.written.remove(&(write.table.id, write.id));
+        }
+        self.tables.truncate(tables);
+        Ok(self.state = State::Active)
+    }
+
+    /// closes the newest savepoint called `name` and every later one, keeping their changes
+    pub fn release(&mut self, name: &str) -> Result<()> {
+        self.check()?;
+
+        let position = self
+            .savepoints
+            .iter()
+            .rposition(|savepoint| savepoint.name == name)
+            .ok_or_else(|| EngineError::NoSavepoint(name.to_string()))?;
+
+        Ok(self.savepoints.truncate(position))
+    }
+
+    /// registers the index at once, so concurrent writers maintain it, then back-fills the key of every version
+    /// a unique index is refused when two rows' newest versions share a key
+    pub fn create_index(
+        &mut self,
+        name: &str,
+        table: &str,
+        column: &str,
+        unique: bool,
+    ) -> Result<()> {
+        self.check()?;
+
+        let created = self.index_table(name, table, column, unique);
+        let (table, column) = self.guard(created)?;
+        let ddl = Ddl::CreateIndex { table: table.id, column, unique, name: name.into() };
+
+        Ok(self.ddl.push((ddl, table)))
     }
 
     pub fn insert(&mut self, table: &Arc<Table>, row: Row) -> Result<RowId> {
@@ -175,19 +408,15 @@ impl Transaction {
         table.scan(self.view)
     }
 
-    /// a handle for point look-ups into `index` under this transaction's view, for index
-    /// nested-loop joins
+    /// a handle for point look-ups into `index` under this transaction's view, for index nested-loop joins
     /// its keys are not known up front, so SERIALIZABLE records a read of the whole table
     pub fn index_probe(&mut self, table: &Arc<Table>, index: &Arc<Index>) -> IndexProbe {
         if let Some(reads) = self.reads_of(table) {
             reads.all = true;
         }
 
-        IndexProbe {
-            table: Arc::clone(table),
-            index: Arc::clone(index),
-            view: self.view,
-        }
+        let (table, index) = (Arc::clone(table), Arc::clone(index));
+        IndexProbe { table, index, view: self.view }
     }
 
     /// a cursor over every visible row in `index` order, resolved a batch at a time
@@ -274,28 +503,31 @@ impl Transaction {
             State::Active => {},
         }
 
-        if self.writes.is_empty() {
+        if self.writes.is_empty() && self.ddl.is_empty() {
             self.finish();
             return Ok(());
         }
 
-        if let Some(write) = self.writes.iter().find(|write| write.table.is_dropped()) {
-            let name = write.table.name().to_string();
-            self.abort();
-            return Err(EngineError::TableNotFound(name));
-        }
-
         // PERFORMANCE: encoded before the critical section, only the timestamp is patched in it
-        let mut payload = self.inner.log.as_ref().map(|_| record::encode_commit(&self.writes));
+        let mut payload = self
+            .inner
+            .log
+            .as_ref()
+            .map(|_| record::encode_commit(self.ddl.iter().map(|(ddl, _)| ddl), &self.writes));
 
-        let (summary, end) = {
+        let (summary, ticket) = {
             let mut commits = self.inner.commits();
 
-            let failure = match &self.reads {
-                _ if self.inner.log.as_ref().is_some_and(Log::is_poisoned) => {
-                    Some(EngineError::Poisoned)
+            // under the commit lock, ordered with `DROP TABLE` (which marks inside it)
+            let dropped = self.tables.iter().find(|table| table.is_dropped());
+            let poisoned = self.inner.log.as_ref().and_then(Log::poisoned);
+            let failure = match (poisoned, &self.reads, dropped) {
+                (Some(poisoned), _, _) => Some(poisoned),
+                (_, _, Some(table)) => Some(EngineError::TableNotFound(table.name().to_string())),
+                (_, Some(reads), _) if invalidated(reads, &commits.recent, self.view.snapshot) => {
+                    Some(EngineError::SerializationFailure)
                 },
-                Some(reads) if invalidated(reads, &commits.recent, self.view.snapshot) => {
+                _ if broken(&self.guards, &commits.recent) => {
                     Some(EngineError::SerializationFailure)
                 },
                 _ => None,
@@ -308,7 +540,8 @@ impl Transaction {
             }
 
             commits.last += 1;
-            let end = match (&self.inner.log, &mut payload) {
+            self.stamp_ddl(commits.last);
+            let ticket = match (&self.inner.log, &mut payload) {
                 (Some(log), Some(payload)) => {
                     record::stamp_timestamp(payload, commits.last);
                     Some(log.append(Kind::Commit, payload))
@@ -322,14 +555,25 @@ impl Transaction {
             commits.recent.push_back(Arc::clone(&summary));
             commits.trim(self.inner.clock.visible());
 
-            (summary, end)
+            (summary, ticket)
         };
 
-        if let (Some(log), Some(end)) = (&self.inner.log, end) {
-            if let Err(error) = log.wait(end) {
-                // the engine is poisoned: nothing is published again, the versions stay flagged
-                self.finish();
-                return Err(error);
+        if let (Some(log), Some(ticket)) = (&self.inner.log, ticket) {
+            match log.wait(ticket) {
+                Ok(_) => {},
+                // nothing is published again, the versions stay flagged
+                Err(Unlogged::Poisoned(error)) => {
+                    self.finish();
+                    return Err(error);
+                },
+                // visibility advances over a gap-free prefix of timestamps: this one becomes
+                // visible as an empty commit
+                Err(Unlogged::Discarded { error, to }) => {
+                    self.inner.commits().recent.retain(|recent| recent.ts != summary.ts);
+                    self.undo(&summary.writes);
+                    self.inner.clock.publish(summary.ts, to);
+                    return Err(error);
+                },
             }
         }
 
@@ -337,10 +581,11 @@ impl Transaction {
             write.table.stamp(write.id, self.view.marker, summary.ts);
         }
 
-        self.inner.clock.publish(summary.ts, end.unwrap_or(0));
-        self.finish();
-
-        Ok(())
+        self.inner.clock.publish(summary.ts, ticket.map_or(0, |ticket| ticket.end));
+        if !self.ddl.is_empty() {
+            self.inner.epoch.fetch_add(1, Ordering::Release);
+        }
+        Ok(self.finish())
     }
 
     pub fn rollback(mut self) {
@@ -390,10 +635,18 @@ impl Transaction {
     ) -> usize {
         match self.written.get(&(table.id, id)) {
             Some(&write) => {
-                self.writes[write].after = after;
+                let previous = std::mem::replace(&mut self.writes[write].after, after);
+                for savepoint in
+                    self.savepoints.iter_mut().filter(|savepoint| write < savepoint.writes)
+                {
+                    savepoint.overwritten.entry(write).or_insert_with(|| previous.clone());
+                }
                 write
             },
             _ => {
+                if self.tables.iter().all(|written| written.id != table.id) {
+                    self.tables.push(Arc::clone(table));
+                }
                 let write = Write { table: Arc::clone(table), id, before: previous, after };
                 self.writes.push(write);
                 self.written.insert((table.id, id), self.writes.len() - 1);
@@ -433,6 +686,62 @@ impl Transaction {
     }
 
     #[inline]
+    fn index_table(
+        &self,
+        name: &str,
+        table: &str,
+        column: &str,
+        unique: bool,
+    ) -> Result<(Arc<Table>, usize)> {
+        let table = self.table(table)?;
+        let column = table
+            .schema
+            .columns
+            .iter()
+            .position(|c| c.name() == column)
+            .ok_or_else(|| EngineError::ColumnNotFound(column.to_string()))?;
+
+        let index = Arc::new(Index::new(name, column, unique));
+        index.stamp_created(self.view.marker);
+        if !table.try_add_index(Arc::clone(&index)) {
+            return Err(EngineError::IndexExists(name.to_string()));
+        }
+        table.for_each_version(|id, row| index.insert_unchecked(row[column].clone(), id));
+
+        match unique.then(|| duplicated_key(&table, &index)).flatten() {
+            Some(key) => {
+                table.remove_index(name);
+                Err(EngineError::DuplicatedKey(key))
+            },
+            _ => Ok((table, column)),
+        }
+    }
+
+    /// stamps the catalogue changes with the commit timestamp, inside the commit critical
+    /// section: a commit ordered after a drop sees it (R1)
+    fn stamp_ddl(&self, ts: u64) {
+        for (ddl, table) in &self.ddl {
+            match ddl {
+                Ddl::CreateTable { .. } => table.stamp_created(ts),
+                Ddl::DropTable { .. } => table.stamp_dropped(ts),
+                Ddl::CreateIndex { name, .. } => {
+                    table.index(name).expect("created index is registered").stamp_created(ts);
+                },
+            }
+        }
+    }
+
+    /// reverts the catalogue changes from the `from`-th on, newest first
+    fn undo_ddl(&mut self, from: usize) {
+        for (ddl, table) in self.ddl.drain(from..).rev() {
+            match ddl {
+                Ddl::CreateTable { .. } => self.inner.forget_table(&table),
+                Ddl::DropTable { .. } => table.stamp_dropped(0),
+                Ddl::CreateIndex { name, .. } => table.remove_index(&name),
+            }
+        }
+    }
+
     fn reads_of(&mut self, table: &Table) -> Option<&mut Reads> {
         self.reads.as_mut().map(|reads| reads.entry(table.id).or_default())
     }
@@ -447,7 +756,8 @@ impl Transaction {
 
     #[inline]
     fn guard<T>(&mut self, result: Result<T>) -> Result<T> {
-        if result.is_err() {
+        // a stale row changed nothing: the statement re-checks it or skips it
+        if result.as_ref().is_err_and(|error| !matches!(error, EngineError::Stale(_))) {
             self.state = State::Doomed;
         }
 
@@ -455,29 +765,38 @@ impl Transaction {
     }
 
     fn abort(&mut self) {
-        self.writes
-            .iter()
-            .for_each(|write| write.table.unlink(write.id, self.view.marker));
+        let writes = std::mem::take(&mut self.writes);
+        self.undo(&writes);
+    }
+
+    /// removes `writes` (this transaction's, in order), the index entries they added and the
+    /// catalogue changes, then finishes
+    fn undo(&mut self, writes: &[Write]) {
+        writes.iter().for_each(|write| write.table.unlink(write.id, self.view.marker));
 
         self.keys.drain(..).for_each(|(write, index, key)| {
-            let Write { table, id, .. } = &self.writes[write];
+            let Write { table, id, .. } = &writes[write];
             index.remove_if(&key, *id, || !table.carries(*id, index.column, &key));
         });
 
+        self.undo_ddl(0);
         self.finish();
     }
 
     fn finish(&mut self) {
-        if self.reads.is_some() {
+        let serializable = self.reads.is_some().then_some(self.view.snapshot);
+        if serializable.is_some() || !self.validating.is_empty() {
             let mut commits = self.inner.commits();
-            let count = commits
-                .serializable
-                .get_mut(&self.view.snapshot)
-                .expect("serializable snapshot registered at begin");
+            for snapshot in serializable.into_iter().chain(self.validating.drain(..)) {
+                let count = commits
+                    .serializable
+                    .get_mut(&snapshot)
+                    .expect("validating snapshot registered");
 
-            *count -= 1;
-            if *count == 0 {
-                commits.serializable.remove(&self.view.snapshot);
+                *count -= 1;
+                if *count == 0 {
+                    commits.serializable.remove(&snapshot);
+                }
             }
         }
 
@@ -609,6 +928,24 @@ impl Drop for Transaction {
 }
 
 /// whether a commit after `snapshot` wrote something the predicates in `reads` cover
+/// whether a commit after a guard's snapshot removed a key it needs present, or added one it needs
+/// absent
+fn broken(guards: &[Guard], recent: &VecDeque<Arc<Summary>>) -> bool {
+    guards.iter().any(|guard| {
+        let holds =
+            |row: &Option<Row>| row.as_ref().is_some_and(|row| row[guard.column] == guard.key);
+        recent
+            .iter()
+            .filter(|summary| summary.ts > guard.snapshot)
+            .flat_map(|summary| &summary.writes)
+            .filter(|write| write.table.id == guard.table)
+            .any(|write| match guard.present {
+                true => holds(&write.before) && !holds(&write.after),
+                _ => holds(&write.after),
+            })
+    })
+}
+
 fn invalidated(
     reads: &HashMap<u32, Reads>,
     recent: &VecDeque<Arc<Summary>>,

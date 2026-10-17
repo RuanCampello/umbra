@@ -12,11 +12,15 @@ use crate::storage::engine::{
 use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) struct Index {
     pub name: String,
     pub column: usize,
     pub unique: bool,
+    /// Stamp of the transaction that created the index, as on a version (0 for recovered ones);
+    /// only checkpoints read it: any registered index serves every reader
+    created: AtomicU64,
     entries: RwLock<BTreeSet<(Value, RowId)>>,
 }
 
@@ -36,8 +40,18 @@ impl Index {
             name: name.into(),
             column,
             unique,
+            created: AtomicU64::new(0),
             entries: RwLock::new(BTreeSet::new()),
         }
+    }
+
+    #[inline]
+    pub fn created(&self) -> u64 {
+        self.created.load(Ordering::Acquire)
+    }
+
+    pub fn stamp_created(&self, stamp: u64) {
+        self.created.store(stamp, Ordering::Release);
     }
 
     /// adds `(key, id)`, a unique index first asks `holder` about every other row under `key`

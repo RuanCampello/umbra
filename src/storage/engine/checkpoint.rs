@@ -37,7 +37,7 @@
 
 use crate::core::crc32c::{crc32c, crc32c_append};
 use crate::db::Schema;
-use crate::storage::engine::table::{Row, RowId, Table};
+use crate::storage::engine::table::{Row, RowId, Table, View};
 use crate::storage::engine::{
     chunk::CHUNK_SIZE,
     codec::{Cursor, Stream, put_blob, put_row, put_string},
@@ -131,7 +131,10 @@ pub(crate) fn write_image(
     buf.extend_from_slice(&table.id.to_le_bytes());
     put_blob(&mut buf, &table.schema.encode(table.name()));
 
-    let indexes = table.indexes();
+    // an index whose creator had not committed by `ts` is not part of the image
+    let pinned = View { snapshot: ts, marker: 0 };
+    let mut indexes = table.indexes();
+    indexes.retain(|index| pinned.sees(index.created()));
     buf.extend_from_slice(&(indexes.len() as u16).to_le_bytes());
     for index in &indexes {
         buf.extend_from_slice(&(index.column as u16).to_le_bytes());

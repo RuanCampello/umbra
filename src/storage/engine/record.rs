@@ -1,12 +1,13 @@
 //! Payloads of log frames
 //!
 //! ```text
-//! Commit = ts u64 | count u32 | (table u32 | row id i64 | op u8 | row if op ≠ delete)*
-//! Ddl    = ts u64 | op u8 | body
-//!          create table: table u32 | schema blob
-//!          drop table:   table u32
-//!          create index: table u32 | column u16 | unique u8 | name
+//! Commit = ts u64 | ddl count u16 | ddl* | count u32 | (table u32 | row id i64 | op u8 | row if op ≠ delete)*
+//! ddl    = create table: 1 u8 | table u32 | schema blob
+//!          drop table:   2 u8 | table u32
+//!          create index: 3 u8 | table u32 | column u16 | unique u8 | name
 //! ```
+//!
+//! A transaction's catalogue changes precede its row writes, in the order they ran
 
 use crate::db::Schema;
 use crate::storage::engine::codec::{Cursor, put_blob, put_row, put_string};
@@ -25,6 +26,13 @@ pub(crate) enum Ddl {
     CreateIndex { table: u32, column: usize, unique: bool, name: String },
 }
 
+/// A decoded commit whose row writes are still to be read, once its DDL is applied
+pub(crate) struct Commit<'a> {
+    pub ts: u64,
+    pub ddl: Vec<Ddl>,
+    writes: Cursor<'a>,
+}
+
 const INSERT: u8 = 1;
 const UPDATE: u8 = 2;
 const DELETE: u8 = 3;
@@ -33,12 +41,19 @@ const CREATE_TABLE: u8 = 1;
 const DROP_TABLE: u8 = 2;
 const CREATE_INDEX: u8 = 3;
 
-/// encodes a write set with a zero timestamp, set later by [stamp_timestamp]
-pub(crate) fn encode_commit(writes: &[Write]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(12 + writes.len() * 32);
+/// encodes a transaction's catalogue changes and write set with a zero timestamp, set later by
+/// [stamp_timestamp]
+pub(crate) fn encode_commit<'a>(
+    ddl: impl ExactSizeIterator<Item = &'a Ddl>,
+    writes: &[Write],
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(14 + writes.len() * 32);
     buf.extend_from_slice(&0u64.to_le_bytes());
-    buf.extend_from_slice(&(writes.len() as u32).to_le_bytes());
 
+    buf.extend_from_slice(&(ddl.len() as u16).to_le_bytes());
+    ddl.for_each(|ddl| encode_ddl(&mut buf, ddl));
+
+    buf.extend_from_slice(&(writes.len() as u32).to_le_bytes());
     for write in writes {
         buf.extend_from_slice(&write.table.id.to_le_bytes());
         buf.extend_from_slice(&write.id.to_le_bytes());
@@ -59,14 +74,50 @@ pub(crate) fn encode_commit(writes: &[Write]) -> Vec<u8> {
     buf
 }
 
-pub(crate) fn encode_ddl(ddl: &Ddl) -> Vec<u8> {
-    let mut buf = 0u64.to_le_bytes().to_vec();
+/// writes the commit timestamp into an encoded payload
+#[inline]
+pub(crate) fn stamp_timestamp(payload: &mut [u8], ts: u64) {
+    payload[..8].copy_from_slice(&ts.to_le_bytes());
+}
 
+/// decodes a commit's timestamp and catalogue changes
+pub(crate) fn decode_commit(payload: &[u8]) -> Result<Commit<'_>> {
+    let mut cursor = Cursor::new(payload, "commit record");
+    let ts = cursor.u64()?;
+    let ddl = (0..cursor.u16()?).map(|_| decode_ddl(&mut cursor)).collect::<Result<_>>()?;
+
+    Ok(Commit { ts, ddl, writes: cursor })
+}
+
+impl Commit<'_> {
+    /// hands every row write to `apply`, in record order
+    pub fn writes(mut self, mut apply: impl FnMut(u32, RowId, Change) -> Result<()>) -> Result<()> {
+        let cursor = &mut self.writes;
+        for _ in 0..cursor.u32()? {
+            let table = cursor.u32()?;
+            let id = cursor.i64()?;
+            let change = match cursor.u8()? {
+                INSERT | UPDATE => Change::Put(cursor.row()?),
+                DELETE => Change::Delete,
+                _ => return Err(cursor.corrupt("unknown change")),
+            };
+
+            apply(table, id, change)?;
+        }
+
+        match cursor.is_empty() {
+            true => Ok(()),
+            _ => Err(cursor.corrupt("trailing bytes")),
+        }
+    }
+}
+
+fn encode_ddl(buf: &mut Vec<u8>, ddl: &Ddl) {
     match ddl {
         Ddl::CreateTable { table, name, schema } => {
             buf.push(CREATE_TABLE);
             buf.extend_from_slice(&table.to_le_bytes());
-            put_blob(&mut buf, &schema.encode(name));
+            put_blob(buf, &schema.encode(name));
         },
         Ddl::DropTable { table } => {
             buf.push(DROP_TABLE);
@@ -77,51 +128,13 @@ pub(crate) fn encode_ddl(ddl: &Ddl) -> Vec<u8> {
             buf.extend_from_slice(&table.to_le_bytes());
             buf.extend_from_slice(&(*column as u16).to_le_bytes());
             buf.push(*unique as u8);
-            put_string(&mut buf, name);
+            put_string(buf, name);
         },
     }
-
-    buf
 }
 
-/// writes the commit timestamp into an encoded payload
-#[inline]
-pub(crate) fn stamp_timestamp(payload: &mut [u8], ts: u64) {
-    payload[..8].copy_from_slice(&ts.to_le_bytes());
-}
-
-/// decodes a commit, handing every change and the commit timestamp to `apply`
-/// returns the timestamp
-pub(crate) fn decode_commit(
-    payload: &[u8],
-    mut apply: impl FnMut(u64, u32, RowId, Change) -> Result<()>,
-) -> Result<u64> {
-    let mut cursor = Cursor::new(payload, "commit record");
-    let ts = cursor.u64()?;
-
-    for _ in 0..cursor.u32()? {
-        let table = cursor.u32()?;
-        let id = cursor.i64()?;
-        let change = match cursor.u8()? {
-            INSERT | UPDATE => Change::Put(cursor.row()?),
-            DELETE => Change::Delete,
-            _ => return Err(cursor.corrupt("unknown change")),
-        };
-
-        apply(ts, table, id, change)?;
-    }
-
-    match cursor.is_empty() {
-        true => Ok(ts),
-        false => Err(cursor.corrupt("trailing bytes")),
-    }
-}
-
-pub(crate) fn decode_ddl(payload: &[u8]) -> Result<(u64, Ddl)> {
-    let mut cursor = Cursor::new(payload, "ddl record");
-    let ts = cursor.u64()?;
-
-    let ddl = match cursor.u8()? {
+fn decode_ddl(cursor: &mut Cursor) -> Result<Ddl> {
+    Ok(match cursor.u8()? {
         CREATE_TABLE => {
             let table = cursor.u32()?;
             let (name, schema) = Schema::decode(cursor.blob()?).map_err(|error| {
@@ -137,7 +150,5 @@ pub(crate) fn decode_ddl(payload: &[u8]) -> Result<(u64, Ddl)> {
             name: cursor.string()?,
         },
         _ => return Err(cursor.corrupt("unknown ddl")),
-    };
-
-    Ok((ts, ddl))
+    })
 }

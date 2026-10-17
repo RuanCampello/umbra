@@ -17,7 +17,7 @@ use crate::storage::engine::{
 };
 use std::sync::{
     Arc, Mutex, RwLock,
-    atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
+    atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering},
 };
 
 pub(crate) struct Table {
@@ -36,7 +36,11 @@ pub(crate) struct Table {
     /// `freed` mirrors its length so tables that never delete skip the lock
     free: Mutex<Vec<RowId>>,
     freed: AtomicUsize,
-    dropped: AtomicBool,
+    /// Stamp of the transaction that created the table, as on a version: its marker until it commits
+    /// 0 for tables every snapshot sees (recovered ones)
+    created: AtomicU64,
+    /// Stamp of the transaction that dropped it, 0 while none did
+    dropped: AtomicU64,
     /// Where evicted chunks go
     /// `None` for in-memory engines or without a memory budget
     cold: Option<Arc<Cold>>,
@@ -101,7 +105,8 @@ impl Table {
             serials,
             free: Mutex::new(Vec::new()),
             freed: AtomicUsize::new(0),
-            dropped: AtomicBool::new(false),
+            created: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
             cold,
         }
     }
@@ -140,6 +145,16 @@ impl Table {
         self.indexes.write().expect("index list poisoned").push(index);
     }
 
+    /// registers `index` unless one of its name exists, under one write of the index list
+    pub fn try_add_index(&self, index: Arc<Index>) -> bool {
+        let mut indexes = self.indexes.write().expect("index list poisoned");
+        let vacant = indexes.iter().all(|existing| existing.name != index.name);
+        if vacant {
+            indexes.push(index);
+        }
+        vacant
+    }
+
     pub fn remove_index(&self, name: &str) {
         self.indexes
             .write()
@@ -147,13 +162,37 @@ impl Table {
             .retain(|index| index.name != name);
     }
 
-    pub fn mark_dropped(&self) {
-        self.dropped.store(true, Ordering::Release);
+    #[inline]
+    pub fn created(&self) -> u64 {
+        self.created.load(Ordering::Acquire)
     }
 
     #[inline]
-    pub fn is_dropped(&self) -> bool {
+    pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Acquire)
+    }
+
+    pub fn stamp_created(&self, stamp: u64) {
+        self.created.store(stamp, Ordering::Release);
+    }
+
+    /// `stamp` is a marker when a transaction drops the table, its timestamp at commit, 0 to undo
+    pub fn stamp_dropped(&self, stamp: u64) {
+        self.dropped.store(stamp, Ordering::Release);
+    }
+
+    /// whether a committed transaction dropped the table
+    #[inline]
+    pub fn is_dropped(&self) -> bool {
+        let dropped = self.dropped();
+        dropped != 0 && dropped & TXN_FLAG == 0
+    }
+
+    /// whether `view` sees the table: its creation and not its drop
+    #[inline]
+    pub fn visible_to(&self, view: View) -> bool {
+        let dropped = self.dropped();
+        view.sees(self.created()) && (dropped == 0 || !view.sees(dropped))
     }
 
     pub fn next_serial(&self, column: usize) -> i64 {
@@ -347,6 +386,16 @@ impl Table {
         let head = slots[slot(id)].last_mut().expect("stamped row has versions");
         assert_eq!(head.stamp, marker, "row {id} is not owned by the committer");
         head.stamp = ts;
+    }
+
+    /// sets the row of the owner's uncommitted version (rolling back to a savepoint)
+    pub fn restore(&self, id: RowId, marker: u64, row: Option<Row>) {
+        let chunk = self.chunk(id).expect("restored row exists");
+        let mut slots = chunk.write();
+
+        let head = slots[slot(id)].last_mut().expect("restored row has versions");
+        assert_eq!(head.stamp, marker, "row {id} is not owned by the restorer");
+        head.row = row;
     }
 
     /// removes the owner's uncommitted version, if still there
