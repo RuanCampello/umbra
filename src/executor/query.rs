@@ -241,7 +241,7 @@ impl Executor {
             // an indexed right key turns the join into per-row index probes (INNER/LEFT only: RIGHT/FULL must also emit the right rows nothing probed)
             let equi = equi_join_positions(&join.on, &schema, left_width);
             let probed = equi.filter(|_| !outer_right).and_then(|(left_key, right_key)| {
-                let table = self.engine.table(right_table).ok()?;
+                let table = self.table(right_table).ok()?;
                 let index = table.index_on(right_positions[right_key])?;
                 Some((left_key, table, index))
             });
@@ -272,7 +272,7 @@ impl Executor {
                     )?
                 },
                 None => {
-                    let table = self.engine.table(right_table)?;
+                    let table = self.table(right_table)?;
                     Box::new(Scan::new(txn.scan(&table), Some(right_positions)))
                 },
             };
@@ -415,8 +415,8 @@ impl Executor {
                 _ => return Ok(()),
             };
 
-        let base = self.engine.table(&select.from.name)?;
-        let joined = self.engine.table(&join.table.name)?;
+        let base = self.table(&select.from.name)?;
+        let joined = self.table(&join.table.name)?;
         let on_primary_key = base
             .schema
             .primary_column_index()
@@ -445,7 +445,7 @@ impl Executor {
             return Ok(None);
         };
 
-        let engine_schema = self.engine.table(&select.from.name)?.schema.clone();
+        let engine_schema = self.table(&select.from.name)?.schema.clone();
         let mut indices = Vec::with_capacity(names.len());
         for read in &names {
             let found: Vec<usize> =
@@ -482,7 +482,7 @@ impl Executor {
             return Ok(None);
         };
 
-        let table = self.engine.table(&select.from.name)?;
+        let table = self.table(&select.from.name)?;
         let Some(column) = table.schema.columns.iter().position(|c| c.name() == name.as_str())
         else {
             return Ok(None);
@@ -502,7 +502,7 @@ impl Executor {
             return Ok(None);
         };
 
-        let table = self.engine.table(&select.from.name)?;
+        let table = self.table(&select.from.name)?;
         let index = table.index_on(column).expect("ordered column is indexed");
         let descending = select.order_by[0].direction == OrderDirection::Desc;
 
@@ -544,7 +544,7 @@ impl Executor {
             .map(|expr| dealias(expr, &select.columns).clone())
             .collect();
 
-        let base = self.engine.table(&select.from.name)?.schema.clone();
+        let base = self.table(&select.from.name)?.schema.clone();
         let primary = base.primary_column_index();
         // where the base table's columns and primary key sit in `schema`
         let (base_width, primary) = match &projection {
@@ -689,7 +689,7 @@ impl Executor {
         projection: Option<&[usize]>,
     ) -> Result<Box<dyn Operator>, DatabaseError> {
         let projection = projection.map(<[usize]>::to_vec);
-        let table = self.engine.table(table)?;
+        let table = self.table(table)?;
         let cursors = match predicate {
             Some(predicate) => self.index_cursors(txn, &table, predicate)?,
             _ => None,
@@ -783,7 +783,7 @@ impl Executor {
         for join in &select.joins {
             use crate::sql::statement::JoinType;
 
-            let right = self.engine.table(&join.table.name)?;
+            let right = self.table(&join.table.name)?;
             let probes_index = |expr: &Expression| match expr {
                 Expression::QualifiedIdentifier { table, column } if table == join.table.key() => {
                     right
@@ -862,7 +862,7 @@ impl Executor {
             return Ok(format!("SeqScan on {table}"));
         };
 
-        let table_handle = self.engine.table(table)?;
+        let table_handle = self.table(table)?;
         let indexed = table_handle
             .schema
             .columns
@@ -938,7 +938,7 @@ impl Executor {
     /// resolves the old `Schema` (column list) for a table from the engine's
     /// stored schema, with `row_id` prepended to match [operator::Scan] tuples
     pub(crate) fn resolve_schema(&self, table: &str) -> Result<Schema, DatabaseError> {
-        Ok(self.engine.table(table)?.scanned.clone())
+        Ok(self.table(table)?.scanned.clone())
     }
 }
 

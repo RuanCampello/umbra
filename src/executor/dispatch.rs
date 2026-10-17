@@ -4,8 +4,8 @@
 //! DDL -> [`ddl`](super::ddl), DML -> [`dml`](super::dml),
 //! Query -> [`query`](super::query)
 
-use super::Executor;
 use super::dml::Target;
+use super::{Executor, ddl};
 use crate::db::{Column, DatabaseError, Schema, SqlError};
 use crate::executor::Tuple;
 use crate::sql::Value;
@@ -30,14 +30,19 @@ impl Executor {
     /// (or rolled back on error)
     ///
     /// Once a statement fails inside an explicit transaction, the
-    /// transaction is aborted: everything except `COMMIT`/`ROLLBACK`
-    /// (both of which roll back) is rejected until the block ends
+    /// transaction is aborted: everything except `COMMIT`/`ROLLBACK` and `ROLLBACK TO SAVEPOINT`
+    /// is rejected until the block ends
     pub fn execute(&mut self, stmt: Statement) -> Result<ExecResult, DatabaseError> {
         if self.aborted {
             return match stmt {
                 Statement::Commit | Statement::Rollback => {
                     self.aborted = false;
                     self.rollback()?;
+                    Ok(ExecResult::Ok)
+                }
+                Statement::RollbackTo(name) => {
+                    self.block()?.rollback_to(&name)?;
+                    self.aborted = false;
                     Ok(ExecResult::Ok)
                 }
                 _ => Err(DatabaseError::Other(
@@ -82,8 +87,23 @@ impl Executor {
                 Ok(ExecResult::Ok)
             },
 
+            Statement::Savepoint(name) => {
+                self.block()?.savepoint(&name)?;
+                Ok(ExecResult::Ok)
+            },
+
+            Statement::RollbackTo(name) => {
+                self.block()?.rollback_to(&name)?;
+                Ok(ExecResult::Ok)
+            },
+
+            Statement::Release(name) => {
+                self.block()?.release(&name)?;
+                Ok(ExecResult::Ok)
+            },
+
             Statement::Create(Create::Table { name, columns }) => {
-                self.create_table(&name, Schema::from_definition(&columns))?;
+                self.create_table(&name, ddl::table_schema(&columns)?)?;
                 Ok(ExecResult::Affected(0))
             },
 
@@ -93,7 +113,7 @@ impl Executor {
             },
 
             Statement::Create(Create::Index { name, table, column, unique }) => {
-                self.engine.create_index(&name, &table, &column, unique)?;
+                self.create_index(&name, &table, &column, unique)?;
                 Ok(ExecResult::Affected(0))
             },
 

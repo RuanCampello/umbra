@@ -6,13 +6,14 @@
 
 use super::operator::Operator;
 use super::{Executor, Tuple};
-use crate::db::{Column, DatabaseError, Schema, SqlError};
+use crate::db::{Column, DatabaseError, ForeignKey, Schema, SqlError};
 use crate::sql::Value;
-use crate::sql::statement::{Expression, Type};
+use crate::sql::statement::{Expression, OnDelete, Type};
 use crate::storage::engine::error::EngineError;
-use crate::storage::engine::table::{Row, RowId, Table};
+use crate::storage::engine::table::{Row, RowId, Table, View};
 use crate::storage::engine::transaction::Transaction;
-use crate::vm::expression::{evaluate_where, resolve_expression};
+use crate::vm::expression::{bind, evaluate_where, resolve_expression};
+use std::sync::Arc;
 
 /// the rows a DML statement targets: its table, its `WHERE` clause and the row-id-first schema
 /// the clause is evaluated against
@@ -22,9 +23,26 @@ pub(crate) struct Target<'a> {
     pub schema: &'a Schema,
 }
 
+/// A foreign key resolved for one statement: rows of `referring` hold in `column` a value of
+/// `referenced`'s column `key`
+struct Reference {
+    referring: Arc<Table>,
+    column: usize,
+    referenced: Arc<Table>,
+    key: usize,
+    on_delete: OnDelete,
+}
+
+/// The foreign keys a statement must keep: those its table holds and those referring to it, with the view their checks read
+struct Integrity {
+    held: Vec<Reference>,
+    referring: Vec<Reference>,
+    view: Option<View>,
+}
+
 impl Executor {
-    /// inserts all tuples from a `values` batch into `table`; with `collect`, returns the typed
-    /// tuples written, row id first
+    /// inserts all tuples from a `values` batch into `table`
+    /// with `collect`, returns the typed tuples written, row id first
     pub fn insert(
         &self,
         txn: &mut Transaction,
@@ -32,7 +50,9 @@ impl Executor {
         values: Vec<Tuple>,
         collect: bool,
     ) -> Result<(usize, Vec<Tuple>), DatabaseError> {
-        let table = self.engine.table(table)?;
+        let table = self.table(table)?;
+        let checks = bound_checks(&table);
+        let integrity = self.integrity(txn, &table, false)?;
         let mut count = 0;
         let mut written = Vec::new();
 
@@ -45,8 +65,11 @@ impl Executor {
             for (column, value) in table.schema.columns.iter().zip(tuple.iter_mut()) {
                 coerce_value(column, value)?;
             }
+            check(&table, &checks, &tuple)?;
 
-            let row_id = txn.insert(&table, tuple.into())?;
+            let row: Row = tuple.into();
+            let row_id = txn.insert(&table, Arc::clone(&row))?;
+            integrity.hold(txn, None, &row)?;
             count += 1;
 
             if collect {
@@ -68,22 +91,23 @@ impl Executor {
         target: &Target<'_>,
         source: &mut dyn Operator,
     ) -> Result<usize, DatabaseError> {
-        let table = self.engine.table(target.table)?;
+        let table = self.table(target.table)?;
+        let integrity = self.integrity(txn, &table, true)?;
         let mut count = 0;
 
-        while let Some(tuple) = source.next()? {
+        while let Some(mut tuple) = source.next()? {
             let row_id = extract_row_id(&tuple)?;
 
             loop {
                 match txn.delete(&table, row_id) {
-                    Ok(()) => {
+                    Ok(_) => {
+                        self.release(txn, &integrity, &tuple[1..])?;
                         count += 1;
                         break;
                     },
-                    Err(EngineError::Stale(latest)) => {
-                        if recheck(target, row_id, latest)?.is_none() {
-                            break;
-                        }
+                    Err(EngineError::Stale(latest)) => match recheck(target, row_id, latest)? {
+                        Some(latest) => tuple = latest,
+                        _ => break,
                     },
                     Err(error) => return Err(error.into()),
                 }
@@ -104,7 +128,9 @@ impl Executor {
         assignments: &[(usize, Expression)],
         collect: bool,
     ) -> Result<(usize, Vec<Tuple>), DatabaseError> {
-        let table = self.engine.table(target.table)?;
+        let table = self.table(target.table)?;
+        let checks = bound_checks(&table);
+        let integrity = self.integrity(txn, &table, true)?;
         let mut count = 0;
         let mut collected = Vec::new();
 
@@ -113,8 +139,11 @@ impl Executor {
 
             loop {
                 let new = assign(&table, &tuple, assignments, target.schema)?;
+                check(&table, &checks, &new[1..])?;
                 match txn.update(&table, row_id, new[1..].into()) {
                     Ok(_) => {
+                        integrity.hold(txn, Some(&tuple[1..]), &new[1..])?;
+                        integrity.keep(txn, &tuple[1..], &new[1..])?;
                         count += 1;
                         if collect {
                             let mut pair = tuple;
@@ -134,6 +163,176 @@ impl Executor {
 
         Ok((count, collected))
     }
+}
+
+impl Executor {
+    /// the foreign keys a write to `table` must keep; `removing` adds those referring to it
+    fn integrity(
+        &self,
+        txn: &mut Transaction,
+        table: &Arc<Table>,
+        removing: bool,
+    ) -> Result<Integrity, DatabaseError> {
+        let resolve =
+            |referring: &Arc<Table>, key: &ForeignKey| -> Result<Reference, DatabaseError> {
+                let referenced = match key.table == referring.name() {
+                    true => Arc::clone(referring),
+                    false => self.table(&key.table)?,
+                };
+                let column = referenced.schema.index_of(&key.referenced).ok_or_else(|| {
+                    SqlError::InvalidQualifiedColumn {
+                        table: key.table.clone(),
+                        column: key.referenced.clone(),
+                    }
+                })?;
+
+                let referring = Arc::clone(referring);
+                let (key, column, on_delete) = (column, key.column, key.on_delete);
+                let reference = Reference { referring, column, referenced, key, on_delete };
+
+                Ok(reference)
+            };
+
+        let held = table
+            .schema
+            .constraints
+            .foreign_keys
+            .iter()
+            .map(|key| resolve(table, key))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut referring = Vec::new();
+        if removing {
+            for other in txn.tables() {
+                for key in other
+                    .schema
+                    .constraints
+                    .foreign_keys
+                    .iter()
+                    .filter(|key| key.table == table.name())
+                {
+                    referring.push(resolve(&other, key)?);
+                }
+            }
+        }
+
+        let view = (!held.is_empty() || !referring.is_empty()).then(|| txn.constraint_view());
+        Ok(Integrity { held, referring, view })
+    }
+
+    /// keeps the foreign keys referring to a row just deleted: refused under RESTRICT, the referring rows deleted under CASCADE
+    fn release(
+        &self,
+        txn: &mut Transaction,
+        integrity: &Integrity,
+        row: &[Value],
+    ) -> Result<(), DatabaseError> {
+        let Some(view) = integrity.view else {
+            return Ok(());
+        };
+
+        for reference in &integrity.referring {
+            let key = &row[reference.key];
+            if key.is_null() {
+                continue;
+            }
+
+            let rows = txn.referencing(view, &reference.referring, reference.column, key);
+            match (reference.on_delete, rows.is_empty()) {
+                (_, true) => {},
+                (OnDelete::Restrict, _) => {
+                    return Err(violation(reference, key, "is still referenced from"));
+                },
+                (OnDelete::Cascade, _) => {
+                    let nested = self.integrity(txn, &reference.referring, true)?;
+                    for (id, row) in rows {
+                        txn.delete(&reference.referring, id)?;
+                        self.release(txn, &nested, &row)?;
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Integrity {
+    /// checks that every changed, non-NULL foreign key of a row just written refers to a row
+    fn hold(
+        &self,
+        txn: &mut Transaction,
+        before: Option<&[Value]>,
+        row: &[Value],
+    ) -> Result<(), DatabaseError> {
+        let Some(view) = self.view else {
+            return Ok(());
+        };
+
+        for reference in &self.held {
+            let key = &row[reference.column];
+            if key.is_null() || before.is_some_and(|before| before[reference.column] == *key) {
+                continue;
+            }
+            if !txn.referenced(view, &reference.referenced, reference.key, key) {
+                return Err(violation(reference, key, "refers to no row of"));
+            }
+        }
+        Ok(())
+    }
+
+    /// refuses an update taking away a key other rows still refer to (no cascade on update)
+    fn keep(
+        &self,
+        txn: &mut Transaction,
+        before: &[Value],
+        after: &[Value],
+    ) -> Result<(), DatabaseError> {
+        let Some(view) = self.view else {
+            return Ok(());
+        };
+
+        for reference in &self.referring {
+            let key = &before[reference.key];
+            if key.is_null() || after[reference.key] == *key {
+                continue;
+            }
+            if !txn.referencing(view, &reference.referring, reference.column, key).is_empty() {
+                return Err(violation(reference, key, "is still referenced from"));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn violation(reference: &Reference, key: &Value, what: &str) -> DatabaseError {
+    let (referring, referenced) = (&reference.referring, &reference.referenced);
+    let message = format!(
+        "foreign key violation: {}.{} = {key} {what} {}.{}",
+        referring.name(),
+        referring.schema.columns[reference.column].name(),
+        referenced.name(),
+        referenced.schema.columns[reference.key].name(),
+    );
+
+    DatabaseError::Sql(SqlError::Other(message))
+}
+
+/// the table's CHECK predicates bound to its row layout, once per statement
+fn bound_checks(table: &Table) -> Vec<Expression> {
+    let mut checks = table.schema.constraints.checks.clone();
+    checks.iter_mut().for_each(|check| bind(check, &table.schema));
+    checks
+}
+
+/// fails when `row` makes one of the table's CHECK predicates false; unknown passes, as in SQL
+fn check(table: &Table, checks: &[Expression], row: &[Value]) -> Result<(), DatabaseError> {
+    for (bound, check) in checks.iter().zip(&table.schema.constraints.checks) {
+        if resolve_expression(row, &table.schema, bound)? == Value::Boolean(false) {
+            let message = format!("new row of {} violates CHECK ({check})", table.name());
+            return Err(DatabaseError::Sql(SqlError::Other(message)));
+        }
+    }
+    Ok(())
 }
 
 /// the row after `assignments`, each evaluated against the pre-update `tuple`

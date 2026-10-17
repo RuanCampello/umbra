@@ -20,7 +20,9 @@ use crate::db::DatabaseError;
 use crate::sql::Value;
 use crate::storage::engine::Engine;
 use crate::storage::engine::error::EngineError;
+use crate::storage::engine::table::{Table, View};
 use crate::storage::engine::transaction::{IsolationLevel, Transaction};
+use std::sync::Arc;
 
 /// Executes statements for one session
 pub(crate) struct Executor {
@@ -36,6 +38,9 @@ pub(crate) struct Executor {
     /// Set when a statement fails inside an explicit transaction, the block
     /// then rejects everything except `COMMIT`/`ROLLBACK`
     aborted: bool,
+    /// The catalogue view of the transaction running the current statement
+    /// table names resolve against the newest committed state outside one
+    catalogue: Option<View>,
 }
 
 /// a result row
@@ -51,6 +56,23 @@ impl Executor {
             next_level: None,
             statements: 0,
             aborted: false,
+            catalogue: None,
+        }
+    }
+
+    /// the table `name` denotes for the running statement
+    pub fn table(&self, name: &str) -> Result<Arc<Table>, EngineError> {
+        match self.catalogue {
+            Some(view) => self.engine.table_in(name, view),
+            None => self.engine.table(name),
+        }
+    }
+
+    /// the table `name` denotes for the session: in its explicit transaction, if one is open
+    pub fn session_table(&self, name: &str) -> Result<Arc<Table>, EngineError> {
+        match &self.txn {
+            Some(txn) => txn.table(name),
+            None => self.engine.table(name),
         }
     }
 
@@ -118,7 +140,9 @@ impl Executor {
                 }
 
                 self.statements += 1;
+                self.catalogue = Some(txn.catalogue_view());
                 let result = run(self, &mut txn);
+                self.catalogue = None;
                 self.txn = Some(txn);
                 result
             },
@@ -126,7 +150,11 @@ impl Executor {
                 let level = self.next_level.take().unwrap_or(self.level);
                 let mut txn = self.engine.begin(level);
 
-                match run(self, &mut txn) {
+                self.catalogue = Some(txn.catalogue_view());
+                let result = run(self, &mut txn);
+                self.catalogue = None;
+
+                match result {
                     Ok(result) => {
                         txn.commit()?;
                         Ok(result)
@@ -138,6 +166,13 @@ impl Executor {
                 }
             },
         }
+    }
+
+    /// the explicit transaction, which savepoints need
+    fn block(&mut self) -> Result<&mut Transaction, DatabaseError> {
+        self.txn.as_mut().ok_or_else(|| {
+            DatabaseError::Other("savepoints can only be used in transaction blocks".into())
+        })
     }
 
     fn take_txn(&mut self) -> Result<Transaction, DatabaseError> {
@@ -178,7 +213,7 @@ mod tests {
     use operator::Operator;
 
     fn setup() -> Executor {
-        let exec = Executor::new(Engine::in_memory());
+        let mut exec = Executor::new(Engine::in_memory());
         let schema = SchemaBuilder::new()
             .primary("id", Type::Integer)
             .add("name", Type::Text)
