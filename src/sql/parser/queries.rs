@@ -78,7 +78,7 @@ impl<'sql> Sql<'sql> for Create {
             Keyword::Database => Create::Database(parser.parse_ident()?),
             Keyword::Table => Create::Table {
                 name: parser.parse_ident()?,
-                columns: parser.parse_separated_tokens(Parser::parse_col, true)?,
+                columns: parser.parse_table_columns()?,
             },
             Keyword::Unique | Keyword::Index => {
                 let unique = keyword.eq(&Keyword::Unique);

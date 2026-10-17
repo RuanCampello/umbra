@@ -88,6 +88,57 @@ pub(in crate::sql) fn analyze<'s>(
                     primary_key = true;
                 }
             }
+
+            // a default refers to no column and is checked like an inserted value: it is evaluated once, when the table is created
+            let table = TableMetadata {
+                name: name.to_string(),
+                schema: Schema::from_definition(columns),
+                indexes: Vec::new(),
+            };
+            for col in columns {
+                for constraint in &col.constraints {
+                    if let Constraint::Default(expr) = constraint {
+                        analyze_assignment(&table, &col.name, expr, false)?;
+                    }
+                }
+            }
+
+            // a CHECK is a boolean over the new table's columns, stored as SQL text
+            for check in &table.schema.constraints.checks {
+                if check.to_sql().is_none() {
+                    let msg = format!("CHECK ({check}) uses a form a constraint cannot hold");
+                    return Err(SqlError::Other(msg).into());
+                }
+                if analyze_expression(&table.schema, None, check)? != VmType::Bool {
+                    return Err(SqlError::Other(format!("CHECK ({check}) is not a boolean")).into());
+                }
+            }
+
+            // a foreign key refers to an existing column of the same type (a table may refer to itself)
+            for key in table.schema.constraints.foreign_keys.iter() {
+                let referenced_schema = match key.table == *name {
+                    true => table.schema.clone(),
+                    _ => ctx.metadata(&key.table)?.schema.clone(),
+                };
+
+                let referenced = referenced_schema
+                    .index_of(&key.referenced)
+                    .map(|index| referenced_schema.columns[index].column_type())
+                    .ok_or_else(|| SqlError::InvalidQualifiedColumn {
+                        table: key.table.clone(),
+                        column: key.referenced.clone(),
+                    })?;
+                let column = &table.schema.columns[key.column];
+                if VmType::from(&referenced) != VmType::from(&column.column_type()) {
+                    let msg = format!(
+                        "foreign key {} cannot refer to {}({}) of another type",
+                        column.name(),
+                        key.table,
+                        key.referenced
+                    );
+                    return Err(SqlError::Other(msg).into());
+                }
+            }
         },
 
         Statement::Create(Create::Index { table, name, .. }) => {
@@ -140,6 +191,7 @@ pub(in crate::sql) fn analyze<'s>(
 
                     if !col.is_nullable()
                         && !col.column_type().can_be_autogen()
+                        && col.default().is_none()
                         && !columns.contains(&col.name())
                     {
                         return Err(AnalyzerError::MissingCols.into());

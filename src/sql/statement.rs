@@ -30,6 +30,11 @@ pub(crate) enum Statement {
     },
     Checkpoint,
     Rollback,
+    Savepoint(String),
+    /// `ROLLBACK TO [SAVEPOINT] name`
+    RollbackTo(String),
+    /// `RELEASE [SAVEPOINT] name`
+    Release(String),
     Explain(Box<Self>),
 }
 
@@ -216,6 +221,24 @@ pub enum Constraint {
     Unique,
     Nullable,
     Default(Expression),
+    /// A predicate every row of the table satisfies (or leaves unknown)
+    /// a table-level `CHECK` is carried by the first column
+    Check(Expression),
+    /// The column's value, when not NULL, is the `column` of some row of `table`
+    References {
+        table: String,
+        column: String,
+        on_delete: OnDelete,
+    },
+}
+
+/// What deleting a referenced row does to the rows referring to it
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub enum OnDelete {
+    /// The delete fails (`RESTRICT`, `NO ACTION`)
+    #[default]
+    Restrict,
+    Cascade,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
@@ -584,6 +607,9 @@ impl Display for Statement {
             Statement::Checkpoint => f.write_str("CHECKPOINT")?,
             Statement::Commit => f.write_str("COMMIT")?,
             Statement::Rollback => f.write_str("ROLLBACK")?,
+            Statement::Savepoint(name) => write!(f, "SAVEPOINT {name}")?,
+            Statement::RollbackTo(name) => write!(f, "ROLLBACK TO SAVEPOINT {name}")?,
+            Statement::Release(name) => write!(f, "RELEASE SAVEPOINT {name}")?,
             Statement::Source(source) => write!(f, "SOURCE '{source}'")?,
             Statement::Explain(statement) => write!(f, "EXPLAIN {statement}")?,
         };
@@ -673,16 +699,61 @@ impl Display for Column {
         };
 
         for constraint in &self.constraints {
-            f.write_char(' ')?;
-            f.write_str(match constraint {
-                Constraint::PrimaryKey => "PRIMARY KEY",
-                Constraint::Unique => "UNIQUE",
-                Constraint::Nullable => "NULLABLE",
-                Constraint::Default(_) => unimplemented!("default values"),
-            })?;
+            match constraint {
+                Constraint::PrimaryKey => f.write_str(" PRIMARY KEY")?,
+                Constraint::Unique => f.write_str(" UNIQUE")?,
+                Constraint::Nullable => f.write_str(" NULLABLE")?,
+                Constraint::Default(expr) => write!(f, " DEFAULT {expr}")?,
+                Constraint::Check(expr) => write!(f, " CHECK ({expr})")?,
+                Constraint::References { table, column, on_delete } => {
+                    write!(f, " REFERENCES {table}({column})")?;
+                    if *on_delete == OnDelete::Cascade {
+                        f.write_str(" ON DELETE CASCADE")?;
+                    }
+                },
+            }
         }
 
         Ok(())
+    }
+}
+
+impl Expression {
+    /// the expression as SQL the parser reads back to an equivalent tree, fully parenthesised
+    pub fn to_sql(&self) -> Option<String> {
+        Some(match self {
+            Self::Identifier(name) => name.clone(),
+            Self::Value(value) => match value {
+                Value::Null => "NULL".into(),
+                Value::Boolean(boolean) => boolean.to_string().to_uppercase(),
+                Value::Number(number) => number.to_string(),
+                Value::Float(float) => float.to_string(),
+                Value::Numeric(numeric) => numeric.to_string(),
+                Value::String(text) => match (text.contains('\''), text.contains('"')) {
+                    (false, _) => format!("'{text}'"),
+                    (true, false) => format!("\"{text}\""),
+                    (true, true) => return None,
+                },
+                _ => return None,
+            },
+            Self::UnaryOperation { operator, expr } => format!("({operator}{})", expr.to_sql()?),
+            Self::BinaryOperation { operator, left, right } => {
+                format!("({} {operator} {})", left.to_sql()?, right.to_sql()?)
+            },
+            Self::Function { func, args } => match func {
+                Function::Substring | Function::Position | Function::Extract => return None,
+                _ => {
+                    let args = args.iter().map(Self::to_sql).collect::<Option<Vec<_>>>()?;
+                    format!("{func}({})", args.join(", "))
+                },
+            },
+            Self::IsNull { expr, negated } => match negated {
+                false => format!("({} IS NULL)", expr.to_sql()?),
+                true => format!("({} IS NOT NULL)", expr.to_sql()?),
+            },
+            Self::Nested(expr) => expr.to_sql()?,
+            _ => return None,
+        })
     }
 }
 

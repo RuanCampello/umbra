@@ -74,7 +74,8 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 *columns = metadata.schema.columns_ids();
             }
 
-            // columns needing auto generated values (UUID or SERIAl variants)
+            // omitted columns take their default, an auto generated value (UUID or SERIAL), or
+            // NULL when nullable
             let auto_inserts: Vec<_> = metadata
                 .schema
                 .columns
@@ -82,14 +83,17 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
                 .enumerate()
                 .filter_map(|(idx, col)| {
                     let named = columns.iter().any(|column| column == col.name());
-                    match col.column_type().can_be_autogen() && !named {
-                        true => Some((idx, col.name().to_string(), col.column_type())),
+                    let filled = col.default().is_some()
+                        || col.column_type().can_be_autogen()
+                        || col.is_nullable();
+                    match filled && !named {
+                        true => Some((idx, col.name().to_string(), col.column_type(), col.default().cloned())),
                         false => None,
                     }
                 })
                 .collect();
 
-            for (idx, name, _) in &auto_inserts {
+            for (idx, name, ..) in &auto_inserts {
                 columns.insert(*idx, name.clone());
             }
 
@@ -97,10 +101,14 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             // serials route through the context so the MVCC session draws from the shared
             // engine counter rather than a per-session one
             for row in values.iter_mut() {
-                for (idx, _, r#type) in &auto_inserts {
-                    let expr = match r#type {
-                        Type::Uuid => Expression::Value(Value::Uuid(Uuid::new_v4())),
-                        _ => Expression::Value(ctx.next_serial(into.as_ref(), *idx)?.into()),
+                for (idx, _, r#type, default) in &auto_inserts {
+                    let expr = match (default, r#type) {
+                        (Some(default), _) => Expression::Value(default.clone()),
+                        (None, Type::Uuid) => Expression::Value(Value::Uuid(Uuid::new_v4())),
+                        (None, r#type) if r#type.can_be_autogen() => {
+                            Expression::Value(ctx.next_serial(into.as_ref(), *idx)?.into())
+                        },
+                        (None, _) => Expression::Value(Value::Null),
                     };
 
                     row.insert(*idx, expr);

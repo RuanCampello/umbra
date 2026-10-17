@@ -22,7 +22,7 @@ use crate::sql::statement::{
     Insert, JoinClause, JoinType, PathSegment, Select, Statement, Type, UnaryOperator, Update,
     Value,
 };
-use crate::sql::statement::{IsolationLevel, NUMERIC_ANY, TableRef};
+use crate::sql::statement::{IsolationLevel, NUMERIC_ANY, OnDelete, TableRef};
 
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -92,6 +92,19 @@ impl<'input> Parser<'input> {
             return Ok(Statement::Checkpoint);
         }
 
+        if self.consume_word("SAVEPOINT") {
+            let name = self.parse_ident()?;
+            self.expect_token(Token::Semicolon)?;
+            return Ok(Statement::Savepoint(name));
+        }
+
+        if self.consume_word("RELEASE") {
+            self.consume_word("SAVEPOINT");
+            let name = self.parse_ident()?;
+            self.expect_token(Token::Semicolon)?;
+            return Ok(Statement::Release(name));
+        }
+
         if self.consume_word("START") {
             self.expect_keyword(Keyword::Transaction)?;
             let level = self.parse_isolation()?;
@@ -124,7 +137,13 @@ impl<'input> Parser<'input> {
                 }
             },
             Keyword::Commit => Statement::Commit,
-            Keyword::Rollback => Statement::Rollback,
+            Keyword::Rollback => match self.consume_word("TO") {
+                true => {
+                    self.consume_word("SAVEPOINT");
+                    Statement::RollbackTo(self.parse_ident()?)
+                },
+                false => Statement::Rollback,
+            },
             Keyword::Explain => return Ok(Statement::Explain(Box::new(self.parse_statement()?))),
             Keyword::Source => {
                 let path = match self.next_token()? {
@@ -571,23 +590,125 @@ impl<'input> Parser<'input> {
         let name = self.parse_ident()?;
         let (data_type, type_def) = self.parse_type_and_def()?;
 
+        let options = [
+            Keyword::Primary,
+            Keyword::Unique,
+            Keyword::Nullable,
+            Keyword::Null,
+            Keyword::Not,
+            Keyword::Default,
+        ];
         let mut constraints = Vec::new();
-        while let Some(constraint) = self
-            .consume_one(&[Keyword::Primary, Keyword::Unique, Keyword::Nullable])
-            .as_optional()
-        {
-            match constraint {
-                Keyword::Primary => {
-                    self.expect_keyword(Keyword::Key)?;
-                    constraints.push(Constraint::PrimaryKey);
+        loop {
+            let constraint = match () {
+                _ if self.consume_word("CHECK") => {
+                    self.expect_token(Token::LeftParen)?;
+                    Constraint::Check(self.parse_closing_expr()?)
                 },
-                Keyword::Unique => constraints.push(Constraint::Unique),
-                Keyword::Nullable => constraints.push(Constraint::Nullable),
-                _ => unreachable!(),
-            }
+                _ if self.consume_word("REFERENCES") => self.parse_references()?,
+                _ => match self.consume_one(&options).as_optional() {
+                    Some(Keyword::Primary) => {
+                        self.expect_keyword(Keyword::Key)?;
+                        Constraint::PrimaryKey
+                    },
+                    Some(Keyword::Unique) => Constraint::Unique,
+                    // `NULL` is the standard spelling of `NULLABLE`
+                    Some(Keyword::Nullable | Keyword::Null) => Constraint::Nullable,
+                    Some(Keyword::Not) => {
+                        self.expect_keyword(Keyword::Null)?;
+                        continue;
+                    },
+                    Some(Keyword::Default) => Constraint::Default(self.parse_expr(None)?),
+                    Some(_) => unreachable!(),
+                    _ => break,
+                },
+            };
+            constraints.push(constraint);
         }
 
         Ok(Column { name, data_type, constraints, type_def })
+    }
+
+    /// `table(column) [ON DELETE CASCADE | RESTRICT | NO ACTION]`, after `REFERENCES`
+    fn parse_references(&mut self) -> ParserResult<Constraint> {
+        let table = self.parse_ident()?;
+        self.expect_token(Token::LeftParen)?;
+        let column = self.parse_ident()?;
+        self.expect_token(Token::RightParen)?;
+
+        let mut on_delete = OnDelete::Restrict;
+        if self.consume_optional(Token::Keyword(Keyword::On)) {
+            self.expect_keyword(Keyword::Delete)?;
+            on_delete = match () {
+                _ if self.consume_word("CASCADE") => OnDelete::Cascade,
+                _ if self.consume_word("RESTRICT") => OnDelete::Restrict,
+                _ => {
+                    self.expect_word("NO")?;
+                    self.expect_word("ACTION")?;
+                    OnDelete::Restrict
+                },
+            };
+        }
+
+        Ok(Constraint::References { table, column, on_delete })
+    }
+
+    /// the parenthesised elements of `CREATE TABLE`: columns and table constraints, which are
+    /// attached to columns (a `CHECK` to the first, a `FOREIGN KEY` to its column)
+    pub(super) fn parse_table_columns(&mut self) -> ParserResult<Vec<Column>> {
+        enum Element {
+            Column(Column),
+            Check(Expression),
+            ForeignKey(String, Constraint),
+        }
+
+        let elements = self.parse_separated_tokens(
+            |parser| match () {
+                _ if parser.consume_word("CHECK") => {
+                    parser.expect_token(Token::LeftParen)?;
+                    Ok(Element::Check(parser.parse_closing_expr()?))
+                },
+                _ if parser.consume_word("FOREIGN") => {
+                    parser.expect_keyword(Keyword::Key)?;
+                    parser.expect_token(Token::LeftParen)?;
+                    let column = parser.parse_ident()?;
+                    parser.expect_token(Token::RightParen)?;
+                    parser.expect_word("REFERENCES")?;
+                    Ok(Element::ForeignKey(column, parser.parse_references()?))
+                },
+                _ => parser.parse_col().map(Element::Column),
+            },
+            true,
+        )?;
+
+        let mut columns = Vec::new();
+        let mut constraints = Vec::new();
+        for element in elements {
+            match element {
+                Element::Column(column) => columns.push(column),
+                Element::Check(expr) => constraints.push((None, Constraint::Check(expr))),
+                Element::ForeignKey(column, references) => {
+                    constraints.push((Some(column), references))
+                },
+            }
+        }
+
+        for (target, constraint) in constraints {
+            let column = match &target {
+                None => columns.first_mut(),
+                Some(name) => columns.iter_mut().find(|column| column.name == *name),
+            };
+            match column {
+                Some(column) => column.constraints.push(constraint),
+                _ => {
+                    let name = target.unwrap_or_default();
+                    let msg = format!("no column {name} to constrain");
+                    return Err(self.error(ErrorKind::FormatError(msg)));
+                },
+            }
+        }
+
+        Ok(columns)
     }
 
     fn parse_type(&mut self) -> ParserResult<Type> {
