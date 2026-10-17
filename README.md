@@ -30,11 +30,13 @@ case—welcome. The focus here is the **learning process**, read as "the screams
 ## Getting Started
 
 ```bash
-cargo run -- file.db 8000
+cargo run -- data.db 8000
 ```
 
-`file.db`: The path to your Umbra database file (will be created if it doesn't exist).
-`8000`: The TCP port the server will listen on.
+`data.db`: The directory holding your Umbra database (created if it doesn't exist)
+An optional third argument caps memory at that many chunks of 1024 rows: colder chunks are evicted
+to disk and reloaded on demand (`cargo run -- data.db 8000 4096`)
+`8000`: The TCP port the server will listen on
 
 #### Use the `usql` CLI (like `psql`, but darker)
 
@@ -215,13 +217,19 @@ CREATE TABLE users (
 - [ ] `HAVING`
 
 #### 💸 **Transactions**
-- [x] `BEGIN` 
-- [x] `COMMIT` 
+- [x] `BEGIN` / `START TRANSACTION`
+- [x] `COMMIT`
 - [x] `ROLLBACK`
+- [x] `ISOLATION LEVEL READ COMMITTED | SNAPSHOT | SERIALIZABLE` (`REPEATABLE READ` is `SNAPSHOT`, the default)
+- [x] `SET TRANSACTION …` / `SET SESSION CHARACTERISTICS AS TRANSACTION …`
+- [x] `CHECKPOINT`
+
+Concurrent writers of one row: the second gets a retryable `could not serialize access …` error
+right away instead of waiting. Commits are durable when acknowledged.
 
 #### 📊 **Indexes**
 - [x] Unique indexes *(exclusivity is key)*
-- [ ] Non-unique indexes *(for the masses)*
+- [x] Non-unique indexes *(for the masses)*
 - [ ] Partial indexes *(discrimination coming soon)*
 
 #### 🔧 Utilities
