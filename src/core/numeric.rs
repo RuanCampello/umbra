@@ -1,29 +1,23 @@
-//! High-performance arbitrary-precision numeric type for the database storage.
+//! High-performance arbitrary-precision numeric type for the database storage
 //!
 //! This module implements a numeric type optimised for storage and operations,
-//! following PostgreSQL's internal architecture with base-10000 representation.
+//! following PostgreSQL's internal architecture with base-10000 representation
 
 use crate::core::Serialize;
 use std::cmp::{max, min};
 use std::ops::{Mul, Neg, Sub};
 use std::{cmp::Ordering, convert::TryFrom, fmt::Display, ops::Add, str::FromStr};
 
-/// Arbitrary-precision numeric type.
-/// This can represent any decimal with arbitrary precision.
+/// Arbitrary-precision numeric type
+/// This can represent any decimal with arbitrary precision
 #[derive(Debug, Clone, Hash, Eq)]
 pub enum Numeric {
-    /// Small numeric value packed into a single 64-bit word.
-    /// No heap allocation, optimal for cache locality.
+    /// Small numeric value packed into a single 64-bit word
+    /// No heap allocation, optimal for cache locality
     Short(u64),
-
-    /// variable-length numeric. Uses base-10000 representation.
-    Long {
-        weight: i16,
-        sign_dscale: u16,
-        digits: Vec<i16>,
-    },
-
-    /// Not a number. Represents an invalid/undefined numeric values.
+    /// variable-length numeric. Uses base-10000 representation
+    Long { weight: i16, sign_dscale: u16, digits: Vec<i16> },
+    /// Not a number. Represents an invalid/undefined numeric values
     NaN,
 }
 
@@ -40,13 +34,13 @@ enum View<'v> {
     Owned([i16; 5], usize),
 }
 
-/// Base for internal digit representation. Each digit represents a value from 0 to 9999.
+/// Base for internal digit representation. Each digit represents a value from 0 to 9999
 const N_BASE: i32 = 10000;
 
-/// Maximum number of digits that can be stored inline in the variable-length format.
+/// Maximum number of digits that can be stored inline in the variable-length format
 const TAG_SHORT: u64 = 0b00;
 
-// Bit positions and masks for packed format.
+// Bit positions and masks for packed format
 
 const TAG_SHIFT: u64 = 62;
 const SIGN_SHIFT: u64 = 61;
@@ -56,7 +50,7 @@ const SIGN_MASK: u64 = 1 << SIGN_SHIFT;
 const SCALE_MASK: u64 = 0x7F << SCALE_SHIFT;
 const PAYLOAD_MASK: u64 = (1 << 46) - 1;
 
-// Sign values for variable-length format.
+// Sign values for variable-length format
 
 const NUMERIC_POS: u16 = 0x0000;
 const NUMERIC_NEG: u16 = 0x4000;
@@ -65,8 +59,8 @@ const DSCALE_MASK: u16 = 0x3FFF;
 
 impl Numeric {
     /// For inherently inexact calculations such as division and square root,
-    /// we try to get at least this many significant digits; the idea is to
-    /// deliver a result no worse than float8 would.
+    /// we try to get at least this many significant digits
+    /// The idea is to deliver a result no worse than float8 would
     const MIN_SIG_DIGITS: i16 = 16;
     const DEC_DIGITS: i16 = 4;
 
@@ -100,7 +94,7 @@ impl Numeric {
             Self::Short(packed) => {
                 let sign = (*packed & SIGN_MASK) >> SIGN_SHIFT;
                 sign != 0 && !self.is_zero()
-            }
+            },
             Self::Long { sign_dscale, .. } => (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG,
             Self::NaN => false,
         }
@@ -187,13 +181,9 @@ impl Numeric {
                 let value = value / divisor;
 
                 Self::from_scaled_i128(value, scale).unwrap_or(Self::NaN)
-            }
+            },
 
-            Self::Long {
-                weight,
-                sign_dscale,
-                digits,
-            } => {
+            Self::Long { weight, sign_dscale, digits } => {
                 let current_scale = *sign_dscale & DSCALE_MASK;
                 if current_scale <= scale {
                     return self.clone();
@@ -205,7 +195,7 @@ impl Numeric {
                     return Self::zero();
                 }
 
-                let mut digits = digits[0..len].to_vec();
+                let mut digits = digits[..len.min(digits.len())].to_vec();
                 let remainder = scale % 4;
 
                 if remainder != 0 {
@@ -231,7 +221,7 @@ impl Numeric {
                     sign_dscale: (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK),
                     digits,
                 }
-            }
+            },
 
             Self::NaN => Self::NaN,
         }
@@ -260,14 +250,10 @@ impl Numeric {
             _ => NUMERIC_POS,
         };
 
-        Self::Long {
-            weight,
-            sign_dscale,
-            digits,
-        }
+        Self::Long { weight, sign_dscale, digits }
     }
 
-    /// Compares absolute values: |A| vs |B|
+    /// compares absolute values: |A| vs |B|
     #[inline]
     pub fn cmp_abs(&self, other: &Self) -> Ordering {
         match (self, other) {
@@ -278,30 +264,21 @@ impl Numeric {
                 let abs_a = val_a.unsigned_abs();
                 let abs_b = val_b.unsigned_abs();
 
-                if scale_a == scale_b {
-                    abs_a.cmp(&abs_b)
-                } else {
-                    if scale_a < scale_b {
-                        let diff = (scale_b - scale_a) as u32;
-                        match 10u128.checked_pow(diff) {
-                            Some(pow) => match abs_a.checked_mul(pow) {
-                                Some(scaled_a) => scaled_a.cmp(&abs_b),
-                                None => Ordering::Greater,
-                            },
-                            None => Ordering::Greater,
-                        }
-                    } else {
+                let scale =
+                    |val: u128, diff| 10u128.checked_pow(diff).and_then(|pow| val.checked_mul(pow));
+
+                match scale_a.cmp(&scale_b) {
+                    Ordering::Equal => abs_a.cmp(&abs_b),
+                    Ordering::Greater => {
                         let diff = (scale_a - scale_b) as u32;
-                        match 10u128.checked_pow(diff) {
-                            Some(pow) => match abs_b.checked_mul(pow) {
-                                Some(scaled_b) => abs_a.cmp(&scaled_b),
-                                None => Ordering::Less,
-                            },
-                            None => Ordering::Less,
-                        }
-                    }
+                        scale(abs_b, diff).map_or(Ordering::Less, |scaled| abs_a.cmp(&scaled))
+                    },
+                    Ordering::Less => {
+                        let diff = (scale_b - scale_a) as u32;
+                        scale(abs_a, diff).map_or(Ordering::Greater, |scaled| scaled.cmp(&abs_b))
+                    },
                 }
-            }
+            },
 
             _ => {
                 let (w1, d1, _, _) = self.as_long_view();
@@ -322,17 +299,16 @@ impl Numeric {
                         }
 
                         Ordering::Equal
-                    }
+                    },
                     ord => ord,
                 }
-            }
+            },
         }
     }
 
+    /// |dividend| / |divisor| to `rscale` decimal digits, rounded half up
+    /// long division in base `N_BASE` (Knuth, TAOCP vol. 2, 4.3.1)
     #[inline]
-    /// Performs an arbitrary divsion: |dividend| / |divisor|.
-    /// Adapted from Postgres `div_var` (src/backend/utils/adt/numeric.c), which implements
-    /// Knuth's Algorithm D (The Art of Computer Programming, Vol 2, 4.3.1) for base-N_BASE.
     fn div_abs(
         w1: i16,
         d1: &[i16],
@@ -340,195 +316,112 @@ impl Numeric {
         d2: &[i16],
         rscale: u16,
     ) -> Result<Self, NumericError> {
-        if d2.iter().all(|&d| d == 0) {
+        const B: i64 = N_BASE as i64;
+
+        let leading = |digits: &[i16]| digits.iter().take_while(|&&digit| digit == 0).count();
+        let (z1, z2) = (leading(d1), leading(d2));
+        if z2 == d2.len() {
             return Err(NumericError::DivisionByZero);
         }
-
-        if d1.iter().all(|&d| d == 0) {
+        if z1 == d1.len() {
             return Ok(Self::zero());
         }
+        let (w1, d1, w2, d2) = (w1 - z1 as i16, &d1[z1..], w2 - z2 as i16, &d2[z2..]);
 
+        // digit `j` of the quotient has weight `weight - j`, one digit past the scale rounds
         let weight = w1 - w2;
-        let fract_groups = (rscale + 3) / 4;
-        let effective_digit_count = (weight + 1 + (fract_groups as i16)) as usize;
-        let digit_count = effective_digit_count + 1;
-
-        if digit_count == 0 {
+        let effective = weight + 1 + rscale.div_ceil(4) as i16;
+        if effective < 0 {
             return Ok(Self::zero());
         }
+        let effective = effective as usize;
+        let dividend = |i: usize| d1.get(i).map_or(0, |&digit| digit as i64);
 
-        let mut digits = Vec::with_capacity(digit_count);
-
-        let rounding_logic = |digits: &mut Vec<i16>| {
-            if digits.len() > effective_digit_count {
-                let extra = digits.pop().unwrap();
-                if extra >= (N_BASE / 2) as i16 {
-                    let mut idx = digits.len();
-
-                    loop {
-                        if idx == 0 {
-                            digits.insert(0, 1);
-                            break;
-                        }
-
-                        idx -= 1;
-                        digits[idx] += 1;
-                        if digits[idx] < N_BASE as i16 {
-                            break;
-                        }
-
-                        digits[idx] = 0;
-                    }
+        let mut digits = Vec::with_capacity(effective + 1);
+        match d2.len() {
+            1 => {
+                let divisor = d2[0] as i64;
+                let mut remainder = 0;
+                for i in 0..=effective {
+                    let current = remainder * B + dividend(i);
+                    digits.push((current / divisor) as i16);
+                    remainder = current % divisor;
                 }
-            }
-        };
+            },
+            m => {
+                // each quotient digit is estimated from the leading digits, then corrected until
+                // `0 <= remainder < divisor`
+                let divisor: Vec<i64> = d2.iter().map(|&digit| digit as i64).collect();
+                let estimate = divisor[0] * B + divisor[1];
+                let mut remainder = vec![0; m + 1];
 
-        if d2.len() == 1 {
-            let divisor = d2[0] as i32;
-            let mut remainder = 0i32;
-
-            for i in 0..digit_count {
-                let val = match i < d1.len() {
-                    true => d1[i] as i32,
-                    false => 0,
-                };
-
-                let current_val = remainder * N_BASE + val;
-                let q = current_val / divisor;
-                remainder = current_val % divisor;
-
-                digits.push(q as i16);
-            }
-
-            rounding_logic(&mut digits);
-
-            let mut offset = 0;
-            while offset < digits.len() && digits[offset] == 0 {
-                offset += 1;
-            }
-
-            if offset > 0 {
-                digits.drain(0..offset);
-            }
-
-            #[rustfmt::skip]
-            let weight = weight - (offset as i16) + if digits.len() > effective_digit_count { 1 } else { 0 };
-
-            return Ok(Self::Long {
-                weight,
-                sign_dscale: rscale & DSCALE_MASK,
-                digits,
-            });
-        }
-
-        let norm_factor = N_BASE / (d2[0] as i32 + 1);
-
-        let mut d1_norm: Vec<i32> = d1.iter().map(|&d| d as i32 * norm_factor).collect();
-        let mut d2_norm: Vec<i32> = d2.iter().map(|&d| d as i32 * norm_factor).collect();
-
-        for i in (1..d1_norm.len()).rev() {
-            let val = d1_norm[i];
-            let carry = val / N_BASE;
-            if carry > 0 {
-                d1_norm[i] %= N_BASE;
-                d1_norm[i - 1] += carry;
-            }
-        }
-        for i in (1..d2_norm.len()).rev() {
-            let val = d2_norm[i];
-            let carry = val / N_BASE;
-            if carry > 0 {
-                d2_norm[i] %= N_BASE;
-                d2_norm[i - 1] += carry;
-            }
-        }
-
-        let mut dividend = d1_norm;
-        let padding = digit_count.saturating_sub(dividend.len()) + d2.len() + 2;
-        dividend.resize(dividend.len() + padding, 0);
-
-        let divisor_0 = d2_norm[0];
-        let divisor_1 = if d2_norm.len() > 1 { d2_norm[1] } else { 0 };
-
-        for j in 0..digit_count {
-            let div_top = dividend[j] * N_BASE + dividend[j + 1];
-            let mut q_hat = div_top / divisor_0;
-            let mut r_hat = div_top % divisor_0;
-
-            loop {
-                if q_hat >= N_BASE || (q_hat * divisor_1 > N_BASE * r_hat + dividend[j + 2]) {
-                    q_hat -= 1;
-                    r_hat += divisor_0;
-                    if r_hat < N_BASE {
+                for i in 0..effective + m {
+                    remainder.rotate_left(1);
+                    remainder[m] = dividend(i);
+                    if i + 1 < m {
                         continue;
                     }
-                }
-                break;
-            }
 
-            let mut borrow = 0;
-            for (i, &div_digit) in d2_norm.iter().rev().enumerate() {
-                let div_idx = j + d2_norm.len() - i;
-
-                let p = q_hat * div_digit;
-                let sub = dividend[div_idx] - (p % N_BASE) - borrow;
-
-                let p_carry = p / N_BASE;
-
-                if sub < 0 {
-                    dividend[div_idx] = sub + N_BASE;
-                    borrow = p_carry + 1;
-                } else {
-                    dividend[div_idx] = sub;
-                    borrow = p_carry;
-                }
-            }
-
-            let sub = dividend[j] - borrow;
-            dividend[j] = sub;
-
-            if dividend[j] < 0 {
-                q_hat -= 1;
-                let mut carry = 0;
-                for (i, &div_digit) in d2_norm.iter().rev().enumerate() {
-                    let div_idx = j + d2_norm.len() - i;
-                    let sum = dividend[div_idx] + div_digit + carry;
-                    if sum >= N_BASE {
-                        dividend[div_idx] = sum - N_BASE;
-                        carry = 1;
-                    } else {
-                        dividend[div_idx] = sum;
-                        carry = 0;
+                    let top = (remainder[0] * B + remainder[1]) * B + remainder[2];
+                    let mut q = (top / estimate).min(B - 1);
+                    let mut overflow = Self::sub_scaled(&mut remainder, &divisor, q);
+                    while overflow < 0 {
+                        overflow += Self::sub_scaled(&mut remainder, &divisor, -1);
+                        q -= 1;
                     }
+                    while remainder[0] > 0 || remainder[1..] >= *divisor {
+                        Self::sub_scaled(&mut remainder, &divisor, 1);
+                        q += 1;
+                    }
+                    digits.push(q as i16);
                 }
-                dividend[j] += carry;
+            },
+        }
+
+        if digits.pop().is_some_and(|extra| extra >= (N_BASE / 2) as i16) {
+            match digits.iter().rposition(|&digit| digit < N_BASE as i16 - 1) {
+                Some(last) => {
+                    digits[last] += 1;
+                    digits[last + 1..].fill(0);
+                },
+                _ => {
+                    digits.fill(0);
+                    digits.insert(0, 1);
+                },
             }
-
-            digits.push(q_hat as i16);
         }
+        let carried = digits.len() > effective;
 
-        rounding_logic(&mut digits);
-
-        let mut offset = 0;
-        while offset < digits.len() && digits[offset] == 0 {
-            offset += 1;
+        let offset = leading(&digits);
+        digits.drain(..offset);
+        while digits.last() == Some(&0) {
+            digits.pop();
         }
-
-        if offset > 0 {
-            digits.drain(0..offset);
-        }
-
-        let weight = weight - (offset as i16);
-
         if digits.is_empty() {
             return Ok(Self::zero());
         }
 
-        Ok(Self::Long {
-            weight,
-            sign_dscale: rscale & DSCALE_MASK,
-            digits,
-        })
+        let weight = weight + carried as i16 - offset as i16;
+        Ok(Self::Long { weight, sign_dscale: rscale & DSCALE_MASK, digits })
+    }
+
+    /// `remainder -= q * divisor`, the divisor aligned to the right
+    /// returns the carry out of the leading digit (negative when the result went below zero)
+    #[inline]
+    fn sub_scaled(remainder: &mut [i64], divisor: &[i64], q: i64) -> i64 {
+        const B: i64 = N_BASE as i64;
+
+        let mut carry = 0;
+        for j in (0..remainder.len()).rev() {
+            let digit = match j {
+                0 => 0,
+                j => divisor[j - 1],
+            };
+            let value = remainder[j] - q * digit + carry;
+            remainder[j] = value.rem_euclid(B);
+            carry = value.div_euclid(B);
+        }
+        carry
     }
 
     #[inline]
@@ -542,7 +435,10 @@ impl Numeric {
 
         // try the short format to see if it fits (that's what she said)
         if scale <= 127 && abs <= PAYLOAD_MASK as u128 {
-            let sign = if is_negative { 1u64 } else { 0u64 };
+            let sign = match is_negative {
+                true => 1u64,
+                _ => 0u64,
+            };
             let packed = (TAG_SHORT << TAG_SHIFT)
                 | (sign << SIGN_SHIFT)
                 | ((scale as u64) << SCALE_SHIFT)
@@ -593,11 +489,7 @@ impl Numeric {
 
         let sign_dscale = sign_part | (scale & DSCALE_MASK);
 
-        Ok(Self::Long {
-            weight,
-            sign_dscale,
-            digits,
-        })
+        Ok(Self::Long { weight, sign_dscale, digits })
     }
 
     #[inline]
@@ -629,11 +521,11 @@ impl Numeric {
                 true => {
                     carry = 1;
                     digits.push((sum - N_BASE) as i16);
-                }
+                },
                 _ => {
                     carry = 0;
                     digits.push(sum as i16)
-                }
+                },
             }
         }
 
@@ -641,7 +533,7 @@ impl Numeric {
             true => {
                 digits.push(carry as i16);
                 weight_max + 1
-            }
+            },
             _ => weight_max,
         };
 
@@ -654,12 +546,7 @@ impl Numeric {
         }
 
         digits.reverse();
-
-        Numeric::Long {
-            weight,
-            sign_dscale: 0,
-            digits,
-        }
+        Numeric::Long { weight, sign_dscale: 0, digits }
     }
 
     #[inline]
@@ -690,7 +577,7 @@ impl Numeric {
                 true => {
                     diff += 10000;
                     borrow = 1;
-                }
+                },
                 _ => borrow = 0,
             };
 
@@ -715,18 +602,10 @@ impl Numeric {
         }
 
         if digits.is_empty() {
-            return Numeric::Long {
-                weight: 0,
-                sign_dscale: 0,
-                digits: vec![0],
-            };
+            return Numeric::Long { weight: 0, sign_dscale: 0, digits: vec![0] };
         }
 
-        Numeric::Long {
-            weight,
-            sign_dscale: 0,
-            digits,
-        }
+        Numeric::Long { weight, sign_dscale: 0, digits }
     }
 
     /// standardise short and long format access
@@ -764,18 +643,14 @@ impl Numeric {
                 let weight = (len as i16) - (fract_groups as i16) - 1;
 
                 (weight, View::Owned(digits, len), v.is_negative(), s)
-            }
+            },
 
-            Self::Long {
-                weight,
-                sign_dscale,
-                digits,
-            } => {
+            Self::Long { weight, sign_dscale, digits } => {
                 let is_neg = (sign_dscale & NUMERIC_NEG) != 0;
                 let scale = sign_dscale & DSCALE_MASK;
 
                 (*weight, View::Borrowed(digits), is_neg, scale)
-            }
+            },
         }
     }
 
@@ -790,7 +665,7 @@ impl Numeric {
                 true => *packed |= 1 << SIGN_SHIFT,
                 _ => *packed &= !(1 << SIGN_SHIFT),
             },
-            Self::NaN => {}
+            Self::NaN => {},
         }
     }
 
@@ -799,14 +674,14 @@ impl Numeric {
         match self {
             Self::Long { sign_dscale, .. } => {
                 *sign_dscale = (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK)
-            }
+            },
 
             Self::Short(packed) => {
                 *packed &= !(SCALE_MASK);
                 *packed |= (scale as u64) << SCALE_SHIFT;
-            }
+            },
 
-            _ => {}
+            _ => {},
         }
     }
 
@@ -824,7 +699,7 @@ impl Numeric {
                 };
 
                 (val, scale)
-            }
+            },
             _ => panic!("unpack_short called on non-Short variant"),
         }
     }
@@ -845,16 +720,9 @@ impl Numeric {
         let tag_bits = packed >> TAG_SHIFT;
 
         match tag_bits {
-            0b00 => {
-                // Short format
-                Ok(Self::Short(packed))
-            }
-            0b10 => {
-                // NaN
-                Ok(Self::NaN)
-            }
+            0b00 => Ok(Self::Short(packed)),
+            0b10 => Ok(Self::NaN),
             0b01 => {
-                // Long format
                 if bytes.len() < 14 {
                     return Err("Long numeric requires at least 14 bytes");
                 }
@@ -874,12 +742,8 @@ impl Numeric {
                     digits.push(digit);
                 }
 
-                Ok(Self::Long {
-                    weight,
-                    sign_dscale,
-                    digits,
-                })
-            }
+                Ok(Self::Long { weight, sign_dscale, digits })
+            },
             _ => Err("Invalid numeric tag"),
         }
     }
@@ -897,11 +761,7 @@ impl Serialize for Numeric {
             // 2 bytes: weight
             // 2 bytes: sign_dscale
             // N * 2 bytes: digits
-            Self::Long {
-                weight,
-                sign_dscale,
-                digits,
-            } => {
+            Self::Long { weight, sign_dscale, digits } => {
                 let tag = 0b01u64 << TAG_SHIFT;
                 buff.extend_from_slice(&tag.to_le_bytes());
 
@@ -910,10 +770,8 @@ impl Serialize for Numeric {
                 buff.extend_from_slice(&weight.to_le_bytes());
                 buff.extend_from_slice(&sign_dscale.to_le_bytes());
 
-                digits
-                    .iter()
-                    .for_each(|d| buff.extend_from_slice(&d.to_le_bytes()));
-            }
+                digits.iter().for_each(|d| buff.extend_from_slice(&d.to_le_bytes()));
+            },
 
             // nan is represented as a short format with a special bit pattern
             Self::NaN => buff.extend_from_slice(&(0b10u64 << TAG_SHIFT).to_le_bytes()),
@@ -952,8 +810,8 @@ impl Ord for Numeric {
             _ => match (self.is_negative(), other.is_negative()) {
                 (false, false) => self.cmp_abs(other),
                 (true, true) => other.cmp_abs(self),
-                (false, true) => Ordering::Greater,
-                (true, false) => Ordering::Less,
+                (_, true) => Ordering::Greater,
+                (true, _) => Ordering::Less,
             },
         }
     }
@@ -1038,7 +896,7 @@ impl<'a, 'b> Add<&'b Numeric> for &'a Numeric {
                 result.set_scale(max(scale_a, scale_b));
 
                 result
-            }
+            },
 
             // case: (+A) + (-B) or (-A) + (+B)
             // operation is a sub magnitudes: |A| - |B|
@@ -1051,14 +909,14 @@ impl<'a, 'b> Add<&'b Numeric> for &'a Numeric {
                     result.set_scale(scale);
 
                     result
-                }
+                },
                 Ordering::Less => {
                     let mut result = Numeric::sub_abs(w_b, &digits_b, w_a, &digits_a);
                     result.set_sign(neg_b);
                     result.set_scale(scale);
 
                     result
-                }
+                },
             },
         }
     }
@@ -1104,9 +962,9 @@ impl<'a, 'b> Sub<&'b Numeric> for &'a Numeric {
                 let mut res = rhs.clone();
                 res.set_sign(!rhs.is_negative());
                 return res;
-            }
+            },
             (_, true) => return self.clone(),
-            _ => {}
+            _ => {},
         };
 
         if let (Numeric::Short(_), Numeric::Short(_)) = (self, rhs) {
@@ -1114,12 +972,10 @@ impl<'a, 'b> Sub<&'b Numeric> for &'a Numeric {
             let (val_b, scale_b) = rhs.unpack_short();
 
             let scale = max(scale_a, scale_b);
-
             let a = match scale_a < scale {
                 true => val_a.checked_mul(10i128.pow((scale - scale_a) as u32)),
                 _ => Some(val_a),
             };
-
             let b = match scale_b < scale {
                 true => val_b.checked_mul(10i128.pow((scale - scale_b) as u32)),
                 _ => Some(val_b),
@@ -1147,7 +1003,7 @@ impl<'a, 'b> Sub<&'b Numeric> for &'a Numeric {
                 res.set_sign(neg_a);
                 res.set_scale(scale);
                 res
-            }
+            },
             _ => {
                 // case: (+A) - (+B) -> |A| - |B|
                 // case: (-A) - (-B) -> -|A| + |B| -> |B| - |A|
@@ -1161,7 +1017,7 @@ impl<'a, 'b> Sub<&'b Numeric> for &'a Numeric {
                         result.set_sign(neg_a);
                         result.set_scale(scale);
                         result
-                    }
+                    },
 
                     Ordering::Less => {
                         // |A| < |B|
@@ -1171,9 +1027,9 @@ impl<'a, 'b> Sub<&'b Numeric> for &'a Numeric {
                         result.set_sign(!neg_a);
                         result.set_scale(scale);
                         result
-                    }
+                    },
                 }
-            }
+            },
         }
     }
 }
@@ -1230,11 +1086,7 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
         let (w2, dig2, neg2, d2) = rhs.as_long_view();
 
         if dig1.is_empty() || dig2.is_empty() {
-            return Numeric::Long {
-                weight: 0,
-                sign_dscale: d1 + d2,
-                digits: vec![],
-            };
+            return Numeric::Long { weight: 0, sign_dscale: d1 + d2, digits: vec![] };
         }
 
         let mut acc = vec![0i32; dig1.len() + dig2.len()];
@@ -1273,24 +1125,13 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
         }
 
         if start >= end {
-            return Numeric::Long {
-                weight: 0,
-                sign_dscale,
-                digits: vec![],
-            };
+            return Numeric::Long { weight: 0, sign_dscale, digits: vec![] };
         };
 
-        let digits = acc[start..end]
-            .iter()
-            .map(|&x| x as i16)
-            .collect::<Vec<i16>>();
-
+        let digits = acc[start..end].iter().map(|&x| x as i16).collect::<Vec<i16>>();
         let weight = (w1 + w2 + 1) - (start as i16);
-        Numeric::Long {
-            weight,
-            sign_dscale,
-            digits,
-        }
+
+        Numeric::Long { weight, sign_dscale, digits }
     }
 }
 
@@ -1389,8 +1230,8 @@ impl<'a, 'b> std::ops::Div<&'b Numeric> for &'a Numeric {
             Ok(mut res) => {
                 res.set_sign(res_is_neg);
                 res
-            }
-            Err(_) => Numeric::NaN,
+            },
+            _ => Numeric::NaN,
         }
     }
 }
@@ -1476,12 +1317,8 @@ impl TryFrom<&[u8]> for Numeric {
                     digits.push(digit);
                 });
 
-                Ok(Self::Long {
-                    weight,
-                    sign_dscale,
-                    digits,
-                })
-            }
+                Ok(Self::Long { weight, sign_dscale, digits })
+            },
             _ => Err(NumericError::InvalidFormat),
         }
     }
@@ -1494,7 +1331,10 @@ impl From<i64> for Numeric {
             return Self::zero();
         }
 
-        let sign = if value.is_negative() { 1u64 } else { 0u64 };
+        let sign = match value.is_negative() {
+            true => 1u64,
+            _ => 0u64,
+        };
         let abs = value.unsigned_abs();
 
         if abs <= PAYLOAD_MASK {
@@ -1543,16 +1383,15 @@ impl From<&Numeric> for Option<f64> {
                 let scale = ((packed & SCALE_MASK) >> SCALE_SHIFT) as u32;
 
                 let divisor = 10_f64.powi(scale as i32);
-                let value = payload / divisor;
+                let mut value = payload / divisor;
+                if sign != 0 {
+                    value = value.neg();
+                }
 
-                Some(if sign != 0 { -value } else { value })
-            }
+                Some(value)
+            },
 
-            Numeric::Long {
-                weight,
-                sign_dscale,
-                digits,
-            } => {
+            Numeric::Long { weight, sign_dscale, digits } => {
                 if digits.is_empty() {
                     return Some(0.0);
                 }
@@ -1567,8 +1406,11 @@ impl From<&Numeric> for Option<f64> {
                 });
 
                 let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
-                Some(if is_negative { -value } else { value })
-            }
+                if is_negative {
+                    value = value.neg();
+                }
+                Some(value)
+            },
 
             Numeric::NaN => Some(f64::NAN),
         }
@@ -1599,20 +1441,19 @@ impl From<&Numeric> for Option<i64> {
                     return None;
                 }
 
-                let value = value as i64;
-                Some(if sign != 0 { -value } else { value })
-            }
+                let mut value = value as i64;
+                if sign != 0 {
+                    value = value.neg();
+                }
+                Some(value)
+            },
 
-            Numeric::Long {
-                weight,
-                sign_dscale,
-                digits,
-            } => {
+            Numeric::Long { weight, sign_dscale, digits } => {
                 if digits.is_empty() {
                     return Some(0);
                 }
 
-                let mut value: i128 = 0;
+                let mut value = 0;
                 for (idx, &digit) in digits.iter().enumerate() {
                     let power = weight - idx as i16;
                     if power < 0 {
@@ -1628,9 +1469,12 @@ impl From<&Numeric> for Option<i64> {
                 }
 
                 let is_negative = (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG;
-                let value = value as i64;
-                Some(if is_negative { -value } else { value })
-            }
+                let mut value = value as i64;
+                if is_negative {
+                    value = value.neg();
+                }
+                Some(value)
+            },
         }
     }
 }
@@ -1666,16 +1510,17 @@ impl FromStr for Numeric {
         }
 
         let int = parts[0];
-        let fract = if parts.len() == 2 { parts[1] } else { "" };
+        let fract = match parts.len() == 2 {
+            true => parts[1],
+            _ => "",
+        };
         let scale = fract.len();
 
         let combined = format!("{int}{fract}");
-
-        let value = combined
-            .parse::<i128>()
-            .map_err(|_| NumericError::InvalidFormat)?;
-
-        let value = if is_negative { -value } else { value };
+        let mut value = combined.parse::<i128>().map_err(|_| NumericError::InvalidFormat)?;
+        if is_negative {
+            value = value.neg();
+        }
         Self::from_scaled_i128(value, scale as u16)
     }
 }
@@ -1693,7 +1538,10 @@ impl Display for Numeric {
                     return write!(f, "0");
                 }
 
-                let sign_str = if sign != 0 { "-" } else { "" };
+                let sign_str = match sign != 0 {
+                    true => "-",
+                    _ => "",
+                };
 
                 match scale == 0 {
                     true => write!(f, "{sign_str}{payload}"),
@@ -1703,14 +1551,10 @@ impl Display for Numeric {
                         let fract = payload % divisor;
 
                         write!(f, "{sign_str}{int}.{fract:0width$}", width = scale as usize)
-                    }
+                    },
                 }
-            }
-            Self::Long {
-                sign_dscale,
-                digits,
-                weight,
-            } => {
+            },
+            Self::Long { sign_dscale, digits, weight } => {
                 if digits.is_empty() {
                     return write!(f, "0");
                 }
@@ -1723,7 +1567,6 @@ impl Display for Numeric {
                 }
 
                 let mut decimal_str = String::new();
-
                 match *weight < 0 {
                     true => {
                         // case 1: pure fraction (0.00...xyz)
@@ -1732,11 +1575,8 @@ impl Display for Numeric {
                         decimal_str.push_str("0.");
                         // The 'gap' between 0. and our digits
                         decimal_str.push_str(&"0000".repeat(zeros));
-
-                        digits
-                            .iter()
-                            .for_each(|d| decimal_str.push_str(&format!("{:04}", d)));
-                    }
+                        digits.iter().for_each(|d| decimal_str.push_str(&format!("{:04}", d)));
+                    },
 
                     _ => {
                         // case 2: number with integer part (123.456)
@@ -1751,7 +1591,7 @@ impl Display for Numeric {
                                 decimal_str.push('.');
                             }
                         }
-                    }
+                    },
                 }
 
                 if scale > 0 {
@@ -1775,7 +1615,7 @@ impl Display for Numeric {
                 }
 
                 write!(f, "{decimal_str}")
-            }
+            },
         }
     }
 }
@@ -1935,15 +1775,11 @@ mod tests {
         // 131 % 4 = 3, so we pad the single digit by 10^1.
         // 3 becomes 30 internally.
         match result {
-            Numeric::Long {
-                weight,
-                sign_dscale,
-                ref digits,
-            } => {
+            Numeric::Long { weight, sign_dscale, ref digits } => {
                 assert_eq!(digits, &vec![30]);
                 assert_eq!(weight, -33);
                 assert_eq!(sign_dscale & DSCALE_MASK, 131);
-            }
+            },
             _ => panic!(),
         };
 
@@ -2112,19 +1948,13 @@ mod tests {
     #[test]
     fn invalid_input_handling() {
         assert_eq!(Numeric::from_str("abc"), Err(NumericError::InvalidFormat));
-        assert_eq!(
-            Numeric::from_str("12.34.56"),
-            Err(NumericError::InvalidFormat)
-        );
+        assert_eq!(Numeric::from_str("12.34.56"), Err(NumericError::InvalidFormat));
 
         assert_eq!(Numeric::from_str(""), Err(NumericError::InvalidFormat));
         assert_eq!(Numeric::try_from(&[][..]), Err(NumericError::InvalidFormat));
 
         let bytes = vec![0u8; 4];
-        assert_eq!(
-            Numeric::try_from(bytes.as_slice()),
-            Err(NumericError::InvalidFormat)
-        );
+        assert_eq!(Numeric::try_from(bytes.as_slice()), Err(NumericError::InvalidFormat));
     }
 
     #[test]
@@ -2153,7 +1983,7 @@ mod tests {
                 // 8e37 requires about 10 groups of base-10000 digits
                 assert!(digits.len() >= 9);
                 assert!(*weight >= 8);
-            }
+            },
             _ => panic!("Result should have been promoted to Long format"),
         }
 
@@ -2188,18 +2018,9 @@ mod tests {
 
     #[test]
     fn arithmetic_div_integer_edges() {
-        assert_eq!(
-            Numeric::from(1u64) / Numeric::from(1u64),
-            Numeric::from(1u64)
-        );
-        assert_eq!(
-            Numeric::from(0u64) / Numeric::from(1u64),
-            Numeric::from(0u64)
-        );
-        assert_eq!(
-            Numeric::from(9u64) / Numeric::from(3u64),
-            Numeric::from(3u64)
-        );
+        assert_eq!(Numeric::from(1u64) / Numeric::from(1u64), Numeric::from(1u64));
+        assert_eq!(Numeric::from(0u64) / Numeric::from(1u64), Numeric::from(0u64));
+        assert_eq!(Numeric::from(9u64) / Numeric::from(3u64), Numeric::from(3u64));
     }
 
     #[test]

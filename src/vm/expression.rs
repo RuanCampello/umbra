@@ -281,6 +281,14 @@ pub(crate) fn resolve_expression(
             }
 
             let left_val = resolve_expression(val, schema, left)?;
+            // a decisive left operand skips the right one, as `evaluate_where` does
+            match (operator, &left_val) {
+                (BinaryOperator::Or, Value::Boolean(true))
+                | (BinaryOperator::And, Value::Boolean(false)) => {
+                    return Ok(left_val);
+                },
+                _ => {},
+            }
             let right_val = resolve_expression(val, schema, right)?;
 
             let (left, right) = try_coerce_enum(left, left_val, right, right_val, schema)?;
@@ -291,32 +299,42 @@ pub(crate) fn resolve_expression(
 
         Expression::Function { func, args } => match func {
             Function::Substring => {
-                let string = get_value::<String>(val, schema, &args[0])?;
-                let start = get_value::<i128>(val, schema, &args[1]).ok().map(|num| num as usize);
-                let count = get_value::<i128>(val, schema, &args[2]).ok().map(|num| num as isize);
+                let (Some(string), Some(start), Some(count)) = (
+                    get_value::<String>(val, schema, &args[0])?,
+                    get_value::<i128>(val, schema, &args[1])?,
+                    get_value::<i128>(val, schema, &args[2])?,
+                ) else {
+                    return Ok(Value::Null);
+                };
 
-                Ok(Value::String(functions::substring(&string, start, count).into()))
+                let (start, count) = (Some(start as usize), Some(count as isize));
+                let substring = functions::substring(&string, start, count);
+                Ok(Value::String(substring.into()))
             },
             Function::Extract => {
-                let kind = get_value::<String>(val, schema, &args[0])?;
+                let Some(kind) = get_value::<String>(val, schema, &args[0])? else {
+                    return Ok(Value::Null);
+                };
                 let kind = ExtractKind::try_from(kind).unwrap();
-
                 let extractable_value = resolve_expression(val, schema, &args[1])?;
+
                 let result = match extractable_value {
+                    Value::Null => return Ok(Value::Null),
                     Value::Temporal(temporal) => temporal.extract(kind)?,
                     Value::Interval(interval) => interval.extract(kind)?,
                     _ => {
-                        return Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
+                        let typ = TypeError::ExpectedOneOfTypes {
                             expected: vec![VmType::Date, VmType::Interval],
-                        }));
+                        };
+                        return Err(SqlError::Type(typ));
                     },
                 };
 
                 Ok(Value::Number(result as i128))
             },
-            Function::Ascii => {
-                let string = get_value::<String>(val, schema, &args[0])?;
-                Ok(Value::Number(functions::ascii(&string) as i128))
+            Function::Ascii => match get_value::<String>(val, schema, &args[0])? {
+                Some(string) => Ok(Value::Number(functions::ascii(&string) as i128)),
+                None => Ok(Value::Null),
             },
             Function::Concat => {
                 let mut joined = String::new();
@@ -344,11 +362,14 @@ pub(crate) fn resolve_expression(
 
                 Ok(Value::String(joined.into()))
             },
-            Function::Position => {
-                let pat = get_value::<String>(val, schema, &args[0])?;
-                let string = get_value::<String>(val, schema, &args[1])?;
-
-                Ok(Value::Number(functions::position(&string, &pat) as i128))
+            Function::Position => match (
+                get_value::<String>(val, schema, &args[0])?,
+                get_value::<String>(val, schema, &args[1])?,
+            ) {
+                (Some(pat), Some(string)) => {
+                    Ok(Value::Number(functions::position(&string, &pat) as i128))
+                },
+                _ => Ok(Value::Null),
             },
             Function::Coalesce => {
                 for arg in args {
@@ -360,14 +381,8 @@ pub(crate) fn resolve_expression(
 
                 Ok(Value::Null)
             },
-            Function::Abs => {
-                let value = resolve_expression(val, schema, &args[0])?;
-                math::abs(&value)
-            },
-            Function::Sqrt => {
-                let value = resolve_expression(val, schema, &args[0])?;
-                math::sqrt(&value)
-            },
+            Function::Abs => math::abs(&resolve_expression(val, schema, &args[0])?),
+            Function::Sqrt => math::sqrt(&resolve_expression(val, schema, &args[0])?),
             Function::Power => {
                 let base = resolve_expression(val, schema, &args[0])?;
                 let expoent = resolve_expression(val, schema, &args[1])?;
@@ -380,10 +395,7 @@ pub(crate) fn resolve_expression(
 
                 math::trunc(&value, decimals)
             },
-            Function::Sign => {
-                let value = resolve_expression(val, schema, &args[0])?;
-                math::sign(&value)
-            },
+            Function::Sign => math::sign(&resolve_expression(val, schema, &args[0])?),
             Function::TypeOf => {
                 let type_of = match &args[0] {
                     Expression::Column(position) => {
@@ -433,12 +445,19 @@ impl ValueExtractor<String> for Value {
     }
 }
 
-fn get_value<T>(val: &[Value], schema: &Schema, argument: &Expression) -> Result<T, SqlError>
+/// `None` for `NULL`: the functions that read their arguments through it are strict
+fn get_value<T>(
+    val: &[Value],
+    schema: &Schema,
+    argument: &Expression,
+) -> Result<Option<T>, SqlError>
 where
     Value: ValueExtractor<T>,
 {
-    let value = resolve_expression(val, schema, argument)?;
-    Value::extract(value, argument)
+    match resolve_expression(val, schema, argument)? {
+        Value::Null => Ok(None),
+        value => Value::extract(value, argument).map(Some),
+    }
 }
 
 pub(crate) fn resolve_only_expression(expr: &Expression) -> Result<Value, SqlError> {

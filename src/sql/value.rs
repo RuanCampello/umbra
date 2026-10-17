@@ -151,6 +151,21 @@ impl Value {
     }
 
     #[inline]
+    /// The rank of a value's kind in the order across kinds; blobs and `NULL` come last.
+    const fn class(&self) -> u8 {
+        match self {
+            Value::Boolean(_) => 0,
+            Value::Number(_) | Value::Float(_) | Value::Numeric(_) => 1,
+            Value::Temporal(_) => 2,
+            Value::Interval(_) => 3,
+            Value::Uuid(_) => 4,
+            Value::Enum(_) => 5,
+            Value::String(_) => 6,
+            Value::Blob(_) => 7,
+            Value::Null => 8,
+        }
+    }
+
     pub const fn is_zero(&self) -> bool {
         match self {
             Value::Number(n) if *n == 0 => true,
@@ -670,7 +685,8 @@ impl Ord for Value {
             (Value::Null, Value::Null) => Ordering::Equal,
             (Value::Null, _) => Ordering::Greater,
             (_, Value::Null) => Ordering::Less,
-            _ => panic!("these values are not comparable"),
+            // values of different kinds order by kind, as SQLite orders storage classes
+            _ => self.class().cmp(&other.class()),
         }
     }
 }

@@ -1,12 +1,6 @@
 //! Aggregate evaluation by accumulators, so a group is folded row by row and never held whole, and
 //! the grouping strategies that feed them: rows arriving grouped are folded as they stream, any other
 //! input goes through a hash table, whose overflow is sorted (hybrid hash aggregation, Graefe 1993)
-//!
-//! The arithmetic of `SUM`/`AVG` follows the first non-null value: `NUMERIC` sums as numeric,
-//! integers sum as integers (`AVG` of integers is numeric), anything else as floating point
-//! `MIN` keeps the first of equal minima and `MAX` the last of equal maxima, both are `0` over no
-//! values
-//! `COUNT(*)` counts rows, `COUNT(x)` non-null values
 
 use super::Tuple;
 use super::operator::{Operator, Sort, tuple_bytes};
@@ -162,16 +156,28 @@ fn fold(function: Function, state: &mut State, value: &Value) {
             };
             *count += 1;
         },
+
+        // the arithmetic widens as values of a wider kind arrive: integer -> float -> numeric
         State::Integer(sum, count) => {
-            if let Value::Number(n) = value {
-                *sum += n;
-                *count += 1;
+            let (total, seen) = (*sum, *count);
+            match value {
+                Value::Number(n) => (*sum, *count) = (total + n, seen + 1),
+                Value::Float(f) => *state = State::Float(total as f64 + f, seen + 1),
+                Value::Numeric(n) => *state = State::Numeric(&Numeric::from(total) + n, seen + 1),
+                _ => {},
             }
         },
-        State::Float(sum, count) => match value {
-            Value::Float(f) => (*sum, *count) = (*sum + f, *count + 1),
-            Value::Number(n) => (*sum, *count) = (*sum + *n as f64, *count + 1),
-            _ => {},
+        State::Float(sum, count) => {
+            let (total, seen) = (*sum, *count);
+            match value {
+                Value::Float(f) => (*sum, *count) = (total + f, seen + 1),
+                Value::Number(n) => (*sum, *count) = (total + *n as f64, seen + 1),
+                Value::Numeric(n) => match Numeric::try_from(total) {
+                    Ok(exact) => *state = State::Numeric(&exact + n, seen + 1),
+                    Err(_) => (*sum, *count) = (total + f64::from(n.clone()), seen + 1),
+                },
+                _ => {},
+            }
         },
     }
 }
@@ -179,7 +185,7 @@ fn fold(function: Function, state: &mut State, value: &Value) {
 fn finish(function: Function, state: State) -> Value {
     match (function, state) {
         (_, State::Count(n)) => Value::Number(n),
-        (_, State::Extreme(value)) => value.unwrap_or(Value::Number(0)),
+        (_, State::Extreme(value)) => value.unwrap_or(Value::Null),
         (_, State::Empty) => Value::Null,
         (Function::Sum, State::Numeric(sum, _)) => Value::Numeric(sum),
         (_, State::Numeric(sum, count)) => Value::Numeric(sum / Numeric::from(count)),

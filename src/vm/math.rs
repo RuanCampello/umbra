@@ -1,5 +1,5 @@
-//! SQL mathematical runtime logics in Rust.
-//! Sometimes, you need to implement `sqrt` from scratch, to make it work.
+//! SQL mathematical runtime logics in Rust
+//! Sometimes, you need to implement `sqrt` from scratch, to make it work
 
 #![allow(dead_code)]
 
@@ -64,10 +64,7 @@ impl SquaredRoot for u128 {
             return Ok(*self);
         }
 
-        let mut num = *self;
-        let mut res = 0u128;
-        let mut bit = 1u128 << 126;
-
+        let (mut num, mut res, mut bit) = (*self, 0u128, 1u128 << 126);
         while bit.gt(self) {
             bit >>= 2;
         }
@@ -77,8 +74,8 @@ impl SquaredRoot for u128 {
                 true => {
                     num -= res + bit;
                     res = (res >> 1) + bit;
-                }
-                false => res >>= 1,
+                },
+                _ => res >>= 1,
             }
 
             bit >>= 2;
@@ -153,6 +150,7 @@ impl SquaredRoot for Numeric {
 #[inline(always)]
 pub(super) fn abs(value: &Value) -> Result<Value, SqlError> {
     match value {
+        Value::Null => Ok(Value::Null),
         Value::Float(f) => Ok(Value::Float(f.abs())),
         Value::Number(n) => Ok(Value::Number(n.abs())),
         Value::Numeric(n) => Ok(Value::Numeric(n.abs())),
@@ -165,12 +163,13 @@ pub(super) fn abs(value: &Value) -> Result<Value, SqlError> {
 #[inline(always)]
 pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError> {
     match (base, expoent) {
+        (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
         (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(*e))),
         (Value::Float(b), Value::Number(e)) => Ok(Value::Float(b.powi(*e as _))),
         (Value::Number(b), Value::Number(e)) => Ok(Value::Number(b.pow(*e as _))),
         (Value::Numeric(b), Value::Numeric(e)) => {
             Ok(Value::Numeric(b.pow(e).expect("Negative numeric sqrt")))
-        }
+        },
 
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
             expected: vec![VmType::Number, VmType::Numeric, VmType::Float],
@@ -183,12 +182,13 @@ pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, Sql
     use crate::sql::statement::Expression;
 
     match (value, decimals) {
+        (Value::Null, _) | (_, Some(Value::Null)) => Ok(Value::Null),
         (Value::Float(value), None) => Ok(value.trunc().into()),
         (Value::Float(value), Some(decimals)) => match decimals {
             Value::Number(decimals) => {
                 let factor = 10f64.powi(decimals as i32);
                 Ok(value.mul_add(factor, 0f64).trunc().div(factor).into())
-            }
+            },
             _ => Err(SqlError::Type(TypeError::ExpectedType {
                 expected: VmType::Number,
                 found: Expression::Value(decimals.clone()),
@@ -203,11 +203,11 @@ pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, Sql
                         expected: VmType::Number,
                         found: Expression::Value(v),
                     }));
-                }
+                },
             };
 
             Ok(Value::Numeric(value.trunc(decimals)))
-        }
+        },
         _ => Err(TypeError::ExpectedType {
             expected: VmType::Float,
             found: Expression::Value(value.clone()),
@@ -219,6 +219,7 @@ pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, Sql
 #[inline(always)]
 pub(super) fn sign(value: &Value) -> Result<Value, SqlError> {
     match value {
+        Value::Null => Ok(Value::Null),
         Value::Number(n) => Ok(Value::Number(n.sign() as i128)),
         Value::Float(f) => Ok(Value::Number(f.sign() as i128)),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
@@ -230,11 +231,12 @@ pub(super) fn sign(value: &Value) -> Result<Value, SqlError> {
 #[inline(always)]
 pub(super) fn sqrt(value: &Value) -> Result<Value, SqlError> {
     match value {
+        Value::Null => Ok(Value::Null),
         Value::Number(n) => {
             let n = u128::try_from(*n).or(Err(SqlError::Vm(VmError::NegativeNumSqrt)))?;
             let sqrt = n.sqrt()?;
             Ok(Value::Number(sqrt as i128))
-        }
+        },
         Value::Float(f) => Ok(Value::Float(f.sqrt()?)),
         Value::Numeric(n) => Ok(Value::Numeric(n.sqrt().expect("Negative num sqrt"))),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
@@ -267,15 +269,9 @@ mod tests {
         assert_eq!(Value::Number(1), power(&i128::MAX.into(), &0.into())?);
         assert!(matches!(power(&f64::NAN.into(), &2.0.into())?, Value::Float(x) if x.is_nan()));
         assert_eq!(Value::Float(1.0), power(&0.0.into(), &0.0.into())?);
-        assert_eq!(
-            Value::Float(f64::INFINITY),
-            power(&0.0.into(), &(-1.0).into())?
-        );
+        assert_eq!(Value::Float(f64::INFINITY), power(&0.0.into(), &(-1.0).into())?);
         assert!(matches!(power(&(-2.0).into(), &0.5.into())?, Value::Float(x) if x.is_nan()));
-        assert_eq!(
-            Value::Float(f64::INFINITY),
-            power(&2.0.into(), &1024.0.into())?
-        );
+        assert_eq!(Value::Float(f64::INFINITY), power(&2.0.into(), &1024.0.into())?);
 
         Ok(())
     }
@@ -305,19 +301,10 @@ mod tests {
         );
 
         assert!(matches!(trunc(&f64::NAN.into(), None)?, Value::Float(x) if x.is_nan()));
-        assert_eq!(
-            Value::Float(f64::INFINITY),
-            trunc(&f64::INFINITY.into(), None)?
-        );
-        assert_eq!(
-            Value::Float(f64::NEG_INFINITY),
-            trunc(&f64::NEG_INFINITY.into(), None)?
-        );
+        assert_eq!(Value::Float(f64::INFINITY), trunc(&f64::INFINITY.into(), None)?);
+        assert_eq!(Value::Float(f64::NEG_INFINITY), trunc(&f64::NEG_INFINITY.into(), None)?);
         assert_eq!(Value::Float(0.0), trunc(&0.0.into(), None)?);
-        assert_eq!(
-            Value::Float(123456789.0),
-            trunc(&123456789.12345.into(), None)?
-        );
+        assert_eq!(Value::Float(123456789.0), trunc(&123456789.12345.into(), None)?);
 
         Ok(())
     }
@@ -349,25 +336,16 @@ mod tests {
         assert_eq!(Value::Number(5), sqrt(&27i128.into()).unwrap());
         assert_eq!(Value::Number(0), sqrt(&Value::Number(0)).unwrap());
 
-        assert_eq!(
-            SqlError::Vm(VmError::NegativeNumSqrt),
-            sqrt(&Value::Number(-1)).unwrap_err()
-        );
+        assert_eq!(SqlError::Vm(VmError::NegativeNumSqrt), sqrt(&Value::Number(-1)).unwrap_err());
     }
 
     #[test]
     fn test_float_sqrt() {
-        assert_eq!(
-            Value::Float(5.196152422706632),
-            sqrt(&27f64.into()).unwrap()
-        );
+        assert_eq!(Value::Float(5.196152422706632), sqrt(&27f64.into()).unwrap());
         assert_eq!(Value::Float(4.0), sqrt(&Value::Float(16.0)).unwrap());
         assert_eq!(Value::Float(0f64), sqrt(&0f64.into()).unwrap());
 
-        assert_eq!(
-            Value::Float(f64::INFINITY),
-            sqrt(&f64::INFINITY.into()).unwrap()
-        );
+        assert_eq!(Value::Float(f64::INFINITY), sqrt(&f64::INFINITY.into()).unwrap());
         assert_eq!(
             SqlError::Vm(VmError::NegativeNumSqrt),
             sqrt(&f64::NEG_INFINITY.into()).unwrap_err()
