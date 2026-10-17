@@ -110,11 +110,30 @@ impl MvccDatabase {
         self.sync_schema_epoch();
         for statement in statements {
             let statement = sql::process_statement(statement, self)?;
-            self.executor.execute(statement)?;
+            self.execute(statement)?;
             self.sync_schema_epoch();
         }
 
         Ok(())
+    }
+
+    /// runs `statement`, dropping cached metadata whenever it may change the catalogue this session
+    /// sees: its own DDL, and the end of a transaction that may hold some (on success or failure)
+    fn execute(&mut self, statement: Statement) -> Result<ExecResult> {
+        let catalogue = matches!(
+            statement,
+            Statement::Create(_)
+                | Statement::Drop(_)
+                | Statement::Commit
+                | Statement::Rollback
+                | Statement::RollbackTo(_)
+        );
+        let result = self.executor.execute(statement);
+        if catalogue {
+            self.context = Context::with_size(db::DEFAULT_CACHE_SIZE);
+        }
+
+        result
     }
 
     pub fn exec(&mut self, input: &str) -> Result<QuerySet> {
@@ -126,7 +145,7 @@ impl MvccDatabase {
             return Ok(QuerySet::empty());
         }
 
-        let result = self.executor.execute(statement)?;
+        let result = self.execute(statement)?;
         self.sync_schema_epoch();
 
         Ok(match result {
@@ -190,8 +209,7 @@ impl Ctx for MvccDatabase {
         if !self.context.contains(table) {
             let handle = self
                 .executor
-                .engine()
-                .table(table)
+                .session_table(table)
                 .map_err(|_| DatabaseError::Sql(SqlError::InvalidTable(table.into())))?;
 
             self.context.insert(TableMetadata {
@@ -207,8 +225,7 @@ impl Ctx for MvccDatabase {
     fn next_serial(&mut self, table: &str, column: usize) -> Result<i128> {
         let handle = self
             .executor
-            .engine()
-            .table(table)
+            .session_table(table)
             .map_err(|_| DatabaseError::Sql(SqlError::InvalidTable(table.into())))?;
         let value = handle.next_serial(column) as i128;
         let data_type = handle.schema.columns[column].column_type();

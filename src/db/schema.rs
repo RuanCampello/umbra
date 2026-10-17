@@ -1,6 +1,10 @@
 use crate::{
     collections::hash::HashMap,
-    sql::statement::{self, Constraint, JoinType, Type},
+    sql::{
+        parser::Parser,
+        statement::{self, Constraint, Expression, JoinType, OnDelete, Type, Value},
+    },
+    storage::tuple,
 };
 use core::fmt;
 use std::{
@@ -11,14 +15,28 @@ use std::{
 
 /// The shape of a table's rows and of every tuple derived from them: the catalogue, the analyser and the executor all use it
 /// Its parts are shared, so a clone costs two reference counts and a mutation copies only what it changes
-///
-/// A bare name resolves to the last column carrying it (a joined table's columns follow the base
-/// table's), found by a reverse search
-/// only `table.column` names, added for joins, need a map
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct Schema {
     pub columns: Arc<Vec<Column>>,
     qualified: Arc<HashMap<String, usize>>,
+    /// What a table's rows satisfy beyond their types, empty for derived shapes
+    pub constraints: Arc<Constraints>,
+}
+
+/// A table's CHECK predicates and foreign keys
+#[derive(Debug, PartialEq, Default)]
+pub struct Constraints {
+    pub checks: Vec<Expression>,
+    pub foreign_keys: Vec<ForeignKey>,
+}
+
+/// `column` holds, when not NULL, the `referenced` column of some row of `table`
+#[derive(Debug, PartialEq, Clone)]
+pub struct ForeignKey {
+    pub column: usize,
+    pub table: String,
+    pub referenced: String,
+    pub on_delete: OnDelete,
 }
 
 /// Builds the schema of a new table, numbering its enum columns
@@ -32,9 +50,13 @@ pub struct Column {
     r#type: Type,
     nullable: bool,
     primary_key: bool,
+    /// `UNIQUE`: the engine keeps a unique index on it, as on the primary key
+    unique: bool,
     /// Variant names of an enum column, carried with the column so a schema joined from several
     /// tables never mixes their per-table [Type::Enum] numbering
     variants: Option<Arc<[String]>>,
+    /// The value an insert omitting the column takes, already of the column's type
+    default: Option<Value>,
 }
 
 /// Bounds-checked cursor over serialised schema bytes
@@ -85,21 +107,51 @@ fn serialise_type(r#type: Type, buff: &mut Vec<u8>) {
 
 impl Schema {
     pub fn new(columns: Vec<Column>) -> Self {
-        Self { columns: Arc::new(columns), qualified: Arc::default() }
+        Self {
+            columns: Arc::new(columns),
+            qualified: Arc::default(),
+            constraints: Arc::default(),
+        }
     }
 
     /// the schema of a `CREATE TABLE` column list, enum columns are numbered in order
     pub fn from_definition(columns: &[statement::Column]) -> Self {
         let mut builder = SchemaBuilder::new();
-        for column in columns {
+        let mut constraints = Constraints::default();
+        for (index, column) in columns.iter().enumerate() {
             let primary = column.constraints.contains(&Constraint::PrimaryKey);
             builder = match &column.type_def {
                 Some(variants) => builder.enumeration(&column.name, variants, column.is_nullable()),
                 _ => builder.column(&column.name, column.data_type, column.is_nullable(), primary),
             };
+
+            for constraint in &column.constraints {
+                match constraint {
+                    Constraint::Check(expr) => constraints.checks.push(expr.clone()),
+                    Constraint::References { table, column: referenced, on_delete } => {
+                        let fk = ForeignKey {
+                            column: index,
+                            table: table.into(),
+                            referenced: referenced.into(),
+                            on_delete: *on_delete,
+                        };
+                        constraints.foreign_keys.push(fk);
+                    },
+                    _ => {},
+                }
+            }
         }
 
-        builder.build()
+        let mut schema = builder.build();
+        let unique = columns.iter().map(|column| column.constraints.contains(&Constraint::Unique));
+        Arc::make_mut(&mut schema.columns)
+            .iter_mut()
+            .zip(unique)
+            .for_each(|(column, unique)| {
+                column.unique = unique;
+            });
+        schema.constraints = Arc::new(constraints);
+        schema
     }
 
     /// a schema without columns
@@ -231,8 +283,13 @@ impl Schema {
         input_schema
     }
 
-    /// the catalogue bytes of table `name` with this schema: name, columns (type, primary key,
-    /// nullability), then the variant lists of the enum columns in [Type::Enum] order
+    /// sets the default of the column at `index`
+    pub fn set_default(&mut self, index: usize, value: Value) {
+        Arc::make_mut(&mut self.columns)[index].default = (value != Value::Null).then_some(value);
+    }
+
+    /// the catalogue bytes of table `name` with this schema: name, columns, the variant lists of
+    /// the enum columns in [Type::Enum] order, then the constraints
     pub fn encode(&self, name: &str) -> Vec<u8> {
         let mut buff = Vec::new();
 
@@ -247,6 +304,11 @@ impl Schema {
             serialise_type(column.r#type, &mut buff);
             buff.push(column.primary_key as u8);
             buff.push(column.nullable as u8);
+            buff.push(column.unique as u8);
+            buff.push(column.default.is_some() as u8);
+            if let Some(default) = &column.default {
+                tuple::serialize_into(&mut buff, &column.r#type, default);
+            }
 
             if let (Type::Enum(id), Some(variants)) = (column.r#type, &column.variants) {
                 enums.push((id, variants));
@@ -261,6 +323,24 @@ impl Schema {
                 buff.extend_from_slice(&(variant.len() as u16).to_le_bytes());
                 buff.extend_from_slice(variant.as_bytes());
             }
+        }
+
+        let put_string = |buff: &mut Vec<u8>, string: &str| {
+            buff.extend_from_slice(&(string.len() as u16).to_le_bytes());
+            buff.extend_from_slice(string.as_bytes());
+        };
+
+        buff.extend_from_slice(&(self.constraints.checks.len() as u16).to_le_bytes());
+        for check in &self.constraints.checks {
+            let string = check.to_sql().expect("the analyser admits only spellable checks");
+            put_string(&mut buff, &string);
+        }
+        buff.extend_from_slice(&(self.constraints.foreign_keys.len() as u16).to_le_bytes());
+        for key in &self.constraints.foreign_keys {
+            buff.extend_from_slice(&(key.column as u16).to_le_bytes());
+            put_string(&mut buff, &key.table);
+            put_string(&mut buff, &key.referenced);
+            buff.push((key.on_delete == OnDelete::Cascade) as u8);
         }
 
         buff
@@ -281,14 +361,21 @@ impl Schema {
             let r#type = bytes.column_type()?;
             let primary_key = bytes.flag("Missing primary key field")?;
             let nullable = bytes.flag("Missing nullable field")?;
-
-            columns.push(Column {
+            let unique = bytes.flag("Missing unique field")?;
+            let mut column = Column {
                 name: column_name,
                 r#type,
                 nullable,
                 primary_key,
+                unique,
                 variants: None,
-            });
+                default: None,
+            };
+            if bytes.flag("Missing default field")? {
+                column.default = Some(bytes.value(&column)?);
+            }
+
+            columns.push(column);
         }
 
         let enum_count = bytes.u16("Missing enum count")? as usize;
@@ -312,7 +399,32 @@ impl Schema {
             }
         }
 
-        Ok((name, Self::new(columns)))
+        let mut constraints = Constraints::default();
+        for _ in 0..bytes.u16("Missing check count")? {
+            let len = bytes.u16("Missing check length")? as usize;
+            let text = bytes.string(len, "Missing check")?;
+            let check = Parser::new(&text).parse_expr(None).map_err(|error| {
+                Error::new(ErrorKind::InvalidData, format!("check {text}: {error}"))
+            })?;
+            constraints.checks.push(check);
+        }
+        for _ in 0..bytes.u16("Missing foreign key count")? {
+            let column = bytes.u16("Missing foreign key column")? as usize;
+            let len = bytes.u16("Missing referenced table length")? as usize;
+            let table = bytes.string(len, "Missing referenced table")?;
+            let len = bytes.u16("Missing referenced column length")? as usize;
+            let referenced = bytes.string(len, "Missing referenced column")?;
+            let on_delete = match bytes.flag("Missing on delete action")? {
+                true => OnDelete::Cascade,
+                false => OnDelete::Restrict,
+            };
+            let fk = ForeignKey { column, table, referenced, on_delete };
+            constraints.foreign_keys.push(fk);
+        }
+
+        let mut schema = Self::new(columns);
+        schema.constraints = Arc::new(constraints);
+        Ok((name, schema))
     }
 }
 
@@ -381,7 +493,9 @@ impl Column {
             r#type,
             nullable: false,
             primary_key: false,
+            unique: false,
             variants: None,
+            default: None,
         }
     }
 
@@ -423,10 +537,20 @@ impl Column {
         self.nullable
     }
 
+    #[inline]
+    pub fn is_unique(&self) -> bool {
+        self.unique
+    }
+
     /// the variant names of an enum column
     #[inline]
     pub fn variants(&self) -> Option<&[String]> {
         self.variants.as_deref()
+    }
+
+    #[inline]
+    pub fn default(&self) -> Option<&Value> {
+        self.default.as_ref()
     }
 }
 
@@ -451,6 +575,14 @@ impl<'a> SchemaBytes<'a> {
 
     fn flag(&mut self, context: &str) -> Result<bool, Error> {
         Ok(self.u8(context)? != 0)
+    }
+
+    /// a non-null value of `column`'s type, as [tuple::serialize_into] wrote it
+    fn value(&mut self, column: &Column) -> Result<Value, Error> {
+        let mut reader = std::io::Cursor::new(&self.data[self.position..]);
+        let value = tuple::read_value(&mut reader, column)?;
+        self.position += reader.position() as usize;
+        Ok(value)
     }
 
     fn u16(&mut self, context: &str) -> Result<u16, Error> {

@@ -1,4 +1,4 @@
-//! The user-facing database API: sessions ([MvccDatabase]), results ([QuerySet]) and errors.
+//! The user-facing database API: sessions ([MvccDatabase]), results ([QuerySet]) and errors
 
 mod context;
 mod metadata;
@@ -13,7 +13,7 @@ pub(crate) use metadata::TableMetadata;
 pub use mvcc::MvccDatabase;
 #[cfg(test)]
 pub(crate) use schema::SchemaBuilder;
-pub(crate) use schema::{Column, Schema};
+pub(crate) use schema::{Column, ForeignKey, Schema};
 
 use crate::core::date::{DateParseError, ExtractError};
 use crate::core::uuid::UuidError;
@@ -46,22 +46,22 @@ pub enum DatabaseError {
 
 #[derive(Debug, PartialEq)]
 pub enum SqlError {
-    /// Database table isn't found or somewhat corrupted.
+    /// Database table isn't found or somewhat corrupted
     InvalidTable(String),
-    /// Column isn't found or not usable in the given context.
+    /// Column isn't found or not usable in the given context
     InvalidColumn(String),
-    /// Column doesn't exist in this given table.
+    /// Column doesn't exist in this given table
     InvalidQualifiedColumn {
         table: String,
         column: String,
     },
-    /// Column does not appear in `group by` or isn't used in aggregation.
+    /// Column does not appear in `group by` or isn't used in aggregation
     InvalidGroupBy(String),
-    /// Duplicated UNIQUE or PRIMARY KEY col.
+    /// Duplicated UNIQUE or PRIMARY KEY col
     DuplicatedKey(Value),
     /// [Analyzer error](AnalyzerError).
     Analyzer(AnalyzerError),
-    /// Invalid function arguments. Expected x but found y.
+    /// Invalid function arguments. Expected x but found y
     InvalidFuncArgs(usize, usize),
     Type(TypeError),
     Vm(VmError),

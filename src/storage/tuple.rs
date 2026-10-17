@@ -286,7 +286,7 @@ fn read_varlena(reader: &mut impl Read) -> io::Result<(usize, Vec<u8>)> {
     Ok((length, buf))
 }
 
-fn read_value(reader: &mut impl Read, col: &crate::db::Column) -> io::Result<Value> {
+pub(crate) fn read_value(reader: &mut impl Read, col: &crate::db::Column) -> io::Result<Value> {
     match col.column_type() {
         Type::Varchar(size) => {
             let mut len = [0; mem::size_of::<usize>()];
