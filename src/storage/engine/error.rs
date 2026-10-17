@@ -2,14 +2,15 @@ use crate::sql::Value;
 use crate::storage::engine::table::Row;
 use std::fmt::{self, Display};
 use std::io;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) enum EngineError {
     Io(io::Error),
     Corrupt(String),
-    /// a durability failure left the engine unable to promise anything further
+    /// a durability failure left the engine unable to promise anything further, for the cause given
     /// reopen it
-    Poisoned,
+    Poisoned(Arc<str>),
     TableNotFound(String),
     TableExists(String),
     IndexExists(String),
@@ -24,6 +25,7 @@ pub(crate) enum EngineError {
     Stale(Option<Row>),
     /// The transaction failed earlier and was rolled back
     Aborted,
+    NoSavepoint(String),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, EngineError>;
@@ -33,7 +35,9 @@ impl Display for EngineError {
         match self {
             Self::Io(cause) => write!(f, "storage I/O failed: {cause}"),
             Self::Corrupt(what) => write!(f, "database files are corrupt: {what}"),
-            Self::Poisoned => f.write_str("engine stopped after a durability failure, reopen it"),
+            Self::Poisoned(cause) => {
+                write!(f, "engine stopped after a durability failure ({cause}), reopen it")
+            },
             Self::TableNotFound(name) => write!(f, "table {name} does not exist"),
             Self::TableExists(name) => write!(f, "table {name} already exists"),
             Self::IndexExists(name) => write!(f, "index {name} already exists"),
@@ -47,6 +51,7 @@ impl Display for EngineError {
             Self::DuplicatedKey(value) => write!(f, "duplicated key value: {value}"),
             Self::Stale(_) => f.write_str("row changed after the statement started"),
             Self::Aborted => f.write_str("transaction was aborted by an earlier error"),
+            Self::NoSavepoint(name) => write!(f, "savepoint {name} does not exist"),
         }
     }
 }

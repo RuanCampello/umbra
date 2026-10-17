@@ -74,7 +74,10 @@ impl DirectoryLock {
 
 impl Storage for OsStorage {
     fn create(&self, path: &Path) -> io::Result<Box<dyn StorageFile>> {
-        let file = OpenOptions::new().create(true).truncate(true).write(true).open(path)?;
+        // appends land at the end even after a short write and a truncation
+        // `truncate` cannot be combined with `append`
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        file.set_len(0)?;
 
         Ok(Box::new(OsFile { file, len: 0 }))
     }
@@ -160,15 +163,18 @@ pub(crate) mod memory {
     use std::collections::BTreeMap;
     use std::io;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex, MutexGuard};
+    use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
     #[derive(Clone, Default)]
     pub(crate) struct MemoryStorage {
         state: Arc<Mutex<MemoryState>>,
+        /// Wakes operations parked by [MemoryStorage::hold]
+        gate: Arc<Condvar>,
     }
 
     struct MemoryFile {
         state: Arc<Mutex<MemoryState>>,
+        gate: Arc<Condvar>,
         inode: u64,
     }
 
@@ -180,14 +186,48 @@ pub(crate) mod memory {
         next_inode: u64,
         operations: u64,
         fail_at: Option<u64>,
+        /// Every operation from this one on fails, until the next reboot
+        fail_from: Option<u64>,
         crash_at: Option<u64>,
         crashed: bool,
+        /// Operations of this kind wait while set, so a test can stop a writer mid-commit
+        held: Option<Op>,
+        waiting: usize,
+        /// Kinds of the operations failed on purpose, in order
+        failed: Vec<Op>,
     }
 
     #[derive(Default)]
     struct Inode {
         current: Vec<u8>,
         durable: Vec<u8>,
+    }
+
+    /// What a crash does to the bytes written since a file's last sync
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(crate) enum Loss {
+        /// All of them are lost
+        Clean,
+        /// The first half survives, the rest is lost
+        Torn,
+        /// They survive with every seventh byte flipped
+        Garbled,
+        /// The first half is lost, the second half survives: the disk persisted later
+        /// sectors of an unsynced write before earlier ones
+        Reordered,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(crate) enum Op {
+        Create,
+        Rename,
+        Remove,
+        RemoveDir,
+        CreateDir,
+        SyncDir,
+        Append,
+        Sync,
+        Truncate,
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -210,12 +250,46 @@ pub(crate) mod memory {
             state.fail_at = Some(state.operations + n);
         }
 
+        /// fails the `n`-th operation from now and every one after it, until the next reboot
+        pub fn fail_from(&self, n: u64) {
+            let mut state = self.lock();
+            state.fail_from = Some(state.operations + n);
+        }
+
         pub fn crash_at(&self, n: u64) {
             let mut state = self.lock();
             state.crash_at = Some(state.operations + n);
         }
 
+        /// parks every file operation of kind `op` until [MemoryStorage::release]
+        pub fn hold(&self, op: Op) {
+            self.lock().held = Some(op);
+        }
+
+        pub fn release(&self) {
+            self.lock().held = None;
+            self.gate.notify_all();
+        }
+
+        /// operations parked by [MemoryStorage::hold]
+        pub fn waiting(&self) -> usize {
+            self.lock().waiting
+        }
+
+        /// kinds of the operations failed by [MemoryStorage::fail_at] or [MemoryStorage::fail_from]
+        pub fn failed(&self) -> Vec<Op> {
+            self.lock().failed.clone()
+        }
+
         pub fn reboot(&self, torn: bool) {
+            self.reboot_with(match torn {
+                true => Loss::Torn,
+                false => Loss::Clean,
+            });
+        }
+
+        /// restarts the machine: everything not synced is lost or damaged as `loss` says
+        pub fn reboot_with(&self, loss: Loss) {
             let mut state = self.lock();
             let state = &mut *state;
 
@@ -223,6 +297,7 @@ pub(crate) mod memory {
             state.crashed = false;
             state.crash_at = None;
             state.fail_at = None;
+            state.fail_from = None;
 
             let live: Vec<_> = state
                 .durable
@@ -235,12 +310,24 @@ pub(crate) mod memory {
             state.inodes.retain(|inode, _| live.contains(inode));
 
             for inode in state.inodes.values_mut() {
-                match torn && inode.current.starts_with(&inode.durable) {
-                    true => {
-                        let tail = (inode.current.len() - inode.durable.len()) / 2;
-                        inode.current.truncate(inode.durable.len() + tail);
+                let synced = inode.durable.len();
+                let extends = inode.current.starts_with(&inode.durable);
+                match (loss, extends) {
+                    (Loss::Clean, _) | (_, false) => inode.current.clone_from(&inode.durable),
+                    (Loss::Torn, true) => {
+                        let tail = (inode.current.len() - synced) / 2;
+                        inode.current.truncate(synced + tail);
                     },
-                    false => inode.current.clone_from(&inode.durable),
+                    (Loss::Garbled, true) => {
+                        inode.current[synced..]
+                            .iter_mut()
+                            .step_by(7)
+                            .for_each(|byte| *byte ^= 0xA5);
+                    },
+                    (Loss::Reordered, true) => {
+                        let lost = (inode.current.len() - synced) / 2;
+                        inode.current[synced..synced + lost].fill(0);
+                    },
                 }
 
                 inode.durable.clone_from(&inode.current);
@@ -253,7 +340,7 @@ pub(crate) mod memory {
     }
 
     impl MemoryState {
-        fn operation(&mut self) -> io::Result<()> {
+        fn operation(&mut self, op: Op) -> io::Result<()> {
             if self.crashed {
                 return Err(io::Error::other("storage crashed"));
             }
@@ -265,8 +352,13 @@ pub(crate) mod memory {
                 return Err(io::Error::other("storage crashed"));
             }
 
-            match self.fail_at == Some(self.operations) {
-                true => Err(io::Error::other("injected failure")),
+            let failing = self.fail_at == Some(self.operations)
+                || self.fail_from.is_some_and(|from| self.operations >= from);
+            match failing {
+                true => {
+                    self.failed.push(op);
+                    Err(io::Error::other(format!("injected {op:?} failure")))
+                },
                 false => Ok(()),
             }
         }
@@ -297,7 +389,7 @@ pub(crate) mod memory {
     impl Storage for MemoryStorage {
         fn create(&self, path: &Path) -> io::Result<Box<dyn StorageFile>> {
             let mut state = self.lock();
-            state.operation()?;
+            state.operation(Op::Create)?;
             state.require_parent(path)?;
 
             let inode = state.next_inode;
@@ -305,13 +397,21 @@ pub(crate) mod memory {
             state.inodes.insert(inode, Inode::default());
             state.current.insert(path.to_path_buf(), Entry::File(inode));
 
-            Ok(Box::new(MemoryFile { state: Arc::clone(&self.state), inode }))
+            Ok(Box::new(MemoryFile {
+                state: Arc::clone(&self.state),
+                gate: Arc::clone(&self.gate),
+                inode,
+            }))
         }
 
         fn open(&self, path: &Path) -> io::Result<Box<dyn StorageFile>> {
             let inode = self.lock().inode(path)?;
 
-            Ok(Box::new(MemoryFile { state: Arc::clone(&self.state), inode }))
+            Ok(Box::new(MemoryFile {
+                state: Arc::clone(&self.state),
+                gate: Arc::clone(&self.gate),
+                inode,
+            }))
         }
 
         fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
@@ -326,7 +426,7 @@ pub(crate) mod memory {
 
         fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
             let mut state = self.lock();
-            state.operation()?;
+            state.operation(Op::Rename)?;
             state.require_parent(to)?;
 
             let entry = state.current.remove(from).ok_or_else(|| {
@@ -339,7 +439,7 @@ pub(crate) mod memory {
 
         fn remove(&self, path: &Path) -> io::Result<()> {
             let mut state = self.lock();
-            state.operation()?;
+            state.operation(Op::Remove)?;
             state.inode(path)?;
             state.current.remove(path);
 
@@ -348,7 +448,7 @@ pub(crate) mod memory {
 
         fn remove_dir(&self, path: &Path) -> io::Result<()> {
             let mut state = self.lock();
-            state.operation()?;
+            state.operation(Op::RemoveDir)?;
 
             if state.current.get(path) != Some(&Entry::Dir) {
                 return Err(io::Error::new(io::ErrorKind::NotFound, path.display().to_string()));
@@ -374,7 +474,7 @@ pub(crate) mod memory {
 
         fn create_dir(&self, path: &Path) -> io::Result<()> {
             let mut state = self.lock();
-            state.operation()?;
+            state.operation(Op::CreateDir)?;
 
             for ancestor in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {
                 match state.current.get(ancestor) {
@@ -396,7 +496,7 @@ pub(crate) mod memory {
 
         fn sync_dir(&self, dir: &Path) -> io::Result<()> {
             let mut state = self.lock();
-            state.operation()?;
+            state.operation(Op::SyncDir)?;
             let state = &mut *state;
 
             state.durable.retain(|path, _| path.parent() != Some(dir));
@@ -418,22 +518,42 @@ pub(crate) mod memory {
         fn lock(&self) -> MutexGuard<'_, MemoryState> {
             self.state.lock().expect("memory storage poisoned")
         }
+
+        /// the state, once operations of kind `op` are no longer held
+        fn park(&self, op: Op) -> MutexGuard<'_, MemoryState> {
+            let mut state = self.lock();
+            if state.held == Some(op) {
+                state.waiting += 1;
+                state = self
+                    .gate
+                    .wait_while(state, |state| state.held == Some(op))
+                    .expect("memory storage poisoned");
+                state.waiting -= 1;
+            }
+            state
+        }
     }
 
     impl StorageFile for MemoryFile {
         fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
-            let mut state = self.lock();
-            state.operation()?;
+            let mut state = self.park(Op::Append);
+            let outcome = state.operation(Op::Append);
 
+            // a failed write may still have written a prefix (a short write before ENOSPC)
+            let written = match (&outcome, state.crashed) {
+                (Ok(()), _) => bytes,
+                (Err(_), false) => &bytes[..bytes.len() / 2],
+                (Err(_), true) => &[],
+            };
             let inode = state.inodes.get_mut(&self.inode).expect("open file has an inode");
-            inode.current.extend_from_slice(bytes);
+            inode.current.extend_from_slice(written);
 
-            Ok(())
+            outcome
         }
 
         fn sync(&mut self) -> io::Result<()> {
-            let mut state = self.lock();
-            state.operation()?;
+            let mut state = self.park(Op::Sync);
+            state.operation(Op::Sync)?;
 
             let inode = state.inodes.get_mut(&self.inode).expect("open file has an inode");
             inode.durable.clone_from(&inode.current);
@@ -443,7 +563,7 @@ pub(crate) mod memory {
 
         fn truncate(&mut self, len: u64) -> io::Result<()> {
             let mut state = self.lock();
-            state.operation()?;
+            state.operation(Op::Truncate)?;
 
             let inode = state.inodes.get_mut(&self.inode).expect("open file has an inode");
             inode.current.truncate(len as usize);
@@ -459,7 +579,7 @@ pub(crate) mod memory {
 
 #[cfg(test)]
 mod tests {
-    use super::memory::MemoryStorage;
+    use super::memory::{MemoryStorage, Op};
     use super::*;
 
     fn durable_root() -> MemoryStorage {
@@ -533,7 +653,12 @@ mod tests {
         let mut file = storage.create(Path::new("db/log")).unwrap();
         assert!(file.append(b"lost").is_err());
         file.append(b"kept").unwrap();
-        assert_eq!(storage.read(Path::new("db/log")).unwrap(), b"kept");
+        assert_eq!(
+            storage.read(Path::new("db/log")).unwrap(),
+            b"lokept",
+            "a failed write is short"
+        );
+        assert_eq!(storage.failed(), [Op::Append]);
 
         storage.crash_at(1);
         assert!(file.sync().is_err());
