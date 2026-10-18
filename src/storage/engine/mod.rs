@@ -15,14 +15,13 @@ pub(crate) mod transaction;
 use crate::collections::hash::HashMap;
 use crate::db::Schema;
 use crate::index;
-use crate::sql::Value;
 use crate::storage::engine::checkpoint::Manifest;
-use crate::storage::engine::chunk::Cold;
+use crate::storage::engine::chunk::{Budget, Cold};
 use crate::storage::engine::clock::{Clock, TXN_FLAG};
 use crate::storage::engine::error::{EngineError, Result};
-use crate::storage::engine::index::{Holder, Index};
+use crate::storage::engine::index::{Holder, Index, Key};
 use crate::storage::engine::io::{DirectoryLock, OsStorage, Storage};
-use crate::storage::engine::log::{Kind, Log, SyncMode};
+use crate::storage::engine::log::{Kind, Layout, Log, SyncMode};
 use crate::storage::engine::record::{Change, Ddl};
 use crate::storage::engine::table::{Table, View};
 use crate::storage::engine::transaction::{Commits, IsolationLevel, Transaction};
@@ -65,18 +64,20 @@ struct Disk {
     /// `(C, start lsn)` of the current checkpoint
     /// held while one is being taken
     checkpoint: Mutex<(u64, u64)>,
-    _lock: Option<DirectoryLock>,
+    /// Released by [Engine::close]
+    lock: Mutex<Option<DirectoryLock>>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct Config {
     pub sync: SyncMode,
     pub segment_size: u64,
+    /// See [Layout::reserve]
+    pub log_reserve: u64,
     pub checkpoint_bytes: u64,
     pub maintenance_interval: Duration,
-    /// Chunks (1024 rows each) kept in memory before the coldest settled ones are evicted to disk
-    /// `None` keeps everything resident
-    pub max_resident_chunks: Option<usize>,
+    /// `None` keeps every chunk resident
+    pub budget: Option<Budget>,
 }
 
 struct Maintenance {
@@ -128,8 +129,8 @@ impl Engine {
         }
 
         let cold = config
-            .max_resident_chunks
-            .map(|max| Arc::new(Cold::new(Arc::clone(&storage), cold_dir, max)));
+            .budget
+            .map(|budget| Arc::new(Cold::new(Arc::clone(&storage), cold_dir, budget)));
 
         let mut recovered = Recovered { cold: cold.clone(), ..Recovered::default() };
         let manifest = Manifest::read(storage.as_ref(), dir)?;
@@ -154,18 +155,20 @@ impl Engine {
         }
 
         let from = manifest.as_ref().map_or(0, |manifest| manifest.start_lsn);
-        let (sync, segment_size) = (config.sync, config.segment_size);
+        let layout =
+            Layout { sync: config.sync, segment_size: config.segment_size, reserve: config.log_reserve };
         let (log, replay) = Log::open(
             Arc::clone(&storage),
             dir.join("wal"),
-            sync,
-            segment_size,
+            layout,
             from,
             |kind, payload| recovered.apply(kind, payload),
         )?;
 
-        recovered.build_indexes();
-        recovered.tables.values().for_each(|table| table.rebuild_free());
+        recovered.build_indexes()?;
+        for table in recovered.tables.values() {
+            table.rebuild_free()?;
+        }
         recovered.lsn = replay.end;
 
         if let Some(cold) = &cold {
@@ -175,7 +178,7 @@ impl Engine {
 
         let checkpoint = Mutex::new(manifest.map_or((0, 0), |m| (m.ts, m.start_lsn)));
         let dir = dir.to_path_buf();
-        let disk = Disk { storage, dir, config, checkpoint, _lock: lock };
+        let disk = Disk { storage, dir, config, checkpoint, lock: Mutex::new(lock) };
 
         Ok(Self::assemble(recovered, Some(log), Some(disk)))
     }
@@ -234,7 +237,7 @@ impl Engine {
     #[cfg(test)]
     pub fn create_index(&self, name: &str, table: &str, column: &str, unique: bool) -> Result<()> {
         let mut txn = self.begin(IsolationLevel::Snapshot);
-        txn.create_index(name, table, column, unique)?;
+        txn.create_index(name, table, &[column], unique)?;
         txn.commit()
     }
 
@@ -252,14 +255,15 @@ impl Engine {
 
         let mut current = disk.checkpoint.lock().expect("checkpoint lock poisoned");
         // a table dropped after the pinned timestamp is still visible there: its replay range may hold commits into it
-        let (ts, lsn) = self.inner.clock.pin();
+        let (registration, lsn) = self.inner.clock.pin();
+        let ts = registration.ts;
         let tables = self.inner.visible_tables(View { snapshot: ts, marker: 0 });
 
         let written = match current.0 == ts && ts != 0 {
             true => Ok(false),
             _ => disk.write_checkpoint(&tables, ts, lsn).map(|_| true),
         };
-        self.inner.clock.release(ts);
+        self.inner.clock.release(registration);
 
         if written? {
             *current = (ts, lsn);
@@ -272,7 +276,7 @@ impl Engine {
     /// one maintenance round: reclaim versions no snapshot needs, trim commit summaries, and
     /// checkpoint once enough log accumulated
     pub fn maintain(&self) -> Result<usize> {
-        let watermark = self.inner.clock.watermark();
+        let watermark = self.inner.clock.settle_watermark();
         self.inner.catalog.write().expect("catalogue poisoned").retain(|_, versions| {
             versions.retain(|table| !table.is_dropped() || table.dropped() > watermark);
             !versions.is_empty()
@@ -343,8 +347,8 @@ impl Engine {
         *maintenance = Some(Maintenance { stop, handle });
     }
 
-    /// stops maintenance and writes a final checkpoint
-    /// transactions still open keep working, their later commits stay durable through the log
+    /// stops maintenance, writes a final checkpoint, then refuses every later commit and releases
+    /// the directory, so it can be opened again while this handle lives on
     pub fn close(&self) -> Result<()> {
         let maintenance = self.inner.maintenance.lock().expect("maintenance poisoned").take();
         if let Some(maintenance) = maintenance {
@@ -352,10 +356,19 @@ impl Engine {
             maintenance.handle.join().expect("maintenance thread panicked");
         }
 
-        match self.inner.log.as_ref().is_some_and(Log::is_poisoned) {
+        let checkpointed = match self.inner.log.as_ref().is_some_and(Log::is_poisoned) {
             true => Ok(()),
             _ => self.checkpoint().map(|_| ()),
+        };
+
+        if let Some(log) = &self.inner.log {
+            log.close();
         }
+        if let Some(disk) = &self.inner.disk {
+            disk.lock.lock().expect("directory lock poisoned").take();
+        }
+
+        checkpointed
     }
 
     fn assemble(recovered: Recovered, log: Option<Log>, disk: Option<Disk>) -> Self {
@@ -386,9 +399,12 @@ impl Default for Config {
         Self {
             sync: SyncMode::Full,
             segment_size: 64 << 20,
+            // PERFORMANCE: an append that grows the file makes `fdatasync` journal the new size,
+            // 1,105 syncs/s against 2,818 over reserved blocks on ext4/NVMe (Phase 21)
+            log_reserve: 1 << 20,
             checkpoint_bytes: 64 << 20,
             maintenance_interval: Duration::from_secs(1),
-            max_resident_chunks: None,
+            budget: physical_memory().map(|bytes| Budget::Bytes(bytes / 2)),
         }
     }
 }
@@ -587,10 +603,10 @@ impl Recovered {
                 };
             };
 
-            Ok(match change {
+            match change {
                 Change::Put(row) => table.recover_put(id, row, ts),
                 Change::Delete => table.recover_delete(id),
-            })
+            }
         })?;
 
         Ok(self.last_ts = ts)
@@ -608,25 +624,24 @@ impl Recovered {
             Ddl::DropTable { table } => {
                 self.tables.remove(&table);
             },
-            Ddl::CreateIndex { table, column, unique, name } => {
+            Ddl::CreateIndex { table, columns, unique, name } => {
                 if let Some(table) = self.tables.get(&table) {
                     if table.index(&name).is_none() {
-                        table.add_index(Arc::new(Index::new(name, column, unique)));
+                        table.add_index(Arc::new(Index::new(name, columns, unique)));
                     }
                 }
             },
         }
     }
 
-    fn build_indexes(&self) {
+    fn build_indexes(&self) -> Result<()> {
         for table in self.tables.values() {
             for index in table.indexes() {
                 index.clear();
-                table.for_each_version(|id, row| {
-                    index.insert_unchecked(row[index.column].clone(), id)
-                });
+                table.for_each_version(|id, row| index.insert_unchecked(index.key(row), id))?;
             }
         }
+        Ok(())
     }
 }
 
@@ -649,17 +664,37 @@ fn new_table(id: u32, name: String, schema: Schema, cold: Option<Arc<Cold>>) -> 
 
     if let Some(column) = table.schema.primary_column_index() {
         let name = index!(primary on (table.name()));
-        table.add_index(Arc::new(Index::new(name, column, true)));
+        table.add_index(Arc::new(Index::new(name, [column], true)));
     }
 
     for (position, column) in table.schema.columns.iter().enumerate() {
         if column.is_unique() && !column.is_primary_key() {
             let name = index!(unique on (table.name()) (column.name()));
-            table.add_index(Arc::new(Index::new(name, position, true)));
+            table.add_index(Arc::new(Index::new(name, [position], true)));
         }
     }
 
     table
+}
+
+/// the memory this process may use: the machine's, or its control group's limit when lower
+fn physical_memory() -> Option<usize> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let total = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("MemTotal:"))?
+        .trim()
+        .strip_suffix("kB")?
+        .trim()
+        .parse::<usize>()
+        .ok()?
+        * 1024;
+
+    let limit = std::fs::read_to_string("/sys/fs/cgroup/memory.max")
+        .ok()
+        .and_then(|limit| limit.trim().parse::<usize>().ok());
+
+    Some(limit.map_or(total, |limit| limit.min(total)))
 }
 
 /// evicts the least recently touched settled chunks of `tables` until `cold` is within budget
@@ -692,16 +727,20 @@ fn evict_coldest(cold: &Cold, tables: &[Arc<Table>], watermark: u64) -> usize {
 }
 
 /// a key the newest versions of two different rows both hold
-fn duplicated_key(table: &Table, index: &Index) -> Option<Value> {
+fn duplicated_key(table: &Table, index: &Index) -> Result<Option<Key>> {
     let mut duplicated = None;
-    let mut current: Option<(Value, usize)> = None;
+    let mut current: Option<(Key, usize)> = None;
+    let mut failed = None;
 
     index.visit(Bound::Unbounded, Bound::Unbounded, |key, id| {
-        if duplicated.is_some() || *key == Value::Null {
+        if duplicated.is_some() || failed.is_some() || key.has_null() {
             return;
         }
 
-        let alive = table.holder(id, index.column, key, 0) != Holder::Free;
+        let alive = match table.holder(id, index, key, 0) {
+            Ok(holder) => holder != Holder::Free,
+            Err(error) => return failed = Some(error),
+        };
         match &mut current {
             Some((previous, count)) if previous == key => *count += alive as usize,
             _ => current = Some((key.clone(), alive as usize)),
@@ -712,12 +751,16 @@ fn duplicated_key(table: &Table, index: &Index) -> Option<Value> {
         }
     });
 
-    duplicated
+    match failed {
+        Some(error) => Err(error),
+        None => Ok(duplicated),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql::Value;
     use crate::db::SchemaBuilder;
     use crate::sql::statement::Type;
     use crate::storage::engine::io::memory::{Loss, MemoryStorage, Op};
@@ -736,11 +779,11 @@ mod tests {
         (engine, table)
     }
 
-    fn row(id: i128, name: &str) -> Row {
+    fn row(id: i64, name: &str) -> Row {
         Arc::from([Value::Number(id), Value::String(name.into())])
     }
 
-    fn insert(engine: &Engine, table: &Arc<Table>, rows: &[(i128, &str)]) -> Vec<RowId> {
+    fn insert(engine: &Engine, table: &Arc<Table>, rows: &[(i64, &str)]) -> Vec<RowId> {
         let mut txn = engine.begin(IsolationLevel::Snapshot);
         let ids = rows
             .iter()
@@ -760,7 +803,7 @@ mod tests {
     fn names(txn: &mut Transaction, table: &Arc<Table>) -> Vec<String> {
         let mut scan = txn.scan(table);
         let mut rows = Vec::new();
-        while scan.next_batch(&mut rows) {}
+        while scan.next_batch(&mut rows).unwrap() {}
 
         rows.iter().map(|(_, row)| text(&row[1])).collect()
     }
@@ -876,8 +919,8 @@ mod tests {
         assert_eq!(insert(&engine, &table, &[(4, "d")]), [ids[1]]);
 
         let mut reader = engine.begin(IsolationLevel::Snapshot);
-        let key = |k: i128| Value::Number(k);
-        let find = |reader: &mut Transaction, k: i128| {
+        let key = |k: i64| Value::Number(k);
+        let find = |reader: &mut Transaction, k: i64| {
             let k = key(k);
             reader
                 .index_range(&table, &index, Bound::Included(&k), Bound::Included(&k))
@@ -939,7 +982,7 @@ mod tests {
                 let count = |txn: &mut Transaction, table: &Arc<Table>| {
                     let mut scan = txn.scan(table);
                     let mut rows = Vec::new();
-                    while scan.next_batch(&mut rows) {}
+                    while scan.next_batch(&mut rows).unwrap() {}
                     rows.len()
                 };
                 assert_eq!(count(&mut txn, &users), count(&mut txn, &orders));
@@ -1095,7 +1138,7 @@ mod tests {
         writer.commit().unwrap();
 
         let mut versions = 0;
-        table.for_each_version(|_, _| versions += 1);
+        table.for_each_version(|_, _| versions += 1).unwrap();
         assert_eq!(versions, 2);
         assert_eq!(by_name.len(), 2);
         assert_eq!(index.len(), 1);
@@ -1110,7 +1153,7 @@ mod tests {
         let mut txn = engine.begin(IsolationLevel::Snapshot);
         let mut scan = txn.scan(&table);
         let mut out = Vec::new();
-        while scan.next_batch(&mut out) {}
+        while scan.next_batch(&mut out).unwrap() {}
 
         assert_eq!(out.len(), 2500);
         assert!(out.windows(2).all(|pair| pair[0].0 < pair[1].0));
@@ -1139,14 +1182,14 @@ mod tests {
         assert!(matches!(txn.commit(), Err(EngineError::TableNotFound(_))));
     }
 
-    fn number(value: &Value) -> i128 {
+    fn number(value: &Value) -> i64 {
         match value {
             Value::Number(number) => *number,
             other => panic!("expected a number, got {other}"),
         }
     }
 
-    fn accounts(engine: &Engine, balances: &[i128]) -> (Arc<Table>, Vec<RowId>) {
+    fn accounts(engine: &Engine, balances: &[i64]) -> (Arc<Table>, Vec<RowId>) {
         let schema = SchemaBuilder::new()
             .primary("id", Type::Integer)
             .add("balance", Type::Integer)
@@ -1158,7 +1201,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(n, &balance)| {
-                let row = Arc::from([Value::Number(n as i128), Value::Number(balance)]);
+                let row = Arc::from([Value::Number(n as i64), Value::Number(balance)]);
                 txn.insert(&table, row).unwrap()
             })
             .collect();
@@ -1167,7 +1210,7 @@ mod tests {
         (table, ids)
     }
 
-    fn balance(txn: &mut Transaction, table: &Arc<Table>, id: RowId) -> i128 {
+    fn balance(txn: &mut Transaction, table: &Arc<Table>, id: RowId) -> i64 {
         number(&txn.get(table, id).unwrap()[1])
     }
 
@@ -1175,8 +1218,8 @@ mod tests {
         txn: &mut Transaction,
         table: &Arc<Table>,
         id: RowId,
-        n: i128,
-        value: i128,
+        n: i64,
+        value: i64,
     ) -> Result<()> {
         txn.update(table, id, Arc::from([Value::Number(n), Value::Number(value)]))
     }
@@ -1186,7 +1229,7 @@ mod tests {
         txn: &mut Transaction,
         table: &Arc<Table>,
         id: RowId,
-        mut current: i128,
+        mut current: i64,
     ) -> Result<()> {
         loop {
             match set(txn, table, id, 0, current + 1) {
@@ -1231,7 +1274,7 @@ mod tests {
         assert_eq!(balance(&mut reader, &table, ids[0]), 11);
     }
 
-    /// Two doctors on call; each takes themselves off if the other is still on call.
+    /// Two doctors on call, each takes themselves off if the other is still on call.
     fn write_skew(level: IsolationLevel) -> (Result<()>, Result<()>) {
         let engine = Engine::in_memory();
         let (table, ids) = accounts(&engine, &[1, 1]);
@@ -1241,8 +1284,8 @@ mod tests {
         let on_call = |txn: &mut Transaction| {
             let mut scan = txn.scan(&table);
             let mut rows = Vec::new();
-            while scan.next_batch(&mut rows) {}
-            rows.iter().map(|(_, row)| number(&row[1])).sum::<i128>()
+            while scan.next_batch(&mut rows).unwrap() {}
+            rows.iter().map(|(_, row)| number(&row[1])).sum::<i64>()
         };
 
         assert_eq!(on_call(&mut first), 2);
@@ -1618,7 +1661,7 @@ mod tests {
 
             let mut txn = engine.begin(IsolationLevel::Snapshot);
             for _ in 0..3 {
-                let value = table.next_serial(0) as i128;
+                let value = table.next_serial(0) as i64;
                 txn.insert(&table, Arc::from([Value::Number(value)])).unwrap();
             }
             txn.commit().unwrap();
@@ -1682,8 +1725,9 @@ mod tests {
             let engine = reopen_with(&storage, config.clone());
             let table = users(&engine);
 
-            // the commit appends (1) and syncs (2); rotating to a new segment then fails (3)
-            storage.fail_at(3);
+            // the commit reserves (1), appends (2) and syncs (3), rotating to a new segment then
+            // fails (4)
+            storage.fail_at(4);
             let mut txn = engine.begin(IsolationLevel::Snapshot);
             txn.insert(&table, row(1, "durable")).unwrap();
             assert!(txn.commit().is_ok(), "the commit was durable before the rotation failed");
@@ -1705,7 +1749,7 @@ mod tests {
         let table = users(&engine);
         insert(&engine, &table, &[(1, "durable")]);
 
-        // the write is the commit's first operation; it fails after writing half its bytes
+        // the write is the commit's first operation and fails after writing half its bytes
         let mut txn = engine.begin(IsolationLevel::Snapshot);
         txn.insert(&table, row(2, "lost")).unwrap();
         storage.fail_at(1);
@@ -1789,7 +1833,8 @@ mod tests {
         let storage = disk();
         let engine = reopen(&storage);
 
-        storage.fail_at(1);
+        // the flush reserves space (1), then writing the record fails (2)
+        storage.fail_at(2);
         assert!(matches!(users_named_with_text(&engine, "t"), Err(EngineError::Io(_))));
         assert!(engine.table("t").is_err());
         users_named_with_text(&engine, "t").unwrap();
@@ -1862,7 +1907,7 @@ mod tests {
     fn snapshot_names(table: &Arc<Table>, snapshot: u64) -> Vec<String> {
         let mut scan = table.scan(View { snapshot, marker: 0 });
         let mut rows = Vec::new();
-        while scan.next_batch(&mut rows) {}
+        while scan.next_batch(&mut rows).unwrap() {}
         rows.iter().map(|(_, row)| text(&row[1])).collect()
     }
 
@@ -1996,7 +2041,7 @@ mod tests {
 
         assert_eq!(engine.maintain().unwrap(), 3);
         let mut versions = 0;
-        table.for_each_version(|_, _| versions += 1);
+        table.for_each_version(|_, _| versions += 1).unwrap();
         assert_eq!(versions, 1);
         assert_eq!(table.index("by_name").unwrap().len(), 1);
         assert_eq!(table.index_on(0).unwrap().len(), 1);
@@ -2037,9 +2082,31 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn a_closed_engine_refuses_commits_and_releases_its_directory() {
+        let dir = std::env::temp_dir().join(format!("umbra-engine-close-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let engine = Engine::open(&dir, Config::default()).unwrap();
+        let table = users(&engine);
+        insert(&engine, &table, &[(1, "kept")]);
+        engine.close().unwrap();
+
+        let mut txn = engine.begin(IsolationLevel::Snapshot);
+        txn.insert(&table, row(2, "lost")).unwrap();
+        assert!(matches!(txn.commit(), Err(EngineError::Closed)));
+        engine.close().unwrap();
+
+        let reopened = Engine::open(&dir, Config::default()).unwrap();
+        assert_eq!(all_names(&reopened, "users"), ["kept"]);
+        drop(engine);
+        drop(reopened);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     type Step = fn(&Engine) -> Result<()>;
 
-    fn put(engine: &Engine, table: &str, rows: &[(i128, &str)]) -> Result<()> {
+    fn put(engine: &Engine, table: &str, rows: &[(i64, &str)]) -> Result<()> {
         let table = engine.table(table)?;
         let mut txn = engine.begin(IsolationLevel::Snapshot);
         for &(id, name) in rows {
@@ -2048,12 +2115,12 @@ mod tests {
         txn.commit()
     }
 
-    fn rewrite(engine: &Engine, table: &str, f: fn(i128) -> Option<&'static str>) -> Result<()> {
+    fn rewrite(engine: &Engine, table: &str, f: fn(i64) -> Option<&'static str>) -> Result<()> {
         let table = engine.table(table)?;
         let mut txn = engine.begin(IsolationLevel::Snapshot);
         let mut scan = txn.scan(&table);
         let mut rows = Vec::new();
-        while scan.next_batch(&mut rows) {}
+        while scan.next_batch(&mut rows).unwrap() {}
 
         for (id, current) in rows {
             let Value::Number(key) = current[0] else {
@@ -2103,7 +2170,7 @@ mod tests {
     }
 
     /// creates `name`, fills it and indexes it, in one transaction
-    fn create_filled(engine: &Engine, name: &str, rows: &[(i128, &str)]) -> Result<()> {
+    fn create_filled(engine: &Engine, name: &str, rows: &[(i64, &str)]) -> Result<()> {
         let schema = SchemaBuilder::new()
             .primary("id", Type::Integer)
             .nullable("name", Type::Text)
@@ -2113,12 +2180,12 @@ mod tests {
         for &(id, text) in rows {
             txn.insert(&table, row(id, text))?;
         }
-        txn.create_index(&format!("{name}_name"), name, "name", false)?;
+        txn.create_index(&format!("{name}_name"), name, &["name"], false)?;
         txn.commit()
     }
 
     /// drops `name` and creates it again with `rows`, in one transaction
-    fn recreate_filled(engine: &Engine, name: &str, rows: &[(i128, &str)]) -> Result<()> {
+    fn recreate_filled(engine: &Engine, name: &str, rows: &[(i64, &str)]) -> Result<()> {
         let schema = SchemaBuilder::new()
             .primary("id", Type::Integer)
             .nullable("name", Type::Text)
@@ -2149,7 +2216,7 @@ mod tests {
                 let mut txn = engine.begin(IsolationLevel::Snapshot);
                 let mut scan = txn.scan(&table);
                 let mut rows = Vec::new();
-                while scan.next_batch(&mut rows) {}
+                while scan.next_batch(&mut rows).unwrap() {}
 
                 let mut rows: Vec<Vec<Value>> = rows.iter().map(|(_, row)| row.to_vec()).collect();
                 rows.sort();
@@ -2161,7 +2228,7 @@ mod tests {
     #[test]
     fn a_crash_before_any_io_operation_recovers_a_committed_prefix() {
         for budget in [None, Some(0)] {
-            crash_sweep(Config { max_resident_chunks: budget, ..Config::default() });
+            crash_sweep(Config { budget: budget.map(Budget::Chunks), ..Config::default() });
         }
     }
 
@@ -2324,7 +2391,7 @@ mod tests {
     }
 
     fn budgeted(storage: &MemoryStorage, chunks: usize) -> Engine {
-        let config = Config { max_resident_chunks: Some(chunks), ..Config::default() };
+        let config = Config { budget: Some(Budget::Chunks(chunks)), ..Config::default() };
         Engine::open_with(Arc::new(storage.clone()), Path::new("db"), config, None).unwrap()
     }
 
@@ -2333,7 +2400,7 @@ mod tests {
     }
 
     /// a users table of `rows` rows (ids 0..rows), committed in one transactions
-    fn populated(engine: &Engine, rows: i128) -> Arc<Table> {
+    fn populated(engine: &Engine, rows: i64) -> Arc<Table> {
         let table = users(engine);
         let mut txn = engine.begin(IsolationLevel::Snapshot);
         for id in 0..rows {
@@ -2343,7 +2410,7 @@ mod tests {
         table
     }
 
-    fn lookup(engine: &Engine, table: &Arc<Table>, id: i128) -> Option<String> {
+    fn lookup(engine: &Engine, table: &Arc<Table>, id: i64) -> Option<String> {
         let index = table.index_on(0).unwrap();
         let key = Value::Number(id);
         let mut txn = engine.begin(IsolationLevel::Snapshot);
@@ -2389,6 +2456,42 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_cold_chunk_fails_the_access_not_the_engine() {
+        let storage = disk();
+        let engine = budgeted(&storage, 1);
+        let table = populated(&engine, 5_000);
+        engine.maintain().unwrap();
+
+        let cold = Path::new("db/cold").join(table.id.to_string());
+        let damaged = storage.list(&cold).unwrap()[0].clone();
+        let mut bytes = storage.read(&damaged).unwrap();
+        bytes[10] ^= 0xFF;
+        storage.create(&damaged).unwrap().append(&bytes).unwrap();
+
+        let mut txn = engine.begin(IsolationLevel::Snapshot);
+        let mut scan = txn.scan(&table);
+        let mut rows = Vec::new();
+        let failed = loop {
+            match scan.next_batch(&mut rows) {
+                Ok(true) => continue,
+                Ok(false) => break None,
+                Err(error) => break Some(error),
+            }
+        };
+        assert!(matches!(failed, Some(EngineError::Corrupt(_))));
+        drop(txn);
+
+        let mut txn = engine.begin(IsolationLevel::Snapshot);
+        txn.insert(&table, row(9_000, "after")).unwrap();
+        txn.commit().unwrap();
+        assert!(engine.close().is_err());
+        drop(engine);
+
+        let engine = budgeted(&storage, 1);
+        assert_eq!(all_names(&engine, "users").len(), 5_001);
+    }
+
+    #[test]
     fn a_chunk_whose_cold_write_fails_stays_resident() {
         let storage = disk();
         let engine = budgeted(&storage, 1);
@@ -2431,6 +2534,61 @@ mod tests {
         assert_eq!(resident(&engine), 0);
     }
 
+    fn bytes(engine: &Engine) -> usize {
+        engine.inner.cold.as_ref().unwrap().bytes()
+    }
+
+    #[test]
+    fn a_byte_budget_bounds_the_resident_rows() {
+        let storage = disk();
+        let config = Config { budget: Some(Budget::Bytes(200 << 10)), ..Config::default() };
+        let engine = Engine::open_with(Arc::new(storage.clone()), Path::new("db"), config, None).unwrap();
+        let table = populated(&engine, 10_000);
+        assert_eq!(resident(&engine), 10);
+        assert!(bytes(&engine) > 200 << 10, "{} bytes for 10 chunks", bytes(&engine));
+
+        engine.maintain().unwrap();
+        assert!(bytes(&engine) <= 200 << 10, "{} bytes after eviction", bytes(&engine));
+        assert!(resident(&engine) < 10);
+        assert_eq!(all_names(&engine, "users").len(), 10_000);
+        assert_eq!(lookup(&engine, &table, 9_999).as_deref(), Some("n9999"));
+    }
+
+    #[test]
+    fn swept_versions_leave_the_byte_count() {
+        let storage = disk();
+        let engine = budgeted(&storage, usize::MAX);
+        let empty = bytes(&engine);
+        let table = populated(&engine, 2_000);
+        engine.maintain().unwrap();
+        let settled = bytes(&engine);
+        assert!(settled > empty);
+
+        for round in 0..3 {
+            let mut txn = engine.begin(IsolationLevel::Snapshot);
+            for id in 1..=2_000 {
+                txn.update(&table, id, row(id as i64 - 1, &format!("round {round} of a longer name")))
+                    .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        assert!(bytes(&engine) > settled, "written versions count before they are swept");
+
+        engine.maintain().unwrap();
+        engine.maintain().unwrap();
+        let longer: usize = (0..2_000).map(|id| "round 2 of a longer name".len() - format!("n{id}").len()).sum();
+        assert_eq!(bytes(&engine), settled + longer);
+
+        let mut txn = engine.begin(IsolationLevel::Snapshot);
+        for id in 1..=2_000 {
+            txn.delete(&table, id).unwrap();
+        }
+        txn.commit().unwrap();
+        engine.maintain().unwrap();
+        engine.maintain().unwrap();
+        assert_eq!(bytes(&engine), empty + 2 * chunk::SKELETON);
+    }
+
     #[test]
     fn recovery_loads_images_larger_than_the_budget() {
         let storage = disk();
@@ -2455,11 +2613,11 @@ mod tests {
         let storage = disk();
         let engine = budgeted(&storage, 1);
         let table = populated(&engine, 4_096);
-        let total = |engine: &Engine| -> i128 {
+        let total = |engine: &Engine| -> i64 {
             let mut txn = engine.begin(IsolationLevel::Snapshot);
             let mut scan = txn.scan(&table);
             let mut rows = Vec::new();
-            while scan.next_batch(&mut rows) {}
+            while scan.next_batch(&mut rows).unwrap() {}
             rows.iter().map(|(_, row)| number(&row[0])).sum()
         };
         let expected = total(&engine);
@@ -2546,7 +2704,7 @@ mod tests {
 
         let mut renamer = engine.begin(IsolationLevel::Snapshot);
         for (n, &id) in ids.iter().enumerate() {
-            renamer.update(&table, id, row(n as i128, &format!("k{n:04}"))).unwrap();
+            renamer.update(&table, id, row(n as i64, &format!("k{n:04}"))).unwrap();
         }
         renamer.commit().unwrap();
 
@@ -2559,7 +2717,7 @@ mod tests {
         let walk = |txn: &mut Transaction, descending: bool| {
             let mut cursor = txn.index_cursor(&table, &index, descending);
             let mut rows = Vec::new();
-            while cursor.next_batch(&mut rows) {}
+            while cursor.next_batch(&mut rows).unwrap() {}
             rows.iter().map(|(_, row)| text(&row[1])).collect::<Vec<_>>()
         };
 
@@ -2575,7 +2733,7 @@ mod tests {
 
         let mut cursor = fresh.index_cursor(&table, &index, false);
         let mut first = Vec::new();
-        cursor.next_batch(&mut first);
+        cursor.next_batch(&mut first).unwrap();
         assert!(first.len() <= 256, "one batch resolves at most one page of entries");
     }
 }

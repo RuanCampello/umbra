@@ -12,9 +12,10 @@ use crate::storage::engine::{
     chunk::{CHUNK_BITS, CHUNK_SIZE, Chain, Chunk, Cold, Version},
     clock::TXN_FLAG,
     error::{EngineError, Result},
-    index::{Holder, Index},
+    index::{Holder, Index, Key},
     transaction::IsolationLevel,
 };
+use std::ops::Bound;
 use std::sync::{
     Arc, Mutex, RwLock,
     atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering},
@@ -80,6 +81,9 @@ pub(crate) struct TableScan {
     chunk: usize,
     slot: usize,
     batch: usize,
+    /// `(column, start, end)` every row the caller wants lies within: chunks whose zone map
+    /// excludes one are skipped
+    ranges: Vec<(usize, Bound<Value>, Bound<Value>)>,
 }
 
 const SLOT_MASK: i64 = CHUNK_SIZE as i64 - 1;
@@ -129,16 +133,15 @@ impl Table {
             .cloned()
     }
 
-    /// the index on `column`, preferring a unique one
+    /// the index serving look-ups of `column` alone, preferring one on that column only, then a
+    /// unique one: a composite index led by `column` serves them as prefix look-ups
     pub fn index_on(&self, column: usize) -> Option<Arc<Index>> {
         let indexes = self.indexes.read().expect("index list poisoned");
-        let mut on_column = indexes.iter().filter(|index| index.column == column);
-
-        let first = on_column.next()?;
-        match first.unique {
-            true => Some(Arc::clone(first)),
-            _ => Some(Arc::clone(on_column.find(|index| index.unique).unwrap_or(first))),
-        }
+        indexes
+            .iter()
+            .filter(|index| index.leading() == column)
+            .min_by_key(|index| (index.columns.len(), !index.unique))
+            .cloned()
     }
 
     pub fn add_index(&self, index: Arc<Index>) {
@@ -233,30 +236,38 @@ impl Table {
         }
     }
 
+    /// how many chunks may hold a row within every range, by their zone maps
+    pub fn chunks_within(&self, ranges: &[(usize, Bound<Value>, Bound<Value>)]) -> usize {
+        let chunks = self.chunks.read().expect("chunk list poisoned");
+        chunks.iter().filter(|chunk| chunk.may_hold(ranges)).count()
+    }
+
     /// the row as `view` sees it
     #[cfg(test)]
     pub fn get(&self, id: RowId, view: View) -> Option<Row> {
         let chunk = self.chunk(id)?;
-        let slots = chunk.read();
+        let slots = chunk.read().expect("test chunks are readable");
         visible(&slots[slot(id)], view).cloned()
     }
 
-    /// the row as `view` sees it, provided its `column` still equals `key` (index re-check)
-    pub fn get_keyed(&self, id: RowId, view: View, column: usize, key: &Value) -> Option<Row> {
-        let chunk = self.chunk(id)?;
-        let slots = chunk.read();
-        visible(&slots[slot(id)], view).filter(|row| row[column] == *key).cloned()
+    /// the row as `view` sees it, provided it still holds `key` in `index` (index re-check)
+    pub fn get_keyed(&self, id: RowId, view: View, index: &Index, key: &Key) -> Result<Option<Row>> {
+        let Some(chunk) = self.chunk(id) else {
+            return Ok(None);
+        };
+        let slots = chunk.read()?;
+        Ok(visible(&slots[slot(id)], view).filter(|row| index.holds(row, key)).cloned())
     }
 
-    /// appends to `out` the rows of `entries` (index order) that `view` sees with the entry's key
-    /// still in `column`, consecutive entries in one chunk share a single latch
+    /// appends to `out` the rows of `entries` (`index` order) that `view` sees still holding the
+    /// entry's key, consecutive entries in one chunk share a single latch
     pub fn resolve_keyed(
         &self,
-        entries: &[(Value, RowId)],
+        entries: &[(Key, RowId)],
         view: View,
-        column: usize,
+        index: &Index,
         out: &mut Vec<(RowId, Row)>,
-    ) {
+    ) -> Result<()> {
         let mut rest = entries;
         while let Some((_, first)) = rest.first() {
             let number = first >> CHUNK_BITS;
@@ -269,26 +280,28 @@ impl Table {
                 continue;
             };
 
-            let slots = chunk.read();
+            let slots = chunk.read()?;
             for (key, id) in same {
                 if let Some(row) =
-                    visible(&slots[slot(*id)], view).filter(|row| row[column] == *key)
+                    visible(&slots[slot(*id)], view).filter(|row| index.holds(row, key))
                 {
                     out.push((*id, Arc::clone(row)));
                 }
             }
         }
+
+        Ok(())
     }
 
     /// [Table::resolve_keyed] without copying rows out: counts the visible entries until `limit`
     /// of them, returning `(visible, entries examined)`
     pub fn count_keyed(
         &self,
-        entries: &[(Value, RowId)],
+        entries: &[(Key, RowId)],
         view: View,
-        column: usize,
+        index: &Index,
         limit: usize,
-    ) -> (usize, usize) {
+    ) -> Result<(usize, usize)> {
         let (mut visible, mut examined) = (0, 0);
         let mut rest = entries;
         while let Some((_, first)) = rest.first() {
@@ -303,34 +316,41 @@ impl Table {
                 continue;
             };
 
-            let slots = chunk.read();
+            let slots = chunk.read()?;
             for (key, id) in same {
                 examined += 1;
-                if visible_with(&slots[slot(*id)], view, column, key) {
+                if visible_holding(&slots[slot(*id)], view, index, key) {
                     visible += 1;
                     if visible == limit {
-                        return (visible, examined);
+                        return Ok((visible, examined));
                     }
                 }
             }
         }
 
-        (visible, examined)
+        Ok((visible, examined))
     }
 
     /// appends a new row owned by `marker`
-    pub fn insert(&self, marker: u64, row: Row) -> RowId {
+    pub fn insert(&self, marker: u64, row: Row) -> Result<RowId> {
         let id = self
             .take_free()
             .unwrap_or_else(|| self.next_row_id.fetch_add(1, Ordering::Relaxed));
         let chunk = self.chunk_or_grow(id);
-        let mut slots = chunk.write();
+        let mut slots = match chunk.write() {
+            Ok(slots) => slots,
+            Err(error) => {
+                self.release(&mut vec![id]);
+                return Err(error);
+            },
+        };
 
         let chain = &mut slots[slot(id)];
         assert!(chain.is_empty(), "row id {id} handed out twice");
+        chunk.widen(&row);
         chain.push(Version { stamp: marker, row: Some(row) });
 
-        id
+        Ok(id)
     }
 
     /// writes a new image of the row (`None` deletes it) under first-updater-wins
@@ -347,7 +367,11 @@ impl Table {
     ) -> Result<Written> {
         let Writer { view, floor, level, watermark } = writer;
         let chunk = self.chunk(id).ok_or_else(|| gone(level))?;
-        let mut slots = chunk.write();
+        let mut slots = chunk.write()?;
+        match &row {
+            Some(row) => chunk.widen(row),
+            None => chunk.changed(),
+        }
         let chain = &mut slots[slot(id)];
 
         let Some(head) = chain.last_mut() else {
@@ -381,7 +405,7 @@ impl Table {
     /// replaces the owner's marker with its commit timestamp
     pub fn stamp(&self, id: RowId, marker: u64, ts: u64) {
         let chunk = self.chunk(id).expect("stamped row exists");
-        let mut slots = chunk.write();
+        let mut slots = chunk.write_resident();
 
         let head = slots[slot(id)].last_mut().expect("stamped row has versions");
         assert_eq!(head.stamp, marker, "row {id} is not owned by the committer");
@@ -391,11 +415,12 @@ impl Table {
     /// sets the row of the owner's uncommitted version (rolling back to a savepoint)
     pub fn restore(&self, id: RowId, marker: u64, row: Option<Row>) {
         let chunk = self.chunk(id).expect("restored row exists");
-        let mut slots = chunk.write();
+        let mut slots = chunk.write_resident();
 
         let head = slots[slot(id)].last_mut().expect("restored row has versions");
         assert_eq!(head.stamp, marker, "row {id} is not owned by the restorer");
         head.row = row;
+        chunk.changed();
     }
 
     /// removes the owner's uncommitted version, if still there
@@ -404,45 +429,52 @@ impl Table {
             return;
         };
 
-        let mut slots = chunk.write();
-        slots[slot(id)].pop_if(|version| version.stamp == marker);
-    }
-
-    /// replaces the row with one committed image (recovery: no snapshot predates it)
-    pub fn recover_put(&self, id: RowId, row: Row, ts: u64) {
-        self.observe(id, &row);
-
-        let chunk = self.chunk_or_grow(id);
-        let mut slots = chunk.write();
-        let chain = &mut slots[slot(id)];
-
-        *chain = Chain::new();
-        chain.push(Version { stamp: ts, row: Some(row) });
-    }
-
-    pub fn recover_delete(&self, id: RowId) {
-        self.next_row_id.fetch_max(id + 1, Ordering::Relaxed);
-
-        if let Some(chunk) = self.chunk(id) {
-            chunk.write()[slot(id)] = Chain::new();
+        let resident = chunk.write_if_resident();
+        if let Some(mut slots) = resident {
+            slots[slot(id)].pop_if(|version| version.stamp == marker);
+            chunk.changed();
         }
     }
 
+    /// replaces the row with one committed image (recovery: no snapshot predates it)
+    pub fn recover_put(&self, id: RowId, row: Row, ts: u64) -> Result<()> {
+        self.observe(id, &row);
+
+        let chunk = self.chunk_or_grow(id);
+        let mut slots = chunk.write()?;
+        let chain = &mut slots[slot(id)];
+
+        *chain = Chain::new();
+        chunk.widen(&row);
+        chain.push(Version { stamp: ts, row: Some(row) });
+        Ok(())
+    }
+
+    pub fn recover_delete(&self, id: RowId) -> Result<()> {
+        self.next_row_id.fetch_max(id + 1, Ordering::Relaxed);
+
+        if let Some(chunk) = self.chunk(id) {
+            chunk.write()?[slot(id)] = Chain::new();
+            chunk.changed();
+        }
+        Ok(())
+    }
+
     /// who keeps `key` alive in `column` of row `id`, for a unique check by `marker`
-    pub(super) fn holder(&self, id: RowId, column: usize, key: &Value, marker: u64) -> Holder {
+    pub(super) fn holder(&self, id: RowId, index: &Index, key: &Key, marker: u64) -> Result<Holder> {
         let Some(chunk) = self.chunk(id) else {
-            return Holder::Free;
+            return Ok(Holder::Free);
         };
 
-        let slots = chunk.read();
+        let slots = chunk.read()?;
         let chain = &slots[slot(id)];
-        let carries = |version: &Version| version.row.as_ref().is_some_and(|r| r[column] == *key);
+        let carries = |version: &Version| version.row.as_ref().is_some_and(|row| index.holds(row, key));
 
         let Some(head) = chain.last() else {
-            return Holder::Free;
+            return Ok(Holder::Free);
         };
 
-        match head.stamp {
+        Ok(match head.stamp {
             stamp if stamp == marker => match carries(head) {
                 true => Holder::Committed,
                 false => Holder::Free,
@@ -458,19 +490,23 @@ impl Table {
                 true => Holder::Committed,
                 false => Holder::Free,
             },
-        }
+        })
     }
 
-    /// whether any version of row `id` still carries `key` in `column`
-    pub fn carries(&self, id: RowId, column: usize, key: &Value) -> bool {
+    /// whether any version of row `id` still holds `key` in `index`
+    /// an unreadable chunk counts as carrying it: a stale index entry is re-checked by readers, a
+    /// missing one would hide the row
+    pub fn carries(&self, id: RowId, index: &Index, key: &Key) -> bool {
         let Some(chunk) = self.chunk(id) else {
             return false;
         };
 
-        let slots = chunk.read();
+        let Ok(slots) = chunk.read() else {
+            return true;
+        };
         slots[slot(id)]
             .iter()
-            .any(|version| version.row.as_ref().is_some_and(|row| row[column] == *key))
+            .any(|version| version.row.as_ref().is_some_and(|row| index.holds(row, key)))
     }
 
     /// drops the index entries of `rows` (versions of row `id` pruned away) that no remaining
@@ -482,14 +518,14 @@ impl Table {
 
         for index in self.indexes() {
             for row in rows {
-                let key = &row[index.column];
-                index.remove_if(key, id, || !self.carries(id, index.column, key));
+                let key = index.key(row);
+                index.remove_if(&key, id, || !self.carries(id, &index, &key));
             }
         }
     }
 
     /// every `(row id, row)` held by any version, for index back-fill and rebuild
-    pub fn for_each_version(&self, mut f: impl FnMut(RowId, &Row)) {
+    pub fn for_each_version(&self, mut f: impl FnMut(RowId, &Row)) -> Result<()> {
         let chunks = self.chunks.read().expect("chunk list poisoned").clone();
 
         for (number, chunk) in chunks.iter().enumerate() {
@@ -501,8 +537,10 @@ impl Table {
                         .filter_map(|version| version.row.as_ref())
                         .for_each(|row| f(id, row));
                 }
-            });
+            })?;
         }
+
+        Ok(())
     }
 
     /// prunes every chain against `watermark` and empties slots whose surviving version is a
@@ -530,6 +568,7 @@ impl Table {
                         vanished.push(id);
                     }
                 }
+                chunk.measure(&slots);
             }
 
             for (id, rows) in dropped.drain(..) {
@@ -557,6 +596,7 @@ impl Table {
             let occupied = !chain.is_empty();
             settle(chain, watermark, &mut rows);
             vanished = occupied && chain.is_empty();
+            chunk.changed();
         }
 
         self.forget(id, &rows);
@@ -566,7 +606,7 @@ impl Table {
     }
 
     /// publishes the empty slots below `next_row_id` as free, after recovery
-    pub fn rebuild_free(&self) {
+    pub fn rebuild_free(&self) -> Result<()> {
         let end = self.next_row_id.load(Ordering::Relaxed);
         let chunks = self.chunks.read().expect("chunk list poisoned").clone();
 
@@ -579,10 +619,11 @@ impl Table {
                         free.push(id);
                     }
                 }
-            });
+            })?;
         }
 
         self.release(&mut free);
+        Ok(())
     }
 
     /// adds `ids` (slots whose rows vanished, with their index entries gone) to the free list
@@ -635,6 +676,7 @@ impl Table {
             chunk: 0,
             slot: 0,
             batch: FIRST_BATCH,
+            ranges: Vec::new(),
         }
     }
 
@@ -666,30 +708,47 @@ impl View {
 }
 
 impl TableScan {
+    /// skips the chunks that hold no row within `ranges`
+    pub fn bounded(mut self, ranges: Vec<(usize, Bound<Value>, Bound<Value>)>) -> Self {
+        self.ranges = ranges;
+        self
+    }
+
     /// appends the visible rows of the next batch of slots to `out`
     /// `false` once the table is exhausted.
-    pub fn next_batch(&mut self, out: &mut Vec<(RowId, Row)>) -> bool {
+    pub fn next_batch(&mut self, out: &mut Vec<(RowId, Row)>) -> Result<bool> {
         let chunk = {
             let chunks = self.table.chunks.read().expect("chunk list poisoned");
             match chunks.get(self.chunk) {
                 Some(chunk) => Arc::clone(chunk),
-                None => return false,
+                None => return Ok(false),
             }
         };
 
+        if self.slot == 0 && !self.ranges.is_empty() && !chunk.may_hold(&self.ranges) {
+            (self.chunk, self.batch) = (self.chunk + 1, FIRST_BATCH);
+            return Ok(true);
+        }
+
         let base = (self.chunk << CHUNK_BITS) as RowId;
         let start = self.slot;
+        // PERFORMANCE: an evicted chunk is decoded whole, so it is read in one batch, not once per
+        // growing batch
+        let batch = match chunk.is_resident() {
+            true => self.batch,
+            false => CHUNK_SIZE,
+        };
 
         // PERFORMANCE: rows are copied out under the latch so writers wait at most one batch
         let end = chunk.visit(|slots| {
-            let end = (start + self.batch).min(slots.len());
+            let end = (start + batch).min(slots.len());
             for (offset, chain) in slots[start..end].iter().enumerate() {
                 if let Some(row) = visible(chain, self.view) {
                     out.push((base + (start + offset) as RowId, Arc::clone(row)));
                 }
             }
             (end < slots.len()).then_some(end)
-        });
+        })?;
 
         match end {
             Some(end) => self.slot = end,
@@ -697,14 +756,14 @@ impl TableScan {
         }
         self.batch = (self.batch * 2).min(CHUNK_SIZE);
 
-        true
+        Ok(true)
     }
 }
 
 /// whether `view` sees a row in `chain` that still holds `key` at `column`
 #[inline]
-fn visible_with(chain: &Chain, view: View, column: usize, key: &Value) -> bool {
-    visible(chain, view).is_some_and(|row| row[column] == *key)
+fn visible_holding(chain: &Chain, view: View, index: &Index, key: &Key) -> bool {
+    visible(chain, view).is_some_and(|row| index.holds(row, key))
 }
 
 /// the row `view` sees in `chain`, `none` when absent or deleted

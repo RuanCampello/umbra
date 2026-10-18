@@ -11,9 +11,11 @@ use crate::db::Schema;
 use crate::sql::Value;
 pub(crate) use crate::sql::statement::IsolationLevel;
 use crate::storage::engine::{
-    Inner, duplicated_key,
+    Inner,
+    clock::Registration,
+    duplicated_key,
     error::{EngineError, Result},
-    index::Index,
+    index::{Index, Key},
     log::{Kind, Log, Unlogged},
     record::{self, Ddl},
     table::{Row, RowId, Table, TableScan, View, Writer, Written},
@@ -32,12 +34,14 @@ pub(crate) struct Transaction {
     inner: Arc<Inner>,
     level: IsolationLevel,
     view: View,
+    /// `view.snapshot` in the clock's registry
+    registration: Registration,
     writes: Vec<Write>,
     written: HashMap<(u32, RowId), usize>,
     /// The distinct tables of `writes`, so commit checks drops per table, not per row
     tables: Vec<Arc<Table>>,
     /// Index entries this transaction added: (write, index, key)
-    keys: Vec<(usize, Arc<Index>, Value)>,
+    keys: Vec<(usize, Arc<Index>, Key)>,
     /// Catalogue changes in the order they ran, with the table each touched
     ddl: Vec<(Ddl, Arc<Table>)>,
     /// Open savepoints, oldest first
@@ -90,13 +94,13 @@ pub(crate) struct IndexCursor {
     table: Arc<Table>,
     index: Arc<Index>,
     view: View,
-    start: Bound<Value>,
-    end: Bound<Value>,
+    start: Bound<Key>,
+    end: Bound<Key>,
     descending: bool,
     /// Entries resolved by the next [IndexCursor::next_batch]: doubles up to `BATCH`, so a short
     /// `LIMIT` resolves few rows
     batch: usize,
-    last: Option<(Value, RowId)>,
+    last: Option<(Key, RowId)>,
     done: bool,
 }
 
@@ -145,22 +149,23 @@ enum State {
 
 impl Transaction {
     pub(super) fn new(inner: Arc<Inner>, level: IsolationLevel) -> Self {
-        let (snapshot, reads) = match level {
+        let (registration, reads) = match level {
             IsolationLevel::Serializable => {
                 let mut commits = inner.commits();
-                let snapshot = inner.clock.snapshot();
-                *commits.serializable.entry(snapshot).or_default() += 1;
-                (snapshot, Some(HashMap::default()))
+                let registration = inner.clock.snapshot();
+                *commits.serializable.entry(registration.ts).or_default() += 1;
+                (registration, Some(HashMap::default()))
             },
             _ => (inner.clock.snapshot(), None),
         };
 
-        let view = View { snapshot, marker: inner.clock.marker() };
+        let view = View { snapshot: registration.ts, marker: inner.clock.marker() };
 
         Self {
             inner,
             level,
             view,
+            registration,
             writes: Vec::new(),
             written: HashMap::default(),
             tables: Vec::new(),
@@ -241,9 +246,9 @@ impl Transaction {
         table: &Arc<Table>,
         column: usize,
         key: &Value,
-    ) -> bool {
+    ) -> Result<bool> {
         self.guard_key(view, table, column, key, true);
-        !self.holding(view, table, column, key).is_empty()
+        Ok(!self.holding(view, table, column, key)?.is_empty())
     }
 
     /// the rows of `table` holding `key` in `column` under `view`
@@ -254,7 +259,7 @@ impl Transaction {
         table: &Arc<Table>,
         column: usize,
         key: &Value,
-    ) -> Vec<(RowId, Row)> {
+    ) -> Result<Vec<(RowId, Row)>> {
         self.guard_key(view, table, column, key, false);
         self.holding(view, table, column, key)
     }
@@ -276,19 +281,20 @@ impl Transaction {
         table: &Arc<Table>,
         column: usize,
         key: &Value,
-    ) -> Vec<(RowId, Row)> {
+    ) -> Result<Vec<(RowId, Row)>> {
         let mut rows = Vec::new();
         match table.index_on(column) {
             Some(index) => {
-                IndexProbe { table: Arc::clone(table), index, view }.find(key, &mut rows)
+                let probe = IndexProbe { table: Arc::clone(table), index, view };
+                probe.find(&Key::One(key.clone()), &mut rows)?
             },
             _ => {
                 let mut scan = table.scan(view);
-                while scan.next_batch(&mut rows) {}
+                while scan.next_batch(&mut rows)? {}
                 rows.retain(|(_, row)| row[column] == *key);
             },
         }
-        rows
+        Ok(rows)
     }
 
     pub fn savepoint(&mut self, name: &str) -> Result<()> {
@@ -331,7 +337,7 @@ impl Transaction {
 
         for (write, index, key) in self.keys.drain(keys..) {
             let Write { table, id, .. } = &self.writes[write];
-            index.remove_if(&key, *id, || !table.carries(*id, index.column, &key));
+            index.remove_if(&key, *id, || !table.carries(*id, &index, &key));
         }
 
         self.undo_ddl(ddl);
@@ -361,14 +367,14 @@ impl Transaction {
         &mut self,
         name: &str,
         table: &str,
-        column: &str,
+        columns: &[&str],
         unique: bool,
     ) -> Result<()> {
         self.check()?;
 
-        let created = self.index_table(name, table, column, unique);
-        let (table, column) = self.guard(created)?;
-        let ddl = Ddl::CreateIndex { table: table.id, column, unique, name: name.into() };
+        let created = self.index_table(name, table, columns, unique);
+        let (table, columns) = self.guard(created)?;
+        let ddl = Ddl::CreateIndex { table: table.id, columns, unique, name: name.into() };
 
         Ok(self.ddl.push((ddl, table)))
     }
@@ -376,7 +382,7 @@ impl Transaction {
     pub fn insert(&mut self, table: &Arc<Table>, row: Row) -> Result<RowId> {
         self.check()?;
 
-        let id = table.insert(self.view.marker, Arc::clone(&row));
+        let id = table.insert(self.view.marker, Arc::clone(&row))?;
         let write = self.record(table, id, None, Some(Arc::clone(&row)));
         let indexed = self.index(write, table, id, None, &row);
 
@@ -434,28 +440,36 @@ impl Transaction {
     }
 
     /// a cursor over the visible rows whose key in `index` lies within the bounds, in key order
+    /// (a bound shorter than the index's key bounds its leading columns)
+    /// SERIALIZABLE records the range of the leading column the bounds lie in
     pub fn index_cursor_within(
         &mut self,
         table: &Arc<Table>,
         index: &Arc<Index>,
-        (start, end): (Bound<Value>, Bound<Value>),
+        (start, end): (Bound<Key>, Bound<Key>),
+        descending: bool,
     ) -> IndexCursor {
         if let Some(reads) = self.reads_of(table) {
+            let leading = |bound: &Bound<Key>| match bound {
+                Bound::Excluded(key) if key.values().len() == 1 => Bound::Excluded(key.values()[0].clone()),
+                Bound::Included(key) | Bound::Excluded(key) => Bound::Included(key.values()[0].clone()),
+                Bound::Unbounded => Bound::Unbounded,
+            };
             reads.ranges.push(Range {
-                column: index.column,
-                start: start.clone(),
-                end: end.clone(),
+                column: index.leading(),
+                start: leading(&start),
+                end: leading(&end),
             });
         }
 
-        self.cursor(table, index, (start, end), false)
+        self.cursor(table, index, (start, end), descending)
     }
 
     fn cursor(
         &self,
         table: &Arc<Table>,
         index: &Arc<Index>,
-        (start, end): (Bound<Value>, Bound<Value>),
+        (start, end): (Bound<Key>, Bound<Key>),
         descending: bool,
     ) -> IndexCursor {
         IndexCursor {
@@ -480,9 +494,10 @@ impl Transaction {
         start: Bound<&Value>,
         end: Bound<&Value>,
     ) -> Vec<(RowId, Row)> {
-        let mut cursor = self.index_cursor_within(table, index, (start.cloned(), end.cloned()));
+        let key = |bound: Bound<&Value>| bound.cloned().map(Key::One);
+        let mut cursor = self.index_cursor_within(table, index, (key(start), key(end)), false);
         let mut rows = Vec::new();
-        while cursor.next_batch(&mut rows) {}
+        while cursor.next_batch(&mut rows).expect("test chunks are readable") {}
         rows
     }
 
@@ -490,7 +505,8 @@ impl Transaction {
     pub fn refresh_snapshot(&mut self) {
         debug_assert_eq!(self.level, IsolationLevel::ReadCommitted);
         self.rechecked.clear();
-        self.view.snapshot = self.inner.clock.refresh(self.view.snapshot);
+        self.registration = self.inner.clock.refresh(self.registration);
+        self.view.snapshot = self.registration.ts;
     }
 
     pub fn commit(mut self) -> Result<()> {
@@ -600,7 +616,12 @@ impl Transaction {
             .get(&(table.id, id))
             .map_or(self.view.snapshot, |&stamp| stamp.max(self.view.snapshot));
 
-        let watermark = self.inner.clock.watermark();
+        // a transaction's first write rescans the snapshot registry, so writers prune what the
+        // readers that just ended no longer need; readers never pay for the scan
+        let watermark = match self.writes.is_empty() {
+            true => self.inner.clock.settle_watermark(),
+            false => self.inner.clock.watermark(),
+        };
         let writer = Writer { view: self.view, floor, level: self.level, watermark };
 
         let mut pruned = Vec::new();
@@ -667,18 +688,20 @@ impl Transaction {
         let marker = self.view.marker;
 
         for index in table.indexes() {
-            let key = &row[index.column];
-            if previous.is_some_and(|previous| previous[index.column] == *key) {
+            let key = index.key(row);
+            if previous.is_some_and(|previous| index.holds(previous, &key)) {
                 continue;
             }
 
-            let free =
-                index.insert(key, id, |other| table.holder(other, index.column, key, marker))?;
-            self.keys.push((write, index, key.clone()));
+            let free = index.insert(&key, id, |other| table.holder(other, &index, &key, marker))?;
+            self.keys.push((write, index, key));
 
             // PERFORMANCE: settled here, a key deleted and inserted again keeps one live entry
-            for dead in free {
-                table.settle_slot(dead, self.inner.clock.watermark());
+            if !free.is_empty() {
+                let watermark = self.inner.clock.settle_watermark();
+                for dead in free {
+                    table.settle_slot(dead, watermark);
+                }
             }
         }
 
@@ -690,30 +713,33 @@ impl Transaction {
         &self,
         name: &str,
         table: &str,
-        column: &str,
+        columns: &[&str],
         unique: bool,
-    ) -> Result<(Arc<Table>, usize)> {
+    ) -> Result<(Arc<Table>, Box<[usize]>)> {
         let table = self.table(table)?;
-        let column = table
-            .schema
-            .columns
+        let columns = columns
             .iter()
-            .position(|c| c.name() == column)
-            .ok_or_else(|| EngineError::ColumnNotFound(column.to_string()))?;
+            .map(|&column| {
+                table
+                    .schema
+                    .index_of(column)
+                    .ok_or_else(|| EngineError::ColumnNotFound(column.to_string()))
+            })
+            .collect::<Result<Box<[usize]>>>()?;
 
-        let index = Arc::new(Index::new(name, column, unique));
+        let index = Arc::new(Index::new(name, columns.clone(), unique));
         index.stamp_created(self.view.marker);
         if !table.try_add_index(Arc::clone(&index)) {
             return Err(EngineError::IndexExists(name.to_string()));
         }
-        table.for_each_version(|id, row| index.insert_unchecked(row[column].clone(), id));
+        table.for_each_version(|id, row| index.insert_unchecked(index.key(row), id))?;
 
-        match unique.then(|| duplicated_key(&table, &index)).flatten() {
+        match unique.then(|| duplicated_key(&table, &index)).transpose()?.flatten() {
             Some(key) => {
                 table.remove_index(name);
-                Err(EngineError::DuplicatedKey(key))
+                Err(EngineError::DuplicatedKey(key.to_value()))
             },
-            _ => Ok((table, column)),
+            _ => Ok((table, columns)),
         }
     }
 
@@ -776,7 +802,7 @@ impl Transaction {
 
         self.keys.drain(..).for_each(|(write, index, key)| {
             let Write { table, id, .. } = &writes[write];
-            index.remove_if(&key, *id, || !table.carries(*id, index.column, &key));
+            index.remove_if(&key, *id, || !table.carries(*id, &index, &key));
         });
 
         self.undo_ddl(0);
@@ -800,7 +826,7 @@ impl Transaction {
             }
         }
 
-        self.inner.clock.release(self.view.snapshot);
+        self.inner.clock.release(self.registration);
         self.state = State::Finished;
     }
 }
@@ -813,7 +839,7 @@ impl IndexCursor {
 
     /// moves past up to `n` visible rows without copying them out
     /// returns how many it passed
-    pub fn skip(&mut self, n: usize) -> usize {
+    pub fn skip(&mut self, n: usize) -> Result<usize> {
         let mut skipped = 0;
         while skipped < n && !self.done {
             let mut entries = Vec::with_capacity(Self::BATCH);
@@ -826,7 +852,7 @@ impl IndexCursor {
             );
 
             let (visible, examined) =
-                self.table.count_keyed(&entries, self.view, self.index.column, n - skipped);
+                self.table.count_keyed(&entries, self.view, &self.index, n - skipped)?;
             skipped += visible;
             self.done = entries.len() < Self::BATCH && examined == entries.len();
             if let Some(last) = examined.checked_sub(1) {
@@ -834,14 +860,14 @@ impl IndexCursor {
             }
         }
 
-        skipped
+        Ok(skipped)
     }
 
     /// appends the visible rows of the next batch of entries to `out`
     /// `false` once exhausted
-    pub fn next_batch(&mut self, out: &mut Vec<(RowId, Row)>) -> bool {
+    pub fn next_batch(&mut self, out: &mut Vec<(RowId, Row)>) -> Result<bool> {
         if self.done {
-            return false;
+            return Ok(false);
         }
 
         let limit = self.batch;
@@ -855,26 +881,29 @@ impl IndexCursor {
             |key, id| entries.push((key.clone(), id)),
         );
 
-        self.table.resolve_keyed(&entries, self.view, self.index.column, out);
+        self.table.resolve_keyed(&entries, self.view, &self.index, out)?;
 
         self.done = entries.len() < limit;
         let seen = !entries.is_empty();
         if let Some(last) = entries.pop() {
             self.last = Some(last);
         }
-        seen
+        Ok(seen)
     }
 }
 
 impl IndexProbe {
-    /// appends the visible rows whose indexed column equals `key` to `out`
-    pub fn find(&self, key: &Value, out: &mut Vec<(RowId, Row)>) {
-        let (table, view, column) = (&self.table, self.view, self.index.column);
-        self.index.visit(Bound::Included(key), Bound::Included(key), |key, id| {
-            if let Some(row) = table.get_keyed(id, view, column, key) {
+    /// appends the visible rows holding `key` (or beginning with it) in the index to `out`
+    pub fn find(&self, key: &Key, out: &mut Vec<(RowId, Row)>) -> Result<()> {
+        let mut ids = Vec::new();
+        self.index.visit(Bound::Included(key), Bound::Included(key), |_, id| ids.push(id));
+
+        for id in ids {
+            if let Some(row) = self.table.get_keyed(id, self.view, &self.index, key)? {
                 out.push((id, row));
             }
-        });
+        }
+        Ok(())
     }
 }
 
