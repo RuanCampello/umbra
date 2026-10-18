@@ -57,6 +57,8 @@ pub(crate) struct Manifest {
 const IMAGE_MAGIC: [u8; 4] = *b"UIM1";
 const MANIFEST_MAGIC: [u8; 4] = *b"UMN1";
 const VERSION: u16 = 1;
+/// an index lists its columns (`count u8 | column u16*`), 1 had a single `column u16`
+const IMAGE_VERSION: u16 = 2;
 
 const ROW: u8 = 1;
 const END: u8 = 0;
@@ -123,10 +125,10 @@ pub(crate) fn write_image(
     path: &Path,
     table: &Table,
     ts: u64,
-    mut next_batch: impl FnMut(&mut Vec<(RowId, Row)>) -> bool,
+    mut next_batch: impl FnMut(&mut Vec<(RowId, Row)>) -> Result<bool>,
 ) -> Result<()> {
     let mut buf = IMAGE_MAGIC.to_vec();
-    buf.extend_from_slice(&VERSION.to_le_bytes());
+    buf.extend_from_slice(&IMAGE_VERSION.to_le_bytes());
     buf.extend_from_slice(&ts.to_le_bytes());
     buf.extend_from_slice(&table.id.to_le_bytes());
     put_blob(&mut buf, &table.schema.encode(table.name()));
@@ -137,7 +139,10 @@ pub(crate) fn write_image(
     indexes.retain(|index| pinned.sees(index.created()));
     buf.extend_from_slice(&(indexes.len() as u16).to_le_bytes());
     for index in &indexes {
-        buf.extend_from_slice(&(index.column as u16).to_le_bytes());
+        buf.push(index.columns.len() as u8);
+        for &column in &index.columns {
+            buf.extend_from_slice(&(column as u16).to_le_bytes());
+        }
         buf.push(index.unique as u8);
         put_string(&mut buf, &index.name);
     }
@@ -155,14 +160,13 @@ pub(crate) fn write_image(
     let mut flush = |buf: &mut Vec<u8>, crc: &mut u32| -> Result<()> {
         *crc = crc32c_append(*crc, buf);
         file.append(buf)?;
-        buf.clear();
-        Ok(())
+        Ok(buf.clear())
     };
 
     let mut rows = Vec::new();
     let mut count = 0u64;
     let mut encoded = Vec::new();
-    while next_batch(&mut rows) {
+    while next_batch(&mut rows)? {
         for (id, row) in rows.drain(..) {
             encoded.clear();
             put_row(&mut encoded, &row);
@@ -199,9 +203,13 @@ pub(crate) fn read_image(
 ) -> Result<Arc<Table>> {
     let mut stream = Stream::new(storage.reader(path)?, "image");
 
-    if stream.exact::<4>()? != IMAGE_MAGIC || stream.u16()? != VERSION {
+    if stream.exact::<4>()? != IMAGE_MAGIC {
         return Err(stream.corrupt("unknown format"));
     }
+    let version = match stream.u16()? {
+        version @ (1 | IMAGE_VERSION) => version,
+        _ => return Err(stream.corrupt("unknown format")),
+    };
 
     let ts = stream.u64()?;
     let id = stream.u32()?;
@@ -210,12 +218,17 @@ pub(crate) fn read_image(
     let table = new_table(id, name, schema);
 
     for _ in 0..stream.u16()? {
-        let column = stream.u16()? as usize;
+        let count = match version {
+            1 => 1,
+            _ => stream.u8()?,
+        };
+        let columns =
+            (0..count).map(|_| Ok(stream.u16()? as usize)).collect::<Result<Box<[_]>>>()?;
         let unique = stream.u8()? != 0;
         let name = stream.string()?;
 
         if table.index(&name).is_none() {
-            table.add_index(Arc::new(Index::new(name, column, unique)));
+            table.add_index(Arc::new(Index::new(name, columns, unique)));
         }
     }
 
@@ -231,7 +244,7 @@ pub(crate) fn read_image(
             ROW => {
                 let row_id = stream.i64()?;
                 let bytes = stream.blob()?;
-                table.recover_put(row_id, Cursor::new(&bytes, "image row").row()?, ts);
+                table.recover_put(row_id, Cursor::new(&bytes, "image row").row()?, ts)?;
                 loaded += 1;
 
                 if loaded % CHUNK_SIZE as u64 == 0 {

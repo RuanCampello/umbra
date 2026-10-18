@@ -5,6 +5,7 @@
 //! ddl    = create table: 1 u8 | table u32 | schema blob
 //!          drop table:   2 u8 | table u32
 //!          create index: 3 u8 | table u32 | column u16 | unique u8 | name
+//!          create index over several columns: 4 u8 | table u32 | count u8 | column u16* | unique u8 | name
 //! ```
 //!
 //! A transaction's catalogue changes precede its row writes, in the order they ran
@@ -23,7 +24,7 @@ pub(crate) enum Change {
 pub(crate) enum Ddl {
     CreateTable { table: u32, name: String, schema: Schema },
     DropTable { table: u32 },
-    CreateIndex { table: u32, column: usize, unique: bool, name: String },
+    CreateIndex { table: u32, columns: Box<[usize]>, unique: bool, name: String },
 }
 
 /// A decoded commit whose row writes are still to be read, once its DDL is applied
@@ -40,6 +41,7 @@ const DELETE: u8 = 3;
 const CREATE_TABLE: u8 = 1;
 const DROP_TABLE: u8 = 2;
 const CREATE_INDEX: u8 = 3;
+const CREATE_COMPOSITE_INDEX: u8 = 4;
 
 /// encodes a transaction's catalogue changes and write set with a zero timestamp, set later by
 /// [stamp_timestamp]
@@ -64,7 +66,7 @@ pub(crate) fn encode_commit<'a>(
                 buf.push(INSERT);
                 put_row(&mut buf, row);
             },
-            (Some(_), Some(row)) => {
+            (_, Some(row)) => {
                 buf.push(UPDATE);
                 put_row(&mut buf, row);
             },
@@ -123,10 +125,22 @@ fn encode_ddl(buf: &mut Vec<u8>, ddl: &Ddl) {
             buf.push(DROP_TABLE);
             buf.extend_from_slice(&table.to_le_bytes());
         },
-        Ddl::CreateIndex { table, column, unique, name } => {
-            buf.push(CREATE_INDEX);
-            buf.extend_from_slice(&table.to_le_bytes());
-            buf.extend_from_slice(&(*column as u16).to_le_bytes());
+        Ddl::CreateIndex { table, columns, unique, name } => {
+            match &**columns {
+                [column] => {
+                    buf.push(CREATE_INDEX);
+                    buf.extend_from_slice(&table.to_le_bytes());
+                    buf.extend_from_slice(&(*column as u16).to_le_bytes());
+                },
+                columns => {
+                    buf.push(CREATE_COMPOSITE_INDEX);
+                    buf.extend_from_slice(&table.to_le_bytes());
+                    buf.push(columns.len() as u8);
+                    for &column in columns {
+                        buf.extend_from_slice(&(column as u16).to_le_bytes());
+                    }
+                },
+            }
             buf.push(*unique as u8);
             put_string(buf, name);
         },
@@ -145,9 +159,21 @@ fn decode_ddl(cursor: &mut Cursor) -> Result<Ddl> {
         DROP_TABLE => Ddl::DropTable { table: cursor.u32()? },
         CREATE_INDEX => Ddl::CreateIndex {
             table: cursor.u32()?,
-            column: cursor.u16()? as usize,
+            columns: [cursor.u16()? as usize].into(),
             unique: cursor.u8()? != 0,
             name: cursor.string()?,
+        },
+        CREATE_COMPOSITE_INDEX => {
+            let table = cursor.u32()?;
+            let columns = (0..cursor.u8()?)
+                .map(|_| Ok(cursor.u16()? as usize))
+                .collect::<Result<Box<[_]>>>()?;
+            Ddl::CreateIndex {
+                table,
+                columns,
+                unique: cursor.u8()? != 0,
+                name: cursor.string()?,
+            }
         },
         _ => return Err(cursor.corrupt("unknown ddl")),
     })
