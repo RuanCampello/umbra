@@ -1,7 +1,6 @@
 //! SQL mathematical runtime logics in Rust
 //! Sometimes, you need to implement `sqrt` from scratch, to make it work
 
-#![allow(dead_code)]
 
 use super::expression::{TypeError, VmError, VmType};
 use crate::{
@@ -24,14 +23,13 @@ trait Signed: Sized {
 }
 
 trait SquaredRoot: Sized + PartialEq + PartialOrd + std::ops::Add<Self> {
-    const EPSILON: f64 = f64::EPSILON;
     fn sqrt(&self) -> Result<Self, SqlError>;
 }
 
 static NUMERIC_TWO: OnceLock<Numeric> = OnceLock::new();
 static NUMERIC_HALF: OnceLock<Numeric> = OnceLock::new();
 
-impl Signed for i128 {
+impl Signed for i64 {
     #[inline(always)]
     fn sign(&self) -> Sign {
         match self.gt(&0) {
@@ -152,7 +150,7 @@ pub(super) fn abs(value: &Value) -> Result<Value, SqlError> {
     match value {
         Value::Null => Ok(Value::Null),
         Value::Float(f) => Ok(Value::Float(f.abs())),
-        Value::Number(n) => Ok(Value::Number(n.abs())),
+        Value::Number(n) => n.checked_abs().map(Value::Number).ok_or(SqlError::Vm(VmError::IntegerOutOfRange)),
         Value::Numeric(n) => Ok(Value::Numeric(n.abs())),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
             expected: vec![VmType::Number, VmType::Numeric, VmType::Float],
@@ -166,7 +164,8 @@ pub(super) fn power(base: &Value, expoent: &Value) -> Result<Value, SqlError> {
         (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
         (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(*e))),
         (Value::Float(b), Value::Number(e)) => Ok(Value::Float(b.powi(*e as _))),
-        (Value::Number(b), Value::Number(e)) => Ok(Value::Number(b.pow(*e as _))),
+        // DOUBLE PRECISION, as the analyser types it and PostgreSQL computes it
+        (Value::Number(b), Value::Number(e)) => Ok(Value::Float((*b as f64).powf(*e as f64))),
         (Value::Numeric(b), Value::Numeric(e)) => {
             Ok(Value::Numeric(b.pow(e).expect("Negative numeric sqrt")))
         },
@@ -220,8 +219,8 @@ pub(super) fn trunc(value: &Value, decimals: Option<Value>) -> Result<Value, Sql
 pub(super) fn sign(value: &Value) -> Result<Value, SqlError> {
     match value {
         Value::Null => Ok(Value::Null),
-        Value::Number(n) => Ok(Value::Number(n.sign() as i128)),
-        Value::Float(f) => Ok(Value::Number(f.sign() as i128)),
+        Value::Number(n) => Ok(Value::Number(n.sign() as i64)),
+        Value::Float(f) => Ok(Value::Number(f.sign() as i64)),
         _ => Err(SqlError::Type(TypeError::ExpectedOneOfTypes {
             expected: vec![VmType::Float, VmType::Number],
         })),
@@ -235,7 +234,7 @@ pub(super) fn sqrt(value: &Value) -> Result<Value, SqlError> {
         Value::Number(n) => {
             let n = u128::try_from(*n).or(Err(SqlError::Vm(VmError::NegativeNumSqrt)))?;
             let sqrt = n.sqrt()?;
-            Ok(Value::Number(sqrt as i128))
+            Ok(Value::Number(sqrt as i64))
         },
         Value::Float(f) => Ok(Value::Float(f.sqrt()?)),
         Value::Numeric(n) => Ok(Value::Numeric(n.sqrt().expect("Negative num sqrt"))),
@@ -258,7 +257,7 @@ mod tests {
         assert_eq!(Value::Number(24), abs(&Value::Number(-24))?);
         assert_eq!(Value::Number(69), abs(&Value::Number(69))?);
         assert_eq!(Value::Float(f64::INFINITY), abs(&f64::NEG_INFINITY.into())?);
-        assert_ne!(Value::Float(f64::NAN), abs(&f64::NAN.into())?);
+        assert!(matches!(abs(&f64::NAN.into())?, Value::Float(f) if f.is_nan()));
 
         Ok(())
     }
@@ -266,7 +265,7 @@ mod tests {
     #[test]
     fn test_power() -> Result<(), SqlError> {
         assert_eq!(Value::Number(729), power(&9.into(), &3.into())?);
-        assert_eq!(Value::Number(1), power(&i128::MAX.into(), &0.into())?);
+        assert_eq!(Value::Number(1), power(&i64::MAX.into(), &0.into())?);
         assert!(matches!(power(&f64::NAN.into(), &2.0.into())?, Value::Float(x) if x.is_nan()));
         assert_eq!(Value::Float(1.0), power(&0.0.into(), &0.0.into())?);
         assert_eq!(Value::Float(f64::INFINITY), power(&0.0.into(), &(-1.0).into())?);
@@ -311,9 +310,9 @@ mod tests {
 
     #[test]
     fn test_signum() {
-        assert_eq!(Sign::Positive, i128::MAX.sign());
+        assert_eq!(Sign::Positive, i64::MAX.sign());
         assert_eq!(Sign::Neutral, 0.sign());
-        assert_eq!(Sign::Negative, i128::MIN.sign());
+        assert_eq!(Sign::Negative, i64::MIN.sign());
 
         assert_eq!(Sign::Positive, f64::MAX.sign());
         assert_eq!(Sign::Neutral, 0.00000f64.sign());
@@ -333,7 +332,7 @@ mod tests {
         assert_eq!(Value::Number(5), sqrt(&Value::Number(27)).unwrap());
         assert_eq!(Value::Number(3), sqrt(&Value::Number(10)).unwrap());
 
-        assert_eq!(Value::Number(5), sqrt(&27i128.into()).unwrap());
+        assert_eq!(Value::Number(5), sqrt(&27i64.into()).unwrap());
         assert_eq!(Value::Number(0), sqrt(&Value::Number(0)).unwrap());
 
         assert_eq!(SqlError::Vm(VmError::NegativeNumSqrt), sqrt(&Value::Number(-1)).unwrap_err());

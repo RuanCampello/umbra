@@ -4,7 +4,7 @@ use crate::core::date::{DateParseError, Extract, ExtractError, ExtractKind};
 use crate::core::json;
 use crate::core::numeric::{Numeric, NumericError};
 use crate::core::uuid::UuidError;
-use crate::db::{Schema, SqlError};
+use crate::db::{self, Schema, SqlError};
 use crate::sql::statement::{
     BinaryOperator, Coerce, Expression, Function, NUMERIC_ANY, PathSegment, Temporal, Type,
     UnaryOperator, Value,
@@ -29,8 +29,10 @@ pub enum VmType {
 
 #[derive(Debug, PartialEq)]
 pub enum VmError {
-    DivisionByZero(i128, i128),
+    DivisionByZero(i64, i64),
     NegativeNumSqrt,
+    /// an integer result beyond 64 bits
+    IntegerOutOfRange,
 }
 
 #[derive(Debug, PartialEq)]
@@ -75,6 +77,7 @@ macro_rules! impl_value_extractor {
 /// references that do not resolve stay as they are, so evaluating the bound expression fails or succeeds exactly as before
 pub(crate) fn bind(expr: &mut Expression, schema: &Schema) {
     match expr {
+        Expression::Subquery(_) => {},
         Expression::Identifier(column) => {
             if let Some(position) = schema.index_of(column) {
                 *expr = Expression::Column(position);
@@ -180,6 +183,7 @@ fn fold_literal(column: &Expression, literal: &mut Expression, schema: &Schema) 
         // writes store NUMERIC columns as `Numeric`, and every operation converts a number
         // operand exactly like this
         (Type::Numeric(..), Value::Number(n)) => Some(Value::Numeric(Numeric::from(*n))),
+        // a decimal literal against a NUMERIC column takes its exactness (the analyser types it so)
         (Type::Numeric(..), Value::Float(f)) => Numeric::try_from(*f).ok().map(Value::Numeric),
         _ => None,
     };
@@ -197,6 +201,9 @@ pub(crate) fn resolve_expression(
     match expression {
         Expression::Value(value) => Ok(value.clone()),
         Expression::Column(position) => Ok(val[*position].clone()),
+        Expression::Subquery(_) => {
+            Err(SqlError::Other("a subquery is only evaluated by a session".into()))
+        },
         Expression::JsonPath { column, path } => match &val[*column] {
             Value::Null => Ok(Value::Null),
             document => {
@@ -267,9 +274,14 @@ pub(crate) fn resolve_expression(
         },
         Expression::UnaryOperation { operator, expr } => {
             let value = resolve_expression(val, schema, expr)?;
-            Ok(match operator {
-                UnaryOperator::Minus => value.neg()?,
-                _ => value,
+            Ok(match (operator, value) {
+                (UnaryOperator::Minus, value) => value.neg()?,
+                (UnaryOperator::Not, Value::Boolean(b)) => Value::Boolean(!b),
+                (UnaryOperator::Not, Value::Null) => Value::Null,
+                (UnaryOperator::Not, value) => {
+                    return Err(TypeError::CannotApplyUnary { operator: *operator, value }.into());
+                },
+                (UnaryOperator::Plus, value) => value,
             })
         },
         Expression::BinaryOperation { left, operator, right } => {
@@ -301,8 +313,8 @@ pub(crate) fn resolve_expression(
             Function::Substring => {
                 let (Some(string), Some(start), Some(count)) = (
                     get_value::<String>(val, schema, &args[0])?,
-                    get_value::<i128>(val, schema, &args[1])?,
-                    get_value::<i128>(val, schema, &args[2])?,
+                    get_value::<i64>(val, schema, &args[1])?,
+                    get_value::<i64>(val, schema, &args[2])?,
                 ) else {
                     return Ok(Value::Null);
                 };
@@ -330,10 +342,10 @@ pub(crate) fn resolve_expression(
                     },
                 };
 
-                Ok(Value::Number(result as i128))
+                Ok(Value::Number(result as i64))
             },
             Function::Ascii => match get_value::<String>(val, schema, &args[0])? {
-                Some(string) => Ok(Value::Number(functions::ascii(&string) as i128)),
+                Some(string) => Ok(Value::Number(functions::ascii(&string) as i64)),
                 None => Ok(Value::Null),
             },
             Function::Concat => {
@@ -367,9 +379,50 @@ pub(crate) fn resolve_expression(
                 get_value::<String>(val, schema, &args[1])?,
             ) {
                 (Some(pat), Some(string)) => {
-                    Ok(Value::Number(functions::position(&string, &pat) as i128))
+                    Ok(Value::Number(functions::position(&string, &pat) as i64))
                 },
                 _ => Ok(Value::Null),
+            },
+            Function::Cast => {
+                let value = resolve_expression(val, schema, &args[0])?;
+                let Expression::Value(Value::Blob(target)) = &args[1] else {
+                    unreachable!("a cast carries its encoded target")
+                };
+                cast(value, db::decode_type(target))
+            },
+            Function::In => {
+                let needle = resolve_expression(val, schema, &args[0])?;
+                if needle.is_null() {
+                    return Ok(Value::Null);
+                }
+
+                let mut unknown = false;
+                for arg in &args[1..] {
+                    let candidate = resolve_expression(val, schema, arg)?;
+                    if candidate.is_null() {
+                        unknown = true;
+                        continue;
+                    }
+
+                    let (left, right) = needle.clone().coerce_to(candidate);
+                    if apply(&left, BinaryOperator::Eq, &right)? == Value::Boolean(true) {
+                        return Ok(Value::Boolean(true));
+                    }
+                }
+
+                Ok(match unknown {
+                    true => Value::Null,
+                    _ => Value::Boolean(false),
+                })
+            },
+            Function::Case => {
+                let (branches, default) = args.split_at(args.len() - 1);
+                for pair in branches.chunks(2) {
+                    if resolve_expression(val, schema, &pair[0])? == Value::Boolean(true) {
+                        return resolve_expression(val, schema, &pair[1]);
+                    }
+                }
+                resolve_expression(val, schema, &default[0])
             },
             Function::Coalesce => {
                 for arg in args {
@@ -426,7 +479,7 @@ pub(crate) fn resolve_expression(
 }
 
 impl_value_extractor! {
-    Number => (i128, Number),
+    Number => (i64, Number),
     Float => (f64, Float),
     Boolean => (bool, Bool),
     Temporal => (Temporal, Date),
@@ -556,7 +609,8 @@ fn apply(left: &Value, operator: BinaryOperator, right: &Value) -> Result<Value,
         BinaryOperator::Plus
         | BinaryOperator::Minus
         | BinaryOperator::Mul
-        | BinaryOperator::Div => left.is_compatible(right),
+        | BinaryOperator::Div
+        | BinaryOperator::Modulo => left.is_compatible(right),
 
         _ => true,
     };
@@ -605,25 +659,34 @@ fn apply(left: &Value, operator: BinaryOperator, right: &Value) -> Result<Value,
                     BinaryOperator::Plus => left + right,
                     BinaryOperator::Minus => left - right,
                     BinaryOperator::Mul => left * right,
-                    BinaryOperator::Div => {
+                    BinaryOperator::Div | BinaryOperator::Modulo => {
                         // check for division by zero
 
                         if right.is_zero() {
                             let left_val = match left {
                                 Value::Number(n) => *n,
-                                Value::Float(f) => *f as i128,
+                                Value::Float(f) => *f as i64,
                                 _ => 0,
                             };
                             return Err(VmError::DivisionByZero(left_val, 0).into());
                         }
 
-                        left / right
+                        match arithmetic {
+                            BinaryOperator::Div => left / right,
+                            _ => left % right,
+                        }
                     },
 
                     _ => unreachable!("unhandled arithmetic operator: {arithmetic}"),
                 };
 
-                result.ok_or_else(mismatched_types)?
+                match (left, right, result) {
+                    (_, _, Some(result)) => result,
+                    (Value::Number(_), Value::Number(_), _) => {
+                        return Err(VmError::IntegerOutOfRange.into());
+                    },
+                    _ => return Err(mismatched_types()),
+                }
             },
         },
     })
@@ -864,6 +927,111 @@ impl Display for VmError {
         match self {
             Self::DivisionByZero(left, right) => write!(f, "Division by zero: {left} / {right}"),
             Self::NegativeNumSqrt => write!(f, "Cannot take square root of a negative number"),
+            Self::IntegerOutOfRange => write!(f, "integer out of range"),
         }
     }
+}
+
+/// `value` as `target`, as PostgreSQL's explicit casts convert: numbers round (floats half to even,
+/// numerics half away from zero), text parses, VARCHAR(n) truncates, NULL stays NULL
+fn cast(value: Value, target: Type) -> Result<Value, SqlError> {
+    use crate::core::numeric::Numeric;
+
+    let invalid =
+        |value: &Value| SqlError::Other(format!("invalid input for type {target}: {value}"));
+    // wider than any target, so a value out of range is seen out of range, not saturated
+    let integral = |value: &Value| -> Result<i128, SqlError> {
+        match value {
+            Value::Number(n) => Ok(*n as i128),
+            Value::Float(f) if f.is_finite() => Ok(f.round_ties_even() as i128),
+            Value::Numeric(n) => {
+                let half = Numeric::from_scaled_i128(5, 1).expect("one half");
+                let rounded = match n.is_negative() {
+                    true => n - &half,
+                    false => n + &half,
+                };
+                rounded.trunc(0).to_string().parse().map_err(|_| invalid(value))
+            },
+            Value::Boolean(b) => Ok(*b as i128),
+            Value::String(s) => s.trim().parse().map_err(|_| invalid(value)),
+            other => Err(invalid(other)),
+        }
+    };
+
+    Ok(match (value, target) {
+        (Value::Null, _) => Value::Null,
+        (value, target) if target.is_integer() => {
+            let number = integral(&value)?;
+            let (least, greatest) = match target {
+                Type::SmallInt | Type::SmallSerial => (i16::MIN as i64, i16::MAX as i64),
+                Type::Integer | Type::Serial => (i32::MIN as i64, i32::MAX as i64),
+                Type::UnsignedSmallInt => (0, u16::MAX as i64),
+                Type::UnsignedInteger => (0, u32::MAX as i64),
+                Type::UnsignedBigInteger => (0, i64::MAX),
+                _ => (i64::MIN, i64::MAX),
+            };
+            match (least as i128..=greatest as i128).contains(&number) {
+                true => Value::Number(number as i64),
+                _ => {
+                    return Err(SqlError::Other(format!(
+                        "{number} is out of range for type {target}"
+                    )));
+                },
+            }
+        },
+        (Value::Number(n), Type::Real | Type::DoublePrecision) => Value::Float(n as f64),
+        (Value::Numeric(n), Type::Real | Type::DoublePrecision) => Value::Float(f64::from(n)),
+        (Value::Float(f), Type::Real | Type::DoublePrecision) => Value::Float(f),
+        (Value::String(s), Type::Real | Type::DoublePrecision) => {
+            Value::Float(s.trim().parse().map_err(|_| invalid(&Value::String(s.clone())))?)
+        },
+        (value, Type::Numeric(_, scale)) => {
+            let numeric = match &value {
+                Value::Number(n) => Numeric::from(*n),
+                Value::Float(f) => Numeric::try_from(*f).map_err(|_| invalid(&value))?,
+                Value::Numeric(n) => n.clone(),
+                Value::String(s) => s.trim().parse().map_err(|_| invalid(&value))?,
+                other => return Err(invalid(other)),
+            };
+            match scale == crate::sql::statement::NUMERIC_ANY {
+                true => Value::Numeric(numeric),
+                false => {
+                    let half = Numeric::from_scaled_i128(5, scale as u16 + 1).expect("one half");
+                    let rounded = match numeric.is_negative() {
+                        true => &numeric - &half,
+                        false => &numeric + &half,
+                    };
+                    Value::Numeric(rounded.trunc(scale as i32))
+                },
+            }
+        },
+        (Value::String(s), Type::Text) => Value::String(s),
+        (Value::String(s), Type::Varchar(limit)) => {
+            Value::String(s.chars().take(limit).collect::<String>().into())
+        },
+        (value, Type::Text | Type::Varchar(_)) => {
+            let text = match &value {
+                Value::Boolean(b) => b.to_string(),
+                other => other.to_string(),
+            };
+            match target {
+                Type::Varchar(limit) => {
+                    Value::String(text.chars().take(limit).collect::<String>().into())
+                },
+                _ => Value::String(text.into()),
+            }
+        },
+        (Value::Boolean(b), Type::Boolean) => Value::Boolean(b),
+        (Value::Number(n), Type::Boolean) => Value::Boolean(n != 0),
+        (Value::String(s), Type::Boolean) => match s.trim().to_lowercase().as_str() {
+            "t" | "true" | "yes" | "y" | "on" | "1" => Value::Boolean(true),
+            "f" | "false" | "no" | "n" | "off" | "0" => Value::Boolean(false),
+            _ => return Err(invalid(&Value::String(s))),
+        },
+        (mut value, target) => {
+            let column = crate::db::Column::new("cast", target);
+            crate::executor::dml::coerce_value(&column, &mut value).map_err(|_| invalid(&value))?;
+            value
+        },
+    })
 }
