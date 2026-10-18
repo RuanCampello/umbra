@@ -6,11 +6,11 @@ use super::Tuple;
 use super::operator::{Operator, Sort, tuple_bytes};
 use crate::collections::hash::HashMap;
 use crate::core::numeric::Numeric;
-use crate::db::{DatabaseError, Schema};
+use crate::db::{DatabaseError, Schema, SqlError};
 use crate::sql::Value;
 use crate::sql::statement::{Expression, Function, Type};
 use crate::storage::tuple::serialize_into;
-use crate::vm::expression::{bind, resolve_expression};
+use crate::vm::expression::{VmError, bind, resolve_expression};
 use std::cmp::Ordering;
 use std::path::Path;
 
@@ -43,13 +43,16 @@ enum Argument {
 }
 
 pub(crate) enum State {
-    Count(i128),
+    Count(i64),
     /// No non-null value seen yet
     Empty,
     Numeric(Numeric, i64),
+    /// the sum is wider than a value, so the order of the rows cannot overflow it
     Integer(i128, i64),
     Float(f64, i64),
     Extreme(Option<Value>),
+    /// `COUNT(DISTINCT x)`: the values seen
+    Distinct(crate::collections::hash::HashSet<Value>),
 }
 
 /// Bytes of first rows and keys [Aggregates::fold_hashed] keeps in memory before it sorts the rest
@@ -128,6 +131,11 @@ fn encode(key: &[(usize, Type)], row: &[Value], bytes: &mut Vec<u8>) {
 fn fold(function: Function, state: &mut State, value: &Value) {
     match state {
         State::Count(n) => *n += 1,
+        State::Distinct(seen) => {
+            if !seen.contains(value) {
+                seen.insert(value.clone());
+            }
+        },
         State::Extreme(None) => *state = State::Extreme(Some(value.clone())),
         State::Extreme(Some(current)) => {
             let order = value.partial_cmp(current).unwrap_or(Ordering::Equal);
@@ -142,28 +150,26 @@ fn fold(function: Function, state: &mut State, value: &Value) {
         State::Empty => {
             *state = match value {
                 Value::Numeric(n) => State::Numeric(n.clone(), 1),
-                Value::Number(n) => State::Integer(*n, 1),
+                Value::Number(n) => State::Integer(*n as i128, 1),
                 Value::Float(f) => State::Float(*f, 1),
                 _ => State::Float(0.0, 0),
             }
         },
-        State::Numeric(sum, count) => {
-            *sum = match value {
-                Value::Numeric(n) => &*sum + n,
-                Value::Number(n) => &*sum + &Numeric::from(*n),
-                Value::Float(f) => &*sum + &Numeric::try_from(*f).unwrap_or(Numeric::zero()),
-                _ => return,
-            };
-            *count += 1;
+        State::Numeric(sum, count) => match value {
+            Value::Numeric(n) => (*sum, *count) = (&*sum + n, *count + 1),
+            Value::Number(n) => (*sum, *count) = (&*sum + &Numeric::from(*n), *count + 1),
+            Value::Float(f) => *state = State::Float(f64::from(sum.clone()) + f, *count + 1),
+            _ => {},
         },
 
-        // the arithmetic widens as values of a wider kind arrive: integer -> float -> numeric
+        // the arithmetic widens as values of a wider kind arrive: integer -> numeric -> float, an
+        // approximate value making the sum approximate, as the engine's arithmetic does
         State::Integer(sum, count) => {
             let (total, seen) = (*sum, *count);
             match value {
-                Value::Number(n) => (*sum, *count) = (total + n, seen + 1),
+                Value::Number(n) => (*sum, *count) = (total + *n as i128, seen + 1),
                 Value::Float(f) => *state = State::Float(total as f64 + f, seen + 1),
-                Value::Numeric(n) => *state = State::Numeric(&Numeric::from(total) + n, seen + 1),
+                Value::Numeric(n) => *state = State::Numeric(&integral(total) + n, seen + 1),
                 _ => {},
             }
         },
@@ -172,30 +178,34 @@ fn fold(function: Function, state: &mut State, value: &Value) {
             match value {
                 Value::Float(f) => (*sum, *count) = (total + f, seen + 1),
                 Value::Number(n) => (*sum, *count) = (total + *n as f64, seen + 1),
-                Value::Numeric(n) => match Numeric::try_from(total) {
-                    Ok(exact) => *state = State::Numeric(&exact + n, seen + 1),
-                    Err(_) => (*sum, *count) = (total + f64::from(n.clone()), seen + 1),
-                },
+                Value::Numeric(n) => (*sum, *count) = (total + f64::from(n.clone()), seen + 1),
                 _ => {},
             }
         },
     }
 }
 
-fn finish(function: Function, state: State) -> Value {
-    match (function, state) {
+fn integral(sum: i128) -> Numeric {
+    Numeric::from_scaled_i128(sum, 0).expect("an i128 is a numeric")
+}
+
+/// an integer `SUM` is BIGINT, as every integer result: one past 64 bits is out of range
+fn finish(function: Function, state: State) -> Result<Value, DatabaseError> {
+    Ok(match (function, state) {
         (_, State::Count(n)) => Value::Number(n),
+        (_, State::Distinct(seen)) => Value::Number(seen.len() as i64),
         (_, State::Extreme(value)) => value.unwrap_or(Value::Null),
         (_, State::Empty) => Value::Null,
         (Function::Sum, State::Numeric(sum, _)) => Value::Numeric(sum),
         (_, State::Numeric(sum, count)) => Value::Numeric(sum / Numeric::from(count)),
-        (Function::Sum, State::Integer(sum, _)) => Value::Number(sum),
-        (_, State::Integer(sum, count)) => {
-            Value::Numeric(Numeric::from(sum) / Numeric::from(count))
+        (Function::Sum, State::Integer(sum, _)) => match i64::try_from(sum) {
+            Ok(sum) => Value::Number(sum),
+            Err(_) => return Err(SqlError::Vm(VmError::IntegerOutOfRange).into()),
         },
+        (_, State::Integer(sum, count)) => Value::Numeric(integral(sum) / Numeric::from(count)),
         (Function::Sum, State::Float(sum, _)) => Value::Float(sum),
         (_, State::Float(sum, count)) => Value::Float(sum / count as f64),
-    }
+    })
 }
 
 impl<'s> Aggregates<'s> {
@@ -237,6 +247,7 @@ impl<'s> Aggregates<'s> {
             .iter()
             .map(|(function, _)| match function {
                 Function::Count => State::Count(0),
+                Function::CountDistinct => State::Distinct(Default::default()),
                 Function::Min | Function::Max => State::Extreme(None),
                 _ => State::Empty,
             })
@@ -353,7 +364,7 @@ impl<'s> Aggregates<'s> {
     }
 
     /// the value of every call, in plan order
-    pub fn finish(&self, states: Vec<State>) -> Vec<Value> {
+    pub fn finish(&self, states: Vec<State>) -> Result<Vec<Value>, DatabaseError> {
         self.calls
             .iter()
             .zip(states)

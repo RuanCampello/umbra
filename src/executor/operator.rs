@@ -13,6 +13,7 @@ use crate::db::{DatabaseError, Schema};
 use crate::executor::Tuple;
 use crate::sql::Value;
 use crate::sql::statement::{Expression, Type};
+use crate::storage::engine::index::Key;
 use crate::storage::engine::table::{Row, RowId, TableScan};
 use crate::storage::engine::transaction::{IndexCursor, IndexProbe};
 use crate::vm::expression::{self, bind, evaluate_where};
@@ -114,6 +115,12 @@ pub(crate) struct IndexJoin {
 /// Streams the tuples of a spill file
 struct Spilled {
     cursor: RunCursor,
+}
+
+/// Drops the tuples equal to one already produced `SELECT DISTINCT`, keeping the first
+pub(crate) struct Distinct {
+    source: Box<dyn Operator>,
+    seen: crate::collections::hash::HashSet<Tuple>,
 }
 
 /// Applies `LIMIT` and `OFFSET` to a source operator
@@ -253,22 +260,22 @@ impl Scan {
     }
 
     /// whether a row is at the cursor, fetching the next chunk once the batch is spent
-    fn ready(&mut self) -> bool {
+    fn ready(&mut self) -> Result<bool, DatabaseError> {
         while self.cursor == self.batch.len() {
             self.batch.clear();
             self.cursor = 0;
-            if !self.rows.next_batch(&mut self.batch) {
-                return false;
+            if !self.rows.next_batch(&mut self.batch)? {
+                return Ok(false);
             }
         }
 
-        true
+        Ok(true)
     }
 }
 
 impl Operator for Scan {
     fn next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
-        while self.ready() {
+        while self.ready()? {
             let (row_id, row) = &self.batch[self.cursor];
             self.cursor += 1;
 
@@ -297,14 +304,14 @@ impl Operator for Scan {
             // PERFORMANCE: index cursors count visible rows without copying them out
             Rows::Index(cursors) => {
                 while let Some(cursor) = cursors.front_mut().filter(|_| skipped < n) {
-                    skipped += cursor.skip(n - skipped);
+                    skipped += cursor.skip(n - skipped)?;
                     if skipped < n {
                         cursors.pop_front();
                     }
                 }
             },
             Rows::Table(_) => {
-                while skipped < n && self.ready() {
+                while skipped < n && self.ready()? {
                     let step = (n - skipped).min(self.batch.len() - self.cursor);
                     self.cursor += step;
                     skipped += step;
@@ -527,7 +534,7 @@ impl Operator for IndexJoin {
             self.matches.clear();
             let key = &left[self.left_key];
             if !key.is_null() {
-                self.probe.find(key, &mut self.matches);
+                self.probe.find(&Key::One(key.clone()), &mut self.matches)?;
             }
 
             for (_, row) in self.matches.drain(..) {
@@ -643,19 +650,37 @@ impl Operator for Run<'_> {
 }
 
 impl Rows {
-    fn next_batch(&mut self, out: &mut Vec<(RowId, Row)>) -> bool {
+    fn next_batch(&mut self, out: &mut Vec<(RowId, Row)>) -> Result<bool, DatabaseError> {
         match self {
-            Rows::Table(scan) => scan.next_batch(out),
+            Rows::Table(scan) => Ok(scan.next_batch(out)?),
             Rows::Index(cursors) => loop {
                 let Some(cursor) = cursors.front_mut() else {
-                    return false;
+                    return Ok(false);
                 };
-                if cursor.next_batch(out) {
-                    return true;
+                if cursor.next_batch(out)? {
+                    return Ok(true);
                 }
                 cursors.pop_front();
             },
         }
+    }
+}
+
+impl Distinct {
+    pub fn new(source: Box<dyn Operator>) -> Self {
+        Self { source, seen: Default::default() }
+    }
+}
+
+impl Operator for Distinct {
+    fn next(&mut self) -> Result<Option<Tuple>, DatabaseError> {
+        while let Some(tuple) = self.source.next()? {
+            if self.seen.insert(tuple.clone()) {
+                return Ok(Some(tuple));
+            }
+        }
+
+        Ok(None)
     }
 }
 
@@ -765,7 +790,7 @@ impl Sort {
         let mut sorted = Vec::new();
         if cap > 0 {
             let trim_at = cap.saturating_mul(2);
-            // the largest row kept by the last trim; nothing that does not sort before it can enter
+            // the largest row kept by the last trim: nothing that does not sort before it can enter
             let mut bound: Option<Tuple> = None;
             while let Some(tuple) = source.next()? {
                 if bound.as_ref().is_some_and(|bound| comparator(&tuple, bound) != Ordering::Less) {
@@ -947,18 +972,46 @@ pub(crate) fn project_row(row_id: RowId, row: &Row, projection: Option<&[usize]>
         Some(columns) => columns.iter().map(|&i| row[i].clone()).collect(),
         _ => {
             let mut tuple = Vec::with_capacity(row.len() + 1);
-            tuple.push(Value::Number(row_id as i128));
+            tuple.push(Value::Number(row_id as i64));
             tuple.extend(row.iter().cloned());
             tuple
         },
     }
 }
 
-/// the bytes a join key is hashed and compared by, encoded under the key column's type so values of different representations still meet
+/// the bytes a join key is hashed and compared by, encoded under the type both keys are compared
+/// in ([join_key_type]), converted to it first so a wider value is never truncated
 fn join_key(key_type: Type, value: &Value) -> Option<Vec<u8>> {
-    match value.is_null() {
-        true => None,
-        false => Some(crate::storage::tuple::serialize(&key_type, value)),
+    use crate::core::numeric::Numeric;
+
+    let converted = match (key_type, value) {
+        (_, Value::Null) => return None,
+        (Type::DoublePrecision, Value::Number(n)) => Value::Float(*n as f64),
+        (Type::DoublePrecision, Value::Numeric(n)) => Value::Float(f64::from(n.clone())),
+        (Type::Numeric(..), Value::Number(n)) => Value::Numeric(Numeric::from(*n)),
+        _ => return Some(crate::storage::tuple::serialize(&key_type, value)),
+    };
+
+    Some(crate::storage::tuple::serialize(&key_type, &converted))
+}
+
+/// the type two join keys are compared in: approximate over exact, wider over narrower
+pub(crate) fn join_key_type(left: Type, right: Type) -> Type {
+    use crate::sql::statement::NUMERIC_ANY;
+
+    let numeric = |kind: Type| matches!(kind, Type::Numeric(..));
+    let number = |kind: Type| kind.is_integer() || kind.is_float() || numeric(kind);
+
+    match (left, right) {
+        _ if left == right => left,
+        _ if number(left) && number(right) && (left.is_float() || right.is_float()) => {
+            Type::DoublePrecision
+        },
+        _ if number(left) && number(right) && (numeric(left) || numeric(right)) => {
+            Type::Numeric(NUMERIC_ANY, NUMERIC_ANY)
+        },
+        _ if left.is_integer() && right.is_integer() => Type::BigInteger,
+        _ => left,
     }
 }
 
@@ -1156,7 +1209,7 @@ mod tests {
     }
 
     fn rows(values: &[i64]) -> Vec<Tuple> {
-        values.iter().map(|&n| vec![Value::Number(n as i128)]).collect()
+        values.iter().map(|&n| vec![Value::Number(n as i64)]).collect()
     }
 
     fn drain(mut sort: Sort) -> Vec<i64> {
