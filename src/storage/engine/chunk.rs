@@ -5,18 +5,22 @@
 //! commit log or the current checkpoint image, so they are not synced and `open` discards them
 
 use crate::collections::smallvec::SmallVec;
-use crate::core::crc32c::crc32c;
+use crate::core::{
+    crc32c::crc32c,
+    numeric::{Long, Numeric},
+};
+use crate::sql::Value;
 use crate::storage::engine::{
     codec::{Cursor, put_row},
     error,
     io::Storage,
     table::Row,
 };
-use std::ops::{Deref, DerefMut};
+use std::ops::{Bound, Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 
 pub(crate) struct Chunk {
@@ -24,6 +28,13 @@ pub(crate) struct Chunk {
     /// [Cold::clock] at the last access, for approximate LRU
     touched: AtomicU64,
     cold: Option<Arc<Cold>>,
+    /// Zone map: per column, the least and greatest non-NULL value of every version ever written
+    /// here (small materialised aggregates, Moerkotte 1998)
+    /// it only widens, so it holds for every snapshot, and it stays when the chunk is evicted
+    bounds: Mutex<Vec<Option<(Value, Value)>>>,
+    /// What this chunk adds to [Cold::bytes]: exact when `measured`, otherwise an over-estimate
+    bytes: AtomicUsize,
+    measured: AtomicBool,
 }
 
 pub(crate) struct Version {
@@ -36,9 +47,12 @@ pub(crate) struct Version {
 pub(crate) struct Cold {
     storage: Arc<dyn Storage>,
     dir: PathBuf,
-    max_resident: usize,
+    budget: Budget,
+    /// Resident chunks
     resident: AtomicUsize,
-    /// Coarse access clock, advanced by maintenance; chunks copy it when touched
+    /// Approximate bytes of the resident chunks: slots, versions, rows and what their values point to
+    bytes: AtomicUsize,
+    /// Coarse access clock, advanced by maintenance, chunks copy it when touched
     clock: AtomicU64,
 }
 
@@ -47,58 +61,158 @@ pub(crate) struct Resident<'a>(RwLockReadGuard<'a, Slots>);
 /// Write access to a resident chunk's slots
 pub(crate) struct ResidentMut<'a>(RwLockWriteGuard<'a, Slots>);
 
+/// How much table data a durable engine keeps in memory before evicting the coldest settled chunks
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Budget {
+    /// approximate bytes of resident chunks; indexes and query memory come on top
+    Bytes(usize),
+    /// whole chunks, whatever their size
+    Chunks(usize),
+}
+
 enum Slots {
     Resident(Box<[Chain]>),
     Evicted(PathBuf),
 }
 
 pub(in crate::storage::engine) const CHUNK_BITS: u32 = 10;
-pub(in crate::storage::engine) const CHUNK_SIZE: usize = 1 << CHUNK_BITS;
+pub(crate) const CHUNK_SIZE: usize = 1 << CHUNK_BITS;
 
 /// Oldest to newest, at most one flagged version, always the newest
 pub(crate) type Chain = SmallVec<Version, 1>;
+
+pub(in crate::storage::engine) const SKELETON: usize = CHUNK_SIZE * size_of::<Chain>();
+/// strong and weak counts ahead of an `Arc`'s data
+const ARC_HEADER: usize = 2 * size_of::<usize>();
 
 impl Chunk {
     pub fn new(cold: Option<Arc<Cold>>) -> Self {
         if let Some(cold) = &cold {
             cold.resident.fetch_add(1, Ordering::Relaxed);
+            cold.bytes.fetch_add(SKELETON, Ordering::Relaxed);
         }
 
         let slots = (0..CHUNK_SIZE).map(|_| Chain::new()).collect();
         let slots = RwLock::new(Slots::Resident(slots));
         let touched = AtomicU64::new(cold.as_ref().map_or(0, |cold| cold.now()));
 
-        Self { slots, touched, cold }
+        Self {
+            slots,
+            touched,
+            cold,
+            bounds: Mutex::new(Vec::new()),
+            bytes: AtomicUsize::new(SKELETON),
+            measured: AtomicBool::new(true),
+        }
+    }
+
+    /// widens the zone map to cover `row`, a new version written under the chunk latch, and
+    /// counts it against the budget
+    // PERFORMANCE: one comparison per column per write, under the chunk latch the writer holds
+    pub fn widen(&self, row: &[Value]) {
+        if let Some(cold) = &self.cold {
+            let bytes = footprint(row);
+            self.bytes.fetch_add(bytes, Ordering::Relaxed);
+            cold.bytes.fetch_add(bytes, Ordering::Relaxed);
+            self.measured.store(false, Ordering::Relaxed);
+        }
+
+        let mut bounds = self.bounds.lock().expect("zone map poisoned");
+        if bounds.len() < row.len() {
+            bounds.resize(row.len(), None);
+        }
+
+        for (bound, value) in bounds.iter_mut().zip(row).filter(|(_, value)| !value.is_null()) {
+            match bound {
+                None => *bound = Some((value.clone(), value.clone())),
+                Some((least, _)) if value < least => *least = value.clone(),
+                Some((_, greatest)) if value > greatest => *greatest = value.clone(),
+                _ => {},
+            }
+        }
+    }
+
+    /// whether a row of this chunk may have its columns within every range: `false` proves none does
+    pub fn may_hold(&self, ranges: &[(usize, Bound<Value>, Bound<Value>)]) -> bool {
+        let bounds = self.bounds.lock().expect("zone map poisoned");
+        ranges.iter().all(|(column, start, end)| {
+            let Some(Some((least, greatest))) = bounds.get(*column) else {
+                return false;
+            };
+            let above = match start {
+                Bound::Included(start) => start <= greatest,
+                Bound::Excluded(start) => start < greatest,
+                Bound::Unbounded => true,
+            };
+            let below = match end {
+                Bound::Included(end) => end >= least,
+                Bound::Excluded(end) => end > least,
+                Bound::Unbounded => true,
+            };
+            above && below
+        })
+    }
+
+    /// a version was removed or replaced: [Chunk::measure] recounts the chunk
+    #[inline]
+    pub fn changed(&self) {
+        self.measured.store(false, Ordering::Relaxed);
+    }
+
+    /// replaces the estimate written versions left with the exact footprint of `chains`, this chunk's slots under its latch
+    pub fn measure(&self, chains: &[Chain]) {
+        let Some(cold) = &self.cold else {
+            return;
+        };
+        if self.measured.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let exact = SKELETON + chains.iter().map(chain_footprint).sum::<usize>();
+        let previous = self.bytes.swap(exact, Ordering::Relaxed);
+        cold.bytes.fetch_add(exact, Ordering::Relaxed);
+        cold.bytes.fetch_sub(previous, Ordering::Relaxed);
     }
 
     /// the slots, reloading them first if the chunk was evicted
-    pub fn read(&self) -> Resident<'_> {
+    pub fn read(&self) -> error::Result<Resident<'_>> {
         loop {
             let slots = self.slots.read().expect("chunk latch poisoned");
             if let Slots::Resident(_) = &*slots {
                 self.touch();
-                return Resident(slots);
+                return Ok(Resident(slots));
             }
 
             drop(slots);
-            self.write();
+            self.write()?;
         }
     }
 
     /// the slots for writing, reloading them first if the chunk was evicted
-    pub fn write(&self) -> ResidentMut<'_> {
+    /// a cold file that cannot be read leaves the chunk evicted and fails the access
+    pub fn write(&self) -> error::Result<ResidentMut<'_>> {
         let mut slots = self.slots.write().expect("chunk latch poisoned");
 
         if let Slots::Evicted(path) = &*slots {
             let cold = self.cold.as_ref().expect("only durable tables evict");
-            let loaded = cold.load(path);
+            let loaded = cold.load(path)?;
             cold.discard(path);
+            let bytes = SKELETON + loaded.iter().map(chain_footprint).sum::<usize>();
+            self.bytes.store(bytes, Ordering::Relaxed);
+            self.measured.store(true, Ordering::Relaxed);
             cold.resident.fetch_add(1, Ordering::Relaxed);
+            cold.bytes.fetch_add(bytes, Ordering::Relaxed);
             *slots = Slots::Resident(loaded);
         }
 
         self.touch();
-        ResidentMut(slots)
+        Ok(ResidentMut(slots))
+    }
+
+    /// [Chunk::write] for a chunk known to be resident: one holding an uncommitted version is never evicted
+    pub fn write_resident(&self) -> ResidentMut<'_> {
+        self.write_if_resident()
+            .expect("a chunk holding an uncommitted version is resident")
     }
 
     /// the slots when resident, without reloading
@@ -113,19 +227,18 @@ impl Chunk {
     /// runs `f` over the slots
     /// an evicted chunk is decoded into a temporary buffer and stays
     /// evicted, so bulk readers (scans, checkpoints, index builds) do not refill memory
-    pub fn visit<R>(&self, f: impl FnOnce(&[Chain]) -> R) -> R {
+    pub fn visit<R>(&self, f: impl FnOnce(&[Chain]) -> R) -> error::Result<R> {
         let slots = self.slots.read().expect("chunk latch poisoned");
         match &*slots {
-            Slots::Resident(chains) => f(chains),
+            Slots::Resident(chains) => Ok(f(chains)),
             Slots::Evicted(path) => {
                 let cold = self.cold.as_ref().expect("only durable tables evict");
-                f(&cold.load(path))
+                Ok(f(&cold.load(path)?))
             },
         }
     }
 
-    /// writes the chunk to `path` and drops its slots, if every row has a single version committed
-    /// at or below `watermark`
+    /// writes the chunk to `path` and drops its slots, if every row has a single version committed at or below `watermark`
     pub fn evict(&self, path: PathBuf, watermark: u64) -> bool {
         let cold = self.cold.as_ref().expect("only durable tables evict");
         let mut slots = self.slots.write().expect("chunk latch poisoned");
@@ -144,6 +257,7 @@ impl Chunk {
 
         *slots = Slots::Evicted(path);
         cold.resident.fetch_sub(1, Ordering::Relaxed);
+        cold.bytes.fetch_sub(self.bytes.swap(0, Ordering::Relaxed), Ordering::Relaxed);
         true
     }
 
@@ -167,14 +281,14 @@ impl Chunk {
 
 impl Cold {
     /// cold files live in `dir`
-    ///
-    /// memory holds at most `max_resident` chunks after each eviction round (as far as eligible chunks allow)
-    pub fn new(storage: Arc<dyn Storage>, dir: PathBuf, max_resident: usize) -> Self {
+    /// memory stays within `budget` after each eviction round (as far as eligible chunks allow)
+    pub fn new(storage: Arc<dyn Storage>, dir: PathBuf, budget: Budget) -> Self {
         Self {
             storage,
             dir,
-            max_resident,
+            budget,
             resident: AtomicUsize::new(0),
+            bytes: AtomicUsize::new(0),
             clock: AtomicU64::new(1),
         }
     }
@@ -194,8 +308,16 @@ impl Cold {
     }
 
     #[inline]
+    pub fn bytes(&self) -> usize {
+        self.bytes.load(Ordering::Relaxed)
+    }
+
+    #[inline]
     pub fn over_budget(&self) -> bool {
-        self.resident() > self.max_resident
+        match self.budget {
+            Budget::Bytes(max) => self.bytes() > max,
+            Budget::Chunks(max) => self.resident() > max,
+        }
     }
 
     pub fn path(&self, table: u32, chunk: usize) -> PathBuf {
@@ -227,18 +349,21 @@ impl Cold {
         self.storage.create(path)?.append(&buf)
     }
 
-    /// a disk that cannot return what it was just given has failed: there is no row-level
-    /// recovery from that, the engine stops loudly and a restart rebuilds from image and log
-    fn load(&self, path: &Path) -> Box<[Chain]> {
-        let unreadable = |why: &dyn std::fmt::Display| -> ! {
-            panic!("cold chunk {} is unreadable: {why}", path.display())
+    /// a cold file that cannot be read back fails the statement that needed it: its rows are still
+    /// in the checkpoint image and the log, which a restart rebuilds the chunk from
+    fn load(&self, path: &Path) -> error::Result<Box<[Chain]>> {
+        let unreadable = |why: &dyn std::fmt::Display| {
+            error::EngineError::Corrupt(format!(
+                "cold chunk {} is unreadable: {why}",
+                path.display()
+            ))
         };
 
-        let bytes = self.storage.read(path).unwrap_or_else(|e| unreadable(&e));
-        let split = bytes.len().checked_sub(4).unwrap_or_else(|| unreadable(&"truncated"));
+        let bytes = self.storage.read(path).map_err(|e| unreadable(&e))?;
+        let split = bytes.len().checked_sub(4).ok_or_else(|| unreadable(&"truncated"))?;
         let (content, footer) = bytes.split_at(split);
         if crc32c(content) != u32::from_le_bytes(footer.try_into().unwrap()) {
-            unreadable(&"checksum mismatch");
+            return Err(unreadable(&"checksum mismatch"));
         }
 
         let mut slots: Box<_> = (0..CHUNK_SIZE).map(|_| Chain::new()).collect();
@@ -256,8 +381,8 @@ impl Cold {
             Ok::<_, error::EngineError>(())
         })();
 
-        decoded.unwrap_or_else(|e| unreadable(&e));
-        slots
+        decoded.map_err(|e| unreadable(&e))?;
+        Ok(slots)
     }
 
     /// removes a cold file whose chunk is resident again, a leftover is harmless (`open` clears the directory)
@@ -310,7 +435,36 @@ impl Drop for Chunk {
             Slots::Evicted(path) => cold.discard(path),
             _ => {
                 cold.resident.fetch_sub(1, Ordering::Relaxed);
+                cold.bytes.fetch_sub(*self.bytes.get_mut(), Ordering::Relaxed);
             },
         }
     }
+}
+
+/// approximate bytes a chain holds beyond its slot
+fn chain_footprint(chain: &Chain) -> usize {
+    let spilled = match chain.len() > 1 {
+        true => chain.capacity() * size_of::<Version>(),
+        _ => 0,
+    };
+    spilled
+        + chain
+            .iter()
+            .filter_map(|version| version.row.as_deref())
+            .map(footprint)
+            .sum::<usize>()
+}
+
+/// approximate bytes of a row: its shared slice and what its values point to
+fn footprint(row: &[Value]) -> usize {
+    let pointed: usize = row
+        .iter()
+        .map(|value| match value {
+            Value::String(text) => ARC_HEADER + text.len(),
+            Value::Blob(bytes) => ARC_HEADER + bytes.len(),
+            Value::Numeric(Numeric::Long(long)) => size_of::<Long>() + long.digits.capacity() * 2,
+            _ => 0,
+        })
+        .sum();
+    ARC_HEADER + size_of_val(row) + pointed
 }
