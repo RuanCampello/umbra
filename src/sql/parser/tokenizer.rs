@@ -5,24 +5,31 @@ use std::fmt::Display;
 use std::iter::Peekable;
 use std::str::{Chars, FromStr};
 
+#[derive(Clone)]
 pub(in crate::sql) struct Tokenizer<'input> {
     stream: Stream<'input>,
     reached_eof: bool,
+    /// whitespace separates tokens without being one
+    skip_whitespace: bool,
 }
 
+#[derive(Clone)]
 pub(in crate::sql) struct TokenWithLocation {
     pub token: Token,
     pub location: Location,
 }
 
 /// A peekable chars stream of [tokens](Token), so we can read through it without consuming.
+#[derive(Clone)]
 struct Stream<'input> {
     input: &'input str,
     location: Location,
     chars: Peekable<Chars<'input>>,
+    /// bytes of `input` consumed
+    offset: usize,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::sql) struct TokenizerError {
     pub kind: ErrorKind,
     pub location: Location,
@@ -38,6 +45,7 @@ pub(in crate::sql) struct Iter<'token, 'input> {
     tokenizer: &'token mut Tokenizer<'input>,
 }
 
+#[derive(Clone)]
 pub(in crate::sql) struct IntoIter<'input> {
     tokenizer: Tokenizer<'input>,
 }
@@ -48,17 +56,12 @@ pub(in crate::sql) struct Location {
     pub(in crate::sql) col: usize,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(in crate::sql) enum ErrorKind {
     UnexpectedToken(char),
-    UnexpectedOperator {
-        unexpected: char,
-        operator: Token,
-    },
+    UnexpectedOperator { unexpected: char, operator: Token },
     OperatorUnclosed(Token),
     StringUnclosed,
-    #[allow(unused)]
-    Other(String),
 }
 
 type TokenizerResult = Result<Token, TokenizerError>;
@@ -68,14 +71,19 @@ impl<'input> Tokenizer<'input> {
         Self {
             stream: Stream::new(input),
             reached_eof: false,
+            skip_whitespace: false,
         }
+    }
+
+    /// a tokenizer that yields no whitespace tokens
+    // PERFORMANCE: a statement has a space between most tokens, each was a token the parser skipped
+    pub fn without_whitespace(input: &'input str) -> Self {
+        Self { skip_whitespace: true, ..Self::new(input) }
     }
 
     #[cfg(test)]
     pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
-        self.iter()
-            .map(|token| token.map(TokenWithLocation::token_only))
-            .collect()
+        self.iter().map(|token| token.map(TokenWithLocation::token_only)).collect()
     }
 
     fn consume(&mut self, token: Token) -> TokenizerResult {
@@ -112,6 +120,7 @@ impl<'input> Tokenizer<'input> {
             },
             '<' => match self.stream.peek_next() {
                 Some('=') => self.consume(Token::LtEq),
+                Some('>') => self.consume(Token::Neq),
                 _ => Ok(Token::Lt),
             },
             '>' => match self.stream.peek_next() {
@@ -126,12 +135,13 @@ impl<'input> Tokenizer<'input> {
                         operator: Token::Neq,
                     };
                     self.error(error_kind)
-                }
+                },
 
                 None => self.error(ErrorKind::OperatorUnclosed(Token::Neq)),
             },
             '*' => self.consume(Token::Mul),
             '/' => self.consume(Token::Div),
+            '%' => self.consume(Token::Percent),
             '+' => self.consume(Token::Plus),
             '-' => self.consume(Token::Minus),
             '=' => self.consume(Token::Eq),
@@ -152,36 +162,37 @@ impl<'input> Tokenizer<'input> {
             _ => {
                 let err = ErrorKind::UnexpectedToken(*c);
                 self.error(err)
-            }
+            },
         }
     }
 
+    // PERFORMANCE: a word is a slice of the input, only an identifier is copied out
     fn tokenize_keyword(&mut self) -> TokenizerResult {
-        let value: String = self.stream.take_while(Token::is_keyword).collect();
-        let keyword = Keyword::from_str(value.as_str()).unwrap_or(Keyword::None);
+        let start = self.stream.offset;
+        self.stream.take_while(Token::is_keyword).for_each(drop);
+        let word = &self.stream.input[start..self.stream.offset];
 
-        Ok(match keyword {
-            Keyword::None => Token::Identifier(value),
-            _ => Token::Keyword(keyword),
+        Ok(match Keyword::from_str(word).unwrap_or(Keyword::None) {
+            Keyword::None => Token::Identifier(word.to_string()),
+            keyword => Token::Keyword(keyword),
         })
     }
 
     fn tokenize_number(&mut self) -> TokenizerResult {
-        let mut number: String = self.stream.take_while(char::is_ascii_digit).collect();
+        let start = self.stream.offset;
+        self.stream.take_while(char::is_ascii_digit).for_each(drop);
 
         if let Some('.') = self.stream.peek() {
             self.stream.next();
-            let fraction: String = self.stream.take_while(char::is_ascii_digit).collect();
+            let fraction = self.stream.offset;
+            self.stream.take_while(char::is_ascii_digit).for_each(drop);
 
-            if fraction.is_empty() {
+            if self.stream.offset == fraction {
                 return self.error(ErrorKind::UnexpectedToken('.'));
             }
-
-            number.push('.');
-            number.push_str(&fraction);
         }
 
-        Ok(Token::Number(number))
+        Ok(Token::Number(self.stream.input[start..self.stream.offset].to_string()))
     }
 
     fn tokenize_string(&mut self) -> TokenizerResult {
@@ -195,10 +206,14 @@ impl<'input> Tokenizer<'input> {
     }
 
     fn next_token_with_location(&mut self) -> Result<TokenWithLocation, TokenizerError> {
+        if self.skip_whitespace {
+            while self.stream.peek().is_some_and(|c| matches!(c, ' ' | '\t' | '\n' | '\r')) {
+                self.stream.next();
+            }
+        }
         let location = self.stream.location();
 
-        self.next_token()
-            .map(|token| TokenWithLocation { token, location })
+        self.next_token().map(|token| TokenWithLocation { token, location })
     }
 
     fn op_next_token_with_location(&mut self) -> Option<Result<TokenWithLocation, TokenizerError>> {
@@ -246,27 +261,26 @@ impl<'input> Stream<'input> {
             input,
             location: Location::default(),
             chars: input.chars().peekable(),
+            offset: 0,
         }
     }
 
     /// Updates the [Location] and consumes the next char.
     fn next(&mut self) -> Option<char> {
         self.chars.next().inspect(|c| {
+            self.offset += c.len_utf8();
             match *c == Whitespace::Newline.as_char() {
                 true => {
                     self.location.line += 1;
                     self.location.col += 1;
-                }
+                },
                 false => self.location.col += 1,
             };
         })
     }
 
     fn take_while<P: FnMut(&char) -> bool>(&mut self, predicate: P) -> TakeWhile<'_, 'input, P> {
-        TakeWhile {
-            stream: self,
-            predicate,
-        }
+        TakeWhile { stream: self, predicate }
     }
 
     fn peek(&mut self) -> Option<&char> {
@@ -328,21 +342,14 @@ impl Default for Location {
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ErrorKind::Other(err) => f.write_str(err),
             ErrorKind::StringUnclosed => f.write_str("Unclosed string"),
             ErrorKind::OperatorUnclosed(op) => write!(f, "Operator {op} unclosed"),
             ErrorKind::UnexpectedToken(token) => {
                 write!(f, "Unexpected or unsupported token: {token}")
-            }
-            ErrorKind::UnexpectedOperator {
-                unexpected,
-                operator,
-            } => {
-                write!(
-                    f,
-                    "Unexpected token '{unexpected}' while parsing operator '{operator}'"
-                )
-            }
+            },
+            ErrorKind::UnexpectedOperator { unexpected, operator } => {
+                write!(f, "Unexpected token '{unexpected}' while parsing operator '{operator}'")
+            },
         }
     }
 }
