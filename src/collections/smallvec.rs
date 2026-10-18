@@ -8,13 +8,11 @@
 //! The implementation has been trimmed and adapted to fit the
 //! specific requirements of this project.
 
-#![allow(unused)]
-
 use std::{
     alloc::Layout,
     marker::PhantomData,
     mem::{ManuallyDrop, MaybeUninit},
-    ptr::{copy_nonoverlapping, NonNull},
+    ptr::{NonNull, copy_nonoverlapping},
 };
 
 pub(crate) struct SmallVec<T, const S: usize> {
@@ -42,36 +40,10 @@ struct DropDealloc {
     align: usize,
 }
 
-struct DropGuard<T> {
-    ptr: *mut T,
-    len: usize,
-}
-
 #[derive(Debug)]
 pub enum AllocErr {
     CapacityOverflow,
     Allocation { layout: Layout },
-}
-
-#[macro_export]
-macro_rules! smallvec {
-    (@one $x:expr) => (1usize);
-    () => {
-        $crate::core::smallvec::SmallVec::new()
-    };
-    ($element:expr, $size:expr) => ({
-        $crate::core::smallvec::from_element($element, $size)
-    });
-    ($($x:expr),+$(,)?) => ({
-        const COUNT: usize = 0usize $(+ $crate::smallvec!(@one $x))+;
-        let mut vec = $crate::core::smallvec::SmallVec::new();
-        if COUNT <= vec.capacity() {
-            $(vec.push($x);)*
-            vec
-        } else {
-            $crate::core::smallvec::SmallVec::from_vec(vec![$($x,)+])
-        }
-    });
 }
 
 impl<T, const S: usize> SmallVec<T, S> {
@@ -84,6 +56,7 @@ impl<T, const S: usize> SmallVec<T, S> {
         }
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         let mut vec = Self::new();
@@ -92,41 +65,6 @@ impl<T, const S: usize> SmallVec<T, S> {
         }
 
         vec
-    }
-
-    #[inline]
-    pub fn from_vec(vec: Vec<T>) -> Self {
-        if vec.capacity() == 0 {
-            return Self::new();
-        }
-
-        match Self::is_zst() {
-            true => {
-                let mut vec = vec;
-                let len = vec.len();
-
-                unsafe { vec.set_len(0) };
-
-                Self {
-                    raw: RawSmallVec::new(),
-                    len: TaggedLength::new(len, false, Self::is_zst()),
-                    _marker: PhantomData,
-                }
-            }
-            _ => {
-                let mut vec = ManuallyDrop::new(vec);
-                let len = vec.len();
-                let capacity = vec.capacity();
-
-                let ptr = unsafe { NonNull::new_unchecked(vec.as_mut_ptr()) };
-
-                Self {
-                    raw: RawSmallVec::new_heap(ptr, capacity),
-                    len: TaggedLength::new(len, true, Self::is_zst()),
-                    _marker: PhantomData,
-                }
-            }
-        }
     }
 
     #[inline]
@@ -157,24 +95,8 @@ impl<T, const S: usize> SmallVec<T, S> {
 
                 let value = unsafe { self.as_mut_ptr().add(len).read() };
                 Some(value)
-            }
+            },
         }
-    }
-
-    #[inline]
-    pub fn append<const OS: usize>(&mut self, other: &mut SmallVec<T, OS>) {
-        let len = self.len();
-        let other_len = other.len();
-        let total_len = len + other_len;
-
-        if total_len > self.capacity() {
-            self.reserve(other_len);
-        }
-
-        let ptr = unsafe { self.as_mut_ptr().add(len) };
-        unsafe { other.set_len(0) };
-        unsafe { copy_nonoverlapping(other.as_ptr(), ptr, other_len) };
-        unsafe { self.set_len(total_len) }
     }
 
     #[inline]
@@ -194,28 +116,34 @@ impl<T, const S: usize> SmallVec<T, S> {
         self.retain_mut(|element| f(element));
     }
 
+    /// drops the elements `f` rejects, a panic in `f` or in a drop leaks the rest instead of
+    /// dropping any twice
     #[inline]
     pub fn retain_mut<F>(&mut self, mut f: F)
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&mut T) -> bool,
     {
-        let mut deleted = 0;
-        let mut len = self.len();
+        let len = self.len();
         let ptr = self.as_mut_ptr();
+        unsafe { self.set_len(0) };
 
+        let mut kept = 0;
         for i in 0..len {
             unsafe {
-                if !f(&mut *ptr.add(i)) {
-                    deleted += 1;
-                } else if deleted > 0 {
-                    core::ptr::swap(ptr.add(i), ptr.add(i - deleted));
+                let element = ptr.add(i);
+                match f(&mut *element) {
+                    true => {
+                        if kept != i {
+                            core::ptr::copy_nonoverlapping(element, ptr.add(kept), 1);
+                        }
+                        kept += 1;
+                    },
+                    false => core::ptr::drop_in_place(element),
                 }
             }
         }
 
-        if deleted > 0 {
-            unsafe { self.set_len(len - deleted) };
-        }
+        unsafe { self.set_len(kept) };
     }
 
     #[inline]
@@ -294,7 +222,7 @@ impl<T, const S: usize> SmallVec<T, S> {
                 }
 
                 result
-            }
+            },
             _ => {
                 if self.spilled() {
                     unsafe {
@@ -312,7 +240,7 @@ impl<T, const S: usize> SmallVec<T, S> {
                 }
 
                 Ok(())
-            }
+            },
         }
     }
 
@@ -339,31 +267,6 @@ impl<T, const S: usize> SmallVec<T, S> {
     #[inline]
     unsafe fn set_inline(&mut self) {
         self.len = TaggedLength::new(self.len(), false, Self::is_zst());
-    }
-
-    unsafe fn from_element(element: T, size: usize) -> Self
-    where
-        T: Clone,
-    {
-        let mut result = Self::new();
-
-        if size > 0 {
-            let ptr = result.raw.as_mut_inline_ptr();
-            let mut guard = DropGuard { ptr, len: 0 };
-
-            unsafe {
-                for idx in 0..(size - 1) {
-                    ptr.add(idx).write(element.clone());
-                    guard.len += 1;
-                }
-
-                core::mem::forget(guard);
-                ptr.add(size - 1).write(element);
-            }
-        }
-
-        unsafe { result.set_len(size) };
-        result
     }
 
     const fn inline_size() -> usize {
@@ -447,7 +350,7 @@ impl<T, const S: usize> Drop for SmallVec<T, S> {
                         size: capacity * size_of::<T>(),
                         align: align_of::<T>(),
                     })
-                }
+                },
                 _ => None,
             };
 
@@ -475,16 +378,12 @@ impl<T, const S: usize> RawSmallVec<T, S> {
 
     #[inline]
     const fn new_inline(inline: MaybeUninit<[T; S]>) -> Self {
-        Self {
-            inline: ManuallyDrop::new(inline),
-        }
+        Self { inline: ManuallyDrop::new(inline) }
     }
 
     #[inline]
     const fn new_heap(ptr: NonNull<T>, capacity: usize) -> Self {
-        Self {
-            heap: (ptr, capacity),
-        }
+        Self { heap: (ptr, capacity) }
     }
 
     /// # Safety
@@ -521,7 +420,7 @@ impl<T, const S: usize> RawSmallVec<T, S> {
 
                 copy_nonoverlapping(ptr, new_ptr.as_ptr(), len);
                 new_ptr
-            }
+            },
             _ => {
                 let old_layout = Layout::from_size_align_unchecked(
                     self.heap.1 * size_of::<T>(),
@@ -530,7 +429,7 @@ impl<T, const S: usize> RawSmallVec<T, S> {
 
                 let new_ptr = realloc(ptr as *mut u8, old_layout, new_layout.size()) as *mut T;
                 NonNull::new(new_ptr).ok_or(AllocErr::Allocation { layout: new_layout })?
-            }
+            },
         };
 
         *self = Self::new_heap(new_ptr, new_capacity);
@@ -555,11 +454,11 @@ impl<T, const S: usize> RawSmallVec<T, S> {
     ///
     /// - This vec must be on inline
     const fn as_mut_inline_ptr(&mut self) -> *mut T {
-        (unsafe { std::ptr::addr_of!(self.inline) }) as *mut T
+        std::ptr::addr_of!(self.inline) as *mut T
     }
 
     const fn as_inline_ptr(&self) -> *const T {
-        (unsafe { std::ptr::addr_of!(self.inline) }) as *const T
+        std::ptr::addr_of!(self.inline) as *const T
     }
 }
 
@@ -570,11 +469,11 @@ impl TaggedLength {
             true => {
                 debug_assert!(!on_heap);
                 Self(len)
-            }
+            },
             _ => {
                 debug_assert!(len < isize::MAX as usize);
                 Self((len << 1) | on_heap as usize)
-            }
+            },
         }
     }
 
@@ -610,15 +509,6 @@ impl Drop for DropDealloc {
     }
 }
 
-impl<T> Drop for DropGuard<T> {
-    #[inline]
-    fn drop(&mut self) {
-        unsafe {
-            core::ptr::slice_from_raw_parts_mut(self.ptr, self.len).drop_in_place();
-        }
-    }
-}
-
 impl core::fmt::Display for AllocErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Allocation error: {:?}", self)
@@ -626,15 +516,6 @@ impl core::fmt::Display for AllocErr {
 }
 
 impl core::error::Error for AllocErr {}
-
-#[inline]
-#[track_caller]
-fn from_element<T: Clone, const S: usize>(element: T, size: usize) -> SmallVec<T, S> {
-    match size > SmallVec::<T, S>::inline_size() {
-        true => SmallVec::<T, S>::from_vec(vec![element; size]),
-        _ => unsafe { SmallVec::<T, S>::from_element(element, size) },
-    }
-}
 
 #[inline]
 fn infallible<T>(result: Result<T, AllocErr>) -> T {
@@ -670,6 +551,26 @@ mod tests {
         assert_eq!(vec[0], "hello");
         vec.push("shave");
         assert_eq!(&*vec, &["hello", "there", "burma", "shave"]);
+    }
+
+    #[test]
+    fn retain_drops_what_it_removes() {
+        let payload = std::rc::Rc::new(());
+        let mut vec = SmallVec::<_, 1>::new();
+        for _ in 0..5 {
+            vec.push(std::rc::Rc::clone(&payload));
+        }
+
+        let mut position = 0;
+        vec.retain(|_| {
+            position += 1;
+            position % 2 == 0
+        });
+        assert_eq!(vec.len(), 2);
+        assert_eq!(std::rc::Rc::strong_count(&payload), 3);
+
+        drop(vec);
+        assert_eq!(std::rc::Rc::strong_count(&payload), 1);
     }
 
     #[test]
