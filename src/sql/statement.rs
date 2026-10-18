@@ -67,23 +67,43 @@ pub struct Column {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Create {
     Database(String),
-    Sequence { name: String, r#type: Type, table: String },
-    Table { name: String, columns: Vec<Column> },
-    Index { name: String, table: String, column: String, unique: bool },
+    Sequence {
+        name: String,
+        r#type: Type,
+        table: String,
+    },
+    Table {
+        name: String,
+        columns: Vec<Column>,
+    },
+    /// over `columns`, compared in that order
+    Index {
+        name: String,
+        table: String,
+        columns: Vec<String>,
+        unique: bool,
+    },
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct Select {
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
+pub struct Select {
+    /// `SELECT DISTINCT`: duplicate result rows are dropped
+    pub distinct: bool,
     pub columns: Vec<Expression>,
     pub from: TableRef,
     pub joins: Vec<JoinClause>,
     pub r#where: Option<Expression>,
     pub order_by: Vec<OrderBy>,
     pub group_by: Vec<Expression>,
+    pub having: Option<Expression>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    /// `UNION`, `INTERSECT` and `EXCEPT` members, in order (`true` for `ALL`, which keeps
+    /// duplicates); the `ORDER BY`, `LIMIT` and `OFFSET` above then apply to the whole
+    pub combined: Vec<(SetOperator, bool, Select)>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Default, PartialEq)]
 pub struct SelectBuilder {
     columns: Vec<Expression>,
@@ -96,7 +116,7 @@ pub struct SelectBuilder {
     offset: Option<usize>,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Hash, Clone)]
 pub struct TableRef {
     pub name: String,
     pub alias: Option<String>,
@@ -166,6 +186,8 @@ pub enum Expression {
         negated: bool,
     },
     Nested(Box<Self>),
+    /// `(SELECT ...)`: the session runs it and puts its result in its place before analysis
+    Subquery(Box<Select>),
     /// a column reference the executor bound to its position in the rows it evaluates
     /// never produced by the parser
     Column(usize),
@@ -184,27 +206,36 @@ pub enum PathSegment {
     Wildcard,
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub struct OrderBy {
     pub expr: Expression,
     pub direction: OrderDirection,
 }
 
-#[derive(Debug, Default, PartialEq, PartialOrd, Clone, Copy)]
+/// How a member combines with the rows before it
+/// `INTERSECT` binds tighter than the others
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
+pub enum SetOperator {
+    Union,
+    Intersect,
+    Except,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Clone, Copy)]
 pub enum OrderDirection {
     #[default]
     Asc,
     Desc,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub struct JoinClause {
     pub table: TableRef,
     pub on: Expression,
     pub join_type: JoinType,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
 pub enum JoinType {
     Left,
     Right,
@@ -245,6 +276,7 @@ pub enum OnDelete {
 pub enum UnaryOperator {
     Plus,
     Minus,
+    Not,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
@@ -259,6 +291,7 @@ pub enum BinaryOperator {
     Minus,
     Mul,
     Div,
+    Modulo,
     And,
     Or,
     Like,
@@ -367,6 +400,17 @@ pub enum Function {
     Coalesce,
     Extract,
     UuidV4,
+    /// `x IN (v1, ..., vn)` as `[x, v1, ..., vn]`: true when `x` equals one, else NULL when one is NULL, else false
+    In,
+    /// `EXISTS (SELECT ...)` over its one [Expression::Subquery]
+    Exists,
+    /// `CAST(x AS type)` as `[x, type]`, the type a blob in the schema's type encoding
+    Cast,
+    /// `COUNT(DISTINCT x)`: the distinct non-null values of `x`
+    CountDistinct,
+    /// `CASE WHEN c1 THEN r1 ... ELSE e END` as `[c1, r1, ..., e]`, the conditions evaluated in
+    /// order and only the chosen result (`CASE x WHEN v` is parsed into `x = v` conditions)
+    Case,
 }
 
 pub const NUMERIC_ANY: usize = usize::MAX;
@@ -423,17 +467,17 @@ impl Column {
 }
 
 impl Type {
-    pub fn is_integer_in_bounds(&self, int: &i128) -> bool {
+    pub fn is_integer_in_bounds(&self, int: &i64) -> bool {
         let bound = match self {
-            Self::SmallInt => i16::MIN as i128..=i16::MAX as i128,
-            Self::UnsignedSmallInt => u16::MIN as i128..=u16::MAX as i128,
-            Self::SmallSerial => 1..=(i16::MAX as i128),
-            Self::Integer => i32::MIN as i128..=i32::MAX as i128,
-            Self::UnsignedInteger => 0..=u32::MAX as i128,
-            Self::Serial => 1..=(i32::MAX as i128),
-            Self::BigInteger => i64::MIN as i128..=i64::MAX as i128,
-            Self::UnsignedBigInteger => 0..=u64::MAX as i128,
-            Self::BigSerial => 1..=(i64::MAX as i128),
+            Self::SmallInt => i16::MIN as i64..=i16::MAX as i64,
+            Self::UnsignedSmallInt => u16::MIN as i64..=u16::MAX as i64,
+            Self::SmallSerial => 1..=(i16::MAX as i64),
+            Self::Integer => i32::MIN as i64..=i32::MAX as i64,
+            Self::UnsignedInteger => 0..=u32::MAX as i64,
+            Self::Serial => 1..=(i32::MAX as i64),
+            Self::BigInteger => i64::MIN..=i64::MAX,
+            Self::UnsignedBigInteger => 0..=i64::MAX,
+            Self::BigSerial => 1..=(i64::MAX),
             other => panic!("bound checking must be used only for integer: {other:#?}"),
         };
 
@@ -499,26 +543,33 @@ impl Display for Statement {
                     write!(f, "CREATE TABLE {name} ({})", join(columns, ", "))?
                 },
                 Create::Database(name) => write!(f, "CREATE DATABASE {name}")?,
-                Create::Index { name, table, column, unique } => {
+                Create::Index { name, table, columns, unique } => {
                     let unique = match unique {
                         true => "UNIQUE",
                         _ => "",
                     };
-                    write!(f, "CREATE {unique} INDEX {name} ON {table}({column})")?;
+                    write!(f, "CREATE {unique} INDEX {name} ON {table}({})", columns.join(", "))?;
                 },
             },
 
             Statement::Select(Select {
+                distinct,
                 columns,
                 from,
                 r#where,
                 joins,
                 order_by,
                 group_by,
+                having,
                 limit,
                 offset,
+                combined,
             }) => {
-                write!(f, "SELECT {} FROM {}", join(columns, ", "), from.name)?;
+                let distinct = match *distinct {
+                    true => "DISTINCT ",
+                    _ => "",
+                };
+                write!(f, "SELECT {distinct}{} FROM {}", join(columns, ", "), from.name)?;
                 if let Some(alias) = &from.alias {
                     write!(f, " AS {alias}")?;
                 }
@@ -537,12 +588,16 @@ impl Display for Statement {
                     write!(f, " WHERE {expr}")?;
                 }
 
-                if !order_by.is_empty() {
-                    write!(f, " ORDER BY {}", join(order_by, ", "))?;
-                }
-
                 if !group_by.is_empty() {
                     write!(f, " GROUP BY {}", join(group_by, ", "))?;
+                }
+
+                if let Some(expr) = having {
+                    write!(f, " HAVING {expr}")?;
+                }
+
+                if !order_by.is_empty() {
+                    write!(f, " ORDER BY {}", join(order_by, ", "))?;
                 }
 
                 if let Some(limit) = limit {
@@ -551,6 +606,14 @@ impl Display for Statement {
 
                 if let Some(offset) = offset {
                     write!(f, " OFFSET {offset}")?;
+                }
+
+                for (operator, all, member) in combined {
+                    let all = match *all {
+                        true => " ALL",
+                        _ => "",
+                    };
+                    write!(f, " {operator}{all} {}", Statement::Select(member.clone()))?;
                 }
             },
 
@@ -618,8 +681,53 @@ impl Display for Statement {
     }
 }
 
+impl Statement {
+    /// the expression trees of the statement
+    pub(crate) fn expressions_mut(&mut self) -> Vec<&mut Expression> {
+        match self {
+            Statement::Select(select) => select
+                .columns
+                .iter_mut()
+                .chain(&mut select.r#where)
+                .chain(&mut select.having)
+                .chain(&mut select.group_by)
+                .chain(select.order_by.iter_mut().map(|order| &mut order.expr))
+                .chain(select.joins.iter_mut().map(|join| &mut join.on))
+                .collect(),
+            Statement::Update(update) => update
+                .columns
+                .iter_mut()
+                .map(|assignment| &mut assignment.value)
+                .chain(&mut update.r#where)
+                .chain(&mut update.returning)
+                .collect(),
+            Statement::Delete(delete) => delete.r#where.iter_mut().collect(),
+            Statement::Insert(insert) => {
+                insert.values.iter_mut().flatten().chain(&mut insert.returning).collect()
+            },
+            Statement::Explain(statement) => statement.expressions_mut(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 impl Expression {
-    pub(in crate::sql) fn unwrap_alias(&self) -> &Self {
+    pub(crate) fn contains_subquery(&self) -> bool {
+        match self {
+            Self::Subquery(_) => true,
+            Self::Function { args, .. } => args.iter().any(Self::contains_subquery),
+            Self::BinaryOperation { left, right, .. } => {
+                left.contains_subquery() || right.contains_subquery()
+            },
+            Self::UnaryOperation { expr, .. }
+            | Self::Nested(expr)
+            | Self::Alias { expr, .. }
+            | Self::IsNull { expr, .. } => expr.contains_subquery(),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn unwrap_alias(&self) -> &Self {
         match self {
             Expression::Alias { ref expr, .. } => expr,
             _ => self,
@@ -740,6 +848,19 @@ impl Expression {
             Self::BinaryOperation { operator, left, right } => {
                 format!("({} {operator} {})", left.to_sql()?, right.to_sql()?)
             },
+            Self::Function { func: Function::In, args } => {
+                let args = args.iter().map(Self::to_sql).collect::<Option<Vec<_>>>()?;
+                format!("({} IN ({}))", args[0], args[1..].join(", "))
+            },
+            Self::Function { func: Function::Case, args } => {
+                let args = args.iter().map(Self::to_sql).collect::<Option<Vec<_>>>()?;
+                let (branches, default) = args.split_at(args.len() - 1);
+                let branches: Vec<_> = branches
+                    .chunks(2)
+                    .map(|pair| format!("WHEN {} THEN {}", pair[0], pair[1]))
+                    .collect();
+                format!("(CASE {} ELSE {} END)", branches.join(" "), default[0])
+            },
             Self::Function { func, args } => match func {
                 Function::Substring | Function::Position | Function::Extract => return None,
                 _ => {
@@ -763,6 +884,7 @@ impl Display for Expression {
             Self::Identifier(ident) => f.write_str(ident),
             Self::QualifiedIdentifier { table, column } => write!(f, "{table}.{column}"),
             Self::Column(position) => write!(f, "#{position}"),
+            Self::Subquery(select) => write!(f, "({})", Statement::Select(select.as_ref().clone())),
             Self::JsonPath { column, path } => write!(f, "#{column}{}", &path[1..]),
             Self::Value(value) => write!(f, "{value}"),
             Self::Wildcard => f.write_str("*"),
@@ -773,14 +895,32 @@ impl Display for Expression {
             },
             Self::Path { head, segments } => {
                 f.write_str(head)?;
-                for seg in segments {
+                Ok(for seg in segments {
                     match seg {
                         PathSegment::Key(key) => write!(f, ".{key}")?,
                         PathSegment::Index(idx) => write!(f, "[{idx}]")?,
                         PathSegment::Wildcard => write!(f, "*")?,
                     }
+                })
+            },
+            Self::Function { func: Function::In, args } => {
+                write!(f, "{} IN ({})", args[0], join(&args[1..], ", "))
+            },
+            Self::Function { func: Function::CountDistinct, args } => {
+                write!(f, "COUNT(DISTINCT {})", args[0])
+            },
+            Self::Function { func: Function::Cast, args } => match &args[1] {
+                Self::Value(Value::Blob(target)) => {
+                    write!(f, "CAST({} AS {})", args[0], crate::db::decode_type(target))
+                },
+                other => write!(f, "CAST({} AS {other})", args[0]),
+            },
+            Self::Function { func: Function::Case, args } => {
+                f.write_str("CASE")?;
+                for pair in args[..args.len() - 1].chunks(2) {
+                    write!(f, " WHEN {} THEN {}", pair[0], pair[1])?;
                 }
-                Ok(())
+                write!(f, " ELSE {} END", args[args.len() - 1])
             },
             Self::Function { func, args } => {
                 let mut args = args.iter();
@@ -809,6 +949,7 @@ impl Display for BinaryOperator {
             Self::Minus => "-",
             Self::Mul => "*",
             Self::Div => "/",
+            Self::Modulo => "%",
             Self::Eq => "=",
             Self::Neq => "!=",
             Self::Gt => ">",
@@ -824,9 +965,10 @@ impl Display for BinaryOperator {
 
 impl Display for UnaryOperator {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_char(match self {
-            Self::Minus => '-',
-            Self::Plus => '+',
+        f.write_str(match self {
+            Self::Minus => "-",
+            Self::Plus => "+",
+            Self::Not => "NOT ",
         })
     }
 }
@@ -893,16 +1035,19 @@ impl Function {
         use Function::*;
         match self {
             Substring | Concat | TypeOf => VmType::String,
-            Count | UuidV4 | Ascii | Position | Extract => VmType::Number,
+            Count | CountDistinct | UuidV4 | Ascii | Position | Extract => VmType::Number,
             Sqrt | Power => match input {
                 VmType::Numeric => VmType::Numeric,
                 _ => VmType::Float,
             },
-            Avg | Sum => match input {
+            Avg => match input {
                 VmType::Number | VmType::Numeric => VmType::Numeric,
                 _ => *input,
             },
-            Abs | Sign | Trunc | Min | Max | Coalesce => *input,
+            Sum => *input,
+            Abs | Sign | Trunc | Min | Max | Coalesce | Case => *input,
+            In | Exists => VmType::Bool,
+            Cast => *input,
         }
     }
 
@@ -911,7 +1056,10 @@ impl Function {
     }
 
     pub const fn is_aggr(&self) -> bool {
-        matches!(self, Self::Count | Self::Sum | Self::Avg | Self::Min | Self::Max)
+        matches!(
+            self,
+            Self::Count | Self::CountDistinct | Self::Sum | Self::Avg | Self::Min | Self::Max
+        )
     }
 
     pub(in crate::sql) const fn is_unary(&self) -> bool {
@@ -944,6 +1092,9 @@ macro_rules! define_function_mapping {
         }
 
         impl Function {
+            /// every function by its upper-case name
+            pub(crate) const NAMES: &'static [(&'static str, Function)] = &[$(($str, Function::$variant),)*];
+
             /// the function named `upper`, already in upper case
             pub(crate) fn from_uppercase(upper: &str) -> Option<Self> {
                 match upper {
@@ -974,8 +1125,14 @@ define_function_mapping! {
     Coalesce => "COALESCE",
     Extract => "EXTRACT",
     UuidV4 => "UUIDV4",
+    Case => "CASE",
+    In => "IN",
+    Exists => "EXISTS",
+    Cast => "CAST",
+    CountDistinct => "COUNT DISTINCT",
 }
 
+#[cfg(test)]
 impl SelectBuilder {
     pub fn from(mut self, from: impl Into<String>) -> Self {
         self.from.name = from.into();
@@ -1023,17 +1180,21 @@ impl SelectBuilder {
     }
 }
 
+#[cfg(test)]
 impl From<SelectBuilder> for Select {
     fn from(value: SelectBuilder) -> Self {
         Self {
+            distinct: false,
             columns: value.columns,
             joins: value.joins,
             from: value.from,
             r#where: value.r#where,
             order_by: value.order_by,
             group_by: value.group_by,
+            having: None,
             limit: value.limit,
             offset: value.offset,
+            combined: Vec::new(),
         }
     }
 }
@@ -1059,8 +1220,8 @@ where
     }
 }
 
+#[cfg(test)]
 impl Select {
-    #[allow(unused)]
     pub fn builder() -> SelectBuilder {
         SelectBuilder::default()
     }
@@ -1069,6 +1230,11 @@ impl Select {
 impl From<Function> for Keyword {
     fn from(value: Function) -> Self {
         match value {
+            Function::Case => Self::Case,
+            Function::In => Self::In,
+            Function::Exists => Self::Exists,
+            Function::Cast => Self::Cast,
+            Function::CountDistinct => Self::Count,
             Function::Sqrt => Self::Sqrt,
             Function::Ascii => Self::Ascii,
             Function::Position => Self::Position,
@@ -1086,7 +1252,7 @@ impl From<Function> for Keyword {
             Function::Sum => Self::Sum,
             Function::Coalesce => Self::Coalesce,
             Function::Extract => Self::Extract,
-            Function::UuidV4 => unimplemented!(),
+            Function::UuidV4 => Self::None,
         }
     }
 }
@@ -1191,6 +1357,16 @@ impl Display for IsolationLevel {
             Self::ReadCommitted => "READ COMMITTED",
             Self::Snapshot => "SNAPSHOT",
             Self::Serializable => "SERIALIZABLE",
+        })
+    }
+}
+
+impl Display for SetOperator {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Union => "UNION",
+            Self::Intersect => "INTERSECT",
+            Self::Except => "EXCEPT",
         })
     }
 }

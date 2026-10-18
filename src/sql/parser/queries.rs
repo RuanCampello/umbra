@@ -9,6 +9,7 @@ use super::{
 
 impl<'sql> Sql<'sql> for Select {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
+        let distinct = parser.consume_optional(Token::Keyword(Keyword::Distinct));
         let columns = parser.parse_separated_tokens(
             |parser| {
                 let expr = parser.parse_expr(None)?;
@@ -23,10 +24,14 @@ impl<'sql> Sql<'sql> for Select {
             false,
         )?;
 
-        parser.expect_keyword(Keyword::From)?;
-        let from = parser.parse_ident()?;
-        let from_alias = parser.parse_alias()?;
-        let from = TableRef::new(from, from_alias);
+        // without FROM the select list is evaluated once, over no table
+        let from = match parser.consume_optional(Token::Keyword(Keyword::From)) {
+            true => {
+                let name = parser.parse_ident()?;
+                TableRef::new(name, parser.parse_alias()?)
+            },
+            false => TableRef::default(),
+        };
 
         let mut joins = Vec::new();
         while let Some(clause) = parser.parse_join()? {
@@ -39,6 +44,10 @@ impl<'sql> Sql<'sql> for Select {
         };
 
         let group_by = parser.parse_by_separated_keyword(Keyword::Group, |p| p.parse_expr(None))?;
+        let having = match parser.consume_optional(Token::Keyword(Keyword::Having)) {
+            true => Some(parser.parse_expr(None)?),
+            false => None,
+        };
         let order_by = parser.parse_by_separated_keyword(Keyword::Order, |p| {
             let expr = p.parse_expr(None)?;
             let direction = match p.consume_one(&[Keyword::Asc, Keyword::Desc]) {
@@ -52,14 +61,17 @@ impl<'sql> Sql<'sql> for Select {
         let offset = parser.parse_usize_by_keyword(Keyword::Offset)?;
 
         Ok(Select {
+            distinct,
             columns,
             from,
             joins,
             r#where,
             order_by,
             group_by,
+            having,
             limit,
             offset,
+            combined: Vec::new(),
         })
     }
 }
@@ -89,13 +101,11 @@ impl<'sql> Sql<'sql> for Create {
                 let name = parser.parse_ident()?;
                 parser.expect_keyword(Keyword::On)?;
                 let table = parser.parse_ident()?;
-                parser.expect_token(Token::LeftParen)?;
-                let column = parser.parse_ident()?;
-                parser.expect_token(Token::RightParen)?;
+                let columns = parser.parse_separated_tokens(|parser| parser.parse_ident(), true)?;
 
                 Create::Index {
                     name,
-                    column,
+                    columns,
                     table,
                     unique,
                 }
@@ -125,8 +135,8 @@ impl<'sql> Sql<'sql> for Insert {
         parser.expect_keyword(Keyword::Into)?;
         let into = parser.parse_ident()?;
         let columns: Vec<String> = match parser.peek_token() {
+            Some(Ok(Token::Keyword(Keyword::Values))) | None => Ok(vec![]),
             Some(_) => parser.parse_separated_tokens(Parser::parse_ident, true),
-            None => Ok(vec![]),
         }?;
 
         parser.expect_keyword(Keyword::Values)?;

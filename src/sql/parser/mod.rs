@@ -22,7 +22,7 @@ use crate::sql::statement::{
     Insert, JoinClause, JoinType, PathSegment, Select, Statement, Type, UnaryOperator, Update,
     Value,
 };
-use crate::sql::statement::{IsolationLevel, NUMERIC_ANY, OnDelete, TableRef};
+use crate::sql::statement::{IsolationLevel, NUMERIC_ANY, OnDelete, SetOperator, TableRef};
 
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -45,31 +45,29 @@ pub struct ParserError {
 }
 
 #[derive(Debug, PartialEq)]
-#[allow(unused)]
 enum ErrorKind {
     TokenizerError(tokenizer::ErrorKind),
     Expected { expected: Token, found: Token },
     ExpectedOneOf { expected: Vec<Token>, found: Token },
-    Unsupported(Token),
     UnexpectedEof,
     FormatError(String),
-    InvalidValue { clause: Keyword, found: Token },
 }
 
 pub(in crate::sql) type ParserResult<T> = Result<T, ParserError>;
 
 const UNARY_ARITHMETIC_OPERATOR: u8 = 50;
+/// binds looser than comparisons and tighter than `AND`
+const UNARY_NOT_OPERATOR: u8 = 15;
 
 trait Sql<'sql>: Sized {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self>;
 }
 
-#[allow(unused)]
 impl<'input> Parser<'input> {
     pub fn new(input: &'input str) -> Self {
         Self {
             input,
-            tokenizer: Tokenizer::new(input).into_iter().peekable(),
+            tokenizer: Tokenizer::without_whitespace(input).into_iter().peekable(),
             location: Location::default(),
         }
     }
@@ -113,7 +111,7 @@ impl<'input> Parser<'input> {
         }
 
         let statement = match self.expect_one(&Self::supported_statements())? {
-            Keyword::Select => Statement::Select(Select::parse(self)?),
+            Keyword::Select => Statement::Select(self.parse_union()?),
             Keyword::Create => Statement::Create(Create::parse(self)?),
             Keyword::Insert => Statement::Insert(Insert::parse(self)?),
             Keyword::Update => Statement::Update(Update::parse(self)?),
@@ -261,6 +259,7 @@ impl<'input> Parser<'input> {
             Token::Minus => BinaryOperator::Minus,
             Token::Mul => BinaryOperator::Mul,
             Token::Div => BinaryOperator::Div,
+            Token::Percent => BinaryOperator::Modulo,
             Token::Keyword(Keyword::And) => BinaryOperator::And,
             Token::Keyword(Keyword::Or) => BinaryOperator::Or,
             Token::Keyword(Keyword::Like) => BinaryOperator::Like,
@@ -285,29 +284,24 @@ impl<'input> Parser<'input> {
             },
             Token::Keyword(Keyword::In) => {
                 self.next_token()?;
+                if self.consume_optional(Token::Keyword(Keyword::Select)) {
+                    let args = vec![left, self.parse_subquery()?];
+                    return Ok(Expression::Function { func: Function::In, args });
+                }
+
                 let values =
                     self.parse_separated_tokens(|parser| parser.parse_expr(None), false)?;
                 self.expect_token(Token::RightParen)?;
 
-                let mut iter = values.into_iter();
-                let first = match iter.next() {
-                    Some(first) => Expression::BinaryOperation {
-                        operator: BinaryOperator::Eq,
-                        left: Box::new(left.clone()),
-                        right: Box::new(first),
-                    },
-                    None => unreachable!(),
-                };
-
-                return Ok(iter.fold(first, |acc, value| Expression::BinaryOperation {
-                    operator: BinaryOperator::Or,
-                    left: Box::new(acc),
-                    right: Box::new(Expression::BinaryOperation {
-                        operator: BinaryOperator::Eq,
-                        left: Box::new(left.clone()),
-                        right: Box::new(value),
-                    }),
-                }));
+                let args = std::iter::once(left).chain(values).collect();
+                return Ok(Expression::Function { func: Function::In, args });
+            },
+            Token::Keyword(Keyword::Not) => {
+                let negated = self.parse_infix(left, precedence)?;
+                return Ok(Expression::UnaryOperation {
+                    operator: UnaryOperator::Not,
+                    expr: Box::new(negated),
+                });
             },
             Token::Keyword(Keyword::Is) => {
                 let negated = self.consume_optional(Token::Keyword(Keyword::Not));
@@ -335,14 +329,14 @@ impl<'input> Parser<'input> {
                 let jsonb =
                     json::from_value_to_jsonb(&Value::String(json_text.into()), json::Conv::Strict)
                         .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
-                Ok(Expression::Value(Value::Blob(jsonb.data())))
+                Ok(Expression::Value(Value::Blob(jsonb.data().into())))
             },
             Token::LeftBracket => {
                 let json_text = self.parse_json_array()?;
                 let jsonb =
                     json::from_value_to_jsonb(&Value::String(json_text.into()), json::Conv::Strict)
                         .map_err(|e| self.error(ErrorKind::FormatError(e.to_string())))?;
-                Ok(Expression::Value(Value::Blob(jsonb.data())))
+                Ok(Expression::Value(Value::Blob(jsonb.data().into())))
             },
             Token::Keyword(Keyword::Interval) => self.parse_interval(),
             Token::Keyword(keyword @ (Keyword::Date | Keyword::Timestamp | Keyword::Time)) => {
@@ -354,19 +348,34 @@ impl<'input> Parser<'input> {
             },
 
             Token::Mul => Ok(Expression::Wildcard),
-            Token::LeftParen => {
-                let expr = self.parse_expr(None)?;
-                self.expect_token(Token::RightParen)?;
+            Token::LeftParen => match self.consume_optional(Token::Keyword(Keyword::Select)) {
+                true => self.parse_subquery(),
+                _ => {
+                    let expr = self.parse_expr(None)?;
+                    self.expect_token(Token::RightParen)?;
 
-                Ok(Expression::Nested(Box::new(expr)))
+                    Ok(Expression::Nested(Box::new(expr)))
+                },
+            },
+            Token::Keyword(Keyword::Exists) => {
+                self.expect_token(Token::LeftParen)?;
+                self.expect_keyword(Keyword::Select)?;
+                Ok(Expression::Function {
+                    func: Function::Exists,
+                    args: vec![self.parse_subquery()?],
+                })
             },
             Token::Number(number) => match number.contains(".") {
                 true => Ok(Expression::Value(Value::Float(
                     number.parse::<f64>().map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
                 ))),
-                _ => Ok(Expression::Value(Value::Number(
-                    number.parse().map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
-                ))),
+                // an integer beyond 64 bits is a NUMERIC
+                _ => match number.parse() {
+                    Ok(integer) => Ok(Expression::Value(Value::Number(integer))),
+                    Err(_) => Ok(Expression::Value(Value::Numeric(
+                        number.parse().map_err(|_| self.error(ErrorKind::UnexpectedEof))?,
+                    ))),
+                },
             },
             Token::Identifier(identifier) => {
                 let mut segments = Vec::new();
@@ -440,11 +449,26 @@ impl<'input> Parser<'input> {
                     _ => Ok(Expression::Path { head: identifier, segments }),
                 }
             },
+            Token::Keyword(Keyword::Not) => {
+                let expr = Box::new(self.parse_expr(Some(UNARY_NOT_OPERATOR))?);
+                Ok(Expression::UnaryOperation { operator: UnaryOperator::Not, expr })
+            },
+            Token::Keyword(Keyword::Case) => self.parse_case(),
+            Token::Keyword(Keyword::Cast) => {
+                self.expect_token(Token::LeftParen)?;
+                let expr = self.parse_expr(None)?;
+                self.expect_keyword(Keyword::As)?;
+                let target = self.parse_type()?;
+                self.expect_token(Token::RightParen)?;
+
+                let target = Expression::Value(Value::Blob(crate::db::encode_type(target).into()));
+                Ok(Expression::Function { func: Function::Cast, args: vec![expr, target] })
+            },
             token @ (Token::Minus | Token::Plus) => {
                 let op = match token {
                     Token::Minus => UnaryOperator::Minus,
                     Token::Plus => UnaryOperator::Plus,
-                    _ => unreachable!(),
+                    _ => unsafe { std::hint::unreachable_unchecked() },
                 };
 
                 let expr = Box::new(self.parse_expr(Some(UNARY_ARITHMETIC_OPERATOR))?);
@@ -846,6 +870,17 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_join(&mut self) -> ParserResult<Option<JoinClause>> {
+        let comma = self.consume_optional(Token::Comma);
+        if comma || self.consume_word("CROSS") {
+            if !comma {
+                self.expect_keyword(Keyword::Join)?;
+            }
+            let table = self.parse_ident()?;
+            let table = TableRef::new(table, self.parse_alias()?);
+            let on = Expression::Value(Value::Boolean(true));
+            return Ok(Some(JoinClause { join_type: JoinType::Inner, table, on }));
+        }
+
         let join_type: JoinType = self
             .consume_one(&[Keyword::Inner, Keyword::Full, Keyword::Left, Keyword::Right])
             .into();
@@ -896,8 +931,14 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_alias(&mut self) -> ParserResult<Option<String>> {
-        Ok(match self.consume_optional(Token::Keyword(Keyword::As)) {
-            true => Some(self.parse_ident()?),
+        if self.consume_optional(Token::Keyword(Keyword::As)) {
+            return Ok(Some(self.parse_ident()?));
+        }
+
+        Ok(match self.peek_token() {
+            Some(Ok(Token::Identifier(name))) if !name.eq_ignore_ascii_case("CROSS") => {
+                Some(self.parse_ident()?)
+            },
             _ => None,
         })
     }
@@ -937,8 +978,12 @@ impl<'input> Parser<'input> {
             | Token::Keyword(Keyword::In)
             | Token::Keyword(Keyword::Like)
             | Token::Keyword(Keyword::Is) => 20,
+            Token::Keyword(Keyword::Not) => match self.peek_second() {
+                Some(Token::Keyword(Keyword::In | Keyword::Between | Keyword::Like)) => 20,
+                _ => 0,
+            },
             Token::Plus | Token::Minus => 30,
-            Token::Mul | Token::Div => 40,
+            Token::Mul | Token::Div | Token::Percent => 40,
             _ => 0,
         }
     }
@@ -1034,7 +1079,7 @@ impl<'input> Parser<'input> {
                 // TODO: this way we need to parse the kind here to check and when executing, but I
                 // don't know any better way without changing the enums to a special case or just
                 // making an execution error instead of a parsing, which isn't the ideal
-                let kind = ExtractKind::try_from(kind_str.as_str()).or(Err(self.error(
+                ExtractKind::try_from(kind_str.as_str()).or(Err(self.error(
                     ErrorKind::FormatError(format!(
                         "Unit '{kind_str}' is not recognised for date type"
                     )),
@@ -1070,6 +1115,10 @@ impl<'input> Parser<'input> {
 
                 Ok(Expression::Function { func: Function::Position, args: vec![needle, haystack] })
             },
+            Keyword::Count if self.peek_token() == Some(Ok(&Token::Keyword(Keyword::Distinct))) => {
+                self.next_token()?;
+                self.parse_unary_func(Function::CountDistinct)
+            },
             keyword if keyword.is_function() => {
                 let value = self.parse_closing_expr()?;
 
@@ -1078,7 +1127,6 @@ impl<'input> Parser<'input> {
                     args: vec![value],
                 })
             },
-            Keyword::Count => self.parse_unary_func(Function::Count),
             Keyword::Sum => self.parse_unary_func(Function::Sum),
             Keyword::Avg => self.parse_unary_func(Function::Avg),
             Keyword::Min => self.parse_unary_func(Function::Min),
@@ -1097,6 +1145,94 @@ impl<'input> Parser<'input> {
     fn peek_token(&mut self) -> Option<Result<&Token, &TokenizerError>> {
         self.skip_whitespaces();
         self.peek_token_stream()
+    }
+
+    /// a SELECT and the `UNION [ALL]` members after it, `SELECT` consumed: the last member's
+    /// `ORDER BY`, `LIMIT` and `OFFSET` order and limit the whole union
+    fn parse_union(&mut self) -> ParserResult<Select> {
+        let mut head = Select::parse(self)?;
+        loop {
+            let operator = match self.peek_token() {
+                Some(Ok(Token::Keyword(Keyword::Union))) => SetOperator::Union,
+                Some(Ok(Token::Keyword(Keyword::Intersect))) => SetOperator::Intersect,
+                Some(Ok(Token::Keyword(Keyword::Except))) => SetOperator::Except,
+                _ => break,
+            };
+            self.next_token()?;
+            let all = self.consume_optional(Token::Keyword(Keyword::All));
+            self.expect_keyword(Keyword::Select)?;
+            head.combined.push((operator, all, Select::parse(self)?));
+        }
+
+        let Some(last) = head.combined.last_mut().map(|(_, _, last)| last) else {
+            return Ok(head);
+        };
+        let (order_by, limit, offset) =
+            (std::mem::take(&mut last.order_by), last.limit.take(), last.offset.take());
+
+        let ordered = |select: &Select| {
+            !select.order_by.is_empty() || select.limit.is_some() || select.offset.is_some()
+        };
+        if ordered(&head) || head.combined.iter().any(|(_, _, member)| ordered(member)) {
+            let msg = "ORDER BY, LIMIT and OFFSET of a set operation go after its last member";
+            return Err(self.error(ErrorKind::FormatError(msg.into())));
+        }
+
+        (head.order_by, head.limit, head.offset) = (order_by, limit, offset);
+        Ok(head)
+    }
+
+    /// the rest of `(SELECT ...)`, its opening parenthesis and `SELECT` consumed
+    fn parse_subquery(&mut self) -> ParserResult<Expression> {
+        let select = self.parse_union()?;
+        self.expect_token(Token::RightParen)?;
+        Ok(Expression::Subquery(Box::new(select)))
+    }
+
+    /// `CASE [operand] WHEN .. THEN .. [ELSE ..] END`, `CASE` consumed
+    fn parse_case(&mut self) -> ParserResult<Expression> {
+        let operand = match self.peek_token() {
+            Some(Ok(Token::Keyword(Keyword::When))) => None,
+            _ => Some(self.parse_expr(None)?),
+        };
+
+        let mut args = Vec::new();
+        while self.consume_optional(Token::Keyword(Keyword::When)) {
+            let condition = self.parse_expr(None)?;
+            self.expect_keyword(Keyword::Then)?;
+            args.push(match &operand {
+                Some(operand) => Expression::BinaryOperation {
+                    operator: BinaryOperator::Eq,
+                    left: Box::new(operand.clone()),
+                    right: Box::new(condition),
+                },
+                None => condition,
+            });
+            args.push(self.parse_expr(None)?);
+        }
+
+        if args.is_empty() {
+            self.expect_keyword(Keyword::When)?;
+        }
+
+        args.push(match self.consume_optional(Token::Keyword(Keyword::Else)) {
+            true => self.parse_expr(None)?,
+            _ => Expression::Value(Value::Null),
+        });
+        self.expect_keyword(Keyword::End)?;
+
+        Ok(Expression::Function { func: Function::Case, args })
+    }
+
+    /// the token after the next one, whitespace skipped
+    fn peek_second(&mut self) -> Option<Token> {
+        self.skip_whitespaces();
+        let mut ahead = self.tokenizer.clone().skip(1);
+        ahead.find_map(|token| match token {
+            Ok(TokenWithLocation { token: Token::Whitespace(_), .. }) => None,
+            Ok(token) => Some(Some(token.token)),
+            _ => Some(None),
+        })?
     }
 
     fn next_token(&mut self) -> ParserResult<Token> {
@@ -1282,7 +1418,6 @@ impl Display for ErrorKind {
             ErrorKind::FormatError(err) => f.write_str(err),
             ErrorKind::TokenizerError(err) => write!(f, "{err}"),
             ErrorKind::UnexpectedEof => write!(f, "Unexpected end of file"),
-            ErrorKind::Unsupported(token) => write!(f, "Unexpected or unsupported token: {token}"),
             ErrorKind::Expected { expected, found } => write!(
                 f,
                 "Expected '{}' but found '{found}' instead",
@@ -1303,9 +1438,6 @@ impl Display for ErrorKind {
                 }
 
                 write!(f, "Expected {one_of} but found '{found}' instead")
-            },
-            ErrorKind::InvalidValue { clause, found } => {
-                write!(f, "{clause} received an invalid value: {found}")
             },
         }
     }
@@ -1499,6 +1631,16 @@ mod tests {
         );
     }
 
+    /// a function with no SQL spelling made its name panic the tokenizer
+    #[test]
+    fn a_word_naming_an_internal_function_is_an_identifier() {
+        let statement = Parser::new("SELECT uuidv4 FROM t;").parse_statement().unwrap();
+        let Statement::Select(select) = statement else {
+            panic!("a select")
+        };
+        assert_eq!(select.columns, [Expression::Identifier("uuidv4".into())]);
+    }
+
     #[test]
     fn test_unique_index() {
         let sql = "CREATE UNIQUE INDEX content_idx ON pages(content);";
@@ -1509,7 +1651,7 @@ mod tests {
             Ok(Statement::Create(Create::Index {
                 name: "content_idx".to_string(),
                 table: "pages".to_string(),
-                column: "content".to_string(),
+                columns: vec!["content".to_string()],
                 unique: true,
             }))
         );
@@ -1856,26 +1998,14 @@ mod tests {
                         Expression::Identifier("film_id".into()),
                         Expression::Identifier("title".into())
                     ])
-                    .r#where(Expression::BinaryOperation {
-                        operator: BinaryOperator::Or,
-                        left: Box::new(Expression::BinaryOperation {
-                            operator: BinaryOperator::Or,
-                            left: Box::new(Expression::BinaryOperation {
-                                operator: BinaryOperator::Eq,
-                                left: Box::new(Expression::Identifier("film_id".to_string())),
-                                right: Box::new(Expression::Value(Value::Number(1))),
-                            }),
-                            right: Box::new(Expression::BinaryOperation {
-                                operator: BinaryOperator::Eq,
-                                left: Box::new(Expression::Identifier("film_id".to_string())),
-                                right: Box::new(Expression::Value(Value::Number(2))),
-                            }),
-                        }),
-                        right: Box::new(Expression::BinaryOperation {
-                            operator: BinaryOperator::Eq,
-                            left: Box::new(Expression::Identifier("film_id".to_string())),
-                            right: Box::new(Expression::Value(Value::Number(3))),
-                        }),
+                    .r#where(Expression::Function {
+                        func: Function::In,
+                        args: vec![
+                            Expression::Identifier("film_id".to_string()),
+                            Expression::Value(Value::Number(1)),
+                            Expression::Value(Value::Number(2)),
+                            Expression::Value(Value::Number(3)),
+                        ],
                     })
                     .into()
             )
@@ -1883,15 +2013,26 @@ mod tests {
     }
 
     #[test]
-    fn test_in_expansion() {
-        let sql = "SELECT film_id, title FROM films WHERE film_id IN (1, 2, 3);";
-        let equivalent_sql =
-            "SELECT film_id, title FROM films WHERE film_id = 1 OR film_id = 2 OR film_id = 3;";
+    fn test_not_in() {
+        let sql = "SELECT title FROM films WHERE film_id NOT IN (1, 2);";
+        let Ok(Statement::Select(select)) = Parser::new(sql).parse_statement() else {
+            panic!("a select")
+        };
 
-        let statement = Parser::new(sql).parse_statement();
-        let equivalent_statement = Parser::new(equivalent_sql).parse_statement();
-
-        assert_eq!(statement, equivalent_statement);
+        assert_eq!(
+            select.r#where,
+            Some(Expression::UnaryOperation {
+                operator: UnaryOperator::Not,
+                expr: Box::new(Expression::Function {
+                    func: Function::In,
+                    args: vec![
+                        Expression::Identifier("film_id".into()),
+                        Expression::Value(Value::Number(1)),
+                        Expression::Value(Value::Number(2)),
+                    ],
+                }),
+            })
+        );
     }
 
     #[test]
@@ -2178,13 +2319,13 @@ mod tests {
                         func: Function::Trunc,
                         args: vec![
                             Expression::Identifier("amount".into()),
-                            Expression::Value(4i128.into())
+                            Expression::Value(4i64.into())
                         ],
                     })
                     .r#where(Expression::BinaryOperation {
                         operator: BinaryOperator::Gt,
                         left: Box::new(Expression::Identifier("customer_id".into())),
-                        right: Box::new(Expression::Value(10i128.into()))
+                        right: Box::new(Expression::Value(10i64.into()))
                     })
                     .into()
             )
