@@ -7,6 +7,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 
 pub(crate) struct OsStorage;
@@ -19,6 +20,8 @@ pub(crate) struct DirectoryLock {
 pub(crate) struct OsFile {
     file: File,
     len: u64,
+    /// Bytes the file holds, reserved space past `len` included
+    size: u64,
 }
 
 pub(crate) trait Storage: Send + Sync {
@@ -43,10 +46,16 @@ pub(crate) trait Storage: Send + Sync {
 }
 
 pub(crate) trait StorageFile: Send {
+    /// writes at [StorageFile::len], over reserved space when there is some
     fn append(&mut self, bytes: &[u8]) -> io::Result<()>;
     /// Makes every appended byte durable (`fdatasync`)
     fn sync(&mut self) -> io::Result<()>;
+    /// cuts the file at `len`, reserved space included
     fn truncate(&mut self, len: u64) -> io::Result<()>;
+    /// zero-fills the file up to `size` bytes and syncs it, leaving [StorageFile::len] alone, so
+    /// later appends overwrite allocated blocks and their syncs carry no change of file size
+    fn reserve(&mut self, size: u64) -> io::Result<()>;
+    /// bytes appended (or the file size, for a file just opened)
     fn len(&self) -> u64;
 }
 
@@ -74,19 +83,14 @@ impl DirectoryLock {
 
 impl Storage for OsStorage {
     fn create(&self, path: &Path) -> io::Result<Box<dyn StorageFile>> {
-        // appends land at the end even after a short write and a truncation
-        // `truncate` cannot be combined with `append`
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
-        file.set_len(0)?;
-
-        Ok(Box::new(OsFile { file, len: 0 }))
+        let file = OpenOptions::new().create(true).write(true).truncate(true).open(path)?;
+        Ok(Box::new(OsFile { file, len: 0, size: 0 }))
     }
 
     fn open(&self, path: &Path) -> io::Result<Box<dyn StorageFile>> {
-        let file = OpenOptions::new().append(true).open(path)?;
+        let file = OpenOptions::new().write(true).open(path)?;
         let len = file.metadata()?.len();
-
-        Ok(Box::new(OsFile { file, len }))
+        Ok(Box::new(OsFile { file, len, size: len }))
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
@@ -135,8 +139,10 @@ impl Storage for OsStorage {
 
 impl StorageFile for OsFile {
     fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.file.write_all(bytes)?;
+        // positioned: a short write leaves `len` where it was, so the next one overwrites it
+        self.file.write_all_at(bytes, self.len)?;
         self.len += bytes.len() as u64;
+        self.size = self.size.max(self.len);
         Ok(())
     }
 
@@ -147,10 +153,28 @@ impl StorageFile for OsFile {
     fn truncate(&mut self, len: u64) -> io::Result<()> {
         self.file.set_len(len)?;
         self.len = len;
-        Ok(())
+        Ok(self.size = len)
     }
 
-    #[inline]
+    fn reserve(&mut self, size: u64) -> io::Result<()> {
+        const ZEROS: [u8; 64 << 10] = [0; 64 << 10];
+
+        if self.size >= size {
+            return Ok(());
+        }
+
+        let mut at = self.size;
+        while at < size {
+            let chunk = ZEROS.len().min((size - at) as usize);
+            self.file.write_all_at(&ZEROS[..chunk], at)?;
+            at += chunk as u64;
+        }
+
+        self.file.sync_data()?;
+        Ok(self.size = size)
+    }
+
+    #[inline(always)]
     fn len(&self) -> u64 {
         self.len
     }
@@ -176,6 +200,7 @@ pub(crate) mod memory {
         state: Arc<Mutex<MemoryState>>,
         gate: Arc<Condvar>,
         inode: u64,
+        len: u64,
     }
 
     #[derive(Default)]
@@ -228,6 +253,7 @@ pub(crate) mod memory {
         Append,
         Sync,
         Truncate,
+        Reserve,
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -310,33 +336,49 @@ pub(crate) mod memory {
             state.inodes.retain(|inode, _| live.contains(inode));
 
             for inode in state.inodes.values_mut() {
-                let synced = inode.durable.len();
-                let extends = inode.current.starts_with(&inode.durable);
-                match (loss, extends) {
-                    (Loss::Clean, _) | (_, false) => inode.current.clone_from(&inode.durable),
-                    (Loss::Torn, true) => {
-                        let tail = (inode.current.len() - synced) / 2;
-                        inode.current.truncate(synced + tail);
-                    },
-                    (Loss::Garbled, true) => {
-                        inode.current[synced..]
-                            .iter_mut()
-                            .step_by(7)
-                            .for_each(|byte| *byte ^= 0xA5);
-                    },
-                    (Loss::Reordered, true) => {
-                        let lost = (inode.current.len() - synced) / 2;
-                        inode.current[synced..synced + lost].fill(0);
-                    },
-                }
+                // the unsynced bytes: from the first that differs from the durable copy to the last, appended or written over reserved space
+                let (current, durable) = (&inode.current, &inode.durable);
+                let shared = current.len().min(durable.len());
+                let start = (0..shared).find(|&i| current[i] != durable[i]).unwrap_or(shared);
+                let end = match current.len() > durable.len() {
+                    true => current.len(),
+                    _ => (start..shared)
+                        .rev()
+                        .find(|&i| current[i] != durable[i])
+                        .map_or(start, |i| i + 1),
+                };
+                let half = start + (end - start) / 2;
 
-                inode.durable.clone_from(&inode.current);
+                let kept = match (loss, current.len() < durable.len()) {
+                    (Loss::Clean, _) | (_, true) => durable.clone(),
+                    (Loss::Torn, _) => overlay(durable, current, start..half),
+                    (Loss::Reordered, _) => overlay(durable, current, half..end),
+                    (Loss::Garbled, _) => {
+                        let mut garbled = current.clone();
+                        garbled[start..end].iter_mut().step_by(7).for_each(|byte| *byte ^= 0xA5);
+                        garbled
+                    },
+                };
+
+                inode.current.clone_from(&kept);
+                inode.durable = kept;
             }
         }
 
         fn lock(&self) -> MutexGuard<'_, MemoryState> {
             self.state.lock().expect("memory storage poisoned")
         }
+    }
+
+    /// `durable` with `current`'s bytes over `range`, zero-filled where neither reaches
+    fn overlay(durable: &[u8], current: &[u8], range: std::ops::Range<usize>) -> Vec<u8> {
+        let mut bytes = durable.to_vec();
+        if bytes.len() < range.end {
+            bytes.resize(range.end, 0);
+        }
+
+        bytes[range.clone()].copy_from_slice(&current[range]);
+        bytes
     }
 
     impl MemoryState {
@@ -354,12 +396,13 @@ pub(crate) mod memory {
 
             let failing = self.fail_at == Some(self.operations)
                 || self.fail_from.is_some_and(|from| self.operations >= from);
+
             match failing {
                 true => {
                     self.failed.push(op);
                     Err(io::Error::other(format!("injected {op:?} failure")))
                 },
-                false => Ok(()),
+                _ => Ok(()),
             }
         }
 
@@ -401,16 +444,20 @@ pub(crate) mod memory {
                 state: Arc::clone(&self.state),
                 gate: Arc::clone(&self.gate),
                 inode,
+                len: 0,
             }))
         }
 
         fn open(&self, path: &Path) -> io::Result<Box<dyn StorageFile>> {
-            let inode = self.lock().inode(path)?;
+            let state = self.lock();
+            let inode = state.inode(path)?;
+            let len = state.inodes[&inode].current.len() as u64;
 
             Ok(Box::new(MemoryFile {
                 state: Arc::clone(&self.state),
                 gate: Arc::clone(&self.gate),
                 inode,
+                len,
             }))
         }
 
@@ -485,7 +532,7 @@ pub(crate) mod memory {
                             ancestor.display().to_string(),
                         ));
                     },
-                    None => {
+                    _ => {
                         state.current.insert(ancestor.to_path_buf(), Entry::Dir);
                     },
                 }
@@ -543,11 +590,19 @@ pub(crate) mod memory {
             let written = match (&outcome, state.crashed) {
                 (Ok(()), _) => bytes,
                 (Err(_), false) => &bytes[..bytes.len() / 2],
-                (Err(_), true) => &[],
+                (Err(_), _) => &[],
             };
             let inode = state.inodes.get_mut(&self.inode).expect("open file has an inode");
-            inode.current.extend_from_slice(written);
+            let at = self.len as usize;
+            if inode.current.len() < at + written.len() {
+                inode.current.resize(at + written.len(), 0);
+            }
+            inode.current[at..at + written.len()].copy_from_slice(written);
+            drop(state);
 
+            if outcome.is_ok() {
+                self.len += bytes.len() as u64;
+            }
             outcome
         }
 
@@ -556,9 +611,7 @@ pub(crate) mod memory {
             state.operation(Op::Sync)?;
 
             let inode = state.inodes.get_mut(&self.inode).expect("open file has an inode");
-            inode.durable.clone_from(&inode.current);
-
-            Ok(())
+            Ok(inode.durable.clone_from(&inode.current))
         }
 
         fn truncate(&mut self, len: u64) -> io::Result<()> {
@@ -567,12 +620,26 @@ pub(crate) mod memory {
 
             let inode = state.inodes.get_mut(&self.inode).expect("open file has an inode");
             inode.current.truncate(len as usize);
+            drop(state);
 
-            Ok(())
+            Ok(self.len = len)
         }
 
+        fn reserve(&mut self, size: u64) -> io::Result<()> {
+            let mut state = self.park(Op::Reserve);
+            if state.inodes[&self.inode].current.len() as u64 >= size {
+                return Ok(());
+            }
+            state.operation(Op::Reserve)?;
+
+            let inode = state.inodes.get_mut(&self.inode).expect("open file has an inode");
+            inode.current.resize(size as usize, 0);
+            Ok(inode.durable.clone_from(&inode.current))
+        }
+
+        #[inline(always)]
         fn len(&self) -> u64 {
-            self.lock().inodes[&self.inode].current.len() as u64
+            self.len
         }
     }
 }
@@ -645,6 +712,29 @@ mod tests {
     }
 
     #[test]
+    fn crash_tears_an_overwrite_of_reserved_space() {
+        let storage = durable_root();
+
+        let mut file = storage.create(Path::new("db/log")).unwrap();
+        storage.sync_dir(Path::new("db")).unwrap();
+        file.reserve(16).unwrap();
+        file.append(b"0123").unwrap();
+        file.sync().unwrap();
+        file.append(b"456789").unwrap();
+        assert_eq!(file.len(), 10);
+
+        storage.reboot(true);
+        assert_eq!(storage.read(Path::new("db/log")).unwrap(), b"0123456\0\0\0\0\0\0\0\0\0");
+
+        let mut file = storage.open(Path::new("db/log")).unwrap();
+        file.truncate(4).unwrap();
+        file.append(b"45").unwrap();
+        file.sync().unwrap();
+        storage.reboot_with(memory::Loss::Reordered);
+        assert_eq!(storage.read(Path::new("db/log")).unwrap(), b"012345");
+    }
+
+    #[test]
     fn injected_failure_and_crash_stop_operations() {
         let storage = MemoryStorage::new();
         storage.create_dir(Path::new("db")).unwrap();
@@ -652,12 +742,9 @@ mod tests {
         storage.fail_at(2);
         let mut file = storage.create(Path::new("db/log")).unwrap();
         assert!(file.append(b"lost").is_err());
+        assert_eq!(storage.read(Path::new("db/log")).unwrap(), b"lo");
         file.append(b"kept").unwrap();
-        assert_eq!(
-            storage.read(Path::new("db/log")).unwrap(),
-            b"lokept",
-            "a failed write is short"
-        );
+        assert_eq!(storage.read(Path::new("db/log")).unwrap(), b"kept");
         assert_eq!(storage.failed(), [Op::Append]);
 
         storage.crash_at(1);
@@ -687,9 +774,12 @@ mod tests {
         let mut file = storage.open(&path).unwrap();
         assert_eq!(file.len(), 5);
         file.append(b"!").unwrap();
+        file.reserve(8).unwrap();
+        file.append(b"?").unwrap();
+        assert_eq!(file.len(), 7);
         storage.sync_dir(&dir).unwrap();
 
-        assert_eq!(storage.read(&path).unwrap(), b"hello!");
+        assert_eq!(storage.read(&path).unwrap(), b"hello!?\0");
         assert_eq!(storage.list(&dir).unwrap(), vec![path]);
         storage.remove_dir(&dir).unwrap();
     }

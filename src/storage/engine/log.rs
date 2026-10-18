@@ -21,14 +21,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 pub(crate) struct Log {
     storage: Arc<dyn Storage>,
     dir: PathBuf,
-    sync: SyncMode,
-    segment_size: u64,
+    layout: Layout,
     state: Mutex<LogState>,
     flushed: Condvar,
     /// Every byte below is durable
     durable: AtomicU64,
     /// Why the log stopped accepting frames, once it did
-    poison: OnceLock<Arc<str>>,
+    poison: OnceLock<Stop>,
 }
 
 struct LogState {
@@ -51,6 +50,11 @@ struct Rewind {
     cause: Arc<str>,
 }
 
+enum Stop {
+    Failed(Arc<str>),
+    Closed,
+}
+
 /// An appended frame, redeemed with [Log::wait]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Ticket {
@@ -58,6 +62,17 @@ pub(crate) struct Ticket {
     pub end: u64,
     /// Rewinds before the frame was appended
     epoch: usize,
+}
+
+/// How the log lays out and syncs its segments
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Layout {
+    pub sync: SyncMode,
+    /// A flush past this size moves appends to a new segment
+    pub segment_size: u64,
+    /// Zeroed space kept ahead of the last frame, in steps of this size, so syncs rewrite allocated
+    /// blocks instead of growing the file (0 grows it frame by frame)
+    pub reserve: u64,
 }
 
 /// Why a frame did not become durable
@@ -107,8 +122,7 @@ impl Log {
     pub fn open(
         storage: Arc<dyn Storage>,
         dir: PathBuf,
-        sync: SyncMode,
-        segment_size: u64,
+        layout: Layout,
         from: u64,
         mut apply: impl FnMut(Kind, &[u8]) -> Result<()>,
     ) -> Result<(Self, Replay)> {
@@ -147,7 +161,8 @@ impl Log {
                         offset += HEADER + payload.len();
                         replay.frames += 1;
                     },
-                    None if offset == bytes.len() => break,
+                    // reserved space never written: the next segment, if any, must start here
+                    None if bytes[offset..].iter().all(|&byte| byte == 0) => break,
                     None if last && !synced_later(&bytes, offset, *start) => {
                         let mut file = storage.open(path)?;
                         file.truncate(offset as u64)?;
@@ -170,7 +185,13 @@ impl Log {
         }
 
         let (segment_start, file) = match tail {
-            Some((start, path)) => (start, storage.open(&path)?),
+            Some((start, path)) => {
+                let mut file = storage.open(&path)?;
+                if file.len() > replay.end - start {
+                    file.truncate(replay.end - start)?;
+                }
+                (start, file)
+            },
             _ => (replay.end, create_segment(storage.as_ref(), &dir, replay.end)?),
         };
 
@@ -186,8 +207,7 @@ impl Log {
         let log = Self {
             storage,
             dir,
-            sync,
-            segment_size,
+            layout,
             state: Mutex::new(state),
             flushed: Condvar::new(),
             durable: AtomicU64::new(replay.end),
@@ -256,8 +276,14 @@ impl Log {
             let mut file = state.file.take().expect("no flush in progress");
             drop(state);
 
+            // a failed reservation only costs speed: the append grows the file instead
+            if self.layout.reserve > 0 {
+                let needed = file.len() + buffer.len() as u64;
+                let _ = file.reserve(needed.next_multiple_of(self.layout.reserve));
+            }
+
             let appended = file.append(&buffer);
-            let synced = match (&appended, self.sync) {
+            let synced = match (&appended, self.layout.sync) {
                 (Ok(()), SyncMode::Full) => file.sync(),
                 _ => Ok(()),
             };
@@ -273,7 +299,7 @@ impl Log {
                 (_, Err(error)) => self.stop(format!("log sync failed: {error}")),
                 _ => {
                     self.durable.store(target, Ordering::Release);
-                    if file.len() >= self.segment_size {
+                    if file.len() >= self.layout.segment_size {
                         self.rotate(&mut state, &mut file, target);
                     }
                 },
@@ -297,7 +323,21 @@ impl Log {
 
     /// the error every write gets once the log stopped
     pub fn poisoned(&self) -> Option<EngineError> {
-        self.poison.get().map(|cause| EngineError::Poisoned(Arc::clone(cause)))
+        self.poison.get().map(|stop| match stop {
+            Stop::Failed(cause) => EngineError::Poisoned(Arc::clone(cause)),
+            Stop::Closed => EngineError::Closed,
+        })
+    }
+
+    /// stops the log once the flush in progress, if any, has ended: frames not yet durable never
+    /// become so, and the files are left to whoever opens the directory next
+    pub fn close(&self) {
+        let _ = self.poison.set(Stop::Closed);
+
+        let mut state = self.lock();
+        while state.flushing {
+            state = self.flushed.wait(state).expect("log lock poisoned");
+        }
     }
 
     /// deletes every segment that ends at or before `lsn`
@@ -359,7 +399,7 @@ impl Log {
     }
 
     fn stop(&self, cause: String) {
-        let _ = self.poison.set(cause.into());
+        let _ = self.poison.set(Stop::Failed(cause.into()));
     }
 
     fn lock(&self) -> MutexGuard<'_, LogState> {
@@ -457,8 +497,7 @@ mod tests {
         let (log, _) = Log::open(
             Arc::new(storage.clone()),
             PathBuf::from("db/wal"),
-            SyncMode::Full,
-            segment_size,
+            Layout { sync: SyncMode::Full, segment_size, reserve: 0 },
             0,
             |_, payload| {
                 frames.push(payload.to_vec());
@@ -488,6 +527,42 @@ mod tests {
         let (_, frames) = open(&storage, 64);
         assert_eq!(frames, (0..20u8).map(|n| vec![n; 10]).collect::<Vec<_>>());
         assert!(storage.list(Path::new("db/wal")).unwrap().len() > 1);
+    }
+
+    #[test]
+    fn appends_overwrite_reserved_space_and_reopening_ignores_it() {
+        let storage = root();
+        let layout = Layout { sync: SyncMode::Full, segment_size: 256, reserve: 128 };
+        let replay = |storage: &MemoryStorage| {
+            let mut frames = Vec::new();
+            let dir = PathBuf::from("db/wal");
+            let (log, replay) =
+                Log::open(Arc::new(storage.clone()), dir, layout, 0, |_, payload| {
+                    Ok(frames.push(payload[0]))
+                })
+                .unwrap();
+            (log, frames, replay.truncated)
+        };
+
+        let (log, _, _) = replay(&storage);
+        for n in 0..12u8 {
+            commit(&log, &[n; 30]);
+        }
+        drop(log);
+
+        let segments = storage.list(Path::new("db/wal")).unwrap();
+        assert!(segments.len() > 1);
+        assert!(segments.iter().all(|path| storage.read(path).unwrap().len() % 128 == 0));
+
+        storage.reboot(false);
+        let (log, frames, truncated) = replay(&storage);
+        assert_eq!(frames, (0..12).collect::<Vec<_>>());
+        assert!(!truncated);
+
+        commit(&log, &[12; 30]);
+        drop(log);
+        storage.reboot(false);
+        assert_eq!(replay(&storage).1, (0..13).collect::<Vec<_>>());
     }
 
     #[test]
@@ -561,8 +636,7 @@ mod tests {
         let opened = Log::open(
             Arc::new(storage.clone()),
             PathBuf::from("db/wal"),
-            SyncMode::Full,
-            16,
+            Layout { sync: SyncMode::Full, segment_size: 16, reserve: 0 },
             0,
             |_, _| Ok(()),
         );
@@ -703,7 +777,7 @@ mod tests {
 
     #[test]
     fn a_failed_rotation_keeps_the_segment_and_retries_on_the_next_flush() {
-        // a flush appends (1) and syncs (2); rotating creates the segment (3), syncs it (4) and
+        // a flush appends (1) and syncs (2), rotating creates the segment (3), syncs it (4) and
         // syncs the directory (5)
         for failure in [3, 4, 5] {
             let storage = root();
@@ -755,8 +829,7 @@ mod tests {
         Log::open(
             Arc::new(storage.clone()),
             PathBuf::from("db/wal"),
-            SyncMode::Full,
-            16,
+            Layout { sync: SyncMode::Full, segment_size: 16, reserve: 0 },
             from,
             |_, payload| {
                 frames.push(payload[0]);
@@ -783,8 +856,7 @@ mod tests {
         let opened = Log::open(
             Arc::new(storage.clone()),
             PathBuf::from("db/wal"),
-            SyncMode::Full,
-            u64::MAX,
+            Layout { sync: SyncMode::Full, segment_size: u64::MAX, reserve: 0 },
             0,
             |_, _| Ok(()),
         );

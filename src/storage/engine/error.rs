@@ -11,19 +11,21 @@ pub(crate) enum EngineError {
     /// a durability failure left the engine unable to promise anything further, for the cause given
     /// reopen it
     Poisoned(Arc<str>),
+    /// the engine was closed: nothing commits any more
+    Closed,
     TableNotFound(String),
     TableExists(String),
     IndexExists(String),
     ColumnNotFound(String),
-    /// The row is being written by another, still uncommitted, transaction
+    /// the row is being written by another, still uncommitted, transaction
     WriteConflict,
-    /// A concurrent commit invalidated this transaction's reads or writes
+    /// a concurrent commit invalidated this transaction's reads or writes
     SerializationFailure,
     DuplicatedKey(Value),
     /// READ COMMITTED only: the row changed after the statement's snapshot
     /// carries its newest committed image (`None` once deleted) so the statement can re-check and retry
     Stale(Option<Row>),
-    /// The transaction failed earlier and was rolled back
+    /// the transaction failed earlier and was rolled back
     Aborted,
     NoSavepoint(String),
 }
@@ -38,6 +40,7 @@ impl Display for EngineError {
             Self::Poisoned(cause) => {
                 write!(f, "engine stopped after a durability failure ({cause}), reopen it")
             },
+            Self::Closed => f.write_str("the database is closed"),
             Self::TableNotFound(name) => write!(f, "table {name} does not exist"),
             Self::TableExists(name) => write!(f, "table {name} already exists"),
             Self::IndexExists(name) => write!(f, "index {name} already exists"),
