@@ -7,7 +7,6 @@
 
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroI32;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod functions;
 pub mod interval;
@@ -15,15 +14,15 @@ pub use functions::{Extract, ExtractError, ExtractKind};
 
 use crate::core::Serialize;
 
-/// A combined date and time representation without timezone information.
+/// A combined date and time representation without timezone information
 ///
-/// This struct combines [`NaiveDate`] (4 bytes)
-/// and [`NaiveTime`] (3 bytes) into a single datetime value,
-/// following the ISO 8601 format (e.g. "2023-01-15T14:30:00").
+/// This struct combines [NaiveDate] (4 bytes)
+/// and [NaiveTime] (3 bytes) into a single datetime value,
+/// following the ISO 8601 format (e.g. "2023-01-15T14:30:00")
 ///
 /// # Memory Layout
-/// - `date`: 4 bytes (packed [`NaiveDate`] with year and ordinal day)
-/// - `time`: 3 bytes (packed [`NaiveTime`] with hours, minutes, seconds)
+/// - `date`: 4 bytes (packed [NaiveDate] with year and ordinal day)
+/// - `time`: 3 bytes (packed [NaiveTime] with hours, minutes, seconds)
 /// - Total size: 8 bytes (due to alignment padding after the 3-byte time)
 ///
 /// # Features
@@ -44,14 +43,11 @@ pub struct NaiveDateTime {
 
 /// [ISO 8601](https://www.loc.gov/standards/datetime/iso-tc154-wg5_n0038_iso_wd_8601-1_2016-02-16.pdf)
 /// calendar date without timezone compact date representation storing year and ordinal day
-/// (1-366) in a single [`NonZeroI32`].
+/// (1-366) in a single [NonZeroI32].
 ///
 /// Uses bit-packing:
 /// - **Upper 19 bits**: Year (`year << 13`)
 /// - **Lower 13 bits**: Day of the year (ordinal, 1-366)
-///
-/// Enables efficient storage (four bytes) and operations while avoiding heap allocations.
-/// [`NonZeroI32`] allows [`Option<NaiveDate>`] to be space-optimised.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct NaiveDate {
     yof: NonZeroI32,
@@ -69,7 +65,7 @@ pub struct NaiveTime {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone, Copy)]
 struct u24([u8; 3]);
 
-#[allow(clippy::enum_variant_names, dead_code)]
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DateParseError {
     InvalidDateTime,
@@ -86,19 +82,10 @@ pub enum DateParseError {
 
 type DateError<T> = Result<T, DateParseError>;
 
-/// Cumulative day offsets for each month (non-leap year), starting at a 1-based index.
-/// E.g. March 1st is the 59th day → CUMULATIVE_DAYS = 59.
+/// Cumulative day offsets for each month (non-leap year), starting at a 1-based index
+/// E.g. March 1st is the 59th day → CUMULATIVE_DAYS = 59
 const CUMULATIVE_DAYS: [u16; 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
 const CUMULATIVE_DAYS_LEAP: [u16; 13] = [0, 0, 31, 60, 91, 121, 152, 182, 213, 244, 275, 306, 335];
-
-/// Days since Unix epoch for year boundaries (1970-2037)
-const DAYS_SINCE_EPOCH: [i32; 68] = [
-    0, 365, 730, 1096, 1461, 1826, 2191, 2557, 2922, 3287, 3652, 4018, 4383, 4748, 5113, 5479,
-    5844, 6209, 6574, 6940, 7305, 7670, 8035, 8401, 8766, 9131, 9496, 9862, 10227, 10592, 10957,
-    11323, 11688, 12053, 12418, 12784, 13149, 13514, 13879, 14245, 14610, 14975, 15340, 15706,
-    16071, 16436, 16801, 17167, 17532, 17897, 18262, 18628, 18993, 19358, 19723, 20089, 20454,
-    20819, 21184, 21550, 21915, 22280, 22645, 23011, 23376, 23741, 24106, 24472,
-];
 
 const SECS_IN_DAY: i64 = 86400;
 
@@ -107,51 +94,7 @@ pub trait Parse: Sized {
     fn timestamp(&self) -> i64;
 }
 
-pub trait Current {
-    /// Returns the current `UTC` time in this representation.
-    #[allow(dead_code)]
-    fn now() -> Self;
-}
-
-#[inline(always)]
-#[allow(unused)]
-pub(crate) fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("System time couldn't be acquired")
-        .as_secs() as i64
-}
-
-impl Current for NaiveDateTime {
-    #[inline(always)]
-    fn now() -> Self {
-        let timestamp = now();
-
-        Self::from_timestamp(timestamp)
-    }
-}
-
-impl NaiveDateTime {
-    #[inline]
-    #[allow(unused)]
-    const fn from_timestamp(timestamp: i64) -> Self {
-        let days = timestamp / SECS_IN_DAY;
-        let secs_in_day = (timestamp % SECS_IN_DAY) as u32;
-
-        let (days, secs_in_day) = match timestamp < 0 && secs_in_day != 0 {
-            true => (
-                days - 1,
-                SECS_IN_DAY as u32 - ((-timestamp % SECS_IN_DAY) as u32),
-            ),
-            false => (days, secs_in_day),
-        };
-
-        let date = NaiveDate::from_days_since_epoch(days);
-        let time = NaiveTime::from_secs(secs_in_day);
-
-        Self { date, time }
-    }
-}
+impl NaiveDateTime {}
 
 impl Parse for NaiveDateTime {
     fn parse_str(date: &str) -> DateError<Self> {
@@ -161,7 +104,7 @@ impl Parse for NaiveDateTime {
 
         // check that byte 10 is either 'T' or ' '
         match date.as_bytes()[10] {
-            b'T' | b' ' => { /* ok */ }
+            b'T' | b' ' => { /* ok */ },
             _ => return Err(DateParseError::InvalidDateTime),
         }
 
@@ -212,23 +155,12 @@ impl Display for NaiveDateTime {
     }
 }
 
-impl Current for NaiveDate {
-    #[inline(always)]
-    fn now() -> Self {
-        let timestamp = now();
-        let days = timestamp / SECS_IN_DAY;
-        Self::from_days_since_epoch(days)
-    }
-}
-
 impl NaiveDate {
     #[inline(always)]
     pub const fn new(year: i32, ordinal: u16) -> Self {
         let packed = (year << 13) | (ordinal as i32);
 
-        Self {
-            yof: unsafe { NonZeroI32::new_unchecked(packed) },
-        }
+        Self { yof: unsafe { NonZeroI32::new_unchecked(packed) } }
     }
 
     #[inline(always)]
@@ -237,52 +169,7 @@ impl NaiveDate {
         let packed = (year << 13) | (ordinal as i32);
         debug_assert!(packed != 0);
 
-        Self {
-            yof: unsafe { NonZeroI32::new_unchecked(packed) },
-        }
-    }
-
-    #[inline(always)]
-    #[allow(unused)]
-    const fn from_days_since_epoch(days: i64) -> Self {
-        const UNIX_YEAR: i32 = 1970;
-        let mut year = UNIX_YEAR;
-        let mut remaining_days = days as i32;
-
-        match days < 0 {
-            true => {
-                while remaining_days < 0 {
-                    year -= 1;
-                    remaining_days += if Self::is_leap_year(year) { 366 } else { 365 };
-                }
-            }
-            false => {
-                if days < DAYS_SINCE_EPOCH[DAYS_SINCE_EPOCH.len() - 1] as i64 {
-                    let mut i = 0;
-
-                    while i < DAYS_SINCE_EPOCH.len() - 1 {
-                        if days < DAYS_SINCE_EPOCH[i + 1] as i64 {
-                            year = UNIX_YEAR + i as i32;
-                            remaining_days = days as i32 - DAYS_SINCE_EPOCH[i];
-                            break;
-                        }
-
-                        i += 1;
-                    }
-                } else {
-                    while remaining_days >= if Self::is_leap_year(year) { 366 } else { 365 } {
-                        remaining_days -= match Self::is_leap_year(year) {
-                            true => 366,
-                            false => 365,
-                        };
-                        year += 1;
-                    }
-                }
-            }
-        }
-
-        let ordinal = (remaining_days + 1) as u16;
-        Self::new_unchecked(year, ordinal)
+        Self { yof: unsafe { NonZeroI32::new_unchecked(packed) } }
     }
 
     #[inline(always)]
@@ -375,15 +262,25 @@ impl Parse for NaiveDate {
 
         match year >= 1970 {
             true => {
-                (1970..year).for_each(|y| days += if Self::is_leap_year(y) { 366 } else { 365 });
+                (1970..year).for_each(|y| {
+                    days += match Self::is_leap_year(y) {
+                        true => 366,
+                        _ => 365,
+                    }
+                });
 
                 days += ordinal - 1
-            }
+            },
             false => {
-                (year..1970).for_each(|y| days -= if Self::is_leap_year(y) { 366 } else { 365 });
+                (year..1970).for_each(|y| {
+                    days -= match Self::is_leap_year(y) {
+                        true => 366,
+                        _ => 365,
+                    }
+                });
 
                 days += ordinal - 1;
-            }
+            },
         }
 
         days * SECS_IN_DAY
@@ -401,10 +298,7 @@ impl TryFrom<[u8; 4]> for NaiveDate {
     fn try_from(bytes: [u8; 4]) -> Result<Self, Self::Error> {
         let yof = i32::from_le_bytes(bytes);
         let date = NonZeroI32::new(yof).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidFilename,
-                "Received zero value in date",
-            )
+            std::io::Error::new(std::io::ErrorKind::InvalidFilename, "Received zero value in date")
         })?;
 
         Ok(Self { yof: date })
@@ -414,16 +308,6 @@ impl TryFrom<[u8; 4]> for NaiveDate {
 impl Display for NaiveDate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}-{:02}-{:02}", self.year(), self.month(), self.day())
-    }
-}
-
-impl Current for NaiveTime {
-    #[inline(always)]
-    fn now() -> Self {
-        let timestamp = now();
-
-        let secs_in_day = (timestamp % SECS_IN_DAY) as u32;
-        Self::from_secs(secs_in_day)
     }
 }
 
@@ -456,15 +340,6 @@ impl NaiveTime {
 
         let val = ((hour as u32) << 12) | ((minute as u32) << 6) | (second as u32);
         Self { hms: u24::new(val) }
-    }
-
-    #[inline(always)]
-    const fn from_secs(seconds: u32) -> Self {
-        let hour = (seconds / 3600) as u8;
-        let min = ((seconds % 3600) / 60) as u8;
-        let secs = (seconds % 60) as u8;
-
-        Self::new_unchecked(hour, min, secs)
     }
 
     fn hour(&self) -> u8 {
@@ -515,13 +390,7 @@ impl From<[u8; 3]> for NaiveTime {
 
 impl Display for NaiveTime {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:02}:{:02}:{:02}",
-            self.hour(),
-            self.minute(),
-            self.second()
-        )
+        write!(f, "{:02}:{:02}:{:02}", self.hour(), self.minute(), self.second())
     }
 }
 
@@ -730,33 +599,5 @@ mod tests {
         assert!(time4 > time0);
         assert_eq!(time1.partial_cmp(&time2), Some(std::cmp::Ordering::Less));
         assert_eq!(time1.partial_cmp(&time3), Some(std::cmp::Ordering::Equal));
-    }
-
-    #[test]
-    fn test_now_ordering() {
-        let time = NaiveTime::now();
-        let timestamp = NaiveDateTime::now();
-
-        let ten_millis = std::time::Duration::from_secs(1);
-        std::thread::sleep(ten_millis);
-
-        let time2 = NaiveTime::now();
-        let timestamp2 = NaiveDateTime::now();
-
-        assert!(time < time2);
-        assert!(timestamp < timestamp2);
-    }
-
-    #[test]
-    fn test_now_between_threads() {
-        let time = NaiveTime::now();
-        let timestamp = NaiveDateTime::now();
-
-        let (time2, timestamp2) = std::thread::spawn(|| (NaiveTime::now(), NaiveDateTime::now()))
-            .join()
-            .unwrap();
-
-        assert_eq!(time, time2);
-        assert_eq!(timestamp, timestamp2);
     }
 }

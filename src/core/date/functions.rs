@@ -1,11 +1,8 @@
 //! Date related functions.
 
-#![allow(dead_code)]
-
-use std::fmt::Display;
-
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::sql::statement::{Temporal, Type};
+use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ExtractKind {
@@ -42,31 +39,28 @@ impl Extract for Temporal {
 
 impl Extract for NaiveDateTime {
     fn extract(&self, kind: ExtractKind) -> Result<f64, ExtractError> {
-        kind.from_timestamp(self)
-            .ok_or(ExtractError::UnsupportedUnitForType {
-                unit: kind,
-                r#type: Temporal::DateTime(*self).into(),
-            })
+        kind.from_timestamp(self).ok_or(ExtractError::UnsupportedUnitForType {
+            unit: kind,
+            r#type: Temporal::DateTime(*self).into(),
+        })
     }
 }
 
 impl Extract for NaiveDate {
     fn extract(&self, kind: ExtractKind) -> Result<f64, ExtractError> {
-        kind.from_date(self)
-            .ok_or(ExtractError::UnsupportedUnitForType {
-                unit: kind,
-                r#type: Temporal::Date(*self).into(),
-            })
+        kind.from_date(self).ok_or(ExtractError::UnsupportedUnitForType {
+            unit: kind,
+            r#type: Temporal::Date(*self).into(),
+        })
     }
 }
 
 impl Extract for NaiveTime {
     fn extract(&self, kind: ExtractKind) -> Result<f64, ExtractError> {
-        kind.from_time(self)
-            .ok_or(ExtractError::UnsupportedUnitForType {
-                unit: kind,
-                r#type: Temporal::Time(*self).into(),
-            })
+        kind.from_time(self).ok_or(ExtractError::UnsupportedUnitForType {
+            unit: kind,
+            r#type: Temporal::Time(*self).into(),
+        })
     }
 }
 
@@ -74,9 +68,7 @@ impl ExtractKind {
     fn from_timestamp(&self, timestamp: &NaiveDateTime) -> Option<f64> {
         match self {
             Self::Epoch => Some(timestamp.timestamp() as f64),
-            _ => self
-                .from_date(&timestamp.date)
-                .or(self.from_time(&timestamp.time)),
+            _ => self.from_date(&timestamp.date).or(self.from_time(&timestamp.time)),
         }
     }
 
@@ -101,7 +93,7 @@ impl ExtractKind {
             Self::Epoch => Some(time.timestamp() as f64),
             Self::Year | Self::Month | Self::Day | Self::Quarter | Self::Century | Self::Decade => {
                 None
-            }
+            },
         }
     }
 }
@@ -111,7 +103,7 @@ impl Display for ExtractError {
         match self {
             Self::UnsupportedUnitForType { unit, r#type } => {
                 write!(f, "Unit {unit} is not supported for {type}")
-            }
+            },
         }
     }
 }
@@ -164,7 +156,7 @@ impl TryFrom<String> for ExtractKind {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::date::{functions::ExtractKind, NaiveDate, NaiveDateTime, NaiveTime, Parse};
+    use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse, functions::ExtractKind};
 
     #[test]
     fn test_from_date() {

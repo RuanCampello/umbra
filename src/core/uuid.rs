@@ -1,16 +1,14 @@
-//! UUID generation internal module.
+//! UUID generation internal module
 
-#![allow(dead_code)]
-
-use super::random::{random_seed, Rng};
+use super::random::Rng;
 use std::{fmt::Display, str::FromStr};
 
 #[repr(C, packed)]
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, Hash)]
-/// A 128 bits Universally Unique Identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A 128 bits Universally Unique Identifier
 /// To learn more about UUIDs on databases,
 /// read [this](https://planetscale.com/blog/the-problem-with-using-a-uuid-primary-key-in-mysql) article about MySql
-/// and [this](https://supabase.com/blog/choosing-a-postgres-primary-key) on Postgres' side.
+/// and [this](https://supabase.com/blog/choosing-a-postgres-primary-key) on Postgres' side
 pub struct Uuid([u8; 16]);
 
 #[derive(Debug, PartialEq)]
@@ -64,25 +62,14 @@ impl Uuid {
         Self(bytes)
     }
 
-    /// Creates a new random version 4 `UUID`.
+    /// Creates a new random version 4 `UUID`
     pub fn new_v4() -> Self {
-        let mut rng = Rng::with_seed(random_seed().unwrap_or_default());
-        Self::from_u128(rng.u128(u128::MIN..u128::MAX) & Self::VERSION_MASK | Self::VARIANT_MASK)
+        Self::from_u128(Rng::seeded().u128() & Self::VERSION_MASK | Self::VARIANT_MASK)
     }
 
-    pub fn try_parse(input: &str) -> Result<Uuid, UuidError> {
-        let bytes = parse_hyphenated(input.as_bytes())?;
-        Ok(Self::from_bytes(bytes))
-    }
-
-    /// Creates a `UUID` from a 128 bit value.
+    /// Creates a `UUID` from a 128 bit value
     const fn from_u128(value: u128) -> Self {
         Self::from_bytes(value.to_be_bytes())
-    }
-
-    #[inline(always)]
-    const fn get_version(&self) -> usize {
-        (self.0[6] >> 4) as usize
     }
 
     #[inline(always)]
@@ -175,22 +162,13 @@ unsafe fn format_hyphenated_ssse3(bytes: *const u8) -> [u8; 36] {
     out
 }
 
-const fn try_parse(input: &[u8]) -> Result<[u8; 16], UuidError> {
-    match (input.len(), input) {
-        (45, [b'u', b'r', b'n', b':', b'u', b'u', b'i', b'd', b':', string @ ..]) => {
-            parse_hyphenated(string)
-        }
-        _ => Err(UuidError::InvalidUUID),
-    }
-}
-
 const fn parse_hyphenated(string: &[u8]) -> Result<[u8; 16], UuidError> {
     if string.len() != 36 {
         return Err(UuidError::InvalidLength);
     }
 
     match [string[8], string[13], string[18], string[23]] {
-        [b'-', b'-', b'-', b'-'] => {}
+        [b'-', b'-', b'-', b'-'] => {},
         _ => return Err(UuidError::InvalidUUID),
     }
 
@@ -218,38 +196,6 @@ const fn parse_hyphenated(string: &[u8]) -> Result<[u8; 16], UuidError> {
     Ok(buffer)
 }
 
-#[cfg(all(feature = "simd", any(target_arch = "x86", target_arch = "x86_64")))]
-impl PartialEq for Uuid {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        unsafe { eq_sse2(self.0.as_ptr(), other.0.as_ptr()) }
-    }
-}
-
-#[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
-#[inline]
-#[target_feature(enable = "sse2")]
-unsafe fn eq_sse2(a: *const u8, b: *const u8) -> bool {
-    #[cfg(target_arch = "x86")]
-    use std::arch::x86::{__m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8};
-    #[cfg(target_arch = "x86_64")]
-    use std::arch::x86_64::{__m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8};
-
-    let a = _mm_loadu_si128(a as *const __m128i);
-    let b = _mm_loadu_si128(b as *const __m128i);
-    let cmp = _mm_cmpeq_epi8(a, b);
-    _mm_movemask_epi8(cmp) == 0xFFFF
-}
-
-#[cfg(not(all(feature = "simd", any(target_arch = "x86", target_arch = "x86_64"))))]
-impl PartialEq for Uuid {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Eq for Uuid {}
-
 impl Display for Uuid {
     #[inline(always)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -273,7 +219,7 @@ impl Display for UuidError {
 impl FromStr for Uuid {
     type Err = UuidError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_parse(s)
+        parse_hyphenated(s.as_bytes()).map(Self::from_bytes)
     }
 }
 
@@ -292,30 +238,27 @@ impl From<Uuid> for u128 {
 #[cfg(test)]
 mod tests {
     use super::Uuid;
-    use crate::core::random::Rng;
     use std::{collections::HashSet, str::FromStr};
 
     #[test]
     fn test_new() {
         let uuid = Uuid::new_v4();
 
-        assert_eq!(uuid.get_version(), 4);
+        assert_eq!(uuid.0[6] >> 4, 4);
     }
 
     #[test]
     fn test_v4_basic_randomness() {
-        let mut rng = Rng::new();
-        let range = rng.i32(0..1024);
-        let mut uuids = HashSet::with_capacity(range as usize);
+        let mut uuids = HashSet::with_capacity(1024);
 
-        for _ in 0..range {
+        for _ in 0..1024 {
             let uuid = Uuid::new_v4();
             assert!(!uuids.contains(&uuid), "Duplicated UUID found {uuid}");
 
             uuids.insert(uuid);
         }
 
-        assert_eq!(uuids.len(), range as usize);
+        assert_eq!(uuids.len(), 1024);
     }
 
     #[test]
