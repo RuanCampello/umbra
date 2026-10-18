@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use super::JsonError;
 use crate::parse_error;
 use std::borrow::Cow;
@@ -78,7 +76,7 @@ fn start(
             parts.push(PathElement::Root);
             *state = State::AfterRoot;
             Ok(())
-        }
+        },
         _ => parse_error!("Bad JSON path: {path}"),
     }
 }
@@ -97,14 +95,14 @@ fn after_root(
             *key = idx + c.1.len_utf8();
 
             Ok(())
-        }
+        },
         (_, '[') => {
             *state = State::InArrayIndex;
             *index_state = ArrayIndexState::Start;
             *index = 0;
 
             Ok(())
-        }
+        },
         _ => parse_error!("Bad JSON path: {path}"),
     }
 }
@@ -134,16 +132,16 @@ fn in_key<'p>(
                             *state = State::InArrayIndex;
                             *index_state = ArrayIndexState::Start;
                             *index = 0;
-                        }
+                        },
                     }
 
                     match key {
                         "+" => parts.push(PathElement::Wildcard),
                         _ => parts.push(PathElement::Key(Cow::Borrowed(key), false)),
                     }
-                }
+                },
             }
-        }
+        },
         (_, '"') => quoted_key(state, key_start, parts, path_iter, path)?,
         _ => (),
     }
@@ -170,7 +168,7 @@ fn array_index(
                 Some((_, ']')) => parts.push(PathElement::Wildcard),
                 _ => parse_error!("Expected ']' after '*' in array index"),
             }
-        }
+        },
         (ArrayIndexState::Start, '0'..='9') => {
             *index = c.1.to_digit(10).ok_or(JsonError::Message {
                 msg: format!("failed to parse digit: {}", c.1),
@@ -178,12 +176,12 @@ fn array_index(
             })? as i128;
 
             *index_state = ArrayIndexState::CollectingNumbers;
-        }
+        },
         (ArrayIndexState::AfterHash, '-') => negative_index(index_state, index, path_iter, path)?,
         (ArrayIndexState::AfterHash, ']') => {
             *state = State::ExpectDotOrBracket;
             parts.push(PathElement::ArrayLocator(None));
-        }
+        },
         (ArrayIndexState::CollectingNumbers, '0'..='9') => {
             let adding = c.1.to_digit(10).ok_or(JsonError::Message {
                 msg: format!("failed to parse digit: {}", c.1),
@@ -195,12 +193,12 @@ fn array_index(
             if is_max { *index_state = ArrayIndexState::IsMax };
 
             *index = num;
-        }
+        },
         (ArrayIndexState::IsMax, '0'..='9') => (),
         (ArrayIndexState::CollectingNumbers | ArrayIndexState::IsMax, ']') => {
             *state = State::ExpectDotOrBracket;
             parts.push(PathElement::ArrayLocator(Some(*index as i32)));
-        }
+        },
         _ => parse_error!("Bad JSON path: {path}"),
     }
 
@@ -221,14 +219,14 @@ fn expect_dot_or_bracket(
             *state = State::InKey;
 
             Ok(())
-        }
+        },
         (_, '[') => {
             *state = State::InArrayIndex;
             *index_state = ArrayIndexState::Start;
             *index = 0;
 
             Ok(())
-        }
+        },
         _ => parse_error!("Bad JSON path: {path}"),
     }
 }
@@ -255,7 +253,7 @@ fn finalise<'p>(
                     "*" => parts.push(PathElement::Wildcard),
                     _ => parts.push(PathElement::Key(Cow::Borrowed(key), false)),
                 }
-            }
+            },
         },
         _ => (),
     })
@@ -272,7 +270,7 @@ fn quoted_key<'p>(
         match c {
             '\\' => {
                 path_iter.next();
-            }
+            },
             '"' => {
                 if *key_start < idx {
                     let key = &path[*key_start + 1..idx];
@@ -281,7 +279,7 @@ fn quoted_key<'p>(
 
                     return Ok(());
                 }
-            }
+            },
             _ => continue,
         }
     }
@@ -304,7 +302,7 @@ fn negative_index(
             *index_state = ArrayIndexState::CollectingNumbers;
 
             Ok(())
-        }
+        },
         None => parse_error!("Bad JSON path: {path}"),
     }
 }
@@ -343,19 +341,10 @@ mod tests {
 
         assert!(path.elements.len() == 5);
         assert_eq!(path.elements.first(), Some(&PathElement::Root));
-        assert_eq!(
-            path.elements[1],
-            PathElement::Key(Cow::Borrowed("store"), false)
-        );
-        assert_eq!(
-            path.elements[2],
-            PathElement::Key(Cow::Borrowed("book"), false)
-        );
+        assert_eq!(path.elements[1], PathElement::Key(Cow::Borrowed("store"), false));
+        assert_eq!(path.elements[2], PathElement::Key(Cow::Borrowed("book"), false));
         assert_eq!(path.elements[3], PathElement::ArrayLocator(Some(0)));
-        assert_eq!(
-            path.elements[4],
-            PathElement::Key(Cow::Borrowed("description"), false)
-        )
+        assert_eq!(path.elements[4], PathElement::Key(Cow::Borrowed("description"), false))
     }
 
     #[test]
@@ -367,10 +356,7 @@ mod tests {
         assert_eq!(path.elements[1], PathElement::ArrayLocator(Some(0)));
         assert_eq!(path.elements[2], PathElement::ArrayLocator(Some(1)));
         assert_eq!(path.elements[3], PathElement::ArrayLocator(Some(2)));
-        assert_eq!(
-            path.elements[4],
-            PathElement::Key(Cow::Borrowed("key"), false)
-        );
+        assert_eq!(path.elements[4], PathElement::Key(Cow::Borrowed("key"), false));
         assert_eq!(path.elements[5], PathElement::ArrayLocator(Some(3)));
     }
 
