@@ -3,53 +3,68 @@ use std::{
     mem,
     net::{SocketAddr, TcpListener, TcpStream},
     path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
     thread,
 };
 
 use crate::{
-    db::{DatabaseError, MvccDatabase},
+    db::{Budget, DatabaseError, MvccDatabase},
     storage::engine::Engine,
-    tcp::{
-        pool::ThreadPool,
-        protocol::{self, Response},
-    },
+    tcp::protocol::{self, Response},
 };
+
+/// Connections served at once, PostgreSQL's default `max_connections`: past it a client is told so and disconnected, instead of waiting unanswered
+const MAX_CONNECTIONS: usize = 100;
 
 /// starts the database rooted at the given directory and listens on the given address
 pub fn start<Dir: AsRef<Path>>(address: SocketAddr, dir: Dir) -> Result<(), DatabaseError> {
     start_with_budget(address, dir, None)
 }
 
-/// [start] keeping at most `max_resident_chunks` chunks of 1024 rows in memory
+/// [start] keeping table data in memory within `budget` (by default half the physical memory)
 pub fn start_with_budget<Dir: AsRef<Path>>(
     address: SocketAddr,
     dir: Dir,
-    max_resident_chunks: Option<usize>,
+    budget: Option<Budget>,
 ) -> Result<(), DatabaseError> {
     // the engine is opened once and shared: every connection runs its own
     // session over it, so transactions no longer serialise on a global lock
     // a static lifetime is fine, the engine lives until the process exits
-    let engine: &'static Engine =
-        &*Box::leak(Box::new(MvccDatabase::open_engine(&dir, max_resident_chunks)?));
+    let engine: &'static Engine = &*Box::leak(Box::new(MvccDatabase::open_engine(&dir, budget)?));
     println!("Database initialised on {}", dir.as_ref().display());
 
-    let pool = ThreadPool::new(8);
     let listener = TcpListener::bind(address)?;
     println!("Listening on {address}");
 
-    listener.incoming().for_each(|stream| {
-        pool.execute(|| {
-            let stream = &mut stream.unwrap();
-            stream.set_nodelay(true).unwrap();
+    static CONNECTED: AtomicUsize = AtomicUsize::new(0);
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else {
+            continue;
+        };
 
-            if let Err(err) = handle(stream, engine.clone()) {
+        if CONNECTED.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+            CONNECTED.fetch_sub(1, Ordering::AcqRel);
+            let refusal = format!("too many connections (at most {MAX_CONNECTIONS})");
+            let _ = stream.write_all(
+                &protocol::serialize(&Response::Err(refusal)).expect("an error encodes"),
+            );
+            continue;
+        }
+
+        thread::spawn(move || {
+            let served = stream
+                .set_nodelay(true)
+                .map_err(DatabaseError::Io)
+                .and_then(|_| handle(&mut stream, engine.clone()));
+            if let Err(err) = served {
                 eprintln!(
                     "Error on thread {:?} while processing connection: {err:#?}",
                     thread::current().id()
                 )
             }
-        })
-    });
+            CONNECTED.fetch_sub(1, Ordering::AcqRel);
+        });
+    }
 
     Ok(())
 }
