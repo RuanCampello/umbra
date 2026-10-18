@@ -40,10 +40,11 @@ impl Executor {
         &mut self,
         name: &str,
         table: &str,
-        column: &str,
+        columns: &[String],
         unique: bool,
     ) -> Result<(), DatabaseError> {
-        self.with_txn(|_, txn| Ok(txn.create_index(name, table, column, unique)?))
+        let columns: Vec<_> = columns.iter().map(String::as_str).collect();
+        self.with_txn(|_, txn| Ok(txn.create_index(name, table, &columns, unique)?))
     }
 }
 

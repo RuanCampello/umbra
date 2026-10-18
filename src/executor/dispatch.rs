@@ -112,9 +112,14 @@ impl Executor {
                 Ok(ExecResult::Affected(0))
             },
 
-            Statement::Create(Create::Index { name, table, column, unique }) => {
-                self.create_index(&name, &table, &column, unique)?;
+            Statement::Create(Create::Index { name, table, columns, unique }) => {
+                self.create_index(&name, &table, &columns, unique)?;
                 Ok(ExecResult::Affected(0))
+            },
+
+            Statement::Select(select) if select.from.name.is_empty() => {
+                let (schema, tuples) = self.select_without_table(select)?;
+                Ok(ExecResult::Rows(schema, tuples))
             },
 
             Statement::Select(select) => {

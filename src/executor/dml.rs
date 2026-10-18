@@ -74,7 +74,7 @@ impl Executor {
 
             if collect {
                 let mut row = Vec::with_capacity(typed.len() + 1);
-                row.push(Value::Number(row_id as i128));
+                row.push(Value::Number(row_id as i64));
                 row.extend(typed);
                 written.push(row);
             }
@@ -166,7 +166,7 @@ impl Executor {
 }
 
 impl Executor {
-    /// the foreign keys a write to `table` must keep; `removing` adds those referring to it
+    /// the foreign keys a write to `table` must keep, `removing` adds those referring to it
     fn integrity(
         &self,
         txn: &mut Transaction,
@@ -237,7 +237,7 @@ impl Executor {
                 continue;
             }
 
-            let rows = txn.referencing(view, &reference.referring, reference.column, key);
+            let rows = txn.referencing(view, &reference.referring, reference.column, key)?;
             match (reference.on_delete, rows.is_empty()) {
                 (_, true) => {},
                 (OnDelete::Restrict, _) => {
@@ -273,7 +273,7 @@ impl Integrity {
             if key.is_null() || before.is_some_and(|before| before[reference.column] == *key) {
                 continue;
             }
-            if !txn.referenced(view, &reference.referenced, reference.key, key) {
+            if !txn.referenced(view, &reference.referenced, reference.key, key)? {
                 return Err(violation(reference, key, "refers to no row of"));
             }
         }
@@ -296,7 +296,7 @@ impl Integrity {
             if key.is_null() || after[reference.key] == *key {
                 continue;
             }
-            if !txn.referencing(view, &reference.referring, reference.column, key).is_empty() {
+            if !txn.referencing(view, &reference.referring, reference.column, key)?.is_empty() {
                 return Err(violation(reference, key, "is still referenced from"));
             }
         }
@@ -324,7 +324,7 @@ fn bound_checks(table: &Table) -> Vec<Expression> {
     checks
 }
 
-/// fails when `row` makes one of the table's CHECK predicates false; unknown passes, as in SQL
+/// fails when `row` makes one of the table's CHECK predicates false, unknown passes as in SQL
 fn check(table: &Table, checks: &[Expression], row: &[Value]) -> Result<(), DatabaseError> {
     for (bound, check) in checks.iter().zip(&table.schema.constraints.checks) {
         if resolve_expression(row, &table.schema, bound)? == Value::Boolean(false) {
@@ -365,7 +365,7 @@ fn recheck(
     };
 
     let mut tuple = Vec::with_capacity(latest.len() + 1);
-    tuple.push(Value::Number(row_id as i128));
+    tuple.push(Value::Number(row_id as i64));
     tuple.extend(latest.iter().cloned());
 
     match target.predicate {
@@ -375,7 +375,7 @@ fn recheck(
 }
 
 /// `value` converted to the representation of `column`'s type
-pub(super) fn coerce_value(column: &Column, value: &mut Value) -> Result<(), DatabaseError> {
+pub(crate) fn coerce_value(column: &Column, value: &mut Value) -> Result<(), DatabaseError> {
     use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse, interval::Interval};
     use crate::core::json::{self, Conv};
     use crate::core::numeric::Numeric;
@@ -431,6 +431,10 @@ pub(super) fn coerce_value(column: &Column, value: &mut Value) -> Result<(), Dat
 
         // REAL columns hold f32 precision
         (Type::Real, Value::Float(f)) => *f = *f as f32 as f64,
+        (Type::Real, Value::Number(n)) => *value = Value::Float(*n as f32 as f64),
+        (Type::DoublePrecision, Value::Number(n)) => *value = Value::Float(*n as f64),
+        (Type::Real, Value::Numeric(n)) => *value = Value::Float(f64::from(n.clone()) as f32 as f64),
+        (Type::DoublePrecision, Value::Numeric(n)) => *value = Value::Float(f64::from(n.clone())),
 
         (
             Type::Jsonb,

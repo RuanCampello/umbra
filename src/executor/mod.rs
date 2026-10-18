@@ -222,7 +222,7 @@ mod tests {
         exec
     }
 
-    fn seed(exec: &mut Executor, rows: &[(i128, &str)]) {
+    fn seed(exec: &mut Executor, rows: &[(i64, &str)]) {
         let values = rows
             .iter()
             .map(|&(id, name)| vec![Value::Number(id), Value::String(name.into())])
@@ -245,18 +245,21 @@ mod tests {
 
     fn select(table: &str) -> Select {
         Select {
+            distinct: false,
             columns: vec![Expression::Wildcard],
             from: TableRef { name: table.into(), alias: None },
             joins: vec![],
             r#where: None,
             order_by: vec![],
             group_by: vec![],
+            having: None,
+            combined: Vec::new(),
             limit: None,
             offset: None,
         }
     }
 
-    fn id_equals(id: i128) -> Expression {
+    fn id_equals(id: i64) -> Expression {
         Expression::BinaryOperation {
             left: Box::new(Expression::Identifier("id".into())),
             operator: BinaryOperator::Eq,
