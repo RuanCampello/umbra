@@ -5,13 +5,6 @@ use crate::db::Schema;
 pub(crate) struct TableMetadata {
     pub name: String,
     pub schema: Schema,
-    pub indexes: Vec<IndexMetadata>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct IndexMetadata {
-    pub name: String,
-    pub(crate) unique: bool,
 }
 
 #[macro_export]

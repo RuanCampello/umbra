@@ -1,215 +1,49 @@
-use crate::collections::hash::{BuildHasher, HashMap};
+use crate::collections::hash::HashMap;
 use crate::db::DatabaseError;
 use crate::db::{Ctx, SqlError, TableMetadata};
 
-#[derive(Debug)]
-pub(crate) struct Context {
-    /// Maps table name to the index in the `entries` vector.
-    map: HashMap<String, usize>,
-    /// Arena storage for the linked list nodes.
-    entries: Vec<Option<Entry>>,
-    /// Index of the Most Recently Used item.
-    head: Option<usize>,
-    /// Index of the Least Recently Used item.
-    tail: Option<usize>,
-    /// Stack of free indices in `entries` to reuse memory.
-    free_indices: Vec<usize>,
-    /// Maximum capacity of the cache.
-    capacity: usize,
-}
-
-/// Node for the `LRU` doubly linked list.
-#[derive(Debug)]
-struct Entry {
-    key: String,
-    value: TableMetadata,
-    prev: Option<usize>,
-    next: Option<usize>,
-}
+/// The tables a session has resolved since the catalogue last changed
+#[derive(Debug, Default)]
+pub(crate) struct Context(HashMap<String, TableMetadata>);
 
 impl Context {
-    #[cfg(test)]
-    pub fn new() -> Self {
-        use crate::db::DEFAULT_CACHE_SIZE;
-
-        Self::with_size(DEFAULT_CACHE_SIZE)
-    }
-
-    pub fn with_size(capacity: usize) -> Self {
-        Self {
-            map: HashMap::with_capacity_and_hasher(capacity, BuildHasher),
-            entries: Vec::with_capacity(capacity),
-            head: None,
-            tail: None,
-            free_indices: Vec::new(),
-            capacity,
-        }
-    }
-
-    /// Inserts a table metadata into the context.
-    /// If the table already exists, it updates it and moves it to the head (MRU).
-    /// If the cache is full, it evicts the tail (LRU).
     pub fn insert(&mut self, metadata: TableMetadata) {
-        let key = metadata.name.clone();
-
-        match self.map.get(&key) {
-            Some(&idx) => {
-                if let Some(entry) = &mut self.entries[idx] {
-                    entry.value = metadata;
-                }
-
-                self.move_to_head(idx);
-            },
-
-            _ => {
-                if self.map.len() >= self.capacity {
-                    self.evict_tail();
-                }
-
-                let index = match self.free_indices.pop() {
-                    Some(idx) => idx,
-                    _ => {
-                        let idx = self.entries.len();
-                        self.entries.push(None);
-                        idx
-                    },
-                };
-
-                let entry = Entry { key: key.clone(), value: metadata, prev: None, next: None };
-
-                self.entries[index] = Some(entry);
-                self.map.insert(key, index);
-                self.push_front(index);
-            },
-        }
+        self.0.insert(metadata.name.clone(), metadata);
     }
 
-    /// Checks if the context contains a table.
-    /// This does NOT update the LRU order (peek operation).
-    pub(super) fn contains(&self, table: &str) -> bool {
-        self.map.contains_key(table)
+    pub fn contains(&self, table: &str) -> bool {
+        self.0.contains_key(table)
     }
 
-    fn move_to_head(&mut self, index: usize) {
-        if self.head == Some(index) {
-            return;
-        }
-        self.remove_node(index);
-        self.push_front(index);
-    }
-
-    fn push_front(&mut self, index: usize) {
-        // current head becomes next of new node
-        if let Some(entry) = &mut self.entries[index] {
-            entry.next = self.head;
-            entry.prev = None;
-        }
-
-        match self.head {
-            Some(head_idx) => {
-                if let Some(head_entry) = &mut self.entries[head_idx] {
-                    head_entry.prev = Some(index);
-                }
-            },
-            _ => self.tail = Some(index),
-        }
-
-        self.head = Some(index);
-    }
-
-    fn remove_node(&mut self, index: usize) {
-        let (prev, next) = {
-            let entry = self.entries[index].as_ref().expect("Node should exist");
-            (entry.prev, entry.next)
-        };
-
-        match prev {
-            Some(prev_idx) => {
-                if let Some(prev_entry) = &mut self.entries[prev_idx] {
-                    prev_entry.next = next;
-                }
-            },
-            _ => self.head = next,
-        }
-
-        match next {
-            Some(next_idx) => {
-                if let Some(next_entry) = &mut self.entries[next_idx] {
-                    next_entry.prev = prev;
-                }
-            },
-            _ => self.tail = prev,
-        }
-    }
-
-    fn evict_tail(&mut self) {
-        if let Some(tail_idx) = self.tail {
-            let key_to_remove = self.entries[tail_idx].as_ref().unwrap().key.clone();
-            self.remove_node(tail_idx);
-            self.map.remove(&key_to_remove);
-            self.entries[tail_idx] = None;
-            self.free_indices.push(tail_idx);
-        }
+    pub fn clear(&mut self) {
+        self.0.clear();
     }
 }
 
-/// Test-only implementation: clones everything for simplicity
 #[cfg(test)]
 impl TryFrom<&[&str]> for Context {
     type Error = DatabaseError;
 
     fn try_from(statements: &[&str]) -> Result<Self, Self::Error> {
-        let mut context = Self::new();
+        use crate::db::Schema;
+        use crate::sql::{
+            parser::Parser,
+            statement::{Create, Statement},
+        };
+
+        let mut context = Self::default();
 
         for sql in statements {
-            use crate::sql::{
-                parser::Parser,
-                statement::{Create, Statement},
-            };
-
-            let statement = Parser::new(sql).parse_statement()?;
-            match statement {
+            match Parser::new(sql).parse_statement()? {
                 Statement::Create(Create::Table { name, columns }) => {
-                    use crate::db::Schema;
-
                     let mut schema = Schema::from_definition(&columns);
                     schema.prepend_id();
-
-                    let mut metadata = TableMetadata {
-                        name: name.clone(),
-                        schema,
-                        indexes: vec![],
-                    };
-
-                    columns.iter().for_each(|col| {
-                        col.constraints.iter().for_each(|constraint| {
-                            use crate::{db::IndexMetadata, index, sql::statement::Constraint};
-
-                            let index = match constraint {
-                                Constraint::Unique => index!(unique on name (col.name)),
-                                Constraint::PrimaryKey => index!(primary on (name)),
-                                _ => unreachable!("This ain't a index")
-                            };
-
-                            metadata.indexes.push(IndexMetadata {
-                                name: index,
-                                unique: true,
-                            });
-                        })
-                    });
-
-                    context.insert(metadata);
-                }
-                Statement::Create(Create::Index { name, unique, .. }) if unique => {
-                    use crate::db::IndexMetadata;
-
-                    let table = context.metadata(&name)?;
-                    table.indexes.push(IndexMetadata { name, unique });
-                }
-
-                statement => {
-                    return Err(SqlError::Other(format!("Only create unique index and create table should be called by test context, but found {statement:#?}")).into())
-                }
+                    context.insert(TableMetadata { name, schema });
+                },
+                stmt => {
+                    let msg = format!("a test context takes CREATE TABLE only, found {stmt:#?}");
+                    return Err(SqlError::Other(msg).into());
+                },
             }
         }
 
@@ -218,18 +52,13 @@ impl TryFrom<&[&str]> for Context {
 }
 
 impl Ctx for Context {
-    fn next_serial(&mut self, _table: &str, _column: usize) -> Result<i128, DatabaseError> {
+    fn next_serial(&mut self, _table: &str, _column: usize) -> Result<i64, DatabaseError> {
         Ok(1)
     }
 
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata, DatabaseError> {
-        self.map
-            .get(table)
-            .copied()
+        self.0
+            .get_mut(table)
             .ok_or_else(|| SqlError::InvalidTable(table.to_string()).into())
-            .map(|index| {
-                self.move_to_head(index);
-                &mut self.entries[index].as_mut().unwrap().value
-            })
     }
 }

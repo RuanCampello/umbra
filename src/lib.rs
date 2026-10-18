@@ -1,27 +1,20 @@
 #![allow(clippy::result_large_err)]
 
-//! # Umbra Database Architecture
+//! # Umbra
 //!
-//! Umbra is an embeddable, relational database built from scratch in Rust. It follows a classic
-//! database architecture split into two main components:
+//! A relational database built from scratch in Rust, without dependencies
 //!
-//! 1. **Storage Engine (`core::storage`)**: Manages data persistence, memory caching, and low-level data structures.
-//!    - Inspired by SQLite and PostgreSQL.
-//!    - Uses **Slotted Pages** (4KB default) as the fundamental unit of storage.
-//!    - Implements a **B+Tree** for tables and indexes.
-//!    - Manages concurrency and IO via a **Pager** and **Buffer Pool** (Cache).
-//!
-//! 2. **Query Engine (`sql` & `vm`)**: Handles the interpretation and execution of SQL queries.
-//!    - **Parsing**: Tokenizes and parses SQL into an Abstract Syntax Tree (AST).
-//!    - **Analysis**: Validates the AST against the system catalog (schema).
-//!    - **Optimisation**: Simplifies expressions and selects index strategies.
-//!    - **Execution**: Uses a Volcano-style iterator model (pull-based) to execute the plan.
-//!
-//! ## Key Modules
-//! - [`sql`]: The SQL compilation pipeline (Text -> AST -> Plan).
-//! - [`vm`]: The Virtual Machine (actually a plan-tree) that executes the query plans.
-//! - [`core`]: The Storage Engine, Type System, and foundational utilities.
-//! - [`db`]: The user-facing API and transaction management.
+//! - [sql]: tokenizer, parser, analyser, rule-based optimiser and statement preparation
+//! - [executor]: plans and runs statements inside a session's transaction: scans, index lookups,
+//!   joins, grouping, sorting, spilling to disk when memory runs short
+//! - [vm]: expression evaluation
+//! - [storage::engine]: the MVCC engine. Rows live in memory as version chains inside chunks of
+//!   1024 slots. Commits go through a group-committed redo log, checkpoints write images of the
+//!   tables, and recovery loads the newest image and replays the log after it. Snapshot isolation by
+//!   default, READ COMMITTED and SERIALIZABLE on request, and no transaction ever waits
+//! - [db]: sessions ([db::MvccDatabase]), results and errors
+//! - [tcp]: the wire protocol and server
+//! - [core]: the value types (numeric, date, interval, UUID, JSONB) and CRC32C
 
 use db::DatabaseError;
 
