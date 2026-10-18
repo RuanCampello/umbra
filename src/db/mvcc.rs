@@ -1,14 +1,15 @@
 //! MVCC-backed database session
 
 use crate::db::{
-    self, Context, Ctx, DatabaseError, QuerySet, Result, Schema, SqlError, TableMetadata,
+    Budget, Context, Ctx, DatabaseError, QuerySet, Result, Schema, SqlError, TableMetadata,
 };
-use crate::executor::Executor;
-use crate::executor::dispatch::ExecResult;
-use crate::sql;
-use crate::sql::analyzer::AnalyzerError;
-use crate::sql::parser::Parser;
-use crate::sql::statement::{Statement, Value};
+use crate::executor::{Executor, dispatch::ExecResult};
+use crate::sql::{
+    self,
+    analyzer::AnalyzerError,
+    parser::Parser,
+    statement::{BinaryOperator, Expression, Function, Select, SetOperator, Statement, Value},
+};
 use crate::storage::engine::{Config, Engine};
 use std::path::Path;
 
@@ -31,10 +32,10 @@ impl MvccDatabase {
         Ok(Self::with_engine(Self::open_engine(dir, None)?, true))
     }
 
-    /// [MvccDatabase::init] keeping at most `chunks` chunks of 1024 rows in memory
-    /// colder settled chunks are evicted to disk and reloaded on demand
-    pub fn init_with_budget(dir: impl AsRef<Path>, chunks: usize) -> Result<Self> {
-        Ok(Self::with_engine(Self::open_engine(dir, Some(chunks))?, true))
+    /// [MvccDatabase::init] keeping table data in memory within `budget` (by default half the
+    /// physical memory): colder settled chunks are evicted to disk and reloaded on demand
+    pub fn init_with_budget(dir: impl AsRef<Path>, budget: Budget) -> Result<Self> {
+        Ok(Self::with_engine(Self::open_engine(dir, Some(budget))?, true))
     }
 
     pub fn in_memory() -> Result<Self> {
@@ -46,11 +47,9 @@ impl MvccDatabase {
 
     /// opens and recovers a durable engine, returning the shared handle so
     /// several sessions can be spawned over it with [MvccDatabase::connect]
-    pub(crate) fn open_engine(
-        dir: impl AsRef<Path>,
-        max_resident_chunks: Option<usize>,
-    ) -> Result<Engine> {
-        let config = Config { max_resident_chunks, ..Config::default() };
+    pub(crate) fn open_engine(dir: impl AsRef<Path>, budget: Option<Budget>) -> Result<Engine> {
+        let default = Config::default();
+        let config = Config { budget: budget.or(default.budget), ..default };
         let engine = Engine::open(dir, config.clone())?;
         engine.start_maintenance(config.maintenance_interval);
 
@@ -82,7 +81,7 @@ impl MvccDatabase {
 
         Self {
             executor: Executor::new(engine),
-            context: Context::with_size(db::DEFAULT_CACHE_SIZE),
+            context: Context::default(),
             epoch,
             owns_engine,
         }
@@ -93,7 +92,7 @@ impl MvccDatabase {
     fn sync_schema_epoch(&mut self) {
         let epoch = self.executor.engine().epoch();
         if epoch != self.epoch {
-            self.context = Context::with_size(db::DEFAULT_CACHE_SIZE);
+            self.context.clear();
             self.epoch = epoch;
         }
     }
@@ -130,7 +129,7 @@ impl MvccDatabase {
         );
         let result = self.executor.execute(statement);
         if catalogue {
-            self.context = Context::with_size(db::DEFAULT_CACHE_SIZE);
+            self.context.clear();
         }
 
         result
@@ -138,19 +137,49 @@ impl MvccDatabase {
 
     pub fn exec(&mut self, input: &str) -> Result<QuerySet> {
         self.sync_schema_epoch();
-        let statement = sql::pipeline(input, self)?;
+        let mut statement = Parser::new(input).parse_statement()?;
 
-        if let Statement::Source(path) = statement {
-            self.load(path)?;
-            return Ok(QuerySet::empty());
+        // its subqueries and union members read the snapshot of the statement around them
+        let union = matches!(&statement, Statement::Select(select) if !select.combined.is_empty());
+        let implicit = !self.active_transaction()
+            && (union || statement.expressions_mut().iter().any(|expr| expr.contains_subquery()));
+        if !implicit {
+            return self.run(statement);
         }
 
-        let result = self.execute(statement)?;
+        self.execute(Statement::StartTransaction(None))?;
+        match self.run(statement) {
+            Ok(result) => self.execute(Statement::Commit).map(|_| result),
+            Err(error) => {
+                let _ = self.rollback();
+                Err(error)
+            },
+        }
+    }
+
+    fn run(&mut self, mut statement: Statement) -> Result<QuerySet> {
+        let result = match statement {
+            Statement::Select(select) if !select.combined.is_empty() => self.union(select)?,
+            _ => {
+                let outer = outer_tables(&statement);
+                for expr in statement.expressions_mut() {
+                    self.materialise(expr, &outer)?;
+                }
+                let statement = sql::process_statement(statement, self)?;
+
+                if let Statement::Source(path) = statement {
+                    self.load(path)?;
+                    return Ok(QuerySet::empty());
+                }
+
+                self.execute(statement)?
+            },
+        };
         self.sync_schema_epoch();
 
         Ok(match result {
             ExecResult::Rows(schema, tuples) => {
-                // an estimate is enough for the guard; exact sizes are for the wire protocol
+                // an estimate is enough for the guard, exact sizes are for the wire protocol
                 let mut total_size = 0;
                 for tuple in &tuples {
                     total_size += tuple.iter().map(sql::Value::serialised_size_hint).sum::<usize>();
@@ -168,10 +197,190 @@ impl MvccDatabase {
             },
             // the wire protocol reads the affected-row count from a schema-less single value
             ExecResult::Affected(count) => {
-                QuerySet::new(Schema::empty(), vec![vec![Value::Number(count as i128)]])
+                QuerySet::new(Schema::empty(), vec![vec![Value::Number(count as i64)]])
             },
             ExecResult::Ok => QuerySet::empty(),
         })
+    }
+
+    /// runs the uncorrelated subqueries in `expr` and puts their results in their place: a value
+    /// list for `IN`, a boolean for `EXISTS`, the single value of a scalar subquery
+    /// an `EXISTS` correlated with `outer` by one equality is first rewritten as a semi-join, see [semi_join]
+    fn materialise(&mut self, expr: &mut Expression, outer: &[String]) -> Result<()> {
+        let semi = match &*expr {
+            Expression::Function { func: Function::Exists, args } => match args.first() {
+                Some(Expression::Subquery(select)) => semi_join(select, outer),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(semi) = semi {
+            *expr = semi;
+        }
+
+        match expr {
+            Expression::Function { func: Function::In, args }
+                if matches!(args.get(1), Some(Expression::Subquery(_))) =>
+            {
+                self.materialise(&mut args[0], outer)?;
+                let Some(Expression::Subquery(select)) = args.pop() else {
+                    unreachable!("matched above")
+                };
+
+                let rows = self.subquery(*select)?;
+                match rows.is_empty() {
+                    // nothing is in an empty set, not even NULL
+                    true => *expr = Expression::Value(Value::Boolean(false)),
+                    _ => args.extend(
+                        rows.into_iter().map(|mut row| Expression::Value(row.swap_remove(0))),
+                    ),
+                }
+            },
+            Expression::Function { func: Function::Exists, args } => {
+                let Some(Expression::Subquery(mut select)) = args.pop() else {
+                    unreachable!("EXISTS is parsed over a subquery")
+                };
+
+                select.limit = Some(1);
+                let found = !self.subquery_rows(*select)?.is_empty();
+                *expr = Expression::Value(Value::Boolean(found));
+            },
+            Expression::Subquery(_) => {
+                let Expression::Subquery(select) = std::mem::take(expr) else {
+                    unreachable!("matched above")
+                };
+                let mut rows = self.subquery(*select)?;
+                *expr = match rows.len() {
+                    0 => Expression::Value(Value::Null),
+                    1 => Expression::Value(rows.swap_remove(0).swap_remove(0)),
+                    _ => {
+                        let msg = "more than one row returned by a subquery used as an expression";
+                        return Err(DatabaseError::Sql(SqlError::Other(msg.into())));
+                    },
+                };
+            },
+            Expression::Function { args, .. } => {
+                args.iter_mut().try_for_each(|arg| self.materialise(arg, outer))?
+            },
+            Expression::BinaryOperation { left, right, .. } => {
+                self.materialise(left, outer)?;
+                self.materialise(right, outer)?;
+            },
+            Expression::UnaryOperation { expr, .. }
+            | Expression::Nested(expr)
+            | Expression::Alias { expr, .. }
+            | Expression::IsNull { expr, .. } => self.materialise(expr, outer)?,
+            _ => {},
+        }
+
+        Ok(())
+    }
+
+    /// the rows of a subquery that must return one column
+    fn subquery(&mut self, select: Select) -> Result<Vec<Vec<Value>>> {
+        let rows = self.subquery_rows(select)?;
+        match rows.first().is_some_and(|row| row.len() != 1) {
+            true => Err(DatabaseError::Sql(SqlError::Other(
+                "subquery must return only one column".into(),
+            ))),
+            false => Ok(rows),
+        }
+    }
+
+    fn subquery_rows(&mut self, select: Select) -> Result<Vec<Vec<Value>>> {
+        self.select_rows(select).map(|(_, rows)| rows)
+    }
+
+    /// a select through the whole pipeline, its subqueries and unions included
+    fn select_rows(&mut self, select: Select) -> Result<(Schema, Vec<Vec<Value>>)> {
+        if !select.combined.is_empty() {
+            return match self.union(select)? {
+                ExecResult::Rows(schema, rows) => Ok((schema, rows)),
+                _ => unreachable!("a union returns rows"),
+            };
+        }
+
+        let mut statement = Statement::Select(select);
+        let outer = outer_tables(&statement);
+        for expr in statement.expressions_mut() {
+            self.materialise(expr, &outer)?;
+        }
+
+        let statement = sql::process_statement(statement, self)?;
+        match self.execute(statement)? {
+            ExecResult::Rows(schema, rows) => Ok((schema, rows)),
+            _ => unreachable!("a select returns rows"),
+        }
+    }
+
+    /// runs each member of a set operation as its own select and combines them: `INTERSECT` runs
+    /// first, binding tighter, then `UNION` and `EXCEPT` left to right
+    /// without `ALL` the result so far loses its duplicates
+    /// `ORDER BY` names output columns, by name or position
+    fn union(&mut self, mut head: Select) -> Result<ExecResult> {
+        let members = std::mem::take(&mut head.combined);
+        let order_by = std::mem::take(&mut head.order_by);
+        let (limit, offset) = (head.limit.take(), head.offset.take());
+
+        let (schema, rows) = self.select_rows(head)?;
+        let mut terms = vec![(SetOperator::Union, true, rows)];
+        for (operator, all, member) in members {
+            let (columns, member_rows) = self.select_rows(member)?;
+            if columns.len() != schema.len() {
+                let message = format!("each {operator} query must have the same number of columns");
+                return Err(DatabaseError::Sql(SqlError::Other(message)));
+            }
+
+            match operator {
+                SetOperator::Intersect => {
+                    let (_, _, term) = terms.last_mut().expect("the head is a term");
+                    *term = combine(std::mem::take(term), member_rows, operator, all);
+                },
+                _ => terms.push((operator, all, member_rows)),
+            }
+        }
+
+        let mut terms = terms.into_iter();
+        let (_, _, mut rows) = terms.next().expect("the head is a term");
+        for (operator, all, term) in terms {
+            rows = combine(rows, term, operator, all);
+        }
+
+        let keys = order_by
+            .iter()
+            .map(|order| {
+                let position = match &order.expr {
+                    Expression::Identifier(name) => schema.index_of(name),
+                    Expression::Value(Value::Number(n)) => {
+                        usize::try_from(*n - 1).ok().filter(|&p| p < schema.len())
+                    },
+                    _ => None,
+                };
+                let descending = order.direction == crate::sql::statement::OrderDirection::Desc;
+                position.map(|position| (position, descending)).ok_or_else(|| {
+                    let message =
+                        format!("ORDER BY {} must name an output column of the UNION", order.expr);
+                    DatabaseError::Sql(SqlError::Other(message))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        rows.sort_by(|a, b| {
+            keys.iter()
+                .map(|&(position, descending)| match descending {
+                    true => b[position].cmp(&a[position]),
+                    false => a[position].cmp(&b[position]),
+                })
+                .find(|order| order.is_ne())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let rows = rows
+            .into_iter()
+            .skip(offset.unwrap_or(0))
+            .take(limit.unwrap_or(usize::MAX))
+            .collect();
+        Ok(ExecResult::Rows(schema, rows))
     }
 
     pub fn active_transaction(&self) -> bool {
@@ -215,23 +424,22 @@ impl Ctx for MvccDatabase {
             self.context.insert(TableMetadata {
                 name: handle.name().to_string(),
                 schema: handle.schema.clone(),
-                indexes: Vec::new(),
             });
         }
 
-        self.context.metadata(table)
+        Ctx::metadata(&mut self.context, table)
     }
 
-    fn next_serial(&mut self, table: &str, column: usize) -> Result<i128> {
+    fn next_serial(&mut self, table: &str, column: usize) -> Result<i64> {
         let handle = self
             .executor
             .session_table(table)
             .map_err(|_| DatabaseError::Sql(SqlError::InvalidTable(table.into())))?;
-        let value = handle.next_serial(column) as i128;
+        let value = handle.next_serial(column) as i64;
         let data_type = handle.schema.columns[column].column_type();
         let max = data_type.max();
 
-        match value > max as i128 {
+        match value > max as i64 {
             true => Err(AnalyzerError::Overflow(data_type, max).into()),
             false => Ok(value),
         }
@@ -250,7 +458,7 @@ mod tests {
 
         owner.exec("CREATE TABLE t (id SERIAL PRIMARY KEY, v INT);").unwrap();
 
-        // the session predates the table; the schema epoch bump makes it visible
+        // the session predates the table, the schema epoch bump makes it visible
         session.exec("INSERT INTO t (v) VALUES (10);").unwrap();
         let rows = owner.exec("SELECT v FROM t;").unwrap();
         assert_eq!(rows.tuples.len(), 1);
@@ -291,4 +499,164 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), 200, "no serial value handed out twice");
     }
+}
+
+/// the names the tables of `statement` go by, which a subquery inside it may refer to
+fn outer_tables(statement: &Statement) -> Vec<String> {
+    match statement {
+        Statement::Select(select) => std::iter::once(&select.from)
+            .chain(select.joins.iter().map(|join| &join.table))
+            .map(|table| table.key().to_string())
+            .collect(),
+        Statement::Update(update) => vec![update.table.clone()],
+        Statement::Delete(delete) => vec![delete.from.clone()],
+        Statement::Explain(inner) => outer_tables(inner),
+        _ => Vec::new(),
+    }
+}
+
+/// `EXISTS (SELECT .. FROM inner WHERE o.c = e AND rest)`, the subquery correlated only by that
+/// one equality (`o` an outer table no inner one shadows, `e` reading the inner tables), as the
+/// uncorrelated `o.c IS NOT NULL AND o.c IN (SELECT DISTINCT e .. WHERE rest AND e IS NOT NULL)`
+/// it is never NULL, so `NOT EXISTS` stays exact
+/// a subquery that groups, aggregates, limits or combines always has a row or decides which, and is left alone
+fn semi_join(select: &Select, outer: &[String]) -> Option<Expression> {
+    let simple = select.group_by.is_empty()
+        && select.having.is_none()
+        && select.limit.is_none()
+        && select.offset.is_none()
+        && select.combined.is_empty()
+        && !select.columns.iter().any(sql::analyzer::contains_aggregate);
+    if !simple {
+        return None;
+    }
+
+    let inner: Vec<_> = std::iter::once(&select.from)
+        .chain(select.joins.iter().map(|join| &join.table))
+        .map(|table| table.key())
+        .collect();
+    let correlated: Vec<_> =
+        outer.iter().map(String::as_str).filter(|name| !inner.contains(name)).collect();
+    let mentions = |expr: &Expression| refers_to(expr, &correlated);
+    if select.joins.iter().any(|join| mentions(&join.on)) {
+        return None;
+    }
+
+    let mut conjuncts = Vec::new();
+    let mut pending = select.r#where.iter().collect::<Vec<_>>();
+    while let Some(conjunct) = pending.pop() {
+        match conjunct {
+            Expression::BinaryOperation { left, operator: BinaryOperator::And, right } => {
+                pending.extend([right.as_ref(), left.as_ref()])
+            },
+            Expression::Nested(inner) => pending.push(inner),
+            other => conjuncts.push(other),
+        }
+    }
+
+    let mut link = None;
+    let mut rest = Vec::new();
+    for conjunct in conjuncts {
+        let pair = match conjunct {
+            Expression::BinaryOperation { left, operator: BinaryOperator::Eq, right } => {
+                Some((left.as_ref(), right.as_ref()))
+            },
+            _ => None,
+        };
+        let outer_side = |side: &Expression| matches!(side, Expression::QualifiedIdentifier { table, .. } if correlated.contains(&table.as_str()));
+        match pair {
+            Some((left, right)) if link.is_none() && outer_side(left) && !mentions(right) => {
+                link = Some((left.clone(), right.clone()))
+            },
+            Some((left, right)) if link.is_none() && outer_side(right) && !mentions(left) => {
+                link = Some((right.clone(), left.clone()))
+            },
+            _ if mentions(conjunct) => return None,
+            _ => rest.push(conjunct.clone()),
+        }
+    }
+    let (outer_column, inner_value) = link?;
+
+    let present = Expression::IsNull { expr: Box::new(inner_value.clone()), negated: true };
+    let r#where = rest.into_iter().fold(present, |all, conjunct| Expression::BinaryOperation {
+        left: Box::new(all),
+        operator: BinaryOperator::And,
+        right: Box::new(conjunct),
+    });
+    let mut subquery = select.clone();
+
+    subquery.distinct = true;
+    subquery.columns = vec![inner_value];
+    subquery.r#where = Some(r#where);
+    subquery.order_by.clear();
+
+    let within = Expression::Function {
+        func: Function::In,
+        args: vec![outer_column.clone(), Expression::Subquery(Box::new(subquery))],
+    };
+    Some(Expression::BinaryOperation {
+        left: Box::new(Expression::IsNull { expr: Box::new(outer_column), negated: true }),
+        operator: BinaryOperator::And,
+        right: Box::new(within),
+    })
+}
+
+/// whether `expr` names a column of one of `tables`, a nested subquery counts as naming them
+fn refers_to(expr: &Expression, tables: &[&str]) -> bool {
+    match expr {
+        Expression::QualifiedIdentifier { table, .. } => tables.contains(&table.as_str()),
+        Expression::Path { head, .. } => tables.contains(&head.as_str()),
+        Expression::Subquery(_) => true,
+        Expression::UnaryOperation { expr, .. }
+        | Expression::IsNull { expr, .. }
+        | Expression::Nested(expr)
+        | Expression::Alias { expr, .. } => refers_to(expr, tables),
+        Expression::BinaryOperation { left, right, .. } => {
+            refers_to(left, tables) || refers_to(right, tables)
+        },
+        Expression::Function { args, .. } => args.iter().any(|arg| refers_to(arg, tables)),
+        Expression::Identifier(_)
+        | Expression::Value(_)
+        | Expression::Wildcard
+        | Expression::Column(_)
+        | Expression::JsonPath { .. } => false,
+    }
+}
+
+/// `left operator right`, multiplicities as SQL defines them: without `ALL` the result is a set,
+/// with it `INTERSECT ALL` keeps the lesser count of a row and `EXCEPT ALL` the difference
+fn combine(
+    mut left: Vec<Vec<Value>>,
+    right: Vec<Vec<Value>>,
+    operator: SetOperator,
+    all: bool,
+) -> Vec<Vec<Value>> {
+    use crate::collections::hash::{HashMap, HashSet};
+    match operator {
+        SetOperator::Union => left.extend(right),
+        SetOperator::Intersect | SetOperator::Except => {
+            let mut counts: HashMap<Vec<Value>, usize> = HashMap::default();
+            for row in right {
+                *counts.entry(row).or_default() += 1;
+            }
+            left.retain(|row| match (operator, counts.get_mut(row)) {
+                (SetOperator::Intersect, Some(count)) if *count > 0 => {
+                    *count -= all as usize;
+                    true
+                },
+                (SetOperator::Intersect, _) => false,
+                (_, Some(count)) if *count > 0 => {
+                    *count -= all as usize;
+                    false
+                },
+                (_, _) => true,
+            });
+        },
+    }
+
+    if !all {
+        let mut seen = HashSet::default();
+        left.retain(|row| seen.insert(row.clone()));
+    }
+    left
 }
