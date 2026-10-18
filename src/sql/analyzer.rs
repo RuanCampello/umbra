@@ -5,17 +5,19 @@
 //! besides from edge cases like [division by zero](crate::vm::expression::VmError), overflow, et cetera.
 
 use super::statement::{Delete, Insert, Select, Update};
+use crate::collections::hash::{HashMap, HashSet};
 use crate::core::date::interval::Interval;
 use crate::core::date::{NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
-use crate::db::{Ctx, DB_METADATA, DatabaseError, ROW_COL_ID, Schema, SqlError, TableMetadata};
+use crate::db::{
+    self, Ctx, DB_METADATA, DatabaseError, ROW_COL_ID, Schema, SqlError, TableMetadata,
+};
 use crate::sql::statement::{
-    BinaryOperator, Constraint, Create, Drop, Expression, NUMERIC_ANY, Statement, Type,
+    BinaryOperator, Constraint, Create, Drop, Expression, Function, NUMERIC_ANY, Statement, Type,
     UnaryOperator, Value,
 };
 use crate::vm::expression::{TypeError, VmType};
-use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -26,7 +28,13 @@ struct JoinCtx<'s> {
 
 #[derive(Debug, PartialEq)]
 pub enum AnalyzerError {
-    MissingCols,
+    /// A row gives a number of values other than the columns it targets
+    ValueCount {
+        columns: usize,
+        values: usize,
+    },
+    /// An omitted column that is neither nullable, generated nor defaulted
+    MissingColumn(String),
     DuplicateCols(String),
     MultiplePrimaryKeys,
     AlreadyExists(AlreadyExists),
@@ -39,7 +47,6 @@ pub enum AnalyzerError {
 #[derive(Debug, PartialEq)]
 pub enum AlreadyExists {
     Table(String),
-    Index(String),
 }
 
 type AnalyzerResult<'exp, T> = Result<T, DatabaseError>;
@@ -69,7 +76,7 @@ pub(in crate::sql) fn analyze<'s>(
             };
 
             let mut primary_key = false;
-            let mut duplicates = HashSet::new();
+            let mut duplicates = HashSet::default();
 
             for col in columns {
                 if !duplicates.insert(&col.name) {
@@ -93,7 +100,6 @@ pub(in crate::sql) fn analyze<'s>(
             let table = TableMetadata {
                 name: name.to_string(),
                 schema: Schema::from_definition(columns),
-                indexes: Vec::new(),
             };
             for col in columns {
                 for constraint in &col.constraints {
@@ -141,11 +147,15 @@ pub(in crate::sql) fn analyze<'s>(
             }
         },
 
-        Statement::Create(Create::Index { table, name, .. }) => {
+        Statement::Create(Create::Index { table, columns, .. }) => {
             let metadata = ctx.metadata(table)?;
-
-            if metadata.indexes.iter().any(|idx| idx.name.eq(name)) {
-                return Err(AnalyzerError::AlreadyExists(AlreadyExists::Index(name.into())).into());
+            for (position, column) in columns.iter().enumerate() {
+                if metadata.schema.index_of(column).is_none() {
+                    return Err(SqlError::InvalidColumn(column.clone()).into());
+                }
+                if columns[..position].contains(column) {
+                    return Err(AnalyzerError::DuplicateCols(column.clone()).into());
+                }
             }
         },
 
@@ -155,50 +165,57 @@ pub(in crate::sql) fn analyze<'s>(
                 return Err(AnalyzerError::MetadataAssignment.into());
             }
 
-            let key = &metadata.schema.columns[..1];
-            let columns_provided_by_user = !columns.is_empty();
-
-            let columns: Vec<_> = match !columns_provided_by_user {
-                true => key
+            // without a column list, values fill the columns in order and the rest is omitted
+            let positional = columns.is_empty();
+            let columns: Vec<_> = match positional {
+                true => metadata
+                    .schema
+                    .columns
                     .iter()
-                    .filter(|col| col.name().ne(ROW_COL_ID) && !col.is_nullable())
                     .map(|col| col.name())
+                    .filter(|name| *name != ROW_COL_ID)
                     .collect(),
                 _ => columns.iter().map(String::as_str).collect(),
             };
 
+            for (position, &col) in columns.iter().enumerate() {
+                if col.eq(ROW_COL_ID) {
+                    return Err(AnalyzerError::MetadataAssignment.into());
+                }
+                if metadata.schema.index_of(col).is_none() {
+                    return Err(SqlError::InvalidColumn(col.into()).into());
+                }
+                if columns[..position].contains(&col) {
+                    return Err(AnalyzerError::DuplicateCols(col.into()).into());
+                }
+            }
+
             for row in rows {
-                if columns_provided_by_user && row.len().ne(&columns.len()) {
-                    return Err(AnalyzerError::MissingCols.into());
-                }
+                let given = match (positional, row.len().cmp(&columns.len())) {
+                    (_, std::cmp::Ordering::Equal) | (true, std::cmp::Ordering::Less) => {
+                        &columns[..row.len()]
+                    },
+                    _ => {
+                        return Err(AnalyzerError::ValueCount {
+                            columns: columns.len(),
+                            values: row.len(),
+                        }
+                        .into());
+                    },
+                };
 
-                for (position, &col) in columns.iter().enumerate() {
-                    if col.eq(ROW_COL_ID) {
-                        return Err(AnalyzerError::MetadataAssignment.into());
-                    }
-                    if metadata.schema.index_of(col).is_none() {
-                        return Err(SqlError::InvalidColumn(col.into()).into());
-                    }
-                    if columns[..position].contains(&col) {
-                        return Err(AnalyzerError::DuplicateCols(col.into()).into());
-                    }
-                }
-
-                for col in key {
-                    if col.name() == ROW_COL_ID {
-                        continue;
-                    }
-
-                    if !col.is_nullable()
+                let missing = metadata.schema.columns.iter().find(|col| {
+                    col.name() != ROW_COL_ID
+                        && !col.is_nullable()
                         && !col.column_type().can_be_autogen()
                         && col.default().is_none()
-                        && !columns.contains(&col.name())
-                    {
-                        return Err(AnalyzerError::MissingCols.into());
-                    }
+                        && !given.contains(&col.name())
+                });
+                if let Some(col) = missing {
+                    return Err(AnalyzerError::MissingColumn(col.name().into()).into());
                 }
 
-                for (expr, col) in row.iter().zip(&columns) {
+                for (expr, col) in row.iter().zip(given) {
                     analyze_assignment(metadata, col, expr, false)?;
                 }
 
@@ -212,20 +229,51 @@ pub(in crate::sql) fn analyze<'s>(
         },
 
         Statement::Select(Select {
+            distinct,
             columns,
             from,
             joins,
             order_by,
             group_by,
+            having,
             r#where,
             limit: _,
             offset: _,
+            combined,
         }) => {
-            let metadata = ctx.metadata(&from.name)?;
-            let mut schema = metadata.schema.clone();
+            if !combined.is_empty() {
+                return Err(SqlError::Other(
+                    "a set operation is only allowed in a statement a session runs".into(),
+                )
+                .into());
+            }
 
-            let mut tables = HashMap::new();
-            tables.insert(from.key(), metadata.schema.clone());
+            // a key outside the select list has no single value per row
+            if *distinct {
+                let listed = |key: &Expression| {
+                    columns.iter().any(|column| {
+                        column == key
+                            || column.unwrap_alias() == key
+                            || *column == Expression::Wildcard
+                            || matches!(column, Expression::Alias { alias, .. } if key.as_identifier() == Some(alias.as_str()))
+                    })
+                };
+                if let Some(order) = order_by.iter().find(|order| !listed(&order.expr)) {
+                    let message =
+                        format!("ORDER BY {} must appear in the SELECT DISTINCT list", order.expr);
+                    return Err(SqlError::Other(message).into());
+                }
+            }
+
+            // qualified names are checked against the tables in FROM even without joins: a
+            // qualifier naming no table here (an outer query's) is an error, not ignored
+            let mut schema = match from.name.is_empty() {
+                true => Schema::empty(),
+                _ => ctx.metadata(&from.name)?.schema.clone(),
+            };
+
+            let mut tables = HashMap::default();
+            tables.insert(from.key(), schema.clone());
 
             for join in joins {
                 let join_metadata = ctx.metadata(&join.table.name)?;
@@ -234,7 +282,7 @@ pub(in crate::sql) fn analyze<'s>(
             }
 
             let (aliases, columns): (HashMap<_, _>, Vec<_>) = columns.iter().fold(
-                (HashMap::new(), Vec::with_capacity(columns.len())),
+                (HashMap::default(), Vec::with_capacity(columns.len())),
                 |(mut aliases, mut cols), column_expr| {
                     if let Expression::Alias { expr, alias } = column_expr {
                         aliases.insert(alias.clone(), expr.as_ref());
@@ -276,32 +324,31 @@ pub(in crate::sql) fn analyze<'s>(
                     return Err(SqlError::InvalidGroupBy(expr.to_string()).into());
                 }
 
-                match joins.is_empty() {
-                    true => analyze_expression(&schema, None, expr)?,
-                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, expr)?,
-                };
+                analyze_expression(&JoinCtx::new(&schema, &tables), None, expr)?;
             }
 
-            analyze_where_with_join(&schema, &tables, r#where, &aliases, joins.is_empty())?;
+            analyze_where_with_join(&schema, &tables, r#where, &aliases)?;
+            if let Some(having) = having {
+                let kind = analyze_expression(&JoinCtx::new(&schema, &tables), None, having)?;
+                if kind != VmType::Bool {
+                    let err =
+                        TypeError::ExpectedType { expected: VmType::Bool, found: having.clone() };
+                    return Err(err.into());
+                }
+            }
 
             // FIXME: we probably can do this in parallel
             for order in order_by {
                 let substituted =
                     order.expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
-                match joins.is_empty() {
-                    true => analyze_expression(&schema, None, &substituted)?,
-                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?,
-                };
+                analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?;
             }
 
             for expr in group_by {
                 let substituted =
                     expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
 
-                match joins.is_empty() {
-                    true => analyze_expression(&schema, None, &substituted)?,
-                    _ => analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?,
-                };
+                analyze_expression(&JoinCtx::new(&schema, &tables), None, &substituted)?;
             }
         },
 
@@ -520,18 +567,145 @@ impl<'s> JoinCtx<'s> {
     }
 }
 
+/// gives every `CASE` and `COALESCE` the type of all its results: a
+/// result of a narrower numeric kind is cast to the widest (float over numeric over integer)
+pub(in crate::sql) fn unify(
+    statement: &mut Statement,
+    ctx: &mut impl Ctx,
+) -> Result<(), DatabaseError> {
+    match statement {
+        Statement::Select(select) => {
+            let from = match select.from.name.is_empty() {
+                true => Schema::empty(),
+                _ => ctx.metadata(&select.from.name)?.schema.clone(),
+            };
+
+            let mut keys = vec![(select.from.key().to_string(), from)];
+            for join in &select.joins {
+                keys.push((
+                    join.table.key().to_string(),
+                    ctx.metadata(&join.table.name)?.schema.clone(),
+                ));
+            }
+
+            let mut schema = keys[0].1.clone();
+            keys[1..]
+                .iter()
+                .for_each(|(_, joined)| schema.extend(joined.columns.iter().cloned()));
+            let tables: HashMap<_, _> =
+                keys.iter().map(|(key, schema)| (key.as_str(), schema.clone())).collect();
+            let joined = JoinCtx::new(&schema, &tables);
+
+            let expressions = select
+                .columns
+                .iter_mut()
+                .chain(&mut select.r#where)
+                .chain(&mut select.having)
+                .chain(&mut select.group_by)
+                .chain(select.order_by.iter_mut().map(|order| &mut order.expr))
+                .chain(select.joins.iter_mut().map(|join| &mut join.on));
+
+            for expr in expressions {
+                unify_expression(expr, &joined);
+            }
+        },
+        Statement::Update(Update { table, columns, r#where, .. }) => {
+            let schema = ctx.metadata(table)?.schema.clone();
+            for expr in columns.iter_mut().map(|column| &mut column.value).chain(r#where) {
+                unify_expression(expr, &schema);
+            }
+        },
+        Statement::Delete(Delete { from, r#where }) => {
+            let schema = ctx.metadata(from)?.schema.clone();
+            if let Some(expr) = r#where {
+                unify_expression(expr, &schema);
+            }
+        },
+        Statement::Explain(statement) => unify(statement, ctx)?,
+        _ => {},
+    }
+
+    Ok(())
+}
+
+/// [unify] over one expression tree, a result whose type cannot be told (an alias) is left alone
+fn unify_expression(expr: &mut Expression, ctx: &impl AnalyzeCtx) {
+    match expr {
+        Expression::Function { func: func @ (Function::Case | Function::Coalesce), args } => {
+            args.iter_mut().for_each(|arg| unify_expression(arg, ctx));
+
+            let last = args.len() - 1;
+            let result = |position: usize| {
+                *func == Function::Coalesce || position % 2 == 1 || position == last
+            };
+            let kinds: Vec<_> = args
+                .iter()
+                .enumerate()
+                .map(|(position, arg)| {
+                    match result(position) && *arg != Expression::Value(Value::Null) {
+                        true => analyze_expression(ctx, None, arg).ok(),
+                        false => None,
+                    }
+                })
+                .collect();
+
+            // `VmType`'s equality merges integers and floats, so kinds are told apart by pattern
+            let any = |wanted: fn(&VmType) -> bool| kinds.iter().flatten().any(wanted);
+            let target = match () {
+                _ if any(|kind| matches!(kind, VmType::Float)) => Type::DoublePrecision,
+                _ if any(|kind| matches!(kind, VmType::Numeric)) => {
+                    Type::Numeric(NUMERIC_ANY, NUMERIC_ANY)
+                },
+                _ => return,
+            };
+
+            for (arg, kind) in args.iter_mut().zip(kinds) {
+                let narrower = match target {
+                    Type::DoublePrecision => matches!(kind, Some(VmType::Number | VmType::Numeric)),
+                    _ => matches!(kind, Some(VmType::Number)),
+                };
+
+                if narrower {
+                    let narrow = std::mem::take(arg);
+                    let target = Expression::Value(Value::Blob(db::encode_type(target).into()));
+                    *arg =
+                        Expression::Function { func: Function::Cast, args: vec![narrow, target] };
+                }
+            }
+        },
+        Expression::Function { args, .. } => {
+            args.iter_mut().for_each(|arg| unify_expression(arg, ctx))
+        },
+        Expression::BinaryOperation { left, right, .. } => {
+            unify_expression(left, ctx);
+            unify_expression(right, ctx);
+        },
+        Expression::UnaryOperation { expr, .. }
+        | Expression::Nested(expr)
+        | Expression::Alias { expr, .. }
+        | Expression::IsNull { expr, .. } => unify_expression(expr, ctx),
+        _ => {},
+    }
+}
+
 #[allow(clippy::needless_lifetimes)]
 pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
     ctx: &Ctx,
     data_type: Option<&Type>,
     expr: &'exp Expression,
 ) -> Result<VmType, SqlError> {
+    use Expression as E;
     Ok(match expr {
-        Expression::Column(_) | Expression::JsonPath { .. } => {
+        E::Column(_) | Expression::JsonPath { .. } => {
             unreachable!("columns are bound by the executor, after analysis")
         },
-        Expression::Value(value) => analyze_value(value, data_type)?,
-        Expression::Identifier(column) => {
+        E::Subquery(_) => {
+            return Err(SqlError::Other(
+                "a subquery is only allowed in a statement a session runs".into(),
+            ));
+        },
+        E::Value(value) => analyze_value(value, data_type)?,
+        E::Identifier(column) => {
             let data_type = ctx
                 .resolve_identifier(column)
                 .map(|tuple| tuple.1)
@@ -544,7 +718,7 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 r#type => VmType::from(&r#type),
             }
         },
-        Expression::QualifiedIdentifier { table, column } => {
+        E::QualifiedIdentifier { table, column } => {
             // table.column
             if let Some((_, data_type)) = ctx.resolve_qualified_identifier(table, column) {
                 return Ok(VmType::from(&data_type));
@@ -562,22 +736,20 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 column: column.into(),
             });
         },
-        Expression::Path { .. } => VmType::Blob,
-
-        Expression::BinaryOperation { operator, left, right } => {
+        E::Path { .. } => VmType::Blob,
+        E::BinaryOperation { operator, left, right } => {
             use BinaryOperator::*;
-            fn get_hint<C: AnalyzeCtx>(ctx: &C, expr: &Expression) -> Option<Type> {
+            fn get_hint<C: AnalyzeCtx>(ctx: &C, expr: &E) -> Option<Type> {
                 match expr {
-                    Expression::Identifier(column)
-                    | Expression::QualifiedIdentifier { column, .. } => {
+                    E::Identifier(column) | E::QualifiedIdentifier { column, .. } => {
                         ctx.resolve_identifier(column).map(|(_, ty)| ty)
                     },
                     _ => None,
                 }
             }
 
-            let left_null = matches!(left.as_ref(), Expression::Value(Value::Null));
-            let right_null = matches!(right.as_ref(), Expression::Value(Value::Null));
+            let left_null = matches!(left.as_ref(), E::Value(Value::Null));
+            let right_null = matches!(right.as_ref(), E::Value(Value::Null));
 
             let (left_type, right_type) = match (left_null, right_null) {
                 // null on left: get the right type, then analyze the left with that info
@@ -614,13 +786,35 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 Eq | Neq | Lt | LtEq | Gt | GtEq => VmType::Bool,
                 Like if left_type.eq(&VmType::String) => VmType::Bool,
                 And | Or if left_type.eq(&VmType::Bool) => VmType::Bool,
-                Plus | Minus | Div | Mul => result_type(left_type, right_type),
+                Plus | Minus | Div | Mul | Modulo => {
+                    // a decimal literal against a NUMERIC column takes its exactness
+                    let exact = |column: &E, literal: &E, kind: VmType| {
+                        matches!(kind, VmType::Numeric)
+                            && matches!(column, E::Identifier(_) | E::QualifiedIdentifier { .. })
+                            && matches!(literal, E::Value(Value::Float(_)))
+                    };
+                    match exact(left, right, left_type) || exact(right, left, right_type) {
+                        true => VmType::Numeric,
+                        _ => result_type(left_type, right_type),
+                    }
+                },
                 _ => unreachable!("unexpected operation state"),
             }
         },
 
-        Expression::UnaryOperation { operator, expr } => {
-            if let (Some(data_type), UnaryOperator::Minus, Expression::Value(value)) =
+        E::UnaryOperation { operator: UnaryOperator::Not, expr } => match &**expr {
+            E::Value(Value::Null) => VmType::Bool,
+            expr => match analyze_expression(ctx, data_type, expr)? {
+                VmType::Bool => VmType::Bool,
+                _ => Err(SqlError::Type(TypeError::ExpectedType {
+                    expected: VmType::Bool,
+                    found: expr.clone(),
+                }))?,
+            },
+        },
+
+        E::UnaryOperation { operator, expr } => {
+            if let (Some(data_type), UnaryOperator::Minus, E::Value(value)) =
                 (data_type, operator, &**expr)
             {
                 if let Type::Numeric(_, _) = data_type {
@@ -651,9 +845,9 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
                 };
             }
 
+            // `VmType`'s equality merges integers and floats, so the kind is kept by pattern
             match analyze_expression(ctx, data_type, expr)? {
-                VmType::Number | VmType::Float => VmType::Number,
-                VmType::Numeric => VmType::Numeric,
+                kind @ (VmType::Number | VmType::Float | VmType::Numeric) => kind,
                 _ => Err(SqlError::Type(TypeError::ExpectedType {
                     expected: VmType::Number,
                     found: *expr.clone(),
@@ -661,7 +855,60 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
             }
         },
 
-        Expression::Function { func, args } => {
+        E::Function { func: Function::Cast, args } => {
+            if args[0] != E::Value(Value::Null) {
+                analyze_expression(ctx, data_type, &args[0])?;
+            }
+            let E::Value(Value::Blob(target)) = &args[1] else {
+                unreachable!("a cast carries its encoded target")
+            };
+            return match db::decode_type(target) {
+                Type::Enum(_) => Err(SqlError::Other("cannot cast to an enum".into())),
+                target => Ok(VmType::from(&target)),
+            };
+        },
+
+        // compared like `=`, at run time across kinds
+        E::Function { func: Function::In, args } => {
+            for arg in args.iter().filter(|arg| **arg != E::Value(Value::Null)) {
+                analyze_expression(ctx, data_type, arg)?;
+            }
+            return Ok(VmType::Bool);
+        },
+
+        // conditions are boolean, results share one type, a NULL result fits any
+        E::Function { func: Function::Case, args } => {
+            let (branches, default) = args.split_at(args.len() - 1);
+            let mut kind = None;
+            for (position, arg) in branches.iter().chain(default).enumerate() {
+                let condition = position % 2 == 0 && position < branches.len();
+                if *arg == E::Value(Value::Null) {
+                    continue;
+                }
+
+                let found = analyze_expression(ctx, data_type, arg)?;
+                match (condition, kind) {
+                    (true, _) if found != VmType::Bool => {
+                        return Err(TypeError::ExpectedType {
+                            expected: VmType::Bool,
+                            found: arg.clone(),
+                        }
+                        .into());
+                    },
+                    (true, _) => {},
+                    (_, None) => kind = Some(found),
+                    (_, Some(expected))
+                        if expected == found || is_numeric(&expected) && is_numeric(&found) => {},
+                    (_, Some(expected)) => {
+                        return Err(TypeError::ExpectedType { expected, found: arg.clone() }.into());
+                    },
+                }
+            }
+
+            return Ok(kind.unwrap_or(VmType::String));
+        },
+
+        E::Function { func, args } => {
             if let Some((min, max)) = func.size_of_args() {
                 if args.len() < min || args.len() > max {
                     return Err(SqlError::InvalidFuncArgs(min, args.len()));
@@ -670,25 +917,23 @@ pub(crate) fn analyze_expression<'exp, Ctx: AnalyzeCtx>(
 
             // this will be naturally very small so we can just allocate at once
             let mut arg_types = Vec::with_capacity(args.len());
+            // a NULL argument fits any type, the others decide
             for arg in args {
-                if arg.ne(&Expression::Wildcard) {
+                if *arg != E::Wildcard && *arg != Expression::Value(Value::Null) {
                     arg_types.push(analyze_expression(ctx, data_type, arg)?);
                 }
             }
 
             return Ok(func.return_type(arg_types.first().unwrap_or(&VmType::Float)));
         },
-
-        Expression::Nested(expr) | Expression::Alias { expr, .. } => {
-            analyze_expression(ctx, data_type, expr)?
-        },
-        Expression::IsNull { expr, .. } => {
-            analyze_expression(ctx, data_type, expr)?;
+        E::Nested(expr) | E::Alias { expr, .. } => analyze_expression(ctx, data_type, expr)?,
+        E::IsNull { expr, .. } => {
+            if **expr != E::Value(Value::Null) {
+                analyze_expression(ctx, data_type, expr)?;
+            }
             VmType::Bool
         },
-        Expression::Wildcard => {
-            return Err(SqlError::Other("Unexpected wildcard expression (*)".into()));
-        },
+        E::Wildcard => return Err(SqlError::Other("Unexpected wildcard expression (*)".into())),
     })
 }
 
@@ -697,7 +942,6 @@ fn analyze_where_with_join<'exp>(
     tables: &'exp HashMap<&'exp str, Schema>,
     r#where: &'exp Option<Expression>,
     aliases: &HashMap<String, &'exp Expression>,
-    no_joins: bool,
 ) -> Result<(), SqlError> {
     let Some(expr) = r#where else {
         return Ok(());
@@ -705,10 +949,7 @@ fn analyze_where_with_join<'exp>(
 
     let substituted = expr.substitute_aliases(|ident| aliases.get(ident).map(|e| (*e).clone()));
 
-    let result = match no_joins {
-        true => analyze_expression(schema, None, &substituted)?,
-        _ => analyze_expression(&JoinCtx::new(schema, tables), None, &substituted)?,
-    };
+    let result = analyze_expression(&JoinCtx::new(schema, tables), None, &substituted)?;
 
     if let VmType::Bool = result {
         return Ok(());
@@ -721,7 +962,8 @@ fn analyze_value(value: &Value, col_type: Option<&Type>) -> Result<VmType, SqlEr
     Ok(match (value, col_type) {
         (Value::Boolean(_), _) => VmType::Bool,
         (Value::Null, Some(t)) => t.into(),
-        (Value::Null, _) => unreachable!("NULL must be type aware"),
+        // a bare NULL (a projected literal): no column gives it a type, and any fits
+        (Value::Null, _) => VmType::Bool,
 
         (Value::Numeric(n), Some(t @ Type::Numeric(_, _))) => analyze_numeric(n, t)?,
         (Value::Number(n), Some(t @ Type::Numeric(_, _))) => {
@@ -799,7 +1041,7 @@ fn analyze_string(s: &str, expected_type: &Type) -> Result<VmType, SqlError> {
     }
 }
 
-fn analyze_number(integer: &i128, data_type: &Type) -> Result<VmType, AnalyzerError> {
+fn analyze_number(integer: &i64, data_type: &Type) -> Result<VmType, AnalyzerError> {
     if data_type.is_integer() && !data_type.is_integer_in_bounds(integer) {
         return Err(AnalyzerError::Overflow(*data_type, *integer as usize));
     }
@@ -855,7 +1097,7 @@ fn are_types_compatible(
             (VmType::Date, VmType::Interval) | (VmType::Interval, VmType::Date) => true,
             (left, right) => is_numeric(left) && is_numeric(right),
         },
-        Op::Mul | Op::Div => is_numeric(left_type) && is_numeric(right_type),
+        Op::Mul | Op::Div | Op::Modulo => is_numeric(left_type) && is_numeric(right_type),
         // comparisons are handled at runtime (Value implements comparisons across variants);
         // this also enables JSON path access expressions whose type is only known at runtime.
         Op::Eq | Op::Neq | Op::Lt | Op::LtEq | Op::Gt | Op::GtEq => true,
@@ -870,8 +1112,9 @@ const fn is_numeric(typ: &VmType) -> bool {
 const fn result_type(left: VmType, right: VmType) -> VmType {
     match (left, right) {
         (VmType::Date, _) | (_, VmType::Date) => VmType::Date,
-        (VmType::Numeric, _) | (_, VmType::Numeric) => VmType::Numeric,
+        // approximate wins, as the arithmetic itself does
         (VmType::Float, _) | (_, VmType::Float) => VmType::Float,
+        (VmType::Numeric, _) | (_, VmType::Numeric) => VmType::Numeric,
 
         _ => VmType::Number,
     }
@@ -880,7 +1123,12 @@ const fn result_type(left: VmType, right: VmType) -> VmType {
 impl Display for AnalyzerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AnalyzerError::MissingCols => write!(f, "all columns must be specified"),
+            AnalyzerError::ValueCount { columns, values } => {
+                write!(f, "{values} values given for {columns} columns")
+            },
+            AnalyzerError::MissingColumn(column) => {
+                write!(f, "column {column} has no default and must be given a value")
+            },
             AnalyzerError::DuplicateCols(col) => write!(f, "column {col} was already declared"),
             AnalyzerError::AlreadyExists(name) => f.write_str(&name.to_string()),
             AnalyzerError::MultiplePrimaryKeys => {
@@ -906,7 +1154,6 @@ impl Display for AlreadyExists {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AlreadyExists::Table(table_name) => write!(f, "table {table_name} already exists"),
-            AlreadyExists::Index(index_name) => write!(f, "index {index_name} already exists"),
         }
     }
 }
@@ -1000,7 +1247,7 @@ mod tests {
             ctx: &[
                 "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(255), birth_date DATE);",
             ],
-            expected: Err(AnalyzerError::MissingCols.into()),
+            expected: Err(AnalyzerError::ValueCount { columns: 3, values: 2 }.into()),
         }
         .assert()
     }

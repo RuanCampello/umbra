@@ -71,7 +71,8 @@ pub(crate) fn prepare(statement: &mut Statement, ctx: &mut impl Ctx) -> Result<(
             let metadata = ctx.metadata(into)?;
 
             if columns.is_empty() {
-                *columns = metadata.schema.columns_ids();
+                let given = values.first().map_or(0, Vec::len);
+                *columns = metadata.schema.columns.iter().map(|col| col.name().to_string()).filter(|name| name != ROW_COL_ID).take(given).collect();
             }
 
             // omitted columns take their default, an auto generated value (UUID or SERIAL), or

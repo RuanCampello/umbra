@@ -3,7 +3,7 @@
 
 use super::statement::{Delete, Insert, Select, Update};
 use crate::db::SqlError;
-use crate::sql::statement::{BinaryOperator, Expression, Statement, UnaryOperator, Value};
+use crate::sql::statement::{BinaryOperator, Expression, Function, Statement, UnaryOperator, Value};
 use crate::vm::expression::resolve_only_expression;
 
 /// Tries to simplify the given statement applying heuristic-based rules
@@ -95,6 +95,17 @@ pub(in crate::sql) fn simplify_recursively(expression: &mut Expression) -> Resul
             simplify_recursively(nested.as_mut())?;
             *expression = std::mem::replace(nested.as_mut(), Expression::Wildcard);
         },
+        // a branch is evaluated only when chosen, so one that cannot be folded stays as written
+        Expression::Function { func: Function::Case | Function::Coalesce, args } => {
+            for arg in args {
+                let mut folded = arg.clone();
+                if simplify_recursively(&mut folded).is_ok() {
+                    *arg = folded;
+                }
+            }
+        },
+        Expression::Function { args, .. } => args.iter_mut().try_for_each(simplify_recursively)?,
+        Expression::Alias { expr, .. } | Expression::IsNull { expr, .. } => simplify_recursively(expr)?,
         _ => {},
     }
 
