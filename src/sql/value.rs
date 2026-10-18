@@ -36,7 +36,8 @@ use crate::core::date::interval::Interval;
 use crate::core::date::{DateParseError, NaiveDate, NaiveDateTime, NaiveTime, Parse};
 use crate::core::numeric::Numeric;
 use crate::core::uuid::Uuid;
-use crate::vm::expression::TypeError;
+use crate::db::SqlError;
+use crate::vm::expression::{TypeError, VmError};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::hash::Hash;
@@ -112,7 +113,7 @@ mod number_sizes {
 #[derive(Debug, Clone)]
 pub enum Value {
     String(Arc<str>),
-    Number(i128),
+    Number(i64),
     Float(f64),
     Boolean(bool),
     Temporal(Temporal),
@@ -120,7 +121,7 @@ pub enum Value {
     Interval(Interval),
     Numeric(Numeric),
     Enum(u8),
-    Blob(Vec<u8>),
+    Blob(Arc<[u8]>),
     Null,
 }
 
@@ -144,6 +145,9 @@ pub trait Coerce: Sized {
 /// Literally "NULL" in hex
 const NULL_HASH: u32 = 0x4E554C4C;
 
+// PERFORMANCE: every row holds one per column and every index entry one per key, a payload wider than 16 bytes belongs behind a pointer
+const _: () = assert!(size_of::<Value>() == 24);
+
 impl Value {
     #[inline]
     pub(crate) const fn is_null(&self) -> bool {
@@ -151,7 +155,7 @@ impl Value {
     }
 
     #[inline]
-    /// The rank of a value's kind in the order across kinds; blobs and `NULL` come last.
+    /// The rank of a value's kind in the order across kinds, blobs and `NULL` come last.
     const fn class(&self) -> u8 {
         match self {
             Value::Boolean(_) => 0,
@@ -228,15 +232,11 @@ impl Value {
             },
 
             Value::Number(n) => {
-                const I16_MIN: i128 = i16::MIN as _;
-                const I16_MAX: i128 = i16::MAX as _;
-                const I32_MAX: i128 = i32::MAX as _;
-                const I32_MIN: i128 = i32::MIN as _;
-                const I64_MIN: i128 = i64::MIN as _;
-                const I64_MAX: i128 = i64::MAX as _;
+                const I16_MIN: i64 = i16::MIN as _;
+                const I16_MAX: i64 = i16::MAX as _;
+                const I32_MAX: i64 = i32::MAX as _;
+                const I32_MIN: i64 = i32::MIN as _;
 
-                // transform this in a match with ranges cases
-                // variable-width integer encoding: use smallest representation
                 match *n {
                     I16_MIN..=I16_MAX => {
                         buf.push(number_sizes::I16);
@@ -248,13 +248,8 @@ impl Value {
                         buf.extend_from_slice(&(*n as i32).to_le_bytes());
                     },
 
-                    I64_MIN..=I64_MAX => {
-                        buf.push(number_sizes::I64);
-                        buf.extend_from_slice(&(*n as i64).to_le_bytes());
-                    },
-
                     _ => {
-                        buf.push(number_sizes::I128);
+                        buf.push(number_sizes::I64);
                         buf.extend_from_slice(&n.to_le_bytes());
                     },
                 }
@@ -324,27 +319,31 @@ impl Value {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated i16"));
                         }
                         let n = i16::from_le_bytes([payload[0], payload[1]]);
-                        (Value::Number(n as i128), 4)
+                        (Value::Number(n as i64), 4)
                     },
                     number_sizes::I32 => {
                         if payload.len() < 4 {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated i32"));
                         }
                         let n = i32::from_le_bytes(payload[..4].try_into().unwrap());
-                        (Value::Number(n as i128), 6)
+                        (Value::Number(n as i64), 6)
                     },
                     number_sizes::I64 => {
                         if payload.len() < 8 {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated i64"));
                         }
                         let n = i64::from_le_bytes(payload[..8].try_into().unwrap());
-                        (Value::Number(n as i128), 10)
+                        (Value::Number(n), 10)
                     },
+                    // written before integers were 64-bit, readable while they fit
                     number_sizes::I128 => {
                         if payload.len() < 16 {
                             return Err(Error::new(ErrorKind::InvalidData, "Truncated i128"));
                         }
                         let n = i128::from_le_bytes(payload[..16].try_into().unwrap());
+                        let n = i64::try_from(n).map_err(|_| {
+                            Error::new(ErrorKind::InvalidData, "Integer out of range")
+                        })?;
                         (Value::Number(n), 18)
                     },
                     _ => return Err(Error::new(ErrorKind::InvalidData, "Invalid number size")),
@@ -481,7 +480,7 @@ impl Value {
                 if content.len() < 4 + len {
                     return Err(Error::new(ErrorKind::InvalidData, "Truncated blob data"));
                 }
-                (Value::Blob(content[4..4 + len].to_vec()), 5 + len)
+                (Value::Blob(Arc::from(&content[4..4 + len])), 5 + len)
             },
 
             _ => {
@@ -516,7 +515,7 @@ impl Value {
 }
 
 macro_rules! impl_value_op {
-    ($trait:ty, $method:ident, $op:tt) => {
+    ($trait:ty, $method:ident, $op:tt, $integer:ident) => {
         impl $trait for &Value {
             type Output = Option<Value>;
             fn $method(self, rhs: Self) -> Self::Output {
@@ -525,28 +524,15 @@ macro_rules! impl_value_op {
                     (Value::Float(a), Value::Float(b)) => Some(Value::Float(*a $op *b)),
                     (Value::Number(a), Value::Float(b)) => Some(Value::Float(*a as f64 $op *b)),
                     (Value::Float(a), Value::Number(b)) => Some(Value::Float(*a $op *b as f64)),
-                    (Value::Number(a), Value::Number(b)) => {
-                        let result = *a as f64 $op *b as f64;
-                        match result.fract() == 0.0 {
-                            true => Some(Value::Number(result as i128)),
-                            _ => Some(Value::Float(result))
-                        }
-                    }
-
+                    // exact, and division truncates towards zero
+                    (Value::Number(a), Value::Number(b)) => a.$integer(*b).map(Value::Number),
                     // arbitrary precision numeric
                     (Value::Numeric(a), Value::Numeric(b)) => Some(Value::Numeric(a $op b)),
-                    (Value::Numeric(a), Value::Number(b)) => {
-                        Some(Value::Numeric(a $op &Numeric::from(*b)))
-                    }
-                    (Value::Number(a), Value::Numeric(b)) => {
-                        Some(Value::Numeric(&Numeric::from(*a) $op b))
-                    }
-                    (Value::Numeric(a), Value::Float(b)) => {
-                        Numeric::try_from(*b).ok().map(|nb| Value::Numeric(a $op &nb))
-                    }
-                    (Value::Float(a), Value::Numeric(b)) => {
-                        Numeric::try_from(*a).ok().map(|na| Value::Numeric(&na $op b))
-                    }
+                    (Value::Numeric(a), Value::Number(b)) => Some(Value::Numeric(a $op &Numeric::from(*b))),
+                    (Value::Number(a), Value::Numeric(b)) => Some(Value::Numeric(&Numeric::from(*a) $op b)),
+                    // approximate wins
+                    (Value::Numeric(a), Value::Float(b)) => Some(Value::Float(f64::from(a.clone()) $op *b)),
+                    (Value::Float(a), Value::Numeric(b)) => Some(Value::Float(*a $op f64::from(b.clone()))),
 
                     _ => None,
                 }
@@ -555,10 +541,11 @@ macro_rules! impl_value_op {
     };
 }
 
-impl_value_op!(std::ops::Add, add, +);
-impl_value_op!(std::ops::Sub, sub, -);
-impl_value_op!(std::ops::Mul, mul, *);
-impl_value_op!(std::ops::Div, div, /);
+impl_value_op!(std::ops::Add, add, +, checked_add);
+impl_value_op!(std::ops::Sub, sub, -, checked_sub);
+impl_value_op!(std::ops::Mul, mul, *, checked_mul);
+impl_value_op!(std::ops::Div, div, /, checked_div);
+impl_value_op!(std::ops::Rem, rem, %, checked_rem);
 
 impl Coerce for Value {
     fn coerce_to(self, other: Self) -> (Self, Self) {
@@ -622,7 +609,7 @@ impl PartialEq for Value {
 
         match (self, other) {
             (Number(a), Number(b)) => a == b,
-            (Float(a), Float(b)) => a == b,
+            (Float(a), Float(b)) => a == b || (a.is_nan() && b.is_nan()),
             // we do this because we can coerce them later to do a comparison between floats and
             // integers
             (Number(a), Float(b)) => (*a as f64) == *b,
@@ -631,9 +618,7 @@ impl PartialEq for Value {
             (Arbitrary(a), Number(n)) | (Number(n), Arbitrary(a)) => {
                 a == &crate::core::numeric::Numeric::from(*n)
             },
-            (Arbitrary(a), Float(f)) | (Float(f), Arbitrary(a)) => {
-                crate::core::numeric::Numeric::try_from(*f).map(|f| &f == a).unwrap_or(false)
-            },
+            (Arbitrary(a), Float(f)) | (Float(f), Arbitrary(a)) => f64::from(a.clone()) == *f,
             (String(a), String(b)) => a == b,
             (Boolean(a), Boolean(b)) => a == b,
             (Temporal(a), Temporal(b)) => a == b,
@@ -655,7 +640,7 @@ impl Eq for Value {}
 impl Ord for Value {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Value::Float(a), Value::Float(b)) => a.total_cmp(b),
+            (Value::Float(a), Value::Float(b)) => float_cmp(*a, *b),
             (Value::Number(a), Value::Number(b)) => a.cmp(b),
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
@@ -664,18 +649,12 @@ impl Ord for Value {
             (Value::Interval(a), Value::Interval(b)) => a.cmp(b),
             (Value::Numeric(a), Value::Numeric(b)) => a.cmp(b),
             // numbers of different representations order by value, as PartialEq compares them
-            (Value::Number(a), Value::Float(b)) => (*a as f64).total_cmp(b),
-            (Value::Float(a), Value::Number(b)) => a.total_cmp(&(*b as f64)),
+            (Value::Number(a), Value::Float(b)) => float_cmp(*a as f64, *b),
+            (Value::Float(a), Value::Number(b)) => float_cmp(*a, *b as f64),
             (Value::Numeric(a), Value::Number(b)) => a.cmp(&Numeric::from(*b)),
             (Value::Number(a), Value::Numeric(b)) => Numeric::from(*a).cmp(b),
-            (Value::Numeric(a), Value::Float(b)) => match Numeric::try_from(*b) {
-                Ok(b) => a.cmp(&b),
-                Err(_) => f64::from(a.clone()).total_cmp(b),
-            },
-            (Value::Float(a), Value::Numeric(b)) => match Numeric::try_from(*a) {
-                Ok(a) => a.cmp(b),
-                Err(_) => a.total_cmp(&f64::from(b.clone())),
-            },
+            (Value::Numeric(a), Value::Float(b)) => float_cmp(f64::from(a.clone()), *b),
+            (Value::Float(a), Value::Numeric(b)) => float_cmp(*a, f64::from(b.clone())),
             (Value::Enum(a), Value::Enum(b)) => a.cmp(b),
             (Value::Blob(a), Value::Blob(b)) => a.cmp(b),
             (Value::Blob(_), _) => std::cmp::Ordering::Greater,
@@ -718,16 +697,24 @@ impl Hash for Value {
             bits
         }
 
+        // numbers equal across representations hash alike: integral values up to 2^53 (exact in
+        // every representation) by their integer, the rest by their nearest double
+        const EXACT: f64 = (1u64 << 53) as f64;
+        let mut approximate = |f: f64| match f.fract() == 0.0 && f.abs() <= EXACT {
+            true => (f as i64).hash(state),
+            _ => encode_float(&f).hash(state),
+        };
+
         match self {
-            Self::Float(f) => encode_float(f).hash(state),
+            Self::Float(f) => approximate(*f),
+            Self::Number(n) => approximate(*n as f64),
+            Self::Numeric(n) => approximate(f64::from(n.clone())),
             Self::Null => NULL_HASH.hash(state),
             Self::String(s) => s.hash(state),
-            Self::Number(n) => n.hash(state),
             Self::Boolean(b) => b.hash(state),
             Self::Temporal(t) => t.hash(state),
             Self::Uuid(u) => u.hash(state),
             Self::Interval(i) => i.hash(state),
-            Self::Numeric(n) => n.hash(state),
             Self::Enum(e) => e.hash(state),
             Self::Blob(b) => b.hash(state),
         }
@@ -735,14 +722,19 @@ impl Hash for Value {
 }
 
 impl Neg for Value {
-    type Output = Result<Self, TypeError>;
+    type Output = Result<Self, SqlError>;
     fn neg(self) -> Self::Output {
         match self {
-            Value::Number(num) => Ok(Value::Number(-num)),
+            Value::Number(num) => num
+                .checked_neg()
+                .map(Value::Number)
+                .ok_or(SqlError::Vm(VmError::IntegerOutOfRange)),
             Value::Float(float) => Ok(Value::Float(-float)),
             Value::Numeric(num) => Ok(Value::Numeric(-num)),
             Value::Null => Ok(Value::Null),
-            v => Err(TypeError::CannotApplyUnary { operator: UnaryOperator::Minus, value: v }),
+            v => {
+                Err(TypeError::CannotApplyUnary { operator: UnaryOperator::Minus, value: v }.into())
+            },
         }
     }
 }
@@ -781,8 +773,8 @@ impl Display for Temporal {
     }
 }
 
-impl From<i128> for Value {
-    fn from(value: i128) -> Self {
+impl From<i64> for Value {
+    fn from(value: i64) -> Self {
         Self::Number(value)
     }
 }
@@ -855,6 +847,17 @@ impl TryFrom<&str> for Temporal {
     }
 }
 
+/// IEEE order with `-0.0 = 0.0`, and NaN equal to itself and above every number
+#[inline]
+fn float_cmp(a: f64, b: f64) -> Ordering {
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => a.partial_cmp(&b).expect("neither is NaN"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -910,10 +913,9 @@ mod tests {
         let bytes = value.serialise().unwrap();
         assert_eq!(bytes[1], 8); // i64 size
 
-        // Maximum size i128
-        let value = Value::Number(i64::MAX as i128 + 1);
+        let value = Value::Number(i64::MAX);
         let bytes = value.serialise().unwrap();
-        assert_eq!(bytes[1], 16); // i128 size
+        assert_eq!(bytes[1], 8);
     }
 
     #[test]
@@ -947,13 +949,13 @@ mod tests {
             Value::Boolean(false),
             Value::Number(-42),
             Value::Number(0),
-            Value::Number(i32::MAX as i128),
+            Value::Number(i32::MAX as i64),
             Value::Float(-0.0),
             Value::Float(f64::MAX),
             Value::String("".into()),
             Value::String("hello world 🌍".into()),
             Value::Enum(255),
-            Value::Blob(vec![1, 2, 3, 4, 5]),
+            Value::Blob(Arc::from([1, 2, 3, 4, 5])),
         ];
 
         for value in values {

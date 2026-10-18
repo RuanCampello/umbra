@@ -15,10 +15,18 @@ pub enum Numeric {
     /// Small numeric value packed into a single 64-bit word
     /// No heap allocation, optimal for cache locality
     Short(u64),
-    /// variable-length numeric. Uses base-10000 representation
-    Long { weight: i16, sign_dscale: u16, digits: Vec<i16> },
+    /// variable-length numeric
+    /// uses base-10000 representation, boxed so a `Value` stays 24 bytes
+    Long(Box<Long>),
     /// Not a number. Represents an invalid/undefined numeric values
     NaN,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct Long {
+    pub weight: i16,
+    pub sign_dscale: u16,
+    pub digits: Vec<i16>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -72,7 +80,10 @@ impl Numeric {
     pub const fn is_zero(&self) -> bool {
         match self {
             Self::Short(packed) => (*packed & PAYLOAD_MASK) == 0,
-            Self::Long { digits, .. } => digits.is_empty(),
+            Self::Long(long) => {
+                let Long { digits, .. } = &**long;
+                digits.is_empty()
+            },
             Self::NaN => false,
         }
     }
@@ -84,7 +95,10 @@ impl Numeric {
     pub const fn size(&self) -> usize {
         match self {
             Numeric::Short(_) | Numeric::NaN => 8,
-            Numeric::Long { digits, .. } => 14 + digits.len() * 2,
+            Numeric::Long(long) => {
+                let Long { digits, .. } = &**long;
+                14 + digits.len() * 2
+            },
         }
     }
 
@@ -95,7 +109,10 @@ impl Numeric {
                 let sign = (*packed & SIGN_MASK) >> SIGN_SHIFT;
                 sign != 0 && !self.is_zero()
             },
-            Self::Long { sign_dscale, .. } => (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG,
+            Self::Long(long) => {
+                let Long { sign_dscale, .. } = &**long;
+                (*sign_dscale & SIGN_DSCALE_MASK) == NUMERIC_NEG
+            },
             Self::NaN => false,
         }
     }
@@ -104,7 +121,10 @@ impl Numeric {
     pub const fn scale(&self) -> u16 {
         match self {
             Self::Short(packed) => ((*packed & SCALE_MASK) >> SCALE_SHIFT) as u16,
-            Self::Long { sign_dscale, .. } => *sign_dscale & DSCALE_MASK,
+            Self::Long(long) => {
+                let Long { sign_dscale, .. } = &**long;
+                *sign_dscale & DSCALE_MASK
+            },
             Self::NaN => 0,
         }
     }
@@ -183,7 +203,8 @@ impl Numeric {
                 Self::from_scaled_i128(value, scale).unwrap_or(Self::NaN)
             },
 
-            Self::Long { weight, sign_dscale, digits } => {
+            Self::Long(long) => {
+                let Long { weight, sign_dscale, digits } = &**long;
                 let current_scale = *sign_dscale & DSCALE_MASK;
                 if current_scale <= scale {
                     return self.clone();
@@ -216,11 +237,11 @@ impl Numeric {
                     return Self::zero();
                 }
 
-                Self::Long {
+                Self::Long(Box::new(Long {
                     weight: *weight,
                     sign_dscale: (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK),
                     digits,
-                }
+                }))
             },
 
             Self::NaN => Self::NaN,
@@ -250,7 +271,7 @@ impl Numeric {
             _ => NUMERIC_POS,
         };
 
-        Self::Long { weight, sign_dscale, digits }
+        Self::Long(Box::new(Long { weight, sign_dscale, digits }))
     }
 
     /// compares absolute values: |A| vs |B|
@@ -402,7 +423,7 @@ impl Numeric {
         }
 
         let weight = weight + carried as i16 - offset as i16;
-        Ok(Self::Long { weight, sign_dscale: rscale & DSCALE_MASK, digits })
+        Ok(Self::Long(Box::new(Long { weight, sign_dscale: rscale & DSCALE_MASK, digits })))
     }
 
     /// `remainder -= q * divisor`, the divisor aligned to the right
@@ -489,7 +510,7 @@ impl Numeric {
 
         let sign_dscale = sign_part | (scale & DSCALE_MASK);
 
-        Ok(Self::Long { weight, sign_dscale, digits })
+        Ok(Self::Long(Box::new(Long { weight, sign_dscale, digits })))
     }
 
     #[inline]
@@ -517,7 +538,7 @@ impl Numeric {
             };
 
             let sum = v1 + v2 + carry;
-            match sum > N_BASE {
+            match sum >= N_BASE {
                 true => {
                     carry = 1;
                     digits.push((sum - N_BASE) as i16);
@@ -546,7 +567,7 @@ impl Numeric {
         }
 
         digits.reverse();
-        Numeric::Long { weight, sign_dscale: 0, digits }
+        Numeric::Long(Box::new(Long { weight, sign_dscale: 0, digits }))
     }
 
     #[inline]
@@ -602,10 +623,10 @@ impl Numeric {
         }
 
         if digits.is_empty() {
-            return Numeric::Long { weight: 0, sign_dscale: 0, digits: vec![0] };
+            return Numeric::Long(Box::new(Long { weight: 0, sign_dscale: 0, digits: vec![0] }));
         }
 
-        Numeric::Long { weight, sign_dscale: 0, digits }
+        Numeric::Long(Box::new(Long { weight, sign_dscale: 0, digits }))
     }
 
     /// standardise short and long format access
@@ -645,7 +666,8 @@ impl Numeric {
                 (weight, View::Owned(digits, len), v.is_negative(), s)
             },
 
-            Self::Long { weight, sign_dscale, digits } => {
+            Self::Long(long) => {
+                let Long { weight, sign_dscale, digits } = &**long;
                 let is_neg = (sign_dscale & NUMERIC_NEG) != 0;
                 let scale = sign_dscale & DSCALE_MASK;
 
@@ -657,9 +679,9 @@ impl Numeric {
     #[inline]
     const fn set_sign(&mut self, neg: bool) {
         match self {
-            Self::Long { sign_dscale, .. } => match neg {
-                true => *sign_dscale |= NUMERIC_NEG,
-                _ => *sign_dscale &= !NUMERIC_NEG,
+            Self::Long(long) => match neg {
+                true => long.sign_dscale |= NUMERIC_NEG,
+                _ => long.sign_dscale &= !NUMERIC_NEG,
             },
             Self::Short(packed) => match neg {
                 true => *packed |= 1 << SIGN_SHIFT,
@@ -672,8 +694,8 @@ impl Numeric {
     #[inline]
     const fn set_scale(&mut self, scale: u16) {
         match self {
-            Self::Long { sign_dscale, .. } => {
-                *sign_dscale = (*sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK)
+            Self::Long(long) => {
+                long.sign_dscale = (long.sign_dscale & NUMERIC_NEG) | (scale & DSCALE_MASK)
             },
 
             Self::Short(packed) => {
@@ -742,7 +764,7 @@ impl Numeric {
                     digits.push(digit);
                 }
 
-                Ok(Self::Long { weight, sign_dscale, digits })
+                Ok(Self::Long(Box::new(Long { weight, sign_dscale, digits })))
             },
             _ => Err("Invalid numeric tag"),
         }
@@ -761,7 +783,8 @@ impl Serialize for Numeric {
             // 2 bytes: weight
             // 2 bytes: sign_dscale
             // N * 2 bytes: digits
-            Self::Long { weight, sign_dscale, digits } => {
+            Self::Long(long) => {
+                let Long { weight, sign_dscale, digits } = &**long;
                 let tag = 0b01u64 << TAG_SHIFT;
                 buff.extend_from_slice(&tag.to_le_bytes());
 
@@ -999,7 +1022,7 @@ impl<'a, 'b> Sub<&'b Numeric> for &'a Numeric {
         // same signs (A - B) -> subtract magnitudes
         match neg_a != neg_b {
             true => {
-                let mut res = Numeric::add_abs(w_a, &digits_b, w_b, &digits_b);
+                let mut res = Numeric::add_abs(w_a, &digits_a, w_b, &digits_b);
                 res.set_sign(neg_a);
                 res.set_scale(scale);
                 res
@@ -1086,7 +1109,11 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
         let (w2, dig2, neg2, d2) = rhs.as_long_view();
 
         if dig1.is_empty() || dig2.is_empty() {
-            return Numeric::Long { weight: 0, sign_dscale: d1 + d2, digits: vec![] };
+            return Numeric::Long(Box::new(Long {
+                weight: 0,
+                sign_dscale: d1 + d2,
+                digits: vec![],
+            }));
         }
 
         let mut acc = vec![0i32; dig1.len() + dig2.len()];
@@ -1125,13 +1152,13 @@ impl<'a, 'b> Mul<&'b Numeric> for &'a Numeric {
         }
 
         if start >= end {
-            return Numeric::Long { weight: 0, sign_dscale, digits: vec![] };
+            return Numeric::Long(Box::new(Long { weight: 0, sign_dscale, digits: vec![] }));
         };
 
         let digits = acc[start..end].iter().map(|&x| x as i16).collect::<Vec<i16>>();
         let weight = (w1 + w2 + 1) - (start as i16);
 
-        Numeric::Long { weight, sign_dscale, digits }
+        Numeric::Long(Box::new(Long { weight, sign_dscale, digits }))
     }
 }
 
@@ -1159,6 +1186,16 @@ impl<'n> Mul<Numeric> for &'n Numeric {
     #[inline]
     fn mul(self, rhs: Numeric) -> Self::Output {
         self * &rhs
+    }
+}
+
+/// `self - trunc(self / rhs) * rhs`: the sign of the dividend
+impl<'a, 'b> std::ops::Rem<&'b Numeric> for &'a Numeric {
+    type Output = Numeric;
+
+    fn rem(self, rhs: &'b Numeric) -> Self::Output {
+        let quotient = (self / rhs).trunc(0);
+        self - &(&quotient * rhs)
     }
 }
 
@@ -1317,7 +1354,7 @@ impl TryFrom<&[u8]> for Numeric {
                     digits.push(digit);
                 });
 
-                Ok(Self::Long { weight, sign_dscale, digits })
+                Ok(Self::Long(Box::new(Long { weight, sign_dscale, digits })))
             },
             _ => Err(NumericError::InvalidFormat),
         }
@@ -1391,7 +1428,8 @@ impl From<&Numeric> for Option<f64> {
                 Some(value)
             },
 
-            Numeric::Long { weight, sign_dscale, digits } => {
+            Numeric::Long(long) => {
+                let Long { weight, sign_dscale, digits } = &**long;
                 if digits.is_empty() {
                     return Some(0.0);
                 }
@@ -1448,7 +1486,8 @@ impl From<&Numeric> for Option<i64> {
                 Some(value)
             },
 
-            Numeric::Long { weight, sign_dscale, digits } => {
+            Numeric::Long(long) => {
+                let Long { weight, sign_dscale, digits } = &**long;
                 if digits.is_empty() {
                     return Some(0);
                 }
@@ -1554,7 +1593,8 @@ impl Display for Numeric {
                     },
                 }
             },
-            Self::Long { sign_dscale, digits, weight } => {
+            Self::Long(long) => {
+                let Long { sign_dscale, digits, weight } = &**long;
                 if digits.is_empty() {
                     return write!(f, "0");
                 }
@@ -1663,6 +1703,28 @@ impl<'n> From<&'n Numeric> for i64 {
 mod tests {
     use super::*;
 
+    /// found by differential fuzzing: a long fraction plus a short one, then truncation
+    #[test]
+    fn adding_a_short_to_a_long_fraction() {
+        let long = Numeric::from_str("0.50000000000000000000").unwrap();
+        let half = Numeric::from_scaled_i128(5, 1).unwrap();
+
+        let sum = &long + &half;
+        assert_eq!(sum.to_string(), "1.00000000000000000000");
+        assert_eq!(sum.trunc(0).to_string(), "1");
+    }
+
+    /// found by differential fuzzing: the long path of `A - (-B)` added `|B|` to itself
+    #[test]
+    fn subtracting_a_negative_from_a_long_numeric() {
+        let long = Numeric::from_str("2.00000000000000000000").unwrap();
+        assert!(matches!(long, Numeric::Long(_)));
+
+        assert_eq!((&long - &Numeric::from(-1i128)).to_string(), "3.00000000000000000000");
+        assert_eq!((&-long.clone() - &Numeric::from(5i128)).to_string(), "-7.00000000000000000000");
+        assert_eq!((&Numeric::from(-5i128) - &long).to_string(), "-7.00000000000000000000");
+    }
+
     fn num(val: i128, scale: u16) -> Numeric {
         Numeric::from_scaled_i128(val, scale).expect("Invalid test numeric data")
     }
@@ -1690,7 +1752,8 @@ mod tests {
     fn base_10000_representation() {
         // 10000 should be represented as a single digit in base-10000
         let num = Numeric::from(10000u64);
-        if let Numeric::Long { digits, weight, .. } = num {
+        if let Numeric::Long(long) = num {
+            let Long { digits, weight, .. } = *long;
             assert_eq!(digits.len(), 1);
             assert_eq!(digits[0], 1);
             assert_eq!(weight, 0);
@@ -1774,10 +1837,11 @@ mod tests {
         // scale 131 means we need 33 groups of 4 digits (132 digits capacity).
         // 131 % 4 = 3, so we pad the single digit by 10^1.
         // 3 becomes 30 internally.
-        match result {
-            Numeric::Long { weight, sign_dscale, ref digits } => {
+        match &result {
+            Numeric::Long(long) => {
+                let Long { weight, sign_dscale, digits } = &**long;
                 assert_eq!(digits, &vec![30]);
-                assert_eq!(weight, -33);
+                assert_eq!(*weight, -33);
                 assert_eq!(sign_dscale & DSCALE_MASK, 131);
             },
             _ => panic!(),
@@ -1979,7 +2043,8 @@ mod tests {
         let res = &a * &a;
 
         match &res {
-            Numeric::Long { digits, weight, .. } => {
+            Numeric::Long(long) => {
+                let Long { digits, weight, .. } = &**long;
                 // 8e37 requires about 10 groups of base-10000 digits
                 assert!(digits.len() >= 9);
                 assert!(*weight >= 8);
