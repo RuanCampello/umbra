@@ -46,7 +46,11 @@ pub struct SchemaBuilder {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Column {
-    name: String,
+    /// Shared, so schemas derived per statement copy a reference count, not the name
+    name: Arc<str>,
+    /// A hash of `name`, so a look-up by name compares integers before strings
+    // PERFORMANCE: every layer of a statement resolves each name it reads by scanning the columns
+    key: u64,
     r#type: Type,
     nullable: bool,
     primary_key: bool,
@@ -63,6 +67,18 @@ pub struct Column {
 struct SchemaBytes<'a> {
     data: &'a [u8],
     position: usize,
+}
+
+/// the bytes of `r#type`, as schemas store it
+pub(crate) fn encode_type(r#type: Type) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    serialise_type(r#type, &mut bytes);
+    bytes
+}
+
+/// the type [encode_type] wrote
+pub(crate) fn decode_type(bytes: &[u8]) -> Type {
+    SchemaBytes::new(bytes).column_type().expect("an encoded type")
 }
 
 /// Mirrors [SchemaBytes::column_type], the discriminants must stay in sync
@@ -170,6 +186,12 @@ impl Schema {
 
     /// a schema of only the columns at `keep`, for projection pushdown
     pub fn project(&self, keep: &[usize]) -> Self {
+        // PERFORMANCE: keeping every column in order is the schema itself, its names not copied
+        if keep.len() == self.columns.len()
+            && keep.iter().enumerate().all(|(position, &i)| position == i)
+        {
+            return self.clone();
+        }
         Self::new(keep.iter().map(|&i| self.columns[i].clone()).collect())
     }
 
@@ -177,7 +199,7 @@ impl Schema {
         use crate::db::ROW_COL_ID;
 
         debug_assert!(
-            self.columns.first().is_none_or(|first| first.name != ROW_COL_ID),
+            self.columns.first().is_none_or(|first| &*first.name != ROW_COL_ID),
             "schema already has {ROW_COL_ID}: {self:?}"
         );
 
@@ -223,7 +245,8 @@ impl Schema {
 
     /// finds the last occurence of column name in the schema
     pub fn last_index_of(&self, col: &str) -> Option<usize> {
-        self.columns.iter().rposition(|c| c.name == col)
+        let key = name_key(col);
+        self.columns.iter().rposition(|c| c.key == key && &*c.name == col)
     }
 
     /// adds qualified column to index for all columns within the range
@@ -255,7 +278,7 @@ impl Schema {
     }
 
     pub fn columns_ids(&self) -> Vec<String> {
-        self.columns.iter().map(|c| c.name.clone()).collect()
+        self.columns.iter().map(|c| c.name.to_string()).collect()
     }
 
     pub fn has_nullable(&self) -> bool {
@@ -363,7 +386,8 @@ impl Schema {
             let nullable = bytes.flag("Missing nullable field")?;
             let unique = bytes.flag("Missing unique field")?;
             let mut column = Column {
-                name: column_name,
+                key: name_key(&column_name),
+                name: column_name.into(),
                 r#type,
                 nullable,
                 primary_key,
@@ -488,8 +512,10 @@ impl SchemaBuilder {
 impl Column {
     /// a column that is neither nullable nor part of the primary key
     pub fn new(name: impl Into<String>, r#type: Type) -> Self {
+        let name: Arc<str> = name.into().into();
         Self {
-            name: name.into(),
+            key: name_key(&name),
+            name,
             r#type,
             nullable: false,
             primary_key: false,
@@ -511,9 +537,23 @@ impl Column {
         self
     }
 
-    /// this column under another name (an alias or an expression's text)
+    pub fn renamed(column: &Column, name: String) -> Self {
+        Self {
+            key: name_key(&name),
+            name: name.into(),
+            r#type: column.r#type,
+            nullable: column.nullable,
+            primary_key: column.primary_key,
+            unique: column.unique,
+            variants: column.variants.clone(),
+            default: column.default.clone(),
+        }
+    }
+
+    /// this column under another name
     pub fn named(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
+        self.name = name.into().into();
+        self.key = name_key(&self.name);
         self
     }
 
@@ -653,7 +693,7 @@ impl Display for Schema {
             .iter()
             .map(|col| {
                 vec![
-                    col.name.clone(),
+                    col.name.to_string(),
                     col.r#type.to_string(),
                     match col.is_nullable() {
                         false => "not null".to_string(),
@@ -709,6 +749,19 @@ impl Display for Schema {
         writeln!(f, "{}", full_border)?;
         Ok(())
     }
+}
+
+#[inline(always)]
+/// fnv-1a over the bytes of a column name
+const fn name_key(name: &str) -> u64 {
+    let bytes = name.as_bytes();
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut position = 0;
+    while position < bytes.len() {
+        hash = (hash ^ bytes[position] as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        position += 1;
+    }
+    hash
 }
 
 #[cfg(test)]

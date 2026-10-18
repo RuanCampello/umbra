@@ -6,14 +6,13 @@ mod mvcc;
 mod schema;
 
 pub use crate::core::numeric::Numeric;
+pub use crate::storage::engine::chunk::Budget;
 pub(crate) use context::Context;
-#[cfg(test)]
-pub(crate) use metadata::IndexMetadata;
 pub(crate) use metadata::TableMetadata;
 pub use mvcc::MvccDatabase;
 #[cfg(test)]
 pub(crate) use schema::SchemaBuilder;
-pub(crate) use schema::{Column, ForeignKey, Schema};
+pub(crate) use schema::{Column, ForeignKey, Schema, decode_type, encode_type};
 
 use crate::core::date::{DateParseError, ExtractError};
 use crate::core::uuid::UuidError;
@@ -71,14 +70,13 @@ pub enum SqlError {
 /// What the analyzer and statement preparation need from a session
 pub(crate) trait Ctx {
     fn metadata(&mut self, table: &str) -> Result<&mut TableMetadata>;
-    fn next_serial(&mut self, table: &str, column: usize) -> Result<i128>;
+    fn next_serial(&mut self, table: &str, column: usize) -> Result<i64>;
 }
 
 /// The identifier of [row id](https://www.sqlite.org/rowidtable.html) column
 pub(crate) const ROW_COL_ID: &str = "row_id";
 /// A table name the catalogue reserves
 pub(crate) const DB_METADATA: &str = "umbra_db_meta";
-const DEFAULT_CACHE_SIZE: usize = 512;
 
 type Result<T> = std::result::Result<T, DatabaseError>;
 
@@ -96,7 +94,6 @@ macro_rules! interval {
     };
 }
 
-#[allow(unused)]
 impl QuerySet {
     pub(crate) fn new(schema: Schema, tuples: Vec<Vec<Value>>) -> Self {
         Self { schema, tuples }
@@ -104,11 +101,6 @@ impl QuerySet {
 
     pub(crate) fn empty() -> Self {
         Self { schema: Schema::empty(), tuples: Vec::new() }
-    }
-
-    #[inline(always)]
-    fn get(&self, row: usize, column: &str) -> Option<&Value> {
-        self.tuples.get(row)?.get(self.schema.index_of(column)?)
     }
 
     pub fn is_empty(&self) -> bool {
