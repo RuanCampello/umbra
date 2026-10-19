@@ -2,7 +2,7 @@
 //! that need no second engine
 //!
 //! - **NoREC** (Rigger & Su, ESEC/FSE 2020): the rows `WHERE p` returns are exactly the rows whose projected `(p)` is true
-//!   `WHERE` runs through pushdown, index cursors, bound fast paths and literal folding; the projection evaluates `p` row by row
+//!   `WHERE` runs through pushdown, index cursors, bound fast paths and literal folding, the projection evaluates `p` row by row
 //! - **TLP** (Rigger & Su, OOPSLA 2020): `p`, `(p) = false` and `(p) IS NULL` partition the table,
 //!   so the partitions' rows, counts, sums, extremes and groups recombine into the unfiltered ones,
 //!   over a single table and over joins
@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use umbra::db::MvccDatabase;
 use umbra::sql::statement::Value;
 
-const NUMBERS: [&str; 7] = ["-2", "-1", "0", "1", "2", "1.5", "2.25"];
+const NUMBERS: [&str; 9] = ["-2", "-1", "0", "1", "2", "1.5", "2.25", "0.1", "0.3"];
 const TEXTS: [&str; 4] = ["'a'", "'ab'", "'b'", "''"];
 
 struct Rng(u64);
@@ -45,15 +45,30 @@ impl Rng {
 /// a table of random rows (with nulls) and random indexes, so each seed takes other access paths
 fn table(rng: &mut Rng) -> MvccDatabase {
     let mut db = MvccDatabase::in_memory().unwrap();
-    db.exec(
-        "CREATE TABLE t (id INT PRIMARY KEY, a INT NULLABLE, r REAL NULLABLE, s TEXT NULLABLE, \
-         b BOOLEAN NULLABLE, n NUMERIC(10, 2) NULLABLE);",
-    )
-    .unwrap();
+    for statement in schema(rng, "REAL") {
+        db.exec(&format!("{statement};")).unwrap();
+    }
+    db
+}
 
-    for (column, index) in [("a", "idx_a"), ("s", "idx_s"), ("n", "idx_n"), ("r", "idx_r")] {
+/// the statements creating and filling `t` and `u`, in SQL both umbra and PostgreSQL accept
+fn schema(rng: &mut Rng, real: &str) -> Vec<String> {
+    let mut statements = vec![format!(
+        "CREATE TABLE t (id INT PRIMARY KEY, a INT NULL, r {real} NULL, s TEXT NULL, b BOOLEAN NULL, n NUMERIC(10, 2) NULL)"
+    )];
+
+    let indexes = [
+        ("a", "idx_a"),
+        ("s", "idx_s"),
+        ("n", "idx_n"),
+        ("r", "idx_r"),
+        ("a, s", "idx_as"),
+        ("n, a", "idx_na"),
+        ("s, r, a", "idx_sra"),
+    ];
+    for (column, index) in indexes {
         if rng.chance(50) {
-            db.exec(&format!("CREATE INDEX {index} ON t({column});")).unwrap();
+            statements.push(format!("CREATE INDEX {index} ON t({column})"));
         }
     }
 
@@ -69,18 +84,16 @@ fn table(rng: &mut Rng) -> MvccDatabase {
                 value(&["-1.5", "0", "1", "2.5"]),
                 value(&TEXTS),
                 value(&["true", "false"]),
-                value(&["0.5", "1", "2.25", "-1"]),
+                value(&["0.5", "1", "2.25", "-1", "0.1", "0.3"]),
             )
         })
         .collect();
-    db.exec(&format!("INSERT INTO t (id, a, r, s, b, n) VALUES {};", rows.join(", ")))
-        .unwrap();
-
-    db.exec("CREATE TABLE u (uid INT PRIMARY KEY, ua INT NULLABLE, us TEXT NULLABLE);")
-        .unwrap();
+    statements.push(format!("INSERT INTO t (id, a, r, s, b, n) VALUES {}", rows.join(", ")));
+    statements.push("CREATE TABLE u (uid INT PRIMARY KEY, ua INT NULL, us TEXT NULL)".into());
     if rng.chance(50) {
-        db.exec("CREATE INDEX idx_ua ON u(ua);").unwrap();
+        statements.push("CREATE INDEX idx_ua ON u(ua)".into());
     }
+
     let rows: Vec<_> = (0..5 + rng.below(15))
         .map(|uid| {
             let ua = match rng.chance(20) {
@@ -94,29 +107,52 @@ fn table(rng: &mut Rng) -> MvccDatabase {
             format!("({uid}, {ua}, {us})")
         })
         .collect();
-    db.exec(&format!("INSERT INTO u (uid, ua, us) VALUES {};", rows.join(", ")))
-        .unwrap();
-    db
+    statements.push(format!("INSERT INTO u (uid, ua, us) VALUES {}", rows.join(", ")));
+
+    statements
 }
 
 /// a numeric term: a column, a literal, or arithmetic over terms
 fn number(rng: &mut Rng, depth: u32) -> String {
-    match rng.below(match depth == 0 {
+    expression(rng, depth).0
+}
+
+/// a numeric expression and whether it is constant
+fn expression(rng: &mut Rng, depth: u32) -> (String, bool) {
+    let number = |rng: &mut Rng, depth| expression(rng, depth).0;
+    let text = match rng.below(match depth == 0 {
         true => 2,
-        _ => 6,
+        _ => 8,
     }) {
         0 => rng.pick(&["a", "r", "n"]).to_string(),
-        1 => rng.pick(&NUMBERS).to_string(),
-        2 => format!(
-            "({} {} {})",
+        1 => return (rng.pick(&NUMBERS).to_string(), true),
+        2 => {
+            let (left, constant) = expression(rng, depth - 1);
+            let right = match constant {
+                true => rng.pick(&["a", "r", "n"]).to_string(),
+                false => number(rng, depth - 1),
+            };
+            format!("({left} {} {right})", rng.pick(&["+", "-", "*", "/", "%"]))
+        },
+        3 => {
+            let (operand, constant) = expression(rng, depth - 1);
+            return (format!("-{operand}"), constant);
+        },
+        4 => format!("ABS({})", number(rng, depth - 1)),
+        5 => format!(
+            "(CASE WHEN {} THEN {} ELSE {} END)",
+            predicate(rng, depth - 1),
             number(rng, depth - 1),
-            rng.pick(&["+", "-", "*", "/"]),
             number(rng, depth - 1)
         ),
-        3 => format!("-{}", number(rng, depth - 1)),
-        4 => format!("ABS({})", number(rng, depth - 1)),
+        6 => format!(
+            "CAST({} AS {})",
+            number(rng, depth - 1),
+            rng.pick(&["INT", "BIGINT", "DOUBLE PRECISION", "NUMERIC(10, 2)", "NUMERIC(10, 1)"])
+        ),
         _ => format!("COALESCE({}, {})", number(rng, depth - 1), rng.pick(&NUMBERS)),
-    }
+    };
+    (text, false)
 }
 
 /// a boolean predicate over the table, type-correct by construction
@@ -124,7 +160,7 @@ fn predicate(rng: &mut Rng, depth: u32) -> String {
     let comparison = || ["=", "!=", "<", "<=", ">", ">="];
     match rng.below(match depth == 0 {
         true => 7,
-        _ => 10,
+        _ => 11,
     }) {
         0 => format!("{} {} {}", number(rng, depth), rng.pick(&comparison()), number(rng, depth)),
         1 => format!("s {} {}", rng.pick(&comparison()), rng.pick(&TEXTS)),
@@ -146,6 +182,17 @@ fn predicate(rng: &mut Rng, depth: u32) -> String {
         6 => rng.pick(&["b", "b = true", "b = false"]).to_string(),
         7 => format!("({}) AND ({})", predicate(rng, depth - 1), predicate(rng, depth - 1)),
         8 => format!("({}) OR ({})", predicate(rng, depth - 1), predicate(rng, depth - 1)),
+        9 => format!(
+            "{}EXISTS (SELECT 1 FROM u WHERE u.ua = t.a{})",
+            rng.pick(&["", "NOT "]),
+            rng.pick(&[
+                "",
+                " AND u.us IS NULL",
+                " AND u.us > 'b'",
+                " AND u.ua > 0",
+                " AND u.uid < 7"
+            ])
+        ),
         _ => format!("({}) = {}", predicate(rng, depth - 1), rng.pick(&["true", "false"])),
     }
 }
@@ -166,7 +213,7 @@ fn affected(db: &mut MvccDatabase, sql: &str) -> Result<usize, String> {
     }
 }
 
-fn ids(db: &mut MvccDatabase, sql: &str) -> Result<BTreeSet<i128>, String> {
+fn ids(db: &mut MvccDatabase, sql: &str) -> Result<BTreeSet<i64>, String> {
     Ok(rows(db, sql)?
         .iter()
         .map(|row| match row[0] {
@@ -198,7 +245,7 @@ fn partitions(
     ])
 }
 
-/// checks every oracle on `p`; `Err` describes the mismatch
+/// checks every oracle on `p`, `Err` describes the mismatch
 fn check(db: &mut MvccDatabase, rng: &mut Rng, p: &str) -> Result<(), String> {
     let filtered = ids(db, &format!("SELECT id FROM t WHERE {p};"));
     let projected = rows(db, &format!("SELECT id, ({p}) FROM t;")).map(|rows| {
@@ -261,8 +308,8 @@ fn check(db: &mut MvccDatabase, rng: &mut Rng, p: &str) -> Result<(), String> {
 fn mutations(
     db: &mut MvccDatabase,
     p: &str,
-    filtered: &BTreeSet<i128>,
-    all: &BTreeSet<i128>,
+    filtered: &BTreeSet<i64>,
+    all: &BTreeSet<i64>,
 ) -> Result<(), String> {
     rows(db, "START TRANSACTION;")?;
     let updated = affected(db, &format!("UPDATE t SET a = a WHERE {p};"))?;
@@ -307,8 +354,8 @@ fn aggregates(db: &mut MvccDatabase, p: &str) -> Result<(), String> {
     };
 
     let recombined = (
-        parts.iter().map(|row| count(row)).sum::<i128>(),
-        parts.iter().map(|row| sum(row)).sum::<i128>(),
+        parts.iter().map(|row| count(row)).sum::<i64>(),
+        parts.iter().map(|row| sum(row)).sum::<i64>(),
         extreme(2, false),
         extreme(3, true),
     );
@@ -375,7 +422,7 @@ fn joins(db: &mut MvccDatabase, rng: &mut Rng, p: &str) -> Result<(), String> {
     }
 }
 
-/// `LIMIT`/`OFFSET` slice the unlimited order; the order is total thanks to the `id` tie-break
+/// `LIMIT`/`OFFSET` slice the unlimited order, the order being total thanks to the `id` tie-break
 fn limits(db: &mut MvccDatabase, rng: &mut Rng, p: &str) -> Result<(), String> {
     let order = format!(
         "{} {}, id {}",
@@ -428,6 +475,128 @@ fn random_predicates_agree_across_execution_paths() {
             }
         }
     }
+}
+
+#[test]
+fn random_predicates_agree_with_postgresql() {
+    let target = std::env::var("UMBRA_BENCH_PG")
+        .unwrap_or_else(|_| "host=/run/postgresql user=postgres dbname=postgres".into());
+    let Ok(mut postgres) = postgres::Client::connect(&target, postgres::NoTls) else {
+        eprintln!("postgresql unreachable, differential fuzzing skipped");
+        return;
+    };
+
+    let seeds: u64 = std::env::var("UMBRA_FUZZ_SEEDS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(40);
+    let render = |rows: Vec<Vec<Value>>| -> Vec<Vec<String>> {
+        rows.into_iter().map(|row| row.iter().map(Value::to_string).collect()).collect()
+    };
+
+    let mut compared = 0;
+    for seed in 0..seeds {
+        let mut rng = Rng::new(seed ^ 0xD1FF);
+        let mut db = MvccDatabase::in_memory().unwrap();
+        postgres
+            .batch_execute("DROP SCHEMA IF EXISTS umbra_fuzz CASCADE; CREATE SCHEMA umbra_fuzz; SET search_path TO umbra_fuzz")
+            .unwrap();
+        for statement in schema(&mut rng, "DOUBLE PRECISION") {
+            db.exec(&format!("{statement};")).unwrap();
+            postgres.batch_execute(&statement).unwrap();
+        }
+
+        for _ in 0..40 {
+            let p = predicate(&mut rng, 3);
+            for sql in [
+                format!("SELECT id FROM t WHERE {p} ORDER BY id"),
+                format!("SELECT COUNT(*), SUM(a), COUNT(s), MIN(a) FROM t WHERE {p}"),
+                format!(
+                    "SELECT t.id, u.uid FROM t JOIN u ON t.a = u.ua WHERE {p} ORDER BY t.id, u.uid"
+                ),
+            ] {
+                let ours = db.exec(&format!("{sql};")).map(|set| render(set.tuples));
+                let theirs = postgres.simple_query(&float_literals(&sql)).map(|messages| {
+                    messages
+                        .iter()
+                        .filter_map(|message| match message {
+                            postgres::SimpleQueryMessage::Row(row) => Some(
+                                (0..row.len())
+                                    .map(|i| row.get(i).unwrap_or("NULL").to_string())
+                                    .collect(),
+                            ),
+                            _ => None,
+                        })
+                        .collect::<Vec<Vec<_>>>()
+                });
+
+                match (ours, theirs) {
+                    (Ok(ours), Ok(theirs)) if ours == theirs => compared += 1,
+                    (Ok(ours), Ok(theirs)) => {
+                        panic!("seed {seed}: {sql}\n  umbra      {ours:?}\n  postgresql {theirs:?}")
+                    },
+                    _ => {},
+                }
+            }
+        }
+    }
+
+    postgres.batch_execute("DROP SCHEMA umbra_fuzz CASCADE").unwrap();
+    eprintln!("{compared} of {} queries compared with postgresql", seeds * 120);
+    assert!(compared > seeds * 60);
+}
+
+/// `sql` with its decimal literals typed `float8`, as umbra types them (PostgreSQL makes them
+/// NUMERIC), except a literal directly against the NUMERIC column `n`, which umbra makes exact
+fn float_literals(sql: &str) -> String {
+    let mut typed = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    let mut previous = ' ';
+
+    while let Some(c) = chars.next() {
+        typed.push(c);
+        let starts = c.is_ascii_digit()
+            && !previous.is_ascii_alphanumeric()
+            && previous != '_'
+            && previous != '.';
+        if starts {
+            let mut decimal = false;
+            while let Some(&next) = chars.peek() {
+                if !(next.is_ascii_digit() || (next == '.' && !decimal)) {
+                    break;
+                }
+                decimal |= next == '.';
+                typed.push(next);
+                chars.next();
+            }
+            let mut before = typed[..typed.len()
+                - typed.chars().rev().take_while(|c| c.is_ascii_digit() || *c == '.').count()]
+                .trim_end();
+            // a unary minus belongs to the literal: what matters is the operator before it
+            if let Some(rest) = before.strip_suffix('-') {
+                if rest.trim_end().ends_with(['+', '-', '*', '/', '%', '(', ',']) {
+                    before = rest.trim_end();
+                }
+            }
+            let after = chars.clone().collect::<String>();
+            let against_n = before.ends_with("n +")
+                || before.ends_with("n -")
+                || before.ends_with("n *")
+                || before.ends_with("n /")
+                || before.ends_with("n %")
+                || ["+ n", "- n", "* n", "/ n", "% n"].iter().any(|op| {
+                    after.trim_start().starts_with(op)
+                        && !after.trim_start()[op.len()..]
+                            .starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                });
+            if decimal && !against_n {
+                typed.push_str("::float8");
+            }
+        }
+        previous = typed.chars().last().unwrap_or(' ');
+    }
+
+    typed
 }
 
 /// seed 10: the simplifier rewrote `x * 0` to `0`, so `NULL * 0 < 1.5` became true
