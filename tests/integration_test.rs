@@ -43,8 +43,8 @@ impl Drop for State {
     }
 }
 
-fn numeric(val: i128, scale: u16) -> Value {
-    Value::Numeric(Numeric::from_scaled_i128(val, scale).unwrap())
+fn numeric(val: i64, scale: u16) -> Value {
+    Value::Numeric(Numeric::from_scaled_i128(val.into(), scale).unwrap())
 }
 
 #[test]
@@ -1141,10 +1141,10 @@ fn text_string_functions() -> Result<()> {
     assert_eq!(
         query.tuples,
         vec![
-            vec![('a' as i128).into()],
-            vec![('b' as i128).into()],
-            vec![('c' as i128).into()],
-            vec![('d' as i128).into()],
+            vec![('a' as i64).into()],
+            vec![('b' as i64).into()],
+            vec![('c' as i64).into()],
+            vec![('d' as i64).into()],
         ]
     );
 
@@ -1959,17 +1959,19 @@ fn join_type_coercion() -> Result<()> {
 }
 
 #[test]
-#[should_panic]
-fn non_equi_join_panic() {
+fn non_equi_join() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE t1 (val INT PRIMARY KEY);").unwrap();
-    db.exec("CREATE TABLE t2 (val INT PRIMARY KEY);").unwrap();
+    db.exec("CREATE TABLE t1 (val INT PRIMARY KEY);")?;
+    db.exec("CREATE TABLE t2 (val INT PRIMARY KEY);")?;
 
-    db.exec("INSERT INTO t1 VALUES (10);").unwrap();
-    db.exec("INSERT INTO t2 VALUES (5);").unwrap();
+    db.exec("INSERT INTO t1 VALUES (10), (3);")?;
+    db.exec("INSERT INTO t2 VALUES (5);")?;
 
-    let _ = db.exec("SELECT t1.val FROM t1 JOIN t2 ON t1.val > t2.val;");
+    let query = db.exec("SELECT t1.val FROM t1 JOIN t2 ON t1.val > t2.val;")?;
+    assert_eq!(query.tuples, vec![vec![10.into()]]);
+
+    Ok(())
 }
 
 #[test]
@@ -3271,7 +3273,7 @@ fn ternary_logic_partitioning_holds_on_every_access_path() -> Result<()> {
         "id >= 50 AND id < 120",
     ];
 
-    let count = |db: &mut State, filter: &str| -> Result<i128> {
+    let count = |db: &mut State, filter: &str| -> Result<i64> {
         let result = db.exec(&format!("SELECT COUNT(*) FROM tlp WHERE {filter};"))?;
         match result.tuples[0][0] {
             Value::Number(n) => Ok(n),

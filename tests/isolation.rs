@@ -13,7 +13,7 @@ fn hermitage() -> MvccDatabase {
     db
 }
 
-fn values(db: &mut MvccDatabase, query: &str) -> Vec<i128> {
+fn values(db: &mut MvccDatabase, query: &str) -> Vec<i64> {
     db.exec(query)
         .unwrap()
         .tuples
@@ -25,7 +25,7 @@ fn values(db: &mut MvccDatabase, query: &str) -> Vec<i128> {
         .collect()
 }
 
-fn value_of(db: &mut MvccDatabase, id: i128) -> i128 {
+fn value_of(db: &mut MvccDatabase, id: i64) -> i64 {
     values(db, &format!("SELECT value FROM test WHERE id = {id};"))[0]
 }
 
@@ -126,7 +126,7 @@ fn read_committed_increments_from_many_sessions_are_never_lost() {
     });
 
     let mut db = db;
-    assert_eq!(value_of(&mut db, 1), 10 + (sessions * increments) as i128);
+    assert_eq!(value_of(&mut db, 1), 10 + (sessions * increments) as i64);
 }
 
 #[test]
@@ -193,11 +193,11 @@ fn pair(level: &str) -> (MvccDatabase, MvccDatabase) {
     (first, second)
 }
 
-fn all_values(db: &mut MvccDatabase) -> Vec<i128> {
+fn all_values(db: &mut MvccDatabase) -> Vec<i64> {
     values(db, "SELECT value FROM test ORDER BY id;")
 }
 
-/// G0: two writers of the same rows; the second is refused instead of interleaving
+/// G0: two writers of the same rows, the second is refused instead of interleaving
 #[test]
 fn g0_dirty_writes_never_interleave() {
     for level in LEVELS {
@@ -414,7 +414,7 @@ impl Rng {
     }
 }
 
-fn try_values(db: &mut MvccDatabase, query: &str) -> Result<Vec<i128>, DatabaseError> {
+fn try_values(db: &mut MvccDatabase, query: &str) -> Result<Vec<i64>, DatabaseError> {
     Ok(db
         .exec(query)?
         .tuples
@@ -436,7 +436,7 @@ fn abandon(db: &mut MvccDatabase) {
 #[test]
 fn bank_transfers_conserve_the_total_in_every_snapshot() {
     const ACCOUNTS: u64 = 16;
-    const START: i128 = 1_000;
+    const START: i64 = 1_000;
 
     for (level, seed) in [("SNAPSHOT", 7), ("SERIALIZABLE", 11)] {
         let mut db = MvccDatabase::in_memory().unwrap();
@@ -455,7 +455,7 @@ fn bank_transfers_conserve_the_total_in_every_snapshot() {
 
                     for _ in 0..300 {
                         let (from, to) = (rng.below(ACCOUNTS), rng.below(ACCOUNTS));
-                        let amount = rng.below(50) as i128 + 1;
+                        let amount = rng.below(50) as i64 + 1;
 
                         let transfer = |db: &mut MvccDatabase| -> Result<(), DatabaseError> {
                             db.exec(&format!("BEGIN ISOLATION LEVEL {level};"))?;
@@ -499,8 +499,8 @@ fn bank_transfers_conserve_the_total_in_every_snapshot() {
                             values(&mut session, "SELECT balance FROM accounts WHERE id >= 8;");
                         let audited = session.exec("COMMIT;");
 
-                        let total: i128 = low.iter().chain(&high).sum();
-                        assert_eq!(total, ACCOUNTS as i128 * START, "{level}, seed {seed}");
+                        let total: i64 = low.iter().chain(&high).sum();
+                        assert_eq!(total, ACCOUNTS as i64 * START, "{level}, seed {seed}");
                         assert!(low.iter().chain(&high).all(|&b| b >= 0), "{level}");
                         assert!(audited.is_ok(), "read-only transactions never abort");
                     }
@@ -508,8 +508,8 @@ fn bank_transfers_conserve_the_total_in_every_snapshot() {
             }
         });
 
-        let total: i128 = values(&mut db, "SELECT balance FROM accounts;").iter().sum();
-        assert_eq!(total, ACCOUNTS as i128 * START, "{level}");
+        let total: i64 = values(&mut db, "SELECT balance FROM accounts;").iter().sum();
+        assert_eq!(total, ACCOUNTS as i64 * START, "{level}");
     }
 }
 
@@ -526,7 +526,7 @@ fn concurrent_write_skew_never_breaks_the_invariant_at_serializable() {
                 let (mut session, barrier) = (db.session(), &barrier);
                 scope.spawn(move || {
                     session.exec("BEGIN ISOLATION LEVEL SERIALIZABLE;").unwrap();
-                    let on_call: i128 =
+                    let on_call: i64 =
                         values(&mut session, "SELECT on_call FROM doctors;").iter().sum();
                     barrier.wait();
                     if on_call >= 2 {
@@ -540,7 +540,7 @@ fn concurrent_write_skew_never_breaks_the_invariant_at_serializable() {
             }
         });
 
-        let on_call: i128 = values(&mut db, "SELECT on_call FROM doctors;").iter().sum();
+        let on_call: i64 = values(&mut db, "SELECT on_call FROM doctors;").iter().sum();
         assert!(on_call >= 1, "round {round}: nobody left on call");
     }
 }

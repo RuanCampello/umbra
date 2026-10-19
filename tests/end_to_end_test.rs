@@ -107,8 +107,8 @@ fn connect(port: u16) -> Client {
     }
 }
 
-fn numeric(val: i128, scale: u16) -> Value {
-    Value::Numeric(Numeric::from_scaled_i128(val, scale).unwrap())
+fn numeric(val: impl Into<i128>, scale: u16) -> Value {
+    Value::Numeric(Numeric::from_scaled_i128(val.into(), scale).unwrap())
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn numeric_joins_aggregation() {
         "#,
     );
 
-    let categories: [(&str, i128); 8] = [
+    let categories: [(&str, i64); 8] = [
         ("Automotive", 2350722),
         ("Beauty", 2108030),
         ("Sports", 2103120),
@@ -271,7 +271,7 @@ fn analytics_reporting() {
         "#,
     );
 
-    let results: [(&str, i128, i128, i128); 8] = [
+    let results: [(&str, i64, i64, i64); 8] = [
         ("Beauty", 757640, 41666666666666667, 6),
         ("Automotive", 730903, 31111111111111111, 9),
         ("Sports", 729063, 42000000000000000, 5),
@@ -589,4 +589,36 @@ fn writes_report_affected_rows_over_tcp() {
     );
     assert_eq!(db.send("UPDATE tallies SET n = 1 WHERE id <= 3;"), Response::Empty(3));
     assert_eq!(db.send("DELETE FROM tallies WHERE n = 0;"), Response::Empty(1));
+}
+
+#[test]
+fn integer_sums_stay_integers() {
+    let server = State::default();
+    let mut db = server.client();
+
+    db.exec("CREATE TABLE invoices (id INT PRIMARY KEY, account BIGINT, cents INT);");
+    db.exec("CREATE INDEX invoices_account ON invoices(account);");
+    db.exec("INSERT INTO invoices (id, account, cents) VALUES (1, 7, 1050), (2, 7, 2500), (3, 8, 1);");
+
+    let query = db.exec("SELECT SUM(cents), AVG(cents) FROM invoices;");
+    assert_eq!(query.tuples, vec![vec![3551.into(), numeric(11836666666666666667i128, 16)]]);
+
+    let query = db.exec("SELECT SUM(cents) FROM invoices WHERE account = 7;");
+    assert_eq!(query.tuples, vec![vec![3550.into()]]);
+}
+
+#[test]
+fn more_clients_than_cores_are_all_served() {
+    let server = State::default();
+    let mut setup = server.client();
+    setup.exec("CREATE TABLE visits (id INT PRIMARY KEY);");
+
+    let mut clients: Vec<_> = (0..32).map(|_| server.client()).collect();
+    for (id, client) in clients.iter_mut().enumerate() {
+        client.stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        client.exec(&format!("INSERT INTO visits (id) VALUES ({id});"));
+    }
+
+    let query = setup.exec("SELECT COUNT(*) FROM visits;");
+    assert_eq!(query.tuples, vec![vec![32.into()]]);
 }
