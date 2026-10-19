@@ -1,0 +1,236 @@
+# Arithmetic over integers, floats and numerics, results from PostgreSQL
+
+statement ok
+CREATE TABLE measures (id INT PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, x DOUBLE PRECISION NOT NULL, n NUMERIC(10, 2) NOT NULL)
+
+statement ok
+INSERT INTO measures (id, a, b, x, n) VALUES (1, 7, 2, 1.5, 10.25), (2, -7, 2, -0.5, 3.10), (3, 9, -4, 2.25, -1.05), (4, 0, 5, 0.0, 0.00)
+
+query II rowsort
+SELECT id, a + b * 2 FROM measures
+----
+1	11
+2	-3
+3	1
+4	10
+
+query II rowsort
+SELECT id, (a + b) * 2 FROM measures
+----
+1	18
+2	-10
+3	10
+4	10
+
+query II rowsort
+SELECT id, a / b FROM measures
+----
+1	3
+2	-3
+3	-2
+4	0
+
+query II rowsort
+SELECT id, -a - -b FROM measures
+----
+1	-5
+2	9
+3	-13
+4	5
+
+query IR rowsort
+SELECT id, x * 2 + a FROM measures
+----
+1	10.000
+2	-8.000
+3	13.500
+4	0.000
+
+query IR rowsort
+SELECT id, a / x FROM measures WHERE x != 0
+----
+1	4.667
+2	14.000
+3	4.000
+
+query IR rowsort
+SELECT id, n * 2 FROM measures
+----
+1	20.500
+2	6.200
+3	-2.100
+4	0.000
+
+query IR rowsort
+SELECT id, n + a FROM measures
+----
+1	17.250
+2	-3.900
+3	7.950
+4	0.000
+
+query IR rowsort
+SELECT id, n / 4 FROM measures
+----
+1	2.562
+2	0.775
+3	-0.263
+4	0.000
+
+query II rowsort
+SELECT id, ABS(a) + SIGN(b) FROM measures
+----
+1	8
+2	8
+3	8
+4	1
+
+query IR rowsort
+SELECT id, SQRT(ABS(x)) FROM measures
+----
+1	1.225
+2	0.707
+3	1.500
+4	0.000
+
+query IR rowsort
+SELECT id, POWER(a, 2) FROM measures
+----
+1	49.000
+2	49.000
+3	81.000
+4	0.000
+
+query I rowsort
+SELECT id FROM measures WHERE a * b < -10
+----
+2
+3
+
+query I rowsort
+SELECT id FROM measures WHERE n > 3
+----
+1
+2
+
+query I rowsort
+SELECT id FROM measures WHERE x * 2 = 3
+----
+1
+
+statement error
+SELECT a / 0 FROM measures
+
+query IIII
+SELECT 3 / -2, 7 / 2, -7 / 2, 4611686018427387903 * 2 + 1 FROM measures WHERE id = 1
+----
+-1	3	-3	9223372036854775807
+
+query I
+SELECT id FROM measures WHERE 3 / -2 = -1 ORDER BY id
+----
+1
+2
+3
+4
+
+query I
+SELECT id FROM measures WHERE x / -2 >= 0 AND x * -1 <= 0 ORDER BY id
+----
+4
+
+query I
+SELECT id FROM measures WHERE x * -1 = 0 ORDER BY id
+----
+4
+
+statement ok
+INSERT INTO measures (id, a, b, x, n) VALUES (5, 1, 1, 3, 1)
+
+statement ok
+UPDATE measures SET x = 7 WHERE id = 4
+
+query IRR rowsort
+SELECT id, x / 2, n / 4 FROM measures WHERE id >= 4
+----
+4	3.500	0.000
+5	1.500	0.250
+
+statement error
+SELECT 9223372036854775807 + 1
+
+statement error
+SELECT -9223372036854775807 - 2
+
+statement error
+SELECT 4611686018427387904 * 2
+
+query I
+SELECT -9223372036854775807 - 1
+----
+-9223372036854775808
+
+query R
+SELECT 9223372036854775808 + 1
+----
+9223372036854775808.000
+
+query R
+SELECT 100000000000000000000 / 3
+----
+33333333333333331968.000
+
+query RR rowsort
+SELECT 1.5 % n, -1.5 % n FROM measures WHERE n <> 0
+----
+0.450	-0.450
+0.500	-0.500
+1.500	-1.500
+1.500	-1.500
+
+statement ok
+INSERT INTO measures (id, a, b, x, n) VALUES (6, 1, 1, 0.1, 0.10)
+
+query IR
+SELECT id, -1.5 % n FROM measures WHERE id = 6
+----
+6	0.000
+
+query I
+SELECT id FROM measures WHERE id = 6 AND -1.5 % n != 0
+----
+
+query IR
+SELECT id, COALESCE(-1.5 % n, 1.5) FROM measures WHERE id = 6
+----
+6	0.000
+
+query I
+SELECT id FROM measures WHERE id = 6 AND COALESCE(-1.5 % n, 1.5) != 0
+----
+
+query II
+SELECT CAST(n + (1.5 / -1) AS BIGINT), CAST(COALESCE(n + -1.5, 0) AS BIGINT) FROM measures WHERE id = 5
+----
+-1	-1
+
+statement error
+SELECT -(-9223372036854775807 - 1)
+
+query I
+SELECT -(-9223372036854775807)
+----
+9223372036854775807
+
+statement error
+SELECT ABS(-9223372036854775807 - 1)
+
+query RRR
+SELECT POWER(2, 10), POWER(2, 64), POWER(2, -1)
+----
+1024.000	18446744073709551616.000	0.500
+
+query II
+SELECT id, CAST(CASE WHEN id > 100 THEN n ELSE -x END AS INT) FROM measures WHERE id = 2
+----
+2	0

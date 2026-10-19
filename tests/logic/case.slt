@@ -1,0 +1,121 @@
+# CASE, results from PostgreSQL
+
+statement ok
+CREATE TABLE tickets (id INT PRIMARY KEY, priority INT NULL, state TEXT NOT NULL, hours DOUBLE PRECISION NOT NULL)
+
+statement ok
+INSERT INTO tickets (id, priority, state, hours) VALUES (1, 1, 'open', 2.5), (2, 3, 'closed', 10), (3, NULL, 'open', 0), (4, 2, 'blocked', 4), (5, 1, 'closed', 1)
+
+query IT rowsort
+SELECT id, CASE WHEN priority = 1 THEN 'urgent' WHEN priority = 2 THEN 'normal' ELSE 'later' END FROM tickets
+----
+1	urgent
+2	later
+3	later
+4	normal
+5	urgent
+
+query IT rowsort
+SELECT id, CASE state WHEN 'open' THEN 'todo' WHEN 'closed' THEN 'done' END FROM tickets
+----
+1	todo
+2	done
+3	todo
+4	NULL
+5	done
+
+query II rowsort
+SELECT id, CASE WHEN hours = 0 THEN 0 ELSE 10 / priority END FROM tickets WHERE priority IS NOT NULL OR hours = 0
+----
+1	10
+2	3
+3	0
+4	5
+5	10
+
+query TI rowsort
+SELECT CASE WHEN hours > 3 THEN 'long' ELSE 'short' END AS kind, COUNT(*) FROM tickets GROUP BY kind
+----
+long	2
+short	3
+
+query I rowsort
+SELECT id FROM tickets WHERE CASE WHEN priority IS NULL THEN TRUE ELSE priority > 2 END
+----
+2
+3
+
+query I
+SELECT SUM(CASE WHEN state = 'open' THEN 1 ELSE 0 END) FROM tickets
+----
+2
+
+query IR rowsort
+SELECT id, CASE WHEN priority > 1 THEN hours * 2 ELSE hours END FROM tickets
+----
+1	2.500
+2	20.000
+3	0.000
+4	8.000
+5	1.000
+
+query I rowsort
+SELECT id FROM tickets ORDER BY CASE WHEN state = 'blocked' THEN 0 ELSE 1 END, id LIMIT 2
+----
+1
+4
+
+statement error
+SELECT CASE WHEN priority THEN 1 END FROM tickets
+
+statement error
+SELECT CASE WHEN priority > 1 THEN 1 ELSE 'x' END FROM tickets
+
+query III rowsort
+SELECT id, id % 2, -id % 3 FROM tickets
+----
+1	1	-1
+2	0	-2
+3	1	0
+4	0	-1
+5	1	-2
+
+query R
+SELECT 7.5 % 2 FROM tickets WHERE id = 1
+----
+1.500
+
+statement error
+SELECT id % 0 FROM tickets
+
+query II rowsort
+SELECT id, CASE WHEN id > 100 THEN 1 / (id - id) ELSE id END FROM tickets
+----
+1	1
+2	2
+3	3
+4	4
+5	5
+
+query IR rowsort
+SELECT id, CASE WHEN priority > 1 THEN hours ELSE id END / -2 FROM tickets
+----
+1	-0.500
+2	-5.000
+3	-1.500
+4	-2.000
+5	-2.500
+
+query IR rowsort
+SELECT id, id / COALESCE(CASE WHEN priority IS NULL THEN NULL ELSE 2 END, 2.5) FROM tickets
+----
+1	0.500
+2	1.000
+3	1.200
+4	2.000
+5	2.500
+
+query II
+SELECT CASE WHEN false THEN 1 / 0 ELSE 1 END, COALESCE(1, 1 / 0)
+----
+1	1

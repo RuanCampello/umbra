@@ -1,0 +1,98 @@
+# Ordering, limits and offsets, results from PostgreSQL
+
+statement ok
+CREATE TABLE books (id INT PRIMARY KEY, title TEXT NOT NULL, year INT NULL, rating DOUBLE PRECISION NOT NULL)
+
+statement ok
+INSERT INTO books (id, title, year, rating) VALUES (1, 'Dune', 1965, 4.3), (2, 'Neuromancer', 1984, 3.9), (3, 'Solaris', 1961, 4.0), (4, 'Hyperion', 1989, 4.3), (5, 'Ubik', 1969, 4.1), (6, 'Untitled', NULL, 2.5), (7, 'Foundation', 1951, 4.2)
+
+query T
+SELECT title FROM books ORDER BY year
+----
+Foundation
+Solaris
+Dune
+Ubik
+Neuromancer
+Hyperion
+Untitled
+
+query T
+SELECT title FROM books ORDER BY year DESC
+----
+Untitled
+Hyperion
+Neuromancer
+Ubik
+Dune
+Solaris
+Foundation
+
+query TR
+SELECT title, rating FROM books ORDER BY rating DESC, title
+----
+Dune	4.300
+Hyperion	4.300
+Foundation	4.200
+Ubik	4.100
+Solaris	4.000
+Neuromancer	3.900
+Untitled	2.500
+
+query T
+SELECT title FROM books ORDER BY rating DESC, year ASC
+----
+Dune
+Hyperion
+Foundation
+Ubik
+Solaris
+Neuromancer
+Untitled
+
+query T
+SELECT title FROM books ORDER BY id LIMIT 3
+----
+Dune
+Neuromancer
+Solaris
+
+query T
+SELECT title FROM books ORDER BY id LIMIT 3 OFFSET 2
+----
+Solaris
+Hyperion
+Ubik
+
+query T
+SELECT title FROM books ORDER BY id OFFSET 5
+----
+Untitled
+Foundation
+
+query T
+SELECT title FROM books ORDER BY id LIMIT 0
+----
+
+query T
+SELECT title FROM books ORDER BY id LIMIT 10 OFFSET 100
+----
+
+query T
+SELECT title FROM books ORDER BY title LIMIT 2
+----
+Dune
+Foundation
+
+query T
+SELECT title FROM books WHERE rating > 4.0 ORDER BY year DESC LIMIT 2
+----
+Hyperion
+Ubik
+
+query I
+SELECT id FROM books ORDER BY rating * 10 + id DESC LIMIT 3
+----
+7
+4
+5

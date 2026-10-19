@@ -1,0 +1,81 @@
+# Constraint enforcement, outcomes checked against PostgreSQL
+
+statement ok
+CREATE TABLE customers (id INT PRIMARY KEY, email VARCHAR(50) NOT NULL UNIQUE, age INT NULL CHECK (age >= 18))
+
+statement ok
+CREATE TABLE orders (id INT PRIMARY KEY, customer INT NOT NULL REFERENCES customers(id), total INT NOT NULL CHECK (total > 0))
+
+statement ok
+INSERT INTO customers (id, email, age) VALUES (1, 'ada@example.com', 36), (2, 'grace@example.com', NULL)
+
+statement error
+INSERT INTO customers (id, email, age) VALUES (1, 'other@example.com', 30)
+
+statement error
+INSERT INTO customers (id, email, age) VALUES (3, 'ada@example.com', 30)
+
+statement error
+INSERT INTO customers (id, email, age) VALUES (4, 'young@example.com', 17)
+
+statement error
+INSERT INTO customers (id, email, age) VALUES (5, NULL, 30)
+
+statement ok
+INSERT INTO orders (id, customer, total) VALUES (1, 1, 50)
+
+statement error
+INSERT INTO orders (id, customer, total) VALUES (2, 9, 50)
+
+statement error
+INSERT INTO orders (id, customer, total) VALUES (3, 1, 0)
+
+statement error
+DELETE FROM customers WHERE id = 1
+
+statement ok
+DELETE FROM customers WHERE id = 2
+
+statement ok
+UPDATE customers SET email = 'ada@example.com' WHERE id = 1 + 10 OR id = 1 AND age < 0
+
+statement ok
+UPDATE customers SET age = 40 WHERE id = 1
+
+statement error
+UPDATE customers SET age = 10 WHERE id = 1
+
+statement error
+UPDATE orders SET customer = 7 WHERE id = 1
+
+query IT
+SELECT id, email FROM customers ORDER BY id
+----
+1	ada@example.com
+
+query III
+SELECT id, customer, total FROM orders ORDER BY id
+----
+1	1	50
+
+statement error
+INSERT INTO customers (id) VALUES (10)
+
+statement error
+INSERT INTO orders (id, customer) VALUES (10, 1)
+
+statement ok
+INSERT INTO customers VALUES (11, 'barbara@example.com', 70)
+
+statement ok
+INSERT INTO customers VALUES (12, 'edsger@example.com')
+
+statement error
+INSERT INTO customers VALUES (13, 'alan@example.com', 41, 1)
+
+query IT
+SELECT id, email FROM customers ORDER BY id
+----
+1	ada@example.com
+11	barbara@example.com
+12	edsger@example.com

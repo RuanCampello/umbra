@@ -1,0 +1,137 @@
+# Joins, results from PostgreSQL
+
+statement ok
+CREATE TABLE departments (id INT PRIMARY KEY, name TEXT NOT NULL, floor INT NULL)
+
+statement ok
+CREATE TABLE employees (id INT PRIMARY KEY, name TEXT NOT NULL, department INT NULL, salary INT NOT NULL)
+
+statement ok
+INSERT INTO departments (id, name, floor) VALUES (1, 'engineering', 3), (2, 'marketing', NULL), (3, 'legal', 1)
+
+statement ok
+INSERT INTO employees (id, name, department, salary) VALUES (1, 'ada', 1, 120), (2, 'grace', 1, 130), (3, 'alan', 2, 90), (4, 'edsger', NULL, 100), (5, 'barbara', 9, 80)
+
+query TT rowsort
+SELECT e.name, d.name FROM employees AS e JOIN departments AS d ON e.department = d.id
+----
+ada	engineering
+alan	marketing
+grace	engineering
+
+query TT rowsort
+SELECT e.name, d.name FROM employees AS e LEFT JOIN departments AS d ON e.department = d.id
+----
+ada	engineering
+alan	marketing
+barbara	NULL
+edsger	NULL
+grace	engineering
+
+query TT rowsort
+SELECT e.name, d.name FROM employees AS e RIGHT JOIN departments AS d ON e.department = d.id
+----
+NULL	legal
+ada	engineering
+alan	marketing
+grace	engineering
+
+query TT rowsort
+SELECT e.name, d.name FROM employees AS e FULL JOIN departments AS d ON e.department = d.id
+----
+NULL	legal
+ada	engineering
+alan	marketing
+barbara	NULL
+edsger	NULL
+grace	engineering
+
+query TI rowsort
+SELECT d.name, COUNT(e.id) FROM departments AS d LEFT JOIN employees AS e ON e.department = d.id GROUP BY d.name
+----
+engineering	2
+legal	0
+marketing	1
+
+query TI rowsort
+SELECT d.name, SUM(e.salary) FROM departments AS d JOIN employees AS e ON e.department = d.id GROUP BY d.name
+----
+engineering	250
+marketing	90
+
+query TT rowsort
+SELECT e.name, d.name FROM employees AS e JOIN departments AS d ON e.department = d.id AND e.salary > 100
+----
+ada	engineering
+grace	engineering
+
+query TT rowsort
+SELECT e.name, d.name FROM employees AS e JOIN departments AS d ON e.department = d.id WHERE d.floor IS NULL
+----
+alan	marketing
+
+query TT rowsort
+SELECT a.name, b.name FROM employees AS a JOIN employees AS b ON a.department = b.department AND a.id < b.id
+----
+ada	grace
+
+query TT rowsort
+SELECT e.name, d.name FROM employees AS e LEFT JOIN departments AS d ON e.department = d.id WHERE d.id IS NULL
+----
+barbara	NULL
+edsger	NULL
+
+query TTI
+SELECT e.name, d.name, e.salary FROM employees AS e JOIN departments AS d ON e.department = d.id ORDER BY e.salary DESC LIMIT 2
+----
+grace	engineering	130
+ada	engineering	120
+
+statement ok
+CREATE TABLE readings (id INT PRIMARY KEY, level DOUBLE PRECISION NOT NULL, ratio NUMERIC(6, 2) NOT NULL)
+
+statement ok
+INSERT INTO readings (id, level, ratio) VALUES (1, 120, 1.5), (2, 90.5, 2), (3, 80, 0.5)
+
+query TI rowsort
+SELECT e.name, r.id FROM employees AS e JOIN readings AS r ON e.salary = r.level
+----
+ada	1
+barbara	3
+
+query I rowsort
+SELECT r.id FROM readings AS r JOIN readings AS q ON r.level = q.ratio * 60
+----
+1
+
+query II rowsort
+SELECT r.id, q.id FROM readings AS r JOIN readings AS q ON r.ratio = q.level / 60.5
+----
+
+query TT rowsort
+SELECT d.name, e.name FROM departments d CROSS JOIN employees e WHERE e.salary >= 120
+----
+engineering	ada
+engineering	grace
+legal	ada
+legal	grace
+marketing	ada
+marketing	grace
+
+query I
+SELECT COUNT(*) FROM departments, employees
+----
+15
+
+query TT rowsort
+SELECT d.name, e.name FROM departments d, employees e WHERE d.id = e.department AND d.floor = 3
+----
+engineering	ada
+engineering	grace
+
+query TTT rowsort
+SELECT d.name, e.name, r.level FROM departments d CROSS JOIN employees e JOIN readings r ON r.id = e.id WHERE d.id = 3
+----
+legal	ada	120
+legal	alan	80
+legal	grace	90.5

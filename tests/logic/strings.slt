@@ -1,0 +1,97 @@
+# Text functions and pattern matching, results from PostgreSQL
+
+statement ok
+CREATE TABLE cities (id INT PRIMARY KEY, name VARCHAR(30) NOT NULL, country TEXT NOT NULL)
+
+statement ok
+INSERT INTO cities (id, name, country) VALUES (1, 'Lisbon', 'PT'), (2, 'London', 'UK'), (3, 'Lyon', 'FR'), (4, 'Porto', 'PT'), (5, 'Oslo', 'NO'), (6, 'Los Angeles', 'US')
+
+query I rowsort
+SELECT id FROM cities WHERE name LIKE 'L%'
+----
+1
+2
+3
+6
+
+query I rowsort
+SELECT id FROM cities WHERE name LIKE '%o'
+----
+4
+5
+
+query I rowsort
+SELECT id FROM cities WHERE name LIKE '_o%'
+----
+2
+4
+6
+
+query I rowsort
+SELECT id FROM cities WHERE name LIKE '%on%'
+----
+1
+2
+3
+
+query IT rowsort
+SELECT id, CONCAT(name, ', ', country) FROM cities
+----
+1	Lisbon, PT
+2	London, UK
+3	Lyon, FR
+4	Porto, PT
+5	Oslo, NO
+6	Los Angeles, US
+
+query IT rowsort
+SELECT id, SUBSTRING(name FROM 2 FOR 3) FROM cities
+----
+1	isb
+2	ond
+3	yon
+4	ort
+5	slo
+6	os 
+
+query II rowsort
+SELECT id, POSITION('o' IN name) FROM cities
+----
+1	5
+2	2
+3	3
+4	2
+5	4
+6	2
+
+query T
+SELECT name FROM cities WHERE country = 'PT' ORDER BY name
+----
+Lisbon
+Porto
+
+query T
+SELECT name FROM cities ORDER BY name DESC
+----
+Porto
+Oslo
+Lyon
+Los Angeles
+London
+Lisbon
+
+query I rowsort
+SELECT id FROM cities WHERE name > 'M'
+----
+4
+5
+
+query II rowsort
+SELECT id, ASCII(name) FROM cities
+----
+1	76
+2	76
+3	76
+4	80
+5	79
+6	76

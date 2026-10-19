@@ -1,0 +1,45 @@
+# SELECT without FROM, results from PostgreSQL
+
+statement ok
+CREATE TABLE things (id INT PRIMARY KEY, weight INT NOT NULL)
+
+statement ok
+INSERT INTO things (id, weight) VALUES (1, 10), (2, 25), (3, 7)
+
+query I
+SELECT 1 + 1
+----
+2
+
+query IT
+SELECT 7 % 3 AS remainder, CONCAT('a', 'b')
+----
+1	ab
+
+query I
+SELECT (SELECT SUM(weight) FROM things)
+----
+42
+
+query I
+SELECT CASE WHEN EXISTS (SELECT id FROM things WHERE weight > 20) THEN 1 ELSE 0 END
+----
+1
+
+query I
+SELECT CAST('42' AS INT) * 2
+----
+84
+
+query I
+SELECT 5 WHERE 1 = 2
+----
+
+query I
+SELECT 5 LIMIT 0
+----
+
+query I
+SELECT COALESCE(NULL, 3)
+----
+3

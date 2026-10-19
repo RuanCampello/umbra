@@ -1,0 +1,226 @@
+# Three-valued logic and NULL propagation, results from PostgreSQL
+
+statement ok
+CREATE TABLE readings (id INT PRIMARY KEY, sensor TEXT NOT NULL, celsius INT NULL, humidity DOUBLE PRECISION NULL)
+
+statement ok
+INSERT INTO readings (id, sensor, celsius, humidity) VALUES (1, 'north', 12, 0.5), (2, 'north', NULL, 0.7), (3, 'south', 20, NULL), (4, 'south', NULL, NULL), (5, 'east', -4, 0.25)
+
+query I rowsort
+SELECT id FROM readings WHERE celsius > 0
+----
+1
+3
+
+query I rowsort
+SELECT id FROM readings WHERE NOT (celsius > 0)
+----
+5
+
+query I rowsort
+SELECT id FROM readings WHERE celsius IS NULL
+----
+2
+4
+
+query I rowsort
+SELECT id FROM readings WHERE celsius IS NOT NULL AND humidity IS NULL
+----
+3
+
+query I rowsort
+SELECT id FROM readings WHERE celsius > 0 OR humidity > 0.6
+----
+1
+2
+3
+
+query I rowsort
+SELECT id FROM readings WHERE celsius > 0 AND humidity > 0.6
+----
+
+query I rowsort
+SELECT id FROM readings WHERE celsius = NULL
+----
+
+query I rowsort
+SELECT id FROM readings WHERE celsius IN (12, 20)
+----
+1
+3
+
+query I rowsort
+SELECT id FROM readings WHERE celsius NOT IN (12, 20)
+----
+5
+
+query I rowsort
+SELECT id FROM readings WHERE celsius BETWEEN -5 AND 15
+----
+1
+5
+
+query II rowsort
+SELECT id, celsius + 1 FROM readings
+----
+1	13
+2	NULL
+3	21
+4	NULL
+5	-3
+
+query II rowsort
+SELECT id, celsius * 0 FROM readings
+----
+1	0
+2	NULL
+3	0
+4	NULL
+5	0
+
+query II rowsort
+SELECT id, COALESCE(celsius, -100) FROM readings
+----
+1	12
+2	-100
+3	20
+4	-100
+5	-4
+
+query IR rowsort
+SELECT id, COALESCE(humidity, celsius, 0) FROM readings
+----
+1	0.500
+2	0.700
+3	20.000
+4	0.000
+5	0.250
+
+query II rowsort
+SELECT id, ABS(celsius) FROM readings
+----
+1	12
+2	NULL
+3	20
+4	NULL
+5	4
+
+query I rowsort
+SELECT id FROM readings WHERE (celsius > 0) IS NULL
+----
+2
+4
+
+query IT
+SELECT id, sensor FROM readings ORDER BY celsius, id
+----
+5	east
+1	north
+3	south
+2	north
+4	south
+
+query IT
+SELECT id, sensor FROM readings ORDER BY celsius DESC, id
+----
+2	north
+4	south
+3	south
+1	north
+5	east
+
+query IIRRI
+SELECT COUNT(*), COUNT(celsius), AVG(celsius), SUM(humidity), MIN(celsius) FROM readings
+----
+5	3	9.333	1.450	-4
+
+query IIR
+SELECT COUNT(celsius), SUM(celsius), AVG(humidity) FROM readings WHERE id > 100
+----
+0	NULL	NULL
+
+query TII rowsort
+SELECT sensor, COUNT(celsius), MAX(celsius) FROM readings GROUP BY sensor
+----
+east	1	-4
+north	1	12
+south	1	20
+
+statement ok
+UPDATE readings SET celsius = celsius + 1
+
+query II rowsort
+SELECT id, celsius FROM readings
+----
+1	13
+2	NULL
+3	21
+4	NULL
+5	-3
+
+statement ok
+DELETE FROM readings WHERE celsius < 0 OR celsius IS NULL
+
+query I rowsort
+SELECT id FROM readings
+----
+1
+3
+
+statement ok
+INSERT INTO readings (id, sensor, celsius, humidity) VALUES (6, 'west', NULL, 0.9), (7, 'west', 8, 0.1)
+
+query I rowsort
+SELECT id FROM readings WHERE NOT celsius > 10 AND humidity < 0.5
+----
+7
+
+query I rowsort
+SELECT id FROM readings WHERE NOT (celsius > 10 OR humidity > 0.5)
+----
+7
+
+query I rowsort
+SELECT id FROM readings WHERE NOT celsius IS NULL
+----
+1
+3
+7
+
+query I rowsort
+SELECT id FROM readings WHERE sensor NOT LIKE 'w%'
+----
+1
+3
+
+query I rowsort
+SELECT id FROM readings WHERE celsius NOT BETWEEN 0 AND 10
+----
+1
+3
+
+query I rowsort
+SELECT id FROM readings WHERE celsius NOT IN (8, NULL)
+----
+
+query I rowsort
+SELECT id FROM readings WHERE NOT NOT (celsius = 8)
+----
+7
+
+query I rowsort
+SELECT id FROM readings WHERE NOT NULL
+----
+
+query III rowsort
+SELECT id, COALESCE(NULL, celsius, 0), CASE WHEN NULL IS NULL THEN 1 ELSE 0 END FROM readings
+----
+1	13	1
+3	21	1
+6	0	1
+7	8	1
+
+query I rowsort
+SELECT id FROM readings WHERE NULL IS NULL AND celsius IS NULL
+----
+6

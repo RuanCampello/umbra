@@ -1,0 +1,140 @@
+# UNION and UNION ALL, results from PostgreSQL
+
+statement ok
+CREATE TABLE staff (id INT PRIMARY KEY, name TEXT NOT NULL, city TEXT NULL)
+
+statement ok
+CREATE TABLE clients (id INT PRIMARY KEY, name TEXT NOT NULL, city TEXT NULL)
+
+statement ok
+INSERT INTO staff (id, name, city) VALUES (1, 'Ada', 'London'), (2, 'Alan', 'London'), (3, 'Grace', NULL)
+
+statement ok
+INSERT INTO clients (id, name, city) VALUES (1, 'Edsger', 'Austin'), (2, 'Barbara', 'London'), (3, 'Ken', NULL)
+
+query T rowsort
+SELECT city FROM staff UNION SELECT city FROM clients
+----
+Austin
+London
+NULL
+
+query T rowsort
+SELECT city FROM staff UNION ALL SELECT city FROM clients
+----
+Austin
+London
+London
+London
+NULL
+NULL
+
+query TT
+SELECT name, city FROM staff UNION SELECT name, city FROM clients ORDER BY name
+----
+Ada	London
+Alan	London
+Barbara	London
+Edsger	Austin
+Grace	NULL
+Ken	NULL
+
+query T
+SELECT city FROM staff UNION SELECT city FROM clients ORDER BY 1 DESC LIMIT 2
+----
+NULL
+London
+
+query T rowsort
+SELECT city FROM staff WHERE id = 1 UNION SELECT city FROM staff WHERE id = 2 UNION ALL SELECT city FROM clients WHERE id = 2
+----
+London
+London
+
+query I
+SELECT COUNT(*) FROM staff UNION ALL SELECT COUNT(*) FROM clients WHERE city IS NOT NULL ORDER BY 1
+----
+2
+3
+
+query T rowsort
+SELECT name FROM staff WHERE city IN (SELECT city FROM clients UNION SELECT 'Paris')
+----
+Ada
+Alan
+
+statement error
+SELECT id, name FROM staff UNION SELECT id FROM clients
+
+statement error
+SELECT name FROM staff ORDER BY name UNION SELECT name FROM clients
+
+# INTERSECT and EXCEPT, with ALL multiplicities and INTERSECT binding tighter
+
+statement ok
+CREATE TABLE bag_a (id INT PRIMARY KEY, v INT NOT NULL)
+
+statement ok
+CREATE TABLE bag_b (id INT PRIMARY KEY, v INT NOT NULL)
+
+statement ok
+INSERT INTO bag_a (id, v) VALUES (1, 1), (2, 1), (3, 1), (4, 2), (5, 3), (6, 4)
+
+statement ok
+INSERT INTO bag_b (id, v) VALUES (1, 1), (2, 1), (3, 3), (4, 5)
+
+query I rowsort
+SELECT v FROM bag_a INTERSECT SELECT v FROM bag_b
+----
+1
+3
+
+query I rowsort
+SELECT v FROM bag_a INTERSECT ALL SELECT v FROM bag_b
+----
+1
+1
+3
+
+query I rowsort
+SELECT v FROM bag_a EXCEPT SELECT v FROM bag_b
+----
+2
+4
+
+query I rowsort
+SELECT v FROM bag_a EXCEPT ALL SELECT v FROM bag_b
+----
+1
+2
+4
+
+query I rowsort
+SELECT v FROM bag_b EXCEPT SELECT v FROM bag_a
+----
+5
+
+query I rowsort
+SELECT v FROM bag_b UNION SELECT v FROM bag_a INTERSECT SELECT v FROM bag_b
+----
+1
+3
+5
+
+query I rowsort
+SELECT v FROM bag_a EXCEPT SELECT v FROM bag_b UNION ALL SELECT v FROM bag_b
+----
+1
+1
+2
+3
+4
+5
+
+query I
+SELECT v FROM bag_a INTERSECT SELECT v FROM bag_b ORDER BY v DESC LIMIT 1
+----
+3
+
+statement error
+SELECT v, id FROM bag_a EXCEPT SELECT v FROM bag_b

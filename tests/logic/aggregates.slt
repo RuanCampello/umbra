@@ -1,0 +1,109 @@
+# Aggregation and grouping, results from PostgreSQL
+
+statement ok
+CREATE TABLE sales (id INT PRIMARY KEY, region TEXT NOT NULL, product TEXT NOT NULL, units INT NOT NULL, price DOUBLE PRECISION NOT NULL, discount INT NULL)
+
+statement ok
+INSERT INTO sales (id, region, product, units, price, discount) VALUES (1, 'north', 'lamp', 3, 19.5, NULL), (2, 'north', 'desk', 1, 120.0, 10), (3, 'south', 'lamp', 7, 18.0, 5), (4, 'south', 'chair', 4, 45.25, NULL), (5, 'east', 'desk', 2, 115.0, 15), (6, 'north', 'lamp', 1, 21.0, NULL), (7, 'east', 'chair', 6, 44.0, 0)
+
+query IIIRR
+SELECT COUNT(*), SUM(units), MAX(units), AVG(price), MIN(price) FROM sales
+----
+7	24	7	54.679	18.000
+
+query IIR
+SELECT COUNT(discount), SUM(discount), AVG(discount) FROM sales
+----
+4	30	7.500
+
+query TII rowsort
+SELECT region, COUNT(*), SUM(units) FROM sales GROUP BY region
+----
+east	2	8
+north	3	5
+south	2	11
+
+query TTI rowsort
+SELECT region, product, SUM(units) FROM sales GROUP BY region, product
+----
+east	chair	6
+east	desk	2
+north	desk	1
+north	lamp	4
+south	chair	4
+south	lamp	7
+
+query TR rowsort
+SELECT product, SUM(units * price) FROM sales GROUP BY product
+----
+chair	445.000
+desk	350.000
+lamp	205.500
+
+query TI
+SELECT product, SUM(units) AS total FROM sales GROUP BY product ORDER BY total DESC
+----
+lamp	11
+chair	10
+desk	3
+
+query TII rowsort
+SELECT region, MIN(discount), MAX(discount) FROM sales GROUP BY region
+----
+east	0	15
+north	10	10
+south	5	5
+
+query TI rowsort
+SELECT region, COUNT(*) FROM sales WHERE units > 2 GROUP BY region
+----
+east	1
+north	1
+south	2
+
+query I
+SELECT COUNT(*) FROM sales WHERE units > 100
+----
+0
+
+query II
+SELECT SUM(units), MAX(units) FROM sales WHERE units > 100
+----
+NULL	NULL
+
+query TI rowsort
+SELECT product, COUNT(*) FROM sales WHERE units > 100 GROUP BY product
+----
+
+query IR
+SELECT SUM(units) + 1, AVG(units) * 2 FROM sales
+----
+25	6.857
+
+query TIT rowsort
+SELECT region, MAX(units), MIN(product) FROM sales GROUP BY region
+----
+east	6	chair
+north	3	desk
+south	7	chair
+
+statement ok
+CREATE TABLE big (id INT PRIMARY KEY, v BIGINT NOT NULL)
+
+statement ok
+INSERT INTO big (id, v) VALUES (1, 9223372036854775807), (2, 9223372036854775807), (3, -5), (4, -9223372036854775807)
+
+query R
+SELECT AVG(v) FROM big
+----
+2305843009213693952.000
+
+query I
+SELECT SUM(v) FROM big WHERE id <> 3
+----
+9223372036854775807
+
+# an integer SUM is BIGINT in umbra (PostgreSQL: NUMERIC over bigint)
+skipif postgresql
+statement error
+SELECT SUM(v) FROM big WHERE id <= 2
