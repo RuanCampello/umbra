@@ -50,3 +50,7 @@ harness = false
 name = "concurrency"
 harness = false
 
+
+[[bench]]
+name = "ycsb"
+harness = false
