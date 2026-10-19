@@ -86,9 +86,10 @@ pub fn serialize(content: &Response) -> Result<Vec<u8>, EncodingError> {
             }
 
             packed.extend_from_slice(&(u32::try_from(query_set.tuples.len())?).to_le_bytes());
-            query_set.tuples.iter().for_each(|tuple| {
-                packed.extend_from_slice(&tuple::serialize_tuple(&query_set.schema, tuple))
-            });
+            let nullable = query_set.schema.has_nullable();
+            for tuple in &query_set.tuples {
+                tuple::serialize_tuple_into(&mut packed, &query_set.schema, tuple, nullable);
+            }
         },
         Response::Empty(affected_rows) => {
             packed.push(b'!');
@@ -191,11 +192,13 @@ pub fn deserialize(content: &[u8]) -> Result<Response, EncodingError> {
             let num_tuples = u32::from_le_bytes(content[cursor..cursor + 4].try_into()?);
             cursor += 4;
 
-            (0..num_tuples).for_each(|_| {
-                let tuple = tuple::deserialize(&content[cursor..], &query_set.schema);
-                cursor += tuple::size_of(&tuple, &query_set.schema);
+            // PERFORMANCE: one cursor over every row, instead of re-measuring each decoded row
+            let mut rows = std::io::Cursor::new(&content[cursor..]);
+            for _ in 0..num_tuples {
+                let tuple = tuple::read_from(&mut rows, &query_set.schema)
+                    .map_err(|error| EncodingError::SliceConversion(error.to_string()))?;
                 query_set.tuples.push(tuple);
-            });
+            }
 
             query_set.display_enums();
             Response::QuerySet(query_set)
