@@ -251,7 +251,13 @@ impl Table {
     }
 
     /// the row as `view` sees it, provided it still holds `key` in `index` (index re-check)
-    pub fn get_keyed(&self, id: RowId, view: View, index: &Index, key: &Key) -> Result<Option<Row>> {
+    pub fn get_keyed(
+        &self,
+        id: RowId,
+        view: View,
+        index: &Index,
+        key: &Key,
+    ) -> Result<Option<Row>> {
         let Some(chunk) = self.chunk(id) else {
             return Ok(None);
         };
@@ -453,22 +459,28 @@ impl Table {
     pub fn recover_delete(&self, id: RowId) -> Result<()> {
         self.next_row_id.fetch_max(id + 1, Ordering::Relaxed);
 
-        if let Some(chunk) = self.chunk(id) {
+        Ok(if let Some(chunk) = self.chunk(id) {
             chunk.write()?[slot(id)] = Chain::new();
             chunk.changed();
-        }
-        Ok(())
+        })
     }
 
     /// who keeps `key` alive in `column` of row `id`, for a unique check by `marker`
-    pub(super) fn holder(&self, id: RowId, index: &Index, key: &Key, marker: u64) -> Result<Holder> {
+    pub(super) fn holder(
+        &self,
+        id: RowId,
+        index: &Index,
+        key: &Key,
+        marker: u64,
+    ) -> Result<Holder> {
         let Some(chunk) = self.chunk(id) else {
             return Ok(Holder::Free);
         };
 
         let slots = chunk.read()?;
         let chain = &slots[slot(id)];
-        let carries = |version: &Version| version.row.as_ref().is_some_and(|row| index.holds(row, key));
+        let carries =
+            |version: &Version| version.row.as_ref().is_some_and(|row| index.holds(row, key));
 
         let Some(head) = chain.last() else {
             return Ok(Holder::Free);
@@ -477,18 +489,18 @@ impl Table {
         Ok(match head.stamp {
             stamp if stamp == marker => match carries(head) {
                 true => Holder::Committed,
-                false => Holder::Free,
+                _ => Holder::Free,
             },
             stamp if stamp & TXN_FLAG != 0 => {
                 let committed = chain.iter().rev().find(|v| v.stamp & TXN_FLAG == 0);
                 match carries(head) || committed.is_some_and(carries) {
                     true => Holder::Uncommitted,
-                    false => Holder::Free,
+                    _ => Holder::Free,
                 }
             },
             _ => match carries(head) {
                 true => Holder::Committed,
-                false => Holder::Free,
+                _ => Holder::Free,
             },
         })
     }
@@ -528,7 +540,7 @@ impl Table {
     pub fn for_each_version(&self, mut f: impl FnMut(RowId, &Row)) -> Result<()> {
         let chunks = self.chunks.read().expect("chunk list poisoned").clone();
 
-        for (number, chunk) in chunks.iter().enumerate() {
+        Ok(for (number, chunk) in chunks.iter().enumerate() {
             chunk.visit(|slots| {
                 for (offset, chain) in slots.iter().enumerate() {
                     let id = ((number << CHUNK_BITS) + offset) as RowId;
@@ -538,9 +550,7 @@ impl Table {
                         .for_each(|row| f(id, row));
                 }
             })?;
-        }
-
-        Ok(())
+        })
     }
 
     /// prunes every chain against `watermark` and empties slots whose surviving version is a
@@ -732,11 +742,10 @@ impl TableScan {
 
         let base = (self.chunk << CHUNK_BITS) as RowId;
         let start = self.slot;
-        // PERFORMANCE: an evicted chunk is decoded whole, so it is read in one batch, not once per
-        // growing batch
+        // PERFORMANCE: an evicted chunk is decoded whole, so it is read in one batch, not once per growing batch
         let batch = match chunk.is_resident() {
             true => self.batch,
-            false => CHUNK_SIZE,
+            _ => CHUNK_SIZE,
         };
 
         // PERFORMANCE: rows are copied out under the latch so writers wait at most one batch

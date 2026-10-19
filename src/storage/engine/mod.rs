@@ -155,15 +155,15 @@ impl Engine {
         }
 
         let from = manifest.as_ref().map_or(0, |manifest| manifest.start_lsn);
-        let layout =
-            Layout { sync: config.sync, segment_size: config.segment_size, reserve: config.log_reserve };
-        let (log, replay) = Log::open(
-            Arc::clone(&storage),
-            dir.join("wal"),
-            layout,
-            from,
-            |kind, payload| recovered.apply(kind, payload),
-        )?;
+        let layout = Layout {
+            sync: config.sync,
+            segment_size: config.segment_size,
+            reserve: config.log_reserve,
+        };
+        let (log, replay) =
+            Log::open(Arc::clone(&storage), dir.join("wal"), layout, from, |kind, payload| {
+                recovered.apply(kind, payload)
+            })?;
 
         recovered.build_indexes()?;
         for table in recovered.tables.values() {
@@ -400,7 +400,7 @@ impl Default for Config {
             sync: SyncMode::Full,
             segment_size: 64 << 20,
             // PERFORMANCE: an append that grows the file makes `fdatasync` journal the new size,
-            // 1,105 syncs/s against 2,818 over reserved blocks on ext4/NVMe (Phase 21)
+            // 1,105 syncs/s against 2,818 over reserved blocks on ext4/NVMe
             log_reserve: 1 << 20,
             checkpoint_bytes: 64 << 20,
             maintenance_interval: Duration::from_secs(1),
@@ -635,13 +635,12 @@ impl Recovered {
     }
 
     fn build_indexes(&self) -> Result<()> {
-        for table in self.tables.values() {
+        Ok(for table in self.tables.values() {
             for index in table.indexes() {
                 index.clear();
                 table.for_each_version(|id, row| index.insert_unchecked(index.key(row), id))?;
             }
-        }
-        Ok(())
+        })
     }
 }
 
@@ -760,8 +759,8 @@ fn duplicated_key(table: &Table, index: &Index) -> Result<Option<Key>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::Value;
     use crate::db::SchemaBuilder;
+    use crate::sql::Value;
     use crate::sql::statement::Type;
     use crate::storage::engine::io::memory::{Loss, MemoryStorage, Op};
     use crate::storage::engine::table::{Row, RowId};
@@ -1214,13 +1213,7 @@ mod tests {
         number(&txn.get(table, id).unwrap()[1])
     }
 
-    fn set(
-        txn: &mut Transaction,
-        table: &Arc<Table>,
-        id: RowId,
-        n: i64,
-        value: i64,
-    ) -> Result<()> {
+    fn set(txn: &mut Transaction, table: &Arc<Table>, id: RowId, n: i64, value: i64) -> Result<()> {
         txn.update(table, id, Arc::from([Value::Number(n), Value::Number(value)]))
     }
 
@@ -2542,7 +2535,8 @@ mod tests {
     fn a_byte_budget_bounds_the_resident_rows() {
         let storage = disk();
         let config = Config { budget: Some(Budget::Bytes(200 << 10)), ..Config::default() };
-        let engine = Engine::open_with(Arc::new(storage.clone()), Path::new("db"), config, None).unwrap();
+        let engine =
+            Engine::open_with(Arc::new(storage.clone()), Path::new("db"), config, None).unwrap();
         let table = populated(&engine, 10_000);
         assert_eq!(resident(&engine), 10);
         assert!(bytes(&engine) > 200 << 10, "{} bytes for 10 chunks", bytes(&engine));
@@ -2567,8 +2561,12 @@ mod tests {
         for round in 0..3 {
             let mut txn = engine.begin(IsolationLevel::Snapshot);
             for id in 1..=2_000 {
-                txn.update(&table, id, row(id as i64 - 1, &format!("round {round} of a longer name")))
-                    .unwrap();
+                txn.update(
+                    &table,
+                    id,
+                    row(id as i64 - 1, &format!("round {round} of a longer name")),
+                )
+                .unwrap();
             }
             txn.commit().unwrap();
         }
@@ -2576,7 +2574,9 @@ mod tests {
 
         engine.maintain().unwrap();
         engine.maintain().unwrap();
-        let longer: usize = (0..2_000).map(|id| "round 2 of a longer name".len() - format!("n{id}").len()).sum();
+        let longer: usize = (0..2_000)
+            .map(|id| "round 2 of a longer name".len() - format!("n{id}").len())
+            .sum();
         assert_eq!(bytes(&engine), settled + longer);
 
         let mut txn = engine.begin(IsolationLevel::Snapshot);

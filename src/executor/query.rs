@@ -6,19 +6,20 @@
 use super::aggregate::{Aggregates, Group, count_calls, substitute};
 use super::operator::Operator;
 use super::{Executor, Tuple};
+use crate::collections::hash;
 use crate::db::{self, Column, DatabaseError, Schema, SqlError};
 use crate::executor::dml;
 use crate::executor::operator::{
-    Comparator, Distinct, Evaluate, Filter, HashJoin, IncrementalSort, IndexJoin, JoinSpec, Keyed, Limit,
-    Project, Scan, Sort, Values, comparator_for, join_key_type,
+    Comparator, Distinct, Evaluate, Filter, HashJoin, IncrementalSort, IndexJoin, JoinSpec, Keyed,
+    Limit, Project, Scan, Sort, Values, comparator_for, join_key_type,
 };
 use crate::sql::Value;
 use crate::sql::analyzer::{self, contains_aggregate};
 use crate::sql::statement::{
     self, BinaryOperator, Expression, Function, NUMERIC_ANY, OrderDirection, PathSegment, Type,
 };
-use crate::storage::engine::index::{Index, Key};
 use crate::storage::engine::chunk::CHUNK_SIZE;
+use crate::storage::engine::index::{Index, Key};
 use crate::storage::engine::table::Table;
 use crate::storage::engine::transaction::IndexCursor;
 use crate::storage::engine::transaction::Transaction;
@@ -127,7 +128,8 @@ impl Executor {
             true => {
                 if !sorted {
                     let keys = sort_keys(&schema, &select.order_by);
-                    pipeline = order(pipeline, keys, presorted, retain, &self.engine.scratch_dir())?;
+                    pipeline =
+                        order(pipeline, keys, presorted, retain, &self.engine.scratch_dir())?;
                 }
 
                 let indices: Vec<_> = (1..schema.len()).collect();
@@ -159,8 +161,10 @@ impl Executor {
 
                 let hidden = items.len() > visible;
 
-                let found: Vec<_> = items.iter().map(|item| column_position(&schema, item)).collect();
-                result_schema = projection_schema_at(&schema, &items[..visible], &found[..visible])?;
+                let found: Vec<_> =
+                    items.iter().map(|item| column_position(&schema, item)).collect();
+                result_schema =
+                    projection_schema_at(&schema, &items[..visible], &found[..visible])?;
 
                 // plain column references need no expression evaluation, only a projection
                 let positions: Option<Vec<_>> = found.into_iter().collect();
@@ -170,7 +174,8 @@ impl Executor {
                 };
 
                 if !sort_keys.is_empty() {
-                    pipeline = order(pipeline, sort_keys, presorted, retain, &self.engine.scratch_dir())?;
+                    pipeline =
+                        order(pipeline, sort_keys, presorted, retain, &self.engine.scratch_dir())?;
                 }
 
                 if hidden {
@@ -197,8 +202,6 @@ impl Executor {
         Ok((result_schema, results))
     }
 
-    /// a SELECT without FROM: its list evaluated once over no row, kept when its WHERE (if any) is
-    /// true and its LIMIT/OFFSET leave a row
     pub(crate) fn select_without_table(
         &self,
         select: statement::Select,
@@ -212,7 +215,10 @@ impl Executor {
 
         let mut rows = Vec::new();
         if kept && select.offset.unwrap_or(0) == 0 && select.limit != Some(0) {
-            let row = select.columns.iter().map(|column| resolve_expression(&[], &empty, column.unwrap_alias()));
+            let row = select
+                .columns
+                .iter()
+                .map(|column| resolve_expression(&[], &empty, column.unwrap_alias()));
             rows.push(row.collect::<Result<_, _>>()?);
         }
 
@@ -503,7 +509,6 @@ impl Executor {
         for read in &names {
             let before = indices.len();
             indices.extend(read.names().filter_map(|name| engine_schema.index_of(name)));
-            // with joins the name may belong to another table (or be an alias)
             if indices.len() == before && select.joins.is_empty() {
                 return Ok(None);
             }
@@ -517,11 +522,6 @@ impl Executor {
     /// the column whose index can supply the query's `ORDER BY` order directly, when the first
     /// `ORDER BY` key is an unqualified indexed column, there is no join, and the `WHERE`, if any,
     /// is served by that same index
-    /// the index whose order delivers the leading `ORDER BY` keys, how many of them, and the
-    /// direction to read it in: with a `WHERE`, only an index serving it as well as the best one
-    /// does; keys its equalities pin are delivered trivially
-    /// Static (no transaction), so it describes the intended plan, and execution still confirms the index is
-    /// usable for the snapshot
     fn index_order(
         &self,
         select: &statement::Select,
@@ -531,7 +531,7 @@ impl Executor {
         }
 
         let table = self.table(&select.from.name)?;
-        let candidates: Vec<(Arc<Index>, usize)> = match &select.r#where {
+        let candidates: Vec<(_, _)> = match &select.r#where {
             Some(predicate) => {
                 let plans = index_plans(&table, predicate);
                 let best = plans.first().map_or(0, IndexPlan::covered);
@@ -563,15 +563,18 @@ impl Executor {
                 .find(|(column, _)| !fixed.contains(column))
                 .is_some_and(|&(_, descending)| descending);
             let mut position = pinned;
+
             let count = columns
                 .iter()
                 .take_while(|&&(column, direction)| match fixed.contains(&column) {
-                    true => true,
-                    false if direction == descending && index.columns.get(position) == Some(&column) => {
+                    false
+                        if direction == descending
+                            && index.columns.get(position) == Some(&column) =>
+                    {
                         position += 1;
                         true
                     },
-                    false => false,
+                    b => b,
                 })
                 .count();
             (count, descending)
@@ -609,7 +612,11 @@ impl Executor {
 
         let Some(mut predicate) = select.r#where.clone() else {
             let cursor = txn.index_cursor(&table, &index, descending);
-            return Ok(Some((schema, Box::new(Scan::indexed([cursor].into(), projection)), presorted)));
+            return Ok(Some((
+                schema,
+                Box::new(Scan::indexed([cursor].into(), projection)),
+                presorted,
+            )));
         };
 
         // PERFORMANCE: the bounded cursor yields rows already in `ORDER BY` order, so a `LIMIT`
@@ -690,9 +697,10 @@ impl Executor {
 
         // without ORDER BY, HAVING and DISTINCT the first `limit + offset` groups in key order are
         // the answer
-        let wanted = match select.order_by.is_empty() && select.having.is_none() && !select.distinct {
+        let wanted = match select.order_by.is_empty() && select.having.is_none() && !select.distinct
+        {
             true => select.limit.map(|limit| limit + select.offset.unwrap_or(0)),
-            false => None,
+            _ => None,
         };
 
         match (keys.is_empty(), clustered, plain) {
@@ -756,15 +764,16 @@ impl Executor {
             let mut tuple = tuple;
             let kept = match select.having {
                 Some(_) => tuple.pop() == Some(Value::Boolean(true)),
-                None => true,
+                _ => true,
             };
+
             if kept {
                 out_rows.push(tuple);
             }
         }
 
         if select.distinct {
-            let mut seen = crate::collections::hash::HashSet::default();
+            let mut seen = hash::HashSet::default();
             out_rows.retain(|row| seen.insert(row.clone()));
         }
 
@@ -819,13 +828,15 @@ impl Executor {
         };
         let scan = match (cursors, predicate) {
             (Some(cursors), _) => Scan::indexed(cursors, projection),
-            (None, Some(predicate)) => Scan::new(txn.scan(&table).bounded(zone_ranges(&table, predicate)), projection),
-            (None, None) => Scan::new(txn.scan(&table), projection),
+            (_, Some(predicate)) => {
+                Scan::new(txn.scan(&table).bounded(zone_ranges(&table, predicate)), projection)
+            },
+            _ => Scan::new(txn.scan(&table), projection),
         };
 
         match predicate {
             Some(predicate) => Ok(filter(scan, &table, schema, predicate.clone())),
-            None => Ok(Box::new(scan)),
+            _ => Ok(Box::new(scan)),
         }
     }
 
@@ -855,7 +866,10 @@ impl Executor {
         ranges: KeyRanges,
         descending: bool,
     ) -> VecDeque<IndexCursor> {
-        ranges.into_iter().map(|range| txn.index_cursor_within(table, index, range, descending)).collect()
+        ranges
+            .into_iter()
+            .map(|range| txn.index_cursor_within(table, index, range, descending))
+            .collect()
     }
 
     /// describes the pipeline `execute_select` would build, one line per
@@ -962,7 +976,7 @@ impl Executor {
         let table_handle = self.table(table)?;
         let scan = match predicate {
             Some(predicate) => index_scan(&table_handle, predicate, false)?,
-            None => None,
+            _ => None,
         };
         let Some((IndexPlan { index, next, .. }, _)) = scan else {
             return Ok(format!("SeqScan on {table}"));
@@ -973,7 +987,12 @@ impl Executor {
             Some(Access::Range(..)) => "IndexRangeScan",
             Some(Access::Points(..)) | None => "IndexScan",
         };
-        let columns: Vec<_> = index.columns.iter().map(|&column| table_handle.schema.columns[column].name()).collect();
+
+        let columns: Vec<_> = index
+            .columns
+            .iter()
+            .map(|&column| table_handle.schema.columns[column].name())
+            .collect();
         Ok(format!("{kind} on {table} using {} ({})", index.name, columns.join(", ")))
     }
 
@@ -1039,7 +1058,11 @@ fn projection_schema(schema: &Schema, columns: &[Expression]) -> Result<Schema, 
 }
 
 /// [projection_schema] with each column's position in `schema` already resolved
-fn projection_schema_at(schema: &Schema, columns: &[Expression], positions: &[Option<usize>]) -> Result<Schema, DatabaseError> {
+fn projection_schema_at(
+    schema: &Schema,
+    columns: &[Expression],
+    positions: &[Option<usize>],
+) -> Result<Schema, DatabaseError> {
     Ok(Schema::new(
         columns
             .iter()
@@ -1199,8 +1222,14 @@ fn index_plans<'p>(table: &Table, predicate: &'p Expression) -> Vec<IndexPlan<'p
 
     let equal_to = |column: &str| {
         parts.iter().find_map(|access| match access {
-            Access::Range(name, Bound::Included(a), Bound::Included(b)) if *name == column && a == b => Some(a.clone()),
-            Access::Points(name, values) if *name == column && values.len() == 1 => Some(values[0].clone()),
+            Access::Range(name, Bound::Included(a), Bound::Included(b))
+                if *name == column && a == b =>
+            {
+                Some(a.clone())
+            },
+            Access::Points(name, values) if *name == column && values.len() == 1 => {
+                Some(values[0].clone())
+            },
             _ => None,
         })
     };
@@ -1223,8 +1252,10 @@ fn index_plans<'p>(table: &Table, predicate: &'p Expression) -> Vec<IndexPlan<'p
                 }
                 Some(Access::Range(column, start, end))
             },
-            None => parts.iter().find_map(|access| match access {
-                Access::Points(name, values) if *name == column => Some(Access::Points(column, values.clone())),
+            _ => parts.iter().find_map(|access| match access {
+                Access::Points(name, values) if *name == column => {
+                    Some(Access::Points(column, values.clone()))
+                },
                 _ => None,
             }),
         }
@@ -1235,10 +1266,17 @@ fn index_plans<'p>(table: &Table, predicate: &'p Expression) -> Vec<IndexPlan<'p
         .into_iter()
         .filter_map(|index| {
             let name = |position: usize| table.schema.columns[index.columns[position]].name();
-            let prefix: Vec<_> = (0..index.columns.len()).map_while(|position| equal_to(name(position))).collect();
+            let prefix: Vec<_> = (0..index.columns.len())
+                .map_while(|position| equal_to(name(position)))
+                .collect();
+
             let next = match prefix.len() < index.columns.len() {
-                true => parts.iter().map(Access::column).find(|&column| column == name(prefix.len())).and_then(access_on),
-                false => None,
+                true => parts
+                    .iter()
+                    .map(Access::column)
+                    .find(|&column| column == name(prefix.len()))
+                    .and_then(access_on),
+                _ => None,
             };
             let plan = IndexPlan { index, prefix, next };
             (plan.covered() > 0).then_some(plan)
@@ -1254,8 +1292,8 @@ fn index_plans<'p>(table: &Table, predicate: &'p Expression) -> Vec<IndexPlan<'p
 
 /// the best index plan for `predicate` and its key ranges, unless scanning the chunks the zone
 /// maps leave is cheaper than resolving the entries the ranges hold
-// PERFORMANCE: an entry resolved costs 90-150 ns, a row scanned and filtered 55 ns (Phase 23), so
-// scanning wins once the entries outnumber two fifths of the rows scanned; entries are counted
+// PERFORMANCE: an entry resolved costs 90-150 ns, a row scanned and filtered 55 ns, so
+// scanning wins once the entries outnumber two fifths of the rows scanned, entries are counted
 // only up to that, and zone maps are read only past one chunk's worth of entries
 fn index_scan<'p>(
     table: &Table,
@@ -1275,8 +1313,10 @@ fn index_scan<'p>(
 
     let count = |cap: usize| {
         ranges.iter().try_fold(0, |counted, (start, end)| match counted < cap {
-            true => Some(counted + index.count_within((start.as_ref(), end.as_ref()), cap - counted)),
-            false => None,
+            true => {
+                Some(counted + index.count_within((start.as_ref(), end.as_ref()), cap - counted))
+            },
+            _ => None,
         })
     };
     let few = count(CHUNK_SIZE).is_some_and(|entries| entries < CHUNK_SIZE);
@@ -1291,13 +1331,18 @@ fn index_scan<'p>(
 
 /// the key ranges of `plan`: one over the prefix's keys bounded by the next column's range, or one
 /// per point of the next column, in key order (reversed when `descending`)
-fn key_ranges(table: &Table, IndexPlan { index, mut prefix, next }: IndexPlan, descending: bool) -> Result<KeyRanges, DatabaseError> {
+fn key_ranges(
+    table: &Table,
+    IndexPlan { index, mut prefix, next }: IndexPlan,
+    descending: bool,
+) -> Result<KeyRanges, DatabaseError> {
     // enum values are indexed by variant index, not by their literal
     let column = |position: usize| &table.schema.columns[index.columns[position]];
     for (position, value) in prefix.iter_mut().enumerate() {
         dml::coerce_value(column(position), value)?;
     }
-    let key = |last: Option<Value>| Key::from(prefix.iter().cloned().chain(last).collect::<Vec<_>>());
+    let key =
+        |last: Option<Value>| Key::from(prefix.iter().cloned().chain(last).collect::<Vec<_>>());
 
     Ok(match next {
         None => vec![(Bound::Included(key(None)), Bound::Included(key(None)))],
@@ -1359,7 +1404,8 @@ fn zone_ranges(table: &Table, predicate: &Expression) -> Vec<(usize, Bound<Value
             continue;
         }
 
-        if let Expression::BinaryOperation { left, operator: BinaryOperator::And, right } = conjunct {
+        if let Expression::BinaryOperation { left, operator: BinaryOperator::And, right } = conjunct
+        {
             conjuncts.extend([left.as_ref(), right.as_ref()]);
         }
     }

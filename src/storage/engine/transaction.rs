@@ -451,8 +451,12 @@ impl Transaction {
     ) -> IndexCursor {
         if let Some(reads) = self.reads_of(table) {
             let leading = |bound: &Bound<Key>| match bound {
-                Bound::Excluded(key) if key.values().len() == 1 => Bound::Excluded(key.values()[0].clone()),
-                Bound::Included(key) | Bound::Excluded(key) => Bound::Included(key.values()[0].clone()),
+                Bound::Excluded(key) if key.values().len() == 1 => {
+                    Bound::Excluded(key.values()[0].clone())
+                },
+                Bound::Included(key) | Bound::Excluded(key) => {
+                    Bound::Included(key.values()[0].clone())
+                },
                 Bound::Unbounded => Bound::Unbounded,
             };
             reads.ranges.push(Range {
@@ -616,11 +620,9 @@ impl Transaction {
             .get(&(table.id, id))
             .map_or(self.view.snapshot, |&stamp| stamp.max(self.view.snapshot));
 
-        // a transaction's first write rescans the snapshot registry, so writers prune what the
-        // readers that just ended no longer need; readers never pay for the scan
         let watermark = match self.writes.is_empty() {
             true => self.inner.clock.settle_watermark(),
-            false => self.inner.clock.watermark(),
+            _ => self.inner.clock.watermark(),
         };
         let writer = Writer { view: self.view, floor, level: self.level, watermark };
 
@@ -896,14 +898,14 @@ impl IndexProbe {
     /// appends the visible rows holding `key` (or beginning with it) in the index to `out`
     pub fn find(&self, key: &Key, out: &mut Vec<(RowId, Row)>) -> Result<()> {
         let mut ids = Vec::new();
-        self.index.visit(Bound::Included(key), Bound::Included(key), |_, id| ids.push(id));
+        self.index
+            .visit(Bound::Included(key), Bound::Included(key), |_, id| ids.push(id));
 
-        for id in ids {
+        Ok(for id in ids {
             if let Some(row) = self.table.get_keyed(id, self.view, &self.index, key)? {
                 out.push((id, row));
             }
-        }
-        Ok(())
+        })
     }
 }
 
