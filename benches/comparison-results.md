@@ -79,3 +79,35 @@ Median microseconds per operation (± median absolute deviation), 10000 users / 
 ## Correctness
 
 Every compared read returned the same row count across engines.
+
+---
+
+# Umbra concurrency benchmark
+
+2000 operations per worker, 80% reads / 20% writes, writes concentrated on a 256-row hot set to force write-write contention. Reads spread over 10000 rows. Throughput counts only successful operations ÷ wall time; latency percentiles include every attempt.
+        Concurrency-control notes (read these before trusting the numbers):
+        - **Umbra** and **Postgres** are MVCC: readers take a consistent snapshot and never block, writers race optimistically, a write-write conflict aborts and is counted as a write error, not retried.
+        - **SQLite** has no MVCC, in shared-cache memory it serialises writers behind the database lock (`busy_timeout` 5s). It runs with `read_uncommitted` so readers do not block on the writer, a weaker guarantee (dirty reads) than the snapshot isolation umbra and Postgres give, and one that works in SQLite's favour here.
+        - Umbra & SQLite are in memory, Postgres is the local on-disk server (a round-trip per call), so Postgres's absolute throughput is not comparable to the embedded engines', read it for scaling, not level.
+    | Engine | Threads | Throughput (ops/s) | p50 (µs) | p99 (µs) | Write errors |
+|:-------|-------:|-------------------:|--------:|--------:|-------------:|
+| Umbra | 1 | 201280 | 4.21 | 11.94 | 0.0% |
+| Umbra | 2 | 361922 | 4.70 | 11.66 | 0.0% |
+| Umbra | 4 | 654595 | 5.20 | 14.47 | 0.0% |
+| Umbra | 8 | 950548 | 6.35 | 19.27 | 0.0% |
+| SQLite | 1 | 255523 | 3.06 | 7.72 | 0.0% |
+| SQLite | 2 | 179863 | 5.71 | 80.93 | 0.0% |
+| SQLite | 4 | 158288 | 7.74 | 185.36 | 0.0% |
+| SQLite | 8 | 158081 | 22.72 | 322.84 | 0.0% |
+| Postgres | 1 | 4937 | 121.51 | 643.45 | 0.0% |
+| Postgres | 2 | 8480 | 140.22 | 843.75 | 0.0% |
+| Postgres | 4 | 15888 | 138.24 | 894.85 | 0.0% |
+| Postgres | 8 | 30902 | 133.75 | 893.70 | 0.0% |
+
+## Scaling (throughput vs single thread)
+
+| Engine | 1× | 2× | 4× | 8× |
+|:-------|------:|------:|------:|------:|
+| Umbra | 1.00× | 1.80× | 3.25× | 4.72× |
+| SQLite | 1.00× | 0.70× | 0.62× | 0.62× |
+| Postgres | 1.00× | 1.72× | 3.22× | 6.26× |
