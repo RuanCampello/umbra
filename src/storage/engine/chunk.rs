@@ -56,15 +56,16 @@ pub(crate) struct Cold {
     clock: AtomicU64,
 }
 
-/// Read access to a resident chunk's slots
+/// Read access to a [resident](Slots::Resident) chunk's slots
 pub(crate) struct Resident<'a>(RwLockReadGuard<'a, Slots>);
-/// Write access to a resident chunk's slots
+/// Write access to a [resident](Slots::Resident) chunk's slots
 pub(crate) struct ResidentMut<'a>(RwLockWriteGuard<'a, Slots>);
 
-/// How much table data a durable engine keeps in memory before evicting the coldest settled chunks
+/// How much table data a durable engine keeps in memory before evicting
+/// the coldest settled chunks
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Budget {
-    /// approximate bytes of resident chunks; indexes and query memory come on top
+    /// approximate bytes of resident chunks, indexes and query memory come on top
     Bytes(usize),
     /// whole chunks, whatever their size
     Chunks(usize),

@@ -164,13 +164,15 @@ fn run_query(stream: &mut TcpStream, query: &str) -> Result<Response, Box<dyn st
 
 fn process_query(stream: &mut TcpStream, statement: &str) {
     let packet_transmission = Instant::now();
-    match run_query(stream, statement) {
+    let response = run_query(stream, statement);
+    let elapsed = packet_transmission.elapsed();
+    match response {
         Ok(response) => match response {
             Response::Err(err) => println!("{err}"),
             Response::Empty(affected_rows) => {
                 println!(
                     "{affected_rows} {TIME_COLOUR}({:.2?}){RESET_COLOUR}",
-                    packet_transmission.elapsed()
+                    elapsed
                 )
             }
             Response::QuerySet(query_set) => {
@@ -179,7 +181,7 @@ fn process_query(stream: &mut TcpStream, statement: &str) {
                     &query_set.to_string(),
                     query_set.tuples.len(),
                     plural("row", query_set.tuples.len()),
-                    packet_transmission.elapsed()
+                    elapsed
                 )
             }
         },

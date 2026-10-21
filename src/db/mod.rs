@@ -143,7 +143,9 @@ impl QuerySet {
 
 impl Display for QuerySet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let widths: Vec<usize> = self
+        const EMPTY: &str = " (0 rows) ";
+
+        let mut widths: Vec<usize> = self
             .schema
             .columns
             .iter()
@@ -155,6 +157,11 @@ impl Display for QuerySet {
                 header_len.max(max_data_len)
             })
             .collect();
+
+        let inner = widths.iter().map(|w| w + 3).sum::<usize>().saturating_sub(1);
+        if let (true, Some(last)) = (self.tuples.is_empty(), widths.last_mut()) {
+            *last += EMPTY.len().saturating_sub(inner);
+        }
 
         let border: String =
             widths.iter().map(|&w| "-".repeat(w + 2)).collect::<Vec<_>>().join("+");
@@ -174,10 +181,7 @@ impl Display for QuerySet {
         writeln!(f, "{}", full_border)?;
 
         if self.tuples.is_empty() {
-            writeln!(
-                f,
-                "| (0 rows)                                                               |"
-            )?;
+            writeln!(f, "|{EMPTY:<width$}|", width = full_border.len() - 2)?;
         } else {
             for row in &self.tuples {
                 let row_str = row
