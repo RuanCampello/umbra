@@ -2,7 +2,7 @@
     <h1>Umbra</h1>
     <h3>(/ˈʌm.brə/)</h3>
     <img alt="Logo" src=".github/umbra-icon.png" width="250" height="250" />
-    <h5>Self-contained, shadowy, and slightly suspicious database :bat: </h5>
+    <h5>Self-contained, shadowy, and slightly suspicious database</h5>
 
 ![Rust](https://img.shields.io/badge/rust-00?style=for-the-badge&logo=rust&color=d62828&link=https%3A%2F%2Fwww.rust-lang.org)
 ![Linux](https://img.shields.io/badge/linux-0?style=for-the-badge&logo=linux&logoColor=fff&color=f77f00)
@@ -12,314 +12,247 @@
 
 ---
 
-## ✨ Not PostgreSQL. Not SQLite. Something... _else_
+## What this is
 
-This project takes certain... liberties with database paradigms. Born from the existential void of a southern hemisphere
-summer (December 2024–January 2025, when ennui struck like the heatwave), Umbra cosplays as PostgreSQL with its query
-planner (proper cost-based optimisation using expression trees, darling—we’re civilised), while harbouring SQLite’s
-scandalous little secrets under the bonnet (_ahem_ `RowId`, you disreputable little implementation detail).
+Umbra is a relational database written in Rust. It began in the southern-hemisphere summer of December 2024, when a
+heatwave and a lack of better ideas produced the obvious conclusion: build a database. It has since been rebuilt twice,
+which is roughly the expected number.
 
-_The bat is non-negotiable._
+It is a study project, not a product. The aim is to implement and measure the decisions a real DBMS has to make, from
+isolation levels to crash recovery, and to check the results against systems that know what they are doing. PostgreSQL
+and SQLite appear throughout, as references and as test oracles. They are not competitors, and nobody should migrate
+anything.
 
-Let's be clear: **this isn't a replacement for anything,** unless you're replacing sanity with chaos, which
-case—welcome. The focus here is the **learning process**, read as "the screams of debugging hand-rolled date parsing at
-3AM."
+A few facts about the current engine:
 
----
-
-## Getting Started
-
-```bash
-cargo run -- data.db 8000
-```
-
-`data.db`: The directory holding your Umbra database (created if it doesn't exist)
-An optional third argument caps memory at that many chunks of 1024 rows: colder chunks are evicted
-to disk and reloaded on demand (`cargo run -- data.db 8000 4096`)
-`8000`: The TCP port the server will listen on
-
-#### Use the `usql` CLI (like `psql`, but darker)
-
-```bash
-cargo run --package usql -- 8000
-```
-
-Connects to the Umbra server running on port `8000`.
-
-> `usql` is your shadowy shell into the Umbra world. It understands SQL and the void.
+- **No runtime dependencies.** Only the Rust standard library.
+- **No `unsafe` in the storage engine.**
+- **Multi-version concurrency control in memory**, with three isolation levels and writers that never block readers.
+- **Durable commits.** A commit is acknowledged only after its log record has been synced to disk.
+- **Larger-than-memory tables.** Cold blocks of rows are evicted to disk under a memory budget. Indexes stay in memory (this might change).
 
 ---
 
-## Implementation Status
+## Getting started
 
-### 🧾 Types
-
-#### :one: **Integer Types**
-
-The beating heart of databases—and poor life decisions.
-
-Umbra supports both **signed** and **unsigned** integer types, as well as their attention-seeking cousins: the **serial** pseudo-types. These `SERIAL` types aren’t real—they're syntactic sugar that auto-magically generate sequences behind the scenes (just like PostgreSQL, but with fewer emotional boundaries).
-
-| Type                 | Range       | Notes                                         |
-|----------------------|-------------|-----------------------------------------------|
-| `SMALLINT`           | ±2¹⁵        | Petite regrets                                |
-| `INTEGER`          | ±2³¹      | Standard regret capacity                      |
-| `BIGINT`             | ±2⁶³        | When regular regrets aren't enough                             |
-| `SMALLINT UNSIGNED`  | 0 → 2¹⁶−1   | For when you're cautiously hopeful            |
-| `INTEGER UNSIGNED`   | 0 → 2³²−1   | Delusional optimism                           |
-| `BIGINT UNSIGNED`    | 0 → 2⁶⁴−1   | Sheer madness                                 |
-| `SMALLSERIAL`        | 1 → 2¹⁵−1   | Small but permanent mistakes    |
-| `SERIAL`             | 1 → 2³¹−1   | Commitment issues               |
-| `BIGSERIAL`          | 1 → 2⁶³−1   | Lifelong consequences            |
-
-> [!NOTE]  
-> **Unsigned Integers**  
-> PostgreSQL demands check constraints, SQLite shrugs, but Umbra embraces MySQL's blunt [syntax](https://dev.mysql.com/doc/refman/8.4/en/numeric-type-syntax.html) for that.
-
-> [!IMPORTANT]  
-> **`SERIAL` Types are forgetful**  
-> Much like PostgreSQL, Umbra's serial values never look back. 
-> Once generated—even if your transaction fails—they’re [gone](https://www.postgresql.org/docs/17/functions-sequence.html).
-
-```sql
-CREATE TABLE cursed_items (
-    item_id SERIAL PRIMARY KEY,
-    name VARCHAR(255),
-    darkness_level SMALLINT UNSIGNED,
-    soul_count BIGINT UNSIGNED
-);
+```bash
+cargo run --release -- data 8000
 ```
 
-#### :1234: **Floating-Point & Numeric Types**
+| argument | meaning |
+|---|---|
+| `data.db` | directory holding the database, created if missing |
+| `8000` | TCP port, default `8000`. The server listens on `127.0.0.1` only |
+| `512M`, `4G` (optional) | memory budget for table data. Defaults to half of the physical memory or the cgroup limit. A bare number is read as a count of 1,024-row blocks |
 
-When integers just won’t cut it and you need *approximate truths*, floating-point types step in—like unreliable narrators in a numerical novel. For precision, we offer `NUMERIC`.
+Then connect with `usql`, a shell in the spirit of `psql`:
 
-| Type             | Precision              | Notes                                                                 |
-|------------------|-------------------------|-----------------------------------------------------------------------|
-| `REAL`             | ~7 decimal digits       | Single-precision daydreams. Fast, vague, and prone to making things up. |
-| `DOUBLE PRECISION` | ~15 decimal digits      | Double the bits, double the confidence. For those who still don’t trust `REAL`. |
-| `NUMERIC(p, s)`    | Arbitrary               | Base-1000 implementation. For when you need to count atoms or debt.
+```bash
+cargo run --release --package usql -- 8000
+```
 
-> [!WARNING]  
-> **Floating-Point Lies**  
-> They're fast. They're fun. They're wrong. Read more about that [here](https://medium.com/@Carl_Maxwell/understanding-f32-floating-point-9d7e3604ab97).
-> If you're just plotting wiggly shadows over time, `REAL` is your friend.
+---
+
+## How it works
+
+### Storage
+
+Rows live in memory, in blocks of 1,024 slots, each block guarded by its own latch. Every slot holds a chain of versions.
+Each version is stamped with the timestamp of the transaction that committed it. An uncommitted version carries its
+writer's id with the top bit set, which is larger than any timestamp, so no other transaction can see it
+
+The scheme comes from HyPer (Neumann, Mühlbauer and Kemper, SIGMOD 2015), and the commit protocol from Hekaton
+(Larson et al., PVLDB 2011).
+
+### Transactions
+
+| level | snapshot taken | prevents | allows |
+|---|---|---|---|
+| `READ COMMITTED` | per statement | dirty writes and reads | non-repeatable reads, phantoms, write skew |
+| `SNAPSHOT` (default, `REPEATABLE READ` is an alias) | per transaction | the above, lost updates, read skew | write skew |
+| `SERIALIZABLE` | per transaction, reads validated at commit | all of the above | nothing |
+
+
+### Queries
+
+Plans are chosen by rules, not by a cost model. There are no statistics (yet).
+Index nested-loop joins when the inner side has an index, hash joins otherwise. Index order serves `ORDER BY`.
+
+---
+
+## SQL support
+
+### Types
+
+#### Integers
+
+| type | range | notes |
+|---|---|---|
+| `SMALLINT` | −2¹⁵ to 2¹⁵−1 | |
+| `INTEGER` / `INT` | −2³¹ to 2³¹−1 | |
+| `BIGINT` | −2⁶³ to 2⁶³−1 | |
+| `SMALLINT UNSIGNED` | 0 to 2¹⁶−1 | MySQL's syntax, rather than PostgreSQL's check constraint |
+| `INTEGER UNSIGNED` | 0 to 2³²−1 | |
+| `BIGINT UNSIGNED` | 0 to 2⁶³−1 | integers are 64-bit signed inside, so the top half is out of reach |
+| `SMALLSERIAL`, `SERIAL`, `BIGSERIAL` | 1 to the signed maximum | backed by a sequence |
+
+Arithmetic is exact. Overflow is an error (`integer out of range`), not a wrap. As in PostgreSQL, a serial value taken by
+a transaction that rolls back is gone for good.
+
+#### Floating point and `NUMERIC`
+
+| type | precision | notes |
+|---|---|---|
+| `REAL` | about 7 significant digits | stored at single precision |
+| `DOUBLE PRECISION` | about 15 significant digits | |
+| `NUMERIC(p, s)` / `DECIMAL` | arbitrary | base-10,000 digits, as in PostgreSQL. A value with more decimal places than `s` is rejected |
+
+Mixing exact and approximate numbers gives an approximate result. A decimal literal such as `0.1` is a
+`DOUBLE PRECISION`, unless it meets a `NUMERIC` column. This is a deliberate difference from PostgreSQL, where it would
+be `NUMERIC`.
 
 ```sql
 CREATE TABLE entropy_watch (
     event_id SERIAL PRIMARY KEY,
-    time TIMESTAMP,
+    observed_at TIMESTAMP,
     shadow_density REAL,
-    void_pressure NUMERIC(10, 4) 
+    void_pressure NUMERIC(10, 4)
 );
+
+SELECT observed_at FROM entropy_watch WHERE shadow_density > 69; -- 69 compares as a float
 ```
 
-> [!TIP]  
-> **Casting Happens**  
-> Umbra will happily let you mix floats and integers. But you might want to think twice before comparing them for equality. That way lies madness.
-> Also, insert will **NOT** coerce types, it'll strictly verify the types based on the defined schema.
+#### Other types
 
-```sql
-SELECT time FROM entropy_watch WHERE shadow_density > 69; -- here we implicitly cast 69 to a float, so you can query without hustle
-```
+- `VARCHAR(n)`, `TEXT`, `BOOLEAN`
+- `DATE`, `TIME`, `TIMESTAMP`, `INTERVAL`
+- `UUID` (version 4)
 
-#### 🧬 **UUID Type**
+#### JSONB
 
-When numbers aren't _unique_ enough and strings are too _sincere_, you reach for the `UUID`. Specifically: **version 4**, because determinism is for spreadsheets.
-
-| Type   | Description                              | Notes                                             |
-|--------|------------------------------------------|---------------------------------------------------|
-| `UUID` | Universally Unique Identifier (v4 only)  | Random, stateless, and perfect for plausible deniability. |
-
-```sql
-CREATE TABLE shadow_agents (
-    agent_id UUID PRIMARY KEY,
-    codename VARCHAR(255),
-    clearance_level SMALLINT
-);
-```
-
-#### :scroll: **JSONB**
-
-Because shadows deserve structure, too. Umbra's `JSONB` implementation provides flexible syntax for
-JavaScript-like object literals, stores them in a compact binary format, and supports dot notation and 
-path expression for nested access.
-
-- Keys can skip quotes: `{name: 'Umbra', active: true}`
-- Line comments `//` and block comments `/* ... */` are ignored while parsing
-- Missing paths quietly become `NULL` instead of raising errors
+Documents are stored in a compact binary form. Object literals can be written directly in SQL, with unquoted keys and
+comments, and paths are read with dots:
 
 ```sql
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
+    name VARCHAR(255),
     metadata JSONB
 );
 
-INSERT INTO users (metadata) VALUES
-({profile: {lang: 'en', hobbies: ['lurking', 'flying']}, active: true});
+INSERT INTO users (name, metadata) VALUES
+    ('Carol', {profile: {lang: 'en', hobbies: ['lurking', 'flying']}, active: true});
 
-SELECT metadata.profile.lang FROM users;       -- dot access
-SELECT metadata.hobbies[*] FROM users;         -- array expansion
-SELECT metadata.hobbies[-1] FROM users;        -- last element via negative index
-SELECT metadata.non_existent_field FROM users; -- NULL
+SELECT metadata.profile.lang FROM users;          -- 'en'
+SELECT metadata.profile.hobbies[*] FROM users;    -- every element
+SELECT metadata.profile.hobbies[-1] FROM users;   -- 'flying', counting from the end
+SELECT metadata.missing FROM users;               -- NULL, not an error
+SELECT name FROM users WHERE metadata.active = true;
 ```
 
-> [!TIP]  
-> You can filter on JSONB directly (`WHERE metadata.active = true`) or access nested profile data (like `metadata.profile.lang`) without extra casting.
+### Constraints
 
-- [x] `VARCHAR`
-- [x] `BOOLEAN`
-- [x] `DECIMAL`
-- [x] `TEXT` (the loquacious one)
-- [x] Temporal types (because time flies when... I ran out of jokes)
-    - [x] `DATE`
-    - [x] `TIME`
-    - [x] `TIMESTAMP` (precision: "ish")
-    - [x] `INTERVAL`
+- `PRIMARY KEY`, `UNIQUE`, enforced under concurrency
+- `DEFAULT` with a constant expression
+- `CHECK` at column and table level
+- `FOREIGN KEY` / `REFERENCES` with `RESTRICT`, `NO ACTION` and `ON DELETE CASCADE`. Checks never wait for locks. Of two
+  conflicting transactions, the one that commits second fails
+- `NOT NULL` is the default, like Rust. A column that may hold `NULL` says so with `NULLABLE`
 
-### 🔗 Constraints
-- [x] `PRIMARY KEY`
-  - [x] Auto-incrementing (via `SERIAL`, no manual gear-shifting required)
-- [x] `UNIQUE` (because duplicates are tacky)
-- [x] `NULLABLE` (explicit nullability, because I believe in clarity)
-- [ ] `FOREIGN KEY` (relationships are hard)
-- [ ] `CHECK`
-
-> [!IMPORTANT]  
-> **Nullability Philosophy**  
-> Unlike SQL standard where columns are nullable by default, requiring `NOT NULL` to prevent it.
-> Umbra follows Rust philosophy: columns are **not null** by default, unless explicit marked as `NULLABLE`.
-> This makes null handling intentional and not condescending.
+That last one departs from the SQL standard on purpose. A column is only nullable when someone decided it should be.
 
 ```sql
-CREATE TABLE users (
+CREATE TABLE crypts (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(255),              -- non-null by default
-    email VARCHAR(255) NULLABLE,    -- explicitly nullable
+    name VARCHAR(50) UNIQUE,
+    depth INT DEFAULT 6 CHECK (depth > 0)
+);
+
+CREATE TABLE bats (
+    id SERIAL PRIMARY KEY,
+    crypt INT NULLABLE REFERENCES crypts(id) ON DELETE CASCADE,
+    name TEXT
 );
 ```
 
-### ⚙️ Operations
-#### 💼 **Table Operations**
-- [x] `CREATE TABLE` *(where hope begins)*
-- [x] `DROP TABLE` *(where hope ends)*
-- [ ] `ALTER TABLE`
+### Statements
 
-#### 🔍 SELECT Operations
-- [x] `WHERE` (basic filtering, no existential crises)
-- [x] `ORDER BY` (implemented after herding literal bats)
-- [x] `BETWEEN` (for when life exists within bounds)
-- [x] `LIMIT`/`OFFSET` (self-restraint is here)
-- [x] Column aliases (SELECT tomb AS grave - identity is fluid)
-- [x] Table aliases (`FROM crypts AS c` - naming things is hard)
-- [x] `JOIN` (relationships require couples therapy)
-- [x] `GROUP BY` (aggregation is a social construct)
-- [ ] `HAVING`
+- `CREATE TABLE`, `DROP TABLE`, `CREATE [UNIQUE] INDEX` on one or more columns
+- `INSERT` (several rows at once, only with column list), `UPDATE`, `DELETE`. `INSERT` and `UPDATE` take
+  `RETURNING`
+- `SELECT` with `WHERE`, `ORDER BY`, `LIMIT` / `OFFSET`, `DISTINCT`, `GROUP BY`, `HAVING`, column and table aliases
+- joins: inner, left, right, full, cross and comma joins, on any condition
+- `UNION`, `INTERSECT` and `EXCEPT`, with or without `ALL`
+- `CASE`, `CAST`, `BETWEEN`, `IN`, `LIKE`, `IS [NOT] NULL`, `%`
+- subqueries in `IN`, `EXISTS` and as scalars. Correlated subqueries are refused with an error, except `EXISTS` over an
+  equality, which becomes a semi-join.
+- `EXPLAIN`
 
-#### 💸 **Transactions**
-- [x] `BEGIN` / `START TRANSACTION`
-- [x] `COMMIT`
-- [x] `ROLLBACK`
-- [x] `ISOLATION LEVEL READ COMMITTED | SNAPSHOT | SERIALIZABLE` (`REPEATABLE READ` is `SNAPSHOT`, the default)
-- [x] `SET TRANSACTION …` / `SET SESSION CHARACTERISTICS AS TRANSACTION …`
-- [x] `CHECKPOINT`
+### Transactions
 
-Concurrent writers of one row: the second gets a retryable `could not serialize access …` error
-right away instead of waiting. Commits are durable when acknowledged.
+- `BEGIN` / `START TRANSACTION [ISOLATION LEVEL ...]`, `COMMIT`, `ROLLBACK`
+- `SAVEPOINT`, `ROLLBACK TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]`
+- `SET TRANSACTION ISOLATION LEVEL ...` and `SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL ...`
+- `CHECKPOINT`
 
-#### 📊 **Indexes**
-- [x] Unique indexes *(exclusivity is key)*
-- [x] Non-unique indexes *(for the masses)*
-- [ ] Partial indexes *(discrimination coming soon)*
+A statement that fails while executing aborts the transaction. After that, only `COMMIT` (which rolls back),
+`ROLLBACK` or `ROLLBACK TO SAVEPOINT` is accepted.
 
-#### 🔧 Utilities
-- [x] `EXPLAIN` (peeking behind the curtain)
+### Functions
 
-### 🧮 Aggregate Functions
+| kind | functions |
+|---|---|
+| aggregate | `COUNT(*)`, `COUNT(expr)`, `COUNT(DISTINCT expr)`, `SUM`, `AVG`, `MIN`, `MAX` |
+| numeric | `ABS`, `SQRT`, `POWER`, `TRUNC(x)`, `TRUNC(x, n)`, `SIGN` |
+| text | `CONCAT`, `SUBSTRING(s FROM start FOR length)`, `POSITION(sub IN s)`, `ASCII`, `LIKE` with `%` and `_` |
+| other | `COALESCE`, `TYPEOF`, `EXTRACT(field FROM value)` |
 
-Now available: _numerical seances_. Umbra can perform ritualistic summoning of truths across rows using standard SQL aggregate functions. Useful for divining patterns, spotting anomalies, or just counting how many regrets you’ve inserted into a table.
+`SUBSTRING` counts from 1. `CONCAT` does not accept `NULL`, so wrap nullable arguments in `COALESCE`.
 
-| Function      | Description                                          | Example                                          |
-| ------------- | ---------------------------------------------------- | ------------------------------------------------ |
-| `COUNT(*)`    | How many? (*all of them*)                            | `SELECT COUNT(*) FROM curses;`                   |
-| `SUM(expr)`   | Add them all up (*tally your sins*)                  | `SELECT SUM(darkness_level) FROM cursed_items;`  |
-| `AVG(expr)`   | Arithmetic mean (*because median is too mainstream*) | `SELECT AVG(void_pressure) FROM entropy_watch;`  |
-| `MIN(expr)`   | The lowest value (*bottom of the abyss*)             | `SELECT MIN(shadow_density) FROM entropy_watch;` |
-| `MAX(expr)`   | The highest value (*loftiest darkness*)              | `SELECT MAX(soul_count) FROM cursed_items;`      |
+### Not supported
 
-### ➗ Mathematical Functions  
-
-For when you need to quantify the abyss. Basic arithmetic operations (`+`, `-`, `*`, `/`) work as expected, but these functions handle the *unnatural* calculations.  
-
-| Function       | Description                                      | Example                                      |
-|----------------|--------------------------------------------------|----------------------------------------------|
-| `ABS(x)`       | Absolute value (*distance from zero*)            | `SELECT ABS(-666) → 666`                     |
-| `SQRT(x)`      | Square root (*measure of diagonal despair*)      | `SELECT SQRT(2) → 1.414...`                  |
-| `POWER(x, y)`  | Exponentiation (*x raised to yth torment*)       | `SELECT POWER(2, 10) → 1024`                 |
-| `TRUNC(x)`     | Amputate decimals (*integer-only suffering*)     | `SELECT TRUNC(3.14159) → 3`                  |
-| `TRUNC(x, n)`  | Precision mutilation (*n decimal digits*)        | `SELECT TRUNC(3.14159, 2) → 3.14`            |
-| `SIGN(x)`      | Returns -1, 0, or 1 (*the algebra of alignment*)| `SELECT SIGN(-13) → -1`                      |
-
-> [!WARNING]  
-> **Division by Zero**  
-> Attempting to divide by zero will summon an error—because some voids should remain unexplored.
-
-### 🔤 **String Functions**
-
-Words are powerful. Here they’re _dangerous_.
-
-| Function                   | Description                                              | Example                                                   |
-|----------------------------|----------------------------------------------------------|-----------------------------------------------------------|
-| `LIKE`                     | Pattern matching with `%` and `_`                        | `WHERE name LIKE 'Umb%'`                                  |
-| `CONCAT(a, b)`             | Smashes values into one long string                      | `CONCAT('bat', 'man') → 'batman'`                         |
-| `SUBSTRING(str FROM x FOR y)` | Extracts a slice, PostgreSQL-style                  | `SUBSTRING(name FROM 1 FOR 1) → first letter of name`     |
-| `POSITION(substr IN str)` | Finds the starting index of a substring                  | `POSITION('e' IN 'shadow') → 2`                           |
-| `ASCII(char)`              | Returns the ASCII code of a single character             | `ASCII('A') → 65`                                         |
-
-> [!NOTE]  
-> **SUBSTRING Syntax**  
-> Umbra uses PostgreSQL-style `SUBSTRING(string FROM start FOR length)`.  
-> - `FROM` and `FOR` are both optional, but at least one must be present.  
-> - Positions are 1-based (because zero-based indexing is for the living).
-
-```sql
--- give me just the first letter of each name
-SELECT name, SUBSTRING(name FROM 1 FOR 1) FROM customers;
-
--- or everything after the third character
-SELECT SUBSTRING(name FROM 4) FROM customers;
-
--- or only the first 3 characters, starting from the beginning
-SELECT SUBSTRING(name FOR 3) FROM customers;
-```
-
-
-### 🔮 System functions
-
-Tools for introspection and survival.
-
-| Function | Description |
-| ------------- | -------------- |
-| `COALESCE(v1, v2, ...)` | Returns the first non-null argument |
-| `TYPEOF(value)` | Returns the data type of the value |
-| `EXTRACT(field FROM source)` | Retrieves sub-fields such as year or date from date/time |
-
+`ALTER TABLE`, `DROP INDEX`, views, triggers, stored procedures, `WITH`, window functions, upserts, prepared statements,
+`SELECT ... FOR UPDATE`, deferrable constraints, `LOWER` / `UPPER` / `LENGTH` / `TRIM`. Some of these may arrive (I think). 
 
 ---
 
-## 📜 Licensing
+## Testing
+
+```bash
+cargo test --release
+```
+
+Besides unit and integration tests, the suite includes:
+
+- the anomaly cases from Hermitage, each with a negative control showing the test fails at a weaker isolation level
+- a history checker in the style of Elle, which searches randomised list-append histories for dependency cycles
+- crash and fault injection over a simulated file system: a crash after every I/O operation, with unsynced bytes lost,
+  torn, garbled or reordered
+- `kill -9` against the binary under load
+- metamorphic SQL fuzzing (NoREC and TLP)
+- sqllogictest records whose expected results were produced by PostgreSQL
+- TPC-C with its consistency conditions checked at every isolation level, and again after `SIGKILL`
+
+Differential fuzzing against PostgreSQL runs when a local server is reachable (`UMBRA_BENCH_PG`, by default
+`host=/run/postgresql user=postgres dbname=postgres`). `UMBRA_FUZZ_SEEDS` raises the number of fuzzing seeds.
+
+Benchmarks, including YCSB against SQLite and PostgreSQL:
+
+```bash
+cargo bench --bench ycsb
+```
+
+---
+
+## Licensing
 
 Umbra is licensed under the **GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)**.
 
-This project includes portions of code derived from third-party projects licensed under the MIT License.
-Attributions and licence texts for those components are provided in the
-[`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES.md) file.
+This project includes portions of code derived from third-party projects licensed under the MIT License. Attributions
+and licence texts for those components are in [`THIRD_PARTY_NOTICES`](./THIRD_PARTY_NOTICES.md).
 
 ---
 
-## *✨ Just So You Know*
+## See also
 
-- **Documentation**: [Here be dragons](https://ruancampello.github.io/umbra-documentation/) (*and possibly bats*)
-- **Protocol**: If you're implementing a client, or are just curious how the shadowy bits work under the hood, check the binary wire format [here](./PROTOCOL.md).
-- **Philosophy**: *"Compiling is victory. Running is a miracle."*
-
+- **Wire protocol:** for writing a client, or for the curious, see [`PROTOCOL.md`](./PROTOCOL.md)
