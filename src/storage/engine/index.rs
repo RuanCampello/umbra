@@ -16,6 +16,11 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+// TODO: Implement this with a better and more low level Btree implementation
+// For this, there's the FB+-tree discussed in this paper: https://arxiv.org/html/2503.23397v1#bib.bib44
+// This one is based on another quite interesting one, but older: https://db.in.tum.de/~leis/papers/artsync.pdf
+// Both (an others) are to be taken in consideration, implementing a lock or latch free tree might
+// improve things, instead of a bare RwLock
 pub(crate) struct Index {
     pub name: String,
     /// The indexed columns, in key order
