@@ -36,7 +36,7 @@ pub(crate) struct Index {
 ///
 /// Keys compare value by value over their common length, so a key shorter than the index is a
 /// prefix bound: equal to every key it begins, `Included(prefix)..=Included(prefix)` spans them all
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Key {
     One(Value),
     /// shared, so cursors copy entries out of the index without allocating
@@ -251,6 +251,13 @@ impl Ord for Key {
     }
 }
 
+impl PartialOrd for Key {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl From<Value> for Key {
     #[inline]
     fn from(value: Value) -> Self {
@@ -294,7 +301,7 @@ fn empty(low: &EntryBound, high: &EntryBound) -> bool {
     let (Bound::Included((high_key, _)) | Bound::Excluded((high_key, _))) = high else {
         return false;
     };
-    if low_key.values().len() != high_key.values().len() && low_key == high_key {
+    if low_key.values().len() != high_key.values().len() && low_key.cmp(high_key).is_eq() {
         return false;
     }
 
