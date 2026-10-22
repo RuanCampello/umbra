@@ -44,6 +44,11 @@ pub(crate) struct Version {
 }
 
 /// The cold-file store of a durable engine, shared by its tables
+// TODO: lower abstraction over the durable storage, instead of relying on OS direct manipulation
+// CMU Andy Pavlo advocates that leaving work for the OS makes things slower and that's true
+// but in his case he relies on Buffer Pools, not anti-caching, so the strategy might change
+// this will make us do more work but can lead to a lot of performancing gains
+// io_uring might be good to give a look at
 pub(crate) struct Cold {
     storage: Arc<dyn Storage>,
     dir: PathBuf,
