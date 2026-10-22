@@ -5,6 +5,7 @@ use crate::core::json;
 use crate::core::numeric::{Numeric, NumericError};
 use crate::core::uuid::UuidError;
 use crate::db::{self, Schema, SqlError};
+use crate::executor::dml;
 use crate::sql::statement::{
     BinaryOperator, Coerce, Expression, Function, NUMERIC_ANY, PathSegment, Temporal, Type,
     UnaryOperator, Value,
@@ -1029,8 +1030,8 @@ fn cast(value: Value, target: Type) -> Result<Value, SqlError> {
             _ => return Err(invalid(&Value::String(s))),
         },
         (mut value, target) => {
-            let column = crate::db::Column::new("cast", target);
-            crate::executor::dml::coerce_value(&column, &mut value).map_err(|_| invalid(&value))?;
+            let column = db::Column::new("cast", target);
+            dml::coerce_value(&column, &mut value).map_err(|_| invalid(&value))?;
             value
         },
     })

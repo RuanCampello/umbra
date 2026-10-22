@@ -524,8 +524,7 @@ impl Transaction {
         }
 
         if self.writes.is_empty() && self.ddl.is_empty() {
-            self.finish();
-            return Ok(());
+            return Ok(self.finish());
         }
 
         // PERFORMANCE: encoded before the critical section, only the timestamp is patched in it

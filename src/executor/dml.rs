@@ -380,49 +380,46 @@ pub(crate) fn coerce_value(column: &Column, value: &mut Value) -> Result<(), Dat
     use crate::core::json::{self, Conv};
     use crate::core::numeric::Numeric;
     use crate::core::uuid::Uuid;
+    use Type::*;
     use std::str::FromStr;
 
     let invalid = |kind: &str, literal: &str| {
         DatabaseError::Sql(SqlError::Other(format!("invalid {kind} '{literal}'")))
     };
 
-    match (column.column_type(), &mut *value) {
-        (Type::Enum(_), Value::String(literal)) => {
+    Ok(match (column.column_type(), &mut *value) {
+        (Enum(_), Value::String(literal)) => {
             let variants = column.variants().expect("enum columns carry their variants");
 
             match variants.iter().position(|variant| variant.as_str() == &**literal) {
                 Some(idx) => *value = Value::Enum(idx as u8),
-                None => return Err(invalid("enum variant", literal)),
+                _ => return Err(invalid("enum variant", literal)),
             }
         },
 
-        (Type::Date, Value::String(literal)) => match NaiveDate::parse_str(literal) {
+        (Date, Value::String(literal)) => match NaiveDate::parse_str(literal) {
             Ok(date) => *value = Value::Temporal(date.into()),
-            Err(_) => return Err(invalid("date", literal)),
+            _ => return Err(invalid("date", literal)),
         },
-
-        (Type::Time, Value::String(literal)) => match NaiveTime::parse_str(literal) {
+        (Time, Value::String(literal)) => match NaiveTime::parse_str(literal) {
             Ok(time) => *value = Value::Temporal(time.into()),
-            Err(_) => return Err(invalid("time", literal)),
+            _ => return Err(invalid("time", literal)),
         },
-
-        (Type::DateTime, Value::String(literal)) => match NaiveDateTime::parse_str(literal) {
+        (DateTime, Value::String(literal)) => match NaiveDateTime::parse_str(literal) {
             Ok(timestamp) => *value = Value::Temporal(timestamp.into()),
-            Err(_) => return Err(invalid("timestamp", literal)),
+            _ => return Err(invalid("timestamp", literal)),
         },
-
-        (Type::Interval, Value::String(literal)) => match Interval::from_str(literal) {
+        (Interval, Value::String(literal)) => match Interval::from_str(literal) {
             Ok(interval) => *value = Value::Interval(interval),
-            Err(_) => return Err(invalid("interval", literal)),
+            _ => return Err(invalid("interval", literal)),
         },
-
-        (Type::Uuid, Value::String(literal)) => match Uuid::from_str(literal) {
+        (Uuid, Value::String(literal)) => match Uuid::from_str(literal) {
             Ok(uuid) => *value = Value::Uuid(uuid),
-            Err(_) => return Err(invalid("uuid", literal)),
+            _ => return Err(invalid("uuid", literal)),
         },
 
-        (Type::Numeric(..), Value::Number(n)) => *value = Value::Numeric(Numeric::from(*n)),
-        (Type::Numeric(..), Value::Float(f)) => match Numeric::try_from(*f) {
+        (Numeric(..), Value::Number(n)) => *value = Value::Numeric(Numeric::from(*n)),
+        (Numeric(..), Value::Float(f)) => match Numeric::try_from(*f) {
             Ok(numeric) => *value = Value::Numeric(numeric),
             Err(_) => {
                 return Err(DatabaseError::Sql(SqlError::Other(format!("invalid numeric '{f}'"))));
@@ -430,16 +427,12 @@ pub(crate) fn coerce_value(column: &Column, value: &mut Value) -> Result<(), Dat
         },
 
         // REAL columns hold f32 precision
-        (Type::Real, Value::Float(f)) => *f = *f as f32 as f64,
-        (Type::Real, Value::Number(n)) => *value = Value::Float(*n as f32 as f64),
-        (Type::DoublePrecision, Value::Number(n)) => *value = Value::Float(*n as f64),
-        (Type::Real, Value::Numeric(n)) => *value = Value::Float(f64::from(n.clone()) as f32 as f64),
-        (Type::DoublePrecision, Value::Numeric(n)) => *value = Value::Float(f64::from(n.clone())),
-
-        (
-            Type::Jsonb,
-            Value::String(_) | Value::Boolean(_) | Value::Float(_) | Value::Number(_),
-        ) => {
+        (Real, Value::Float(f)) => *f = *f as f32 as f64,
+        (Real, Value::Number(n)) => *value = Value::Float(*n as f32 as f64),
+        (DoublePrecision, Value::Number(n)) => *value = Value::Float(*n as f64),
+        (Real, Value::Numeric(n)) => *value = Value::Float(f64::from(n.clone()) as f32 as f64),
+        (DoublePrecision, Value::Numeric(n)) => *value = Value::Float(f64::from(n.clone())),
+        (Jsonb, Value::String(_) | Value::Boolean(_) | Value::Float(_) | Value::Number(_)) => {
             let strictness = match value {
                 Value::String(_) => Conv::NotStrict,
                 _ => Conv::Strict,
@@ -454,11 +447,8 @@ pub(crate) fn coerce_value(column: &Column, value: &mut Value) -> Result<(), Dat
             *value = json::from_json_to_value(json, element_type, json::OutputFlag::ElementType)
                 .map_err(|e| DatabaseError::Sql(SqlError::Other(format!("invalid json: {e}"))))?;
         },
-
         _ => {},
-    }
-
-    Ok(())
+    })
 }
 
 #[inline(always)]

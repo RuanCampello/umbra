@@ -384,14 +384,17 @@ impl Table {
             return Err(gone(level));
         };
 
+        // it's already mine
         if head.stamp == view.marker {
             return Ok(Written::Done(std::mem::replace(&mut head.row, row)));
         }
 
+        // it's not mine and it's not confirmed
         if head.stamp & TXN_FLAG != 0 {
             return Err(EngineError::WriteConflict);
         }
 
+        // confirmed after my snapshot
         if head.stamp > floor || head.row.is_none() {
             return match level {
                 IsolationLevel::ReadCommitted => {
@@ -401,8 +404,11 @@ impl Table {
             };
         }
 
+        // confirmed and I can see it
         let previous = head.row.clone();
+        // passing prune
         prune(chain, watermark, pruned);
+        // create a new version with my marker
         chain.push(Version { stamp: view.marker, row });
 
         Ok(Written::Done(previous))
