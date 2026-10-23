@@ -84,32 +84,6 @@ impl<'input> Parser<'input> {
     }
 
     pub fn parse_statement(&mut self) -> ParserResult<Statement> {
-        // words only meaningful at the start of a statement stay identifiers elsewhere
-        if self.consume_word("CHECKPOINT") {
-            self.expect_token(Token::Semicolon)?;
-            return Ok(Statement::Checkpoint);
-        }
-
-        if self.consume_word("SAVEPOINT") {
-            let name = self.parse_ident()?;
-            self.expect_token(Token::Semicolon)?;
-            return Ok(Statement::Savepoint(name));
-        }
-
-        if self.consume_word("RELEASE") {
-            self.consume_word("SAVEPOINT");
-            let name = self.parse_ident()?;
-            self.expect_token(Token::Semicolon)?;
-            return Ok(Statement::Release(name));
-        }
-
-        if self.consume_word("START") {
-            self.expect_keyword(Keyword::Transaction)?;
-            let level = self.parse_isolation()?;
-            self.expect_token(Token::Semicolon)?;
-            return Ok(Statement::StartTransaction(level));
-        }
-
         let statement = match self.expect_one(&Self::supported_statements())? {
             Keyword::Select => Statement::Select(self.parse_union()?),
             Keyword::Create => Statement::Create(Create::parse(self)?),
@@ -117,32 +91,42 @@ impl<'input> Parser<'input> {
             Keyword::Update => Statement::Update(Update::parse(self)?),
             Keyword::Drop => Statement::Drop(Drop::parse(self)?),
             Keyword::Delete => Statement::Delete(Delete::parse(self)?),
-            Keyword::Start => {
+            Keyword::Begin => {
                 self.consume_optional(Token::Keyword(Keyword::Transaction));
-                Statement::StartTransaction(self.parse_isolation()?)
+                let level = self
+                    .consume_optional(Token::Keyword(Keyword::Isolation))
+                    .then(|| self.parse_isolation_level())
+                    .transpose()?;
+
+                Statement::StartTransaction(level)
             },
             Keyword::Set => {
-                let session = self.consume_word("SESSION");
+                let session = self.consume_optional(Token::Keyword(Keyword::Session));
                 if session {
-                    self.expect_word("CHARACTERISTICS")?;
+                    self.expect_keyword(Keyword::Characteristics)?;
                     self.expect_keyword(Keyword::As)?;
                 }
 
                 self.expect_keyword(Keyword::Transaction)?;
-                match self.parse_isolation()? {
-                    Some(level) => Statement::SetIsolation { level, session },
-                    None => return Err(self.expected_word("ISOLATION")),
-                }
+                self.expect_keyword(Keyword::Isolation)?;
+                Statement::SetIsolation { level: self.parse_isolation_level()?, session }
             },
             Keyword::Commit => Statement::Commit,
-            Keyword::Rollback => match self.consume_word("TO") {
-                true => {
-                    self.consume_word("SAVEPOINT");
-                    Statement::RollbackTo(self.parse_ident()?)
-                },
-                false => Statement::Rollback,
+            Keyword::Rollback => self
+                .consume_optional(Token::Keyword(Keyword::To))
+                .then(|| -> Result<_, ParserError> {
+                    self.expect_keyword(Keyword::Savepoint)?;
+                    Ok(Statement::RollbackTo(self.parse_ident()?))
+                })
+                .transpose()?
+                .unwrap_or(Statement::Rollback),
+            Keyword::Checkpoint => Statement::Checkpoint,
+            Keyword::Savepoint => Statement::Savepoint(self.parse_ident()?),
+            Keyword::Release => {
+                self.expect_keyword(Keyword::Savepoint)?;
+                Statement::Release(self.parse_ident()?)
             },
-            Keyword::Explain => return Ok(Statement::Explain(Box::new(self.parse_statement()?))),
+            Keyword::Explain => Statement::Explain(Box::new(self.parse_statement()?)),
             Keyword::Source => {
                 let path = match self.next_token()? {
                     Token::String(s) => s,
@@ -153,7 +137,6 @@ impl<'input> Parser<'input> {
                         }));
                     },
                 };
-
                 Statement::Source(path)
             },
             _ => unreachable!(),
@@ -163,54 +146,22 @@ impl<'input> Parser<'input> {
         Ok(statement)
     }
 
-    /// an optional `ISOLATION LEVEL <level>` clause
-    fn parse_isolation(&mut self) -> ParserResult<Option<IsolationLevel>> {
-        if !self.consume_word("ISOLATION") {
-            return Ok(None);
-        }
-
-        self.expect_word("LEVEL")?;
-        let level = match () {
-            _ if self.consume_word("READ") => {
-                self.expect_word("COMMITTED")?;
-                IsolationLevel::ReadCommitted
+    /// `LEVEL <level>`, after `ISOLATION`
+    fn parse_isolation_level(&mut self) -> ParserResult<IsolationLevel> {
+        self.expect_keyword(Keyword::Level)?;
+        Ok(
+            match self.expect_one(&[Keyword::Read, Keyword::Repeatable, Keyword::Serializable])? {
+                Keyword::Read => {
+                    self.expect_keyword(Keyword::Committed)?;
+                    IsolationLevel::ReadCommitted
+                },
+                Keyword::Repeatable => {
+                    self.expect_keyword(Keyword::Read)?;
+                    IsolationLevel::Snapshot
+                },
+                _ => IsolationLevel::Serializable,
             },
-            _ if self.consume_word("REPEATABLE") => {
-                self.expect_word("READ")?;
-                IsolationLevel::Snapshot
-            },
-            _ if self.consume_word("SNAPSHOT") => IsolationLevel::Snapshot,
-            _ if self.consume_word("SERIALIZABLE") => IsolationLevel::Serializable,
-            _ => {
-                return Err(self
-                    .expected_word("READ COMMITTED | REPEATABLE READ | SNAPSHOT | SERIALIZABLE"));
-            },
-        };
-
-        Ok(Some(level))
-    }
-
-    /// consumes the next token when it is the identifier `word`
-    fn consume_word(&mut self, word: &str) -> bool {
-        match self.peek_token() {
-            Some(Ok(Token::Identifier(found))) if found.eq_ignore_ascii_case(word) => {
-                let _ = self.next_token();
-                true
-            },
-            _ => false,
-        }
-    }
-
-    fn expect_word(&mut self, word: &str) -> ParserResult<()> {
-        match self.consume_word(word) {
-            true => Ok(()),
-            _ => Err(self.expected_word(word)),
-        }
-    }
-
-    fn expected_word(&mut self, word: &str) -> ParserError {
-        let found = self.next_token().unwrap_or(Token::Eof);
-        self.error(ErrorKind::Expected { expected: Token::Identifier(word.into()), found })
+        )
     }
 
     fn parse_ident(&mut self) -> ParserResult<String> {
@@ -621,31 +572,31 @@ impl<'input> Parser<'input> {
             Keyword::Null,
             Keyword::Not,
             Keyword::Default,
+            Keyword::Check,
+            Keyword::References,
         ];
         let mut constraints = Vec::new();
+
         loop {
-            let constraint = match () {
-                _ if self.consume_word("CHECK") => {
+            let constraint = match self.consume_one(&options).as_optional() {
+                Some(Keyword::Primary) => {
+                    self.expect_keyword(Keyword::Key)?;
+                    Constraint::PrimaryKey
+                },
+                Some(Keyword::Unique) => Constraint::Unique,
+                Some(Keyword::Nullable | Keyword::Null) => Constraint::Nullable,
+                Some(Keyword::Not) => {
+                    self.expect_keyword(Keyword::Null)?;
+                    continue;
+                },
+                Some(Keyword::Default) => Constraint::Default(self.parse_expr(None)?),
+                Some(Keyword::Check) => {
                     self.expect_token(Token::LeftParen)?;
                     Constraint::Check(self.parse_closing_expr()?)
                 },
-                _ if self.consume_word("REFERENCES") => self.parse_references()?,
-                _ => match self.consume_one(&options).as_optional() {
-                    Some(Keyword::Primary) => {
-                        self.expect_keyword(Keyword::Key)?;
-                        Constraint::PrimaryKey
-                    },
-                    Some(Keyword::Unique) => Constraint::Unique,
-                    // `NULL` is the standard spelling of `NULLABLE`
-                    Some(Keyword::Nullable | Keyword::Null) => Constraint::Nullable,
-                    Some(Keyword::Not) => {
-                        self.expect_keyword(Keyword::Null)?;
-                        continue;
-                    },
-                    Some(Keyword::Default) => Constraint::Default(self.parse_expr(None)?),
-                    Some(_) => unreachable!(),
-                    _ => break,
-                },
+                Some(Keyword::References) => self.parse_references()?,
+                Some(_) => unreachable!(),
+                _ => break,
             };
             constraints.push(constraint);
         }
@@ -663,15 +614,15 @@ impl<'input> Parser<'input> {
         let mut on_delete = OnDelete::Restrict;
         if self.consume_optional(Token::Keyword(Keyword::On)) {
             self.expect_keyword(Keyword::Delete)?;
-            on_delete = match () {
-                _ if self.consume_word("CASCADE") => OnDelete::Cascade,
-                _ if self.consume_word("RESTRICT") => OnDelete::Restrict,
-                _ => {
-                    self.expect_word("NO")?;
-                    self.expect_word("ACTION")?;
-                    OnDelete::Restrict
-                },
-            };
+            on_delete =
+                match self.expect_one(&[Keyword::Cascade, Keyword::Restrict, Keyword::No])? {
+                    Keyword::Cascade => OnDelete::Cascade,
+                    Keyword::Restrict => OnDelete::Restrict,
+                    _ => {
+                        self.expect_keyword(Keyword::Action)?;
+                        OnDelete::Restrict
+                    },
+                };
         }
 
         Ok(Constraint::References { table, column, on_delete })
@@ -687,17 +638,17 @@ impl<'input> Parser<'input> {
         }
 
         let elements = self.parse_separated_tokens(
-            |parser| match () {
-                _ if parser.consume_word("CHECK") => {
+            |parser| match parser.consume_one(&[Keyword::Check, Keyword::Foreign]) {
+                Keyword::Check => {
                     parser.expect_token(Token::LeftParen)?;
                     Ok(Element::Check(parser.parse_closing_expr()?))
                 },
-                _ if parser.consume_word("FOREIGN") => {
+                Keyword::Foreign => {
                     parser.expect_keyword(Keyword::Key)?;
                     parser.expect_token(Token::LeftParen)?;
                     let column = parser.parse_ident()?;
                     parser.expect_token(Token::RightParen)?;
-                    parser.expect_word("REFERENCES")?;
+                    parser.expect_keyword(Keyword::References)?;
                     Ok(Element::ForeignKey(column, parser.parse_references()?))
                 },
                 _ => parser.parse_col().map(Element::Column),
@@ -870,20 +821,16 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_join(&mut self) -> ParserResult<Option<JoinClause>> {
-        let comma = self.consume_optional(Token::Comma);
-        if comma || self.consume_word("CROSS") {
-            if !comma {
-                self.expect_keyword(Keyword::Join)?;
-            }
+        if self.consume_optional(Token::Keyword(Keyword::Cross)) {
+            self.expect_keyword(Keyword::Join)?;
             let table = self.parse_ident()?;
             let table = TableRef::new(table, self.parse_alias()?);
             let on = Expression::Value(Value::Boolean(true));
             return Ok(Some(JoinClause { join_type: JoinType::Inner, table, on }));
         }
 
-        let join_type: JoinType = self
-            .consume_one(&[Keyword::Inner, Keyword::Full, Keyword::Left, Keyword::Right])
-            .into();
+        let join_type: JoinType =
+            self.consume_one(&[Keyword::Full, Keyword::Left, Keyword::Right]).into();
 
         if !self.consume_optional(Token::Keyword(Keyword::Join)) {
             return Ok(None);
@@ -931,16 +878,10 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_alias(&mut self) -> ParserResult<Option<String>> {
-        if self.consume_optional(Token::Keyword(Keyword::As)) {
-            return Ok(Some(self.parse_ident()?));
+        match self.consume_optional(Token::Keyword(Keyword::As)) {
+            true => self.parse_ident().map(Some),
+            false => Ok(None),
         }
-
-        Ok(match self.peek_token() {
-            Some(Ok(Token::Identifier(name))) if !name.eq_ignore_ascii_case("CROSS") => {
-                Some(self.parse_ident()?)
-            },
-            _ => None,
-        })
     }
 
     fn parse_returning(&mut self) -> ParserResult<Vec<Expression>> {
@@ -1323,7 +1264,7 @@ impl<'input> Parser<'input> {
         keywords.into_iter().map(From::from).collect()
     }
 
-    const fn supported_statements() -> [Keyword; 12] {
+    const fn supported_statements() -> [Keyword; 15] {
         [
             Keyword::Set,
             Keyword::Select,
@@ -1332,8 +1273,11 @@ impl<'input> Parser<'input> {
             Keyword::Insert,
             Keyword::Delete,
             Keyword::Drop,
-            Keyword::Start,
+            Keyword::Begin,
             Keyword::Rollback,
+            Keyword::Checkpoint,
+            Keyword::Savepoint,
+            Keyword::Release,
             Keyword::Commit,
             Keyword::Explain,
             Keyword::Source,
@@ -1514,9 +1458,9 @@ mod tests {
     fn test_create_table() {
         let input = r#"
             CREATE TABLE employees (
-                id INT PRIMARY KEY,
+                id INTEGER PRIMARY KEY,
                 name VARCHAR(255),
-                age INT,
+                age INTEGER,
                 is_manager BOOLEAN
             );
         "#;
@@ -1541,7 +1485,7 @@ mod tests {
     fn test_create_table_with_unsigned_keys() {
         let sql = r#"
             CREATE TABLE companies (
-                id INT UNSIGNED PRIMARY KEY,
+                id INTEGER UNSIGNED PRIMARY KEY,
                 name VARCHAR(50),
                 address VARCHAR(255),
                 phone VARCHAR(10)
@@ -1682,7 +1626,7 @@ mod tests {
         let sql = r#"
             DROP TABLE bills;
             CREATE TABLE departments (
-                id INT UNSIGNED PRIMARY KEY,
+                id INTEGER UNSIGNED PRIMARY KEY,
                 name VARCHAR(69)
             );
             SELECT * FROM employees;
@@ -1737,7 +1681,7 @@ mod tests {
     fn test_parse_date() {
         let sql = r#"
             CREATE TABLE events (
-            event_id INT PRIMARY KEY,
+            event_id INTEGER PRIMARY KEY,
             event_name VARCHAR(100),
             event_date DATE
         );
@@ -1800,7 +1744,7 @@ mod tests {
 
     #[test]
     fn test_missing_parenthesis() {
-        let sql = "CREATE TABLE employees id INT, name VARCHAR(255);";
+        let sql = "CREATE TABLE employees id INTEGER, name VARCHAR(255);";
         let statement = Parser::new(sql).parse_statement();
 
         assert_eq!(
@@ -1820,7 +1764,7 @@ mod tests {
     fn test_parse_small_int() {
         let sql = r#"
         CREATE TABLE books (
-            book_id INT PRIMARY KEY,
+            book_id INTEGER PRIMARY KEY,
             title VARCHAR (255),
             pages SMALLINT
         );"#;
@@ -1884,13 +1828,13 @@ mod tests {
 
     #[test]
     fn test_invalid_varchar_len() {
-        let sql = "CREATE TABLE employees (id INT, name VARCHAR(SOMETHING));";
+        let sql = "CREATE TABLE employees (id INTEGER, name VARCHAR(SOMETHING));";
         let statement = Parser::new(sql).parse_statement();
 
         assert_eq!(
             statement,
             Err(ParserError {
-                location: Location::new(1, 46),
+                location: Location::new(1, 50),
                 input: sql.into(),
                 kind: ErrorKind::Expected {
                     expected: Token::Number(Default::default()),
@@ -2739,7 +2683,7 @@ mod tests {
 
     #[test]
     fn test_numeric_type_parsing() {
-        let sql = "CREATE TABLE accounts (id INT PRIMARY KEY, balance NUMERIC, rate DECIMAL);";
+        let sql = "CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance NUMERIC, rate NUMERIC);";
         let statement = Parser::new(sql).parse_statement();
 
         assert_eq!(
@@ -2758,7 +2702,7 @@ mod tests {
     #[test]
     fn test_create_table_with_enum() {
         let sql =
-            r#"CREATE TABLE tasks (id INT PRIMARY KEY, status "todo" | "in_progress" | "done");"#;
+            "CREATE TABLE tasks (id INTEGER PRIMARY KEY, status 'todo' | 'in_progress' | 'done');";
         let statement = Parser::new(sql).parse_statement();
 
         assert_eq!(
