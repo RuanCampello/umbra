@@ -165,57 +165,36 @@ pub(in crate::sql) fn analyze<'s>(
                 return Err(AnalyzerError::MetadataAssignment.into());
             }
 
-            // without a column list, values fill the columns in order and the rest is omitted
-            let positional = columns.is_empty();
-            let columns: Vec<_> = match positional {
-                true => metadata
-                    .schema
-                    .columns
-                    .iter()
-                    .map(|col| col.name())
-                    .filter(|name| *name != ROW_COL_ID)
-                    .collect(),
-                _ => columns.iter().map(String::as_str).collect(),
-            };
-
-            for (position, &col) in columns.iter().enumerate() {
+            for (position, col) in columns.iter().enumerate() {
                 if col.eq(ROW_COL_ID) {
                     return Err(AnalyzerError::MetadataAssignment.into());
                 }
                 if metadata.schema.index_of(col).is_none() {
-                    return Err(SqlError::InvalidColumn(col.into()).into());
+                    return Err(SqlError::InvalidColumn(col.clone()).into());
                 }
-                if columns[..position].contains(&col) {
-                    return Err(AnalyzerError::DuplicateCols(col.into()).into());
+                if columns[..position].contains(col) {
+                    return Err(AnalyzerError::DuplicateCols(col.clone()).into());
                 }
             }
 
             for row in rows {
-                let given = match (positional, row.len().cmp(&columns.len())) {
-                    (_, std::cmp::Ordering::Equal) | (true, std::cmp::Ordering::Less) => {
-                        &columns[..row.len()]
-                    },
-                    _ => {
-                        return Err(AnalyzerError::ValueCount {
-                            columns: columns.len(),
-                            values: row.len(),
-                        }
-                        .into());
-                    },
-                };
+                if row.len() != columns.len() {
+                    let (columns, values) = (columns.len(), row.len());
+                    return Err(AnalyzerError::ValueCount { columns, values }.into());
+                }
 
                 let missing = metadata.schema.columns.iter().find(|col| {
                     col.name() != ROW_COL_ID
                         && !col.is_nullable()
                         && !col.column_type().can_be_autogen()
                         && col.default().is_none()
-                        && !given.contains(&col.name())
+                        && !columns.iter().any(|given| given == col.name())
                 });
                 if let Some(col) = missing {
                     return Err(AnalyzerError::MissingColumn(col.name().into()).into());
                 }
 
-                for (expr, col) in row.iter().zip(given) {
+                for (expr, col) in row.iter().zip(columns) {
                     analyze_assignment(metadata, col, expr, false)?;
                 }
 
@@ -1198,7 +1177,7 @@ mod tests {
     fn select_from_invalid_column() -> AnalyzerResult {
         Analyze {
             sql: "SELECT last_name FROM customer;",
-            ctx: &["CREATE TABLE customer (id INT PRIMARY KEY, first_name VARCHAR(69));"],
+            ctx: &["CREATE TABLE customer (id INTEGER PRIMARY KEY, first_name VARCHAR(69));"],
             expected: Err(SqlError::InvalidColumn("last_name".into()).into()),
         }
         .assert()
@@ -1208,7 +1187,7 @@ mod tests {
     fn select_from_valid_table() -> AnalyzerResult {
         Analyze {
             sql: "SELECT * FROM users;",
-            ctx: &["CREATE TABLE users (id INT PRIMARY KEY);"],
+            ctx: &["CREATE TABLE users (id INTEGER PRIMARY KEY);"],
             expected: Ok(()),
         }
         .assert()
@@ -1218,7 +1197,7 @@ mod tests {
     fn select_from_valid_column() -> AnalyzerResult {
         Analyze {
             sql: "SELECT last_name FROM customer;",
-            ctx: &["CREATE TABLE customer (id INT PRIMARY KEY, first_name VARCHAR(69), last_name VARCHAR(69));"],
+            ctx: &["CREATE TABLE customer (id INTEGER PRIMARY KEY, first_name VARCHAR(69), last_name VARCHAR(69));"],
             expected: Ok(()),
         }
             .assert()
@@ -1230,7 +1209,7 @@ mod tests {
     fn insert_without_columns_targeting() -> AnalyzerResult {
         Analyze {
             sql: "INSERT INTO users VALUES ('string', 5, 6);",
-            ctx: &["CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255), email VARCHAR(255) UNIQUE);"],
+            ctx: &["CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255), email VARCHAR(255) UNIQUE);"],
             expected: Err(TypeError::ExpectedType {
                 expected: VmType::Number,
                 found: Expression::Value(Value::String("1".into())),
@@ -1245,7 +1224,7 @@ mod tests {
         Analyze {
             sql: "INSERT INTO employees (id, name, birth_date) VALUES (24, 'Mary Dove');",
             ctx: &[
-                "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(255), birth_date DATE);",
+                "CREATE TABLE employees (id INTEGER PRIMARY KEY, name VARCHAR(255), birth_date DATE);",
             ],
             expected: Err(AnalyzerError::ValueCount { columns: 3, values: 2 }.into()),
         }
@@ -1255,8 +1234,8 @@ mod tests {
     #[test]
     fn column_type_mismatch() -> AnalyzerResult {
         const CTX: &[&str; 2] = &[
-            "CREATE TABLE products (id INT, name VARCHAR(255), price INT);",
-            "CREATE TABLE users (id INT, username VARCHAR(255));",
+            "CREATE TABLE products (id INTEGER, name VARCHAR(255), price INTEGER);",
+            "CREATE TABLE users (id INTEGER, username VARCHAR(255));",
         ];
 
         Analyze {
@@ -1318,7 +1297,7 @@ mod tests {
     fn insert_invalid_time_format() -> AnalyzerResult {
         const CTX: &str = r#"
             CREATE TABLE logs (
-                log_id INT PRIMARY KEY,
+                log_id INTEGER PRIMARY KEY,
                 logged_at TIME
             );
         "#;
@@ -1408,7 +1387,7 @@ mod tests {
     fn insert_invalid_datetime_format() -> AnalyzerResult {
         const CTX: &str = r#"
             CREATE TABLE events (
-                id INT,
+                id INTEGER,
                 happened_at TIMESTAMP
             );
         "#;
@@ -1439,7 +1418,7 @@ mod tests {
 
     #[test]
     fn insert_smallint() -> AnalyzerResult {
-        const CTX: &str = "CREATE TABLE hamlets (id INT PRIMARY KEY, population SMALLINT);";
+        const CTX: &str = "CREATE TABLE hamlets (id INTEGER PRIMARY KEY, population SMALLINT);";
 
         Analyze {
             sql: "INSERT INTO hamlets (id, population) VALUES (1, 4302);",
@@ -1452,7 +1431,7 @@ mod tests {
     #[test]
     fn multiple_primary_keys() -> AnalyzerResult {
         let analyze = Analyze {
-            sql: "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255) PRIMARY KEY);",
+            sql: "CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255) PRIMARY KEY);",
             ctx: &[],
             expected: Err(AnalyzerError::MultiplePrimaryKeys.into()),
         };
@@ -1462,7 +1441,7 @@ mod tests {
 
     #[test]
     fn non_boolean_where() -> AnalyzerResult {
-        const CTX: &str = "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255));";
+        const CTX: &str = "CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255));";
         let found = Expression::BinaryOperation {
             operator: BinaryOperator::Plus,
             left: Box::new(Expression::Value(Value::Number(1))),
@@ -1480,7 +1459,7 @@ mod tests {
     #[test]
     fn minus_uniary_operation() -> AnalyzerResult {
         const CTX: &str =
-            "CREATE TABLE measurements (id INT PRIMARY KEY, temperature REAL, altitude INT);";
+            "CREATE TABLE measurements (id INTEGER PRIMARY KEY, temperature REAL, altitude INTEGER);";
 
         let sql = r#"
             INSERT INTO measurements (id, temperature, altitude) VALUES
@@ -1621,7 +1600,7 @@ mod tests {
 
     #[test]
     fn group_by() -> AnalyzerResult {
-        let context = "CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INT, staff_id INT, amount INT);";
+        let context = "CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INTEGER, staff_id INTEGER, amount INTEGER);";
 
         Analyze {
             sql: "SELECT customer_id, SUM(amount) FROM payment GROUP BY amount;",
@@ -1645,8 +1624,8 @@ mod tests {
         .assert()?;
 
         let context_joined = &[
-            "CREATE TABLE student (sid INT PRIMARY KEY, name TEXT, gpa REAL);",
-            "CREATE TABLE enrolled (sid INT, cid TEXT, grade VARCHAR(1));",
+            "CREATE TABLE student (sid INTEGER PRIMARY KEY, name TEXT, gpa REAL);",
+            "CREATE TABLE enrolled (sid INTEGER, cid TEXT, grade VARCHAR(1));",
         ];
 
         Analyze {
@@ -1673,7 +1652,7 @@ mod tests {
     fn insert_empty_text() -> AnalyzerResult {
         Analyze {
             sql: "INSERT INTO users (id, notes) VALUES (1, '');",
-            ctx: &["CREATE TABLE users (id INT PRIMARY KEY, notes TEXT);"],
+            ctx: &["CREATE TABLE users (id INTEGER PRIMARY KEY, notes TEXT);"],
             expected: Ok(()),
         }
         .assert()
@@ -1683,7 +1662,7 @@ mod tests {
     fn insert_large_text() -> AnalyzerResult {
         Analyze {
             sql: &format!("INSERT INTO t (id, notes) VALUES (1, '{}');", "x".repeat(10000)),
-            ctx: &["CREATE TABLE t (id INT PRIMARY KEY, notes TEXT);"],
+            ctx: &["CREATE TABLE t (id INTEGER PRIMARY KEY, notes TEXT);"],
             expected: Ok(()),
         }
         .assert()
@@ -1692,7 +1671,7 @@ mod tests {
     #[test]
     fn test_where_between_text_varchar() -> AnalyzerResult {
         let ctx = &["CREATE TABLE documents (
-            id INT PRIMARY KEY,
+            id INTEGER PRIMARY KEY,
             short_desc VARCHAR(100),
             full_text TEXT
         );"];
