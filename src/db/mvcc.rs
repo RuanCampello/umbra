@@ -456,7 +456,7 @@ mod tests {
         let mut owner = MvccDatabase::in_memory().unwrap();
         let mut session = MvccDatabase::connect(owner.engine());
 
-        owner.exec("CREATE TABLE t (id SERIAL PRIMARY KEY, v INT);").unwrap();
+        owner.exec("CREATE TABLE t (id SERIAL PRIMARY KEY, v INTEGER);").unwrap();
 
         // the session predates the table, the schema epoch bump makes it visible
         session.exec("INSERT INTO t (v) VALUES (10);").unwrap();
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn concurrent_sessions_never_collide_on_serials() {
         let mut owner = MvccDatabase::in_memory().unwrap();
-        owner.exec("CREATE TABLE t (id SERIAL PRIMARY KEY, who INT);").unwrap();
+        owner.exec("CREATE TABLE t (id SERIAL PRIMARY KEY, who INTEGER);").unwrap();
         let engine = owner.engine();
 
         let handles: Vec<_> = (0..4)

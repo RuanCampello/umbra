@@ -404,7 +404,7 @@ mod tests {
         let mut db = crate::db::MvccDatabase::in_memory().unwrap();
         let mut run = |sql: &str| Response::from(db.exec(sql));
 
-        run("CREATE TABLE t (id INT PRIMARY KEY, v INT);");
+        run("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER);");
         assert_eq!(run("INSERT INTO t (id, v) VALUES (1, 1), (2, 2), (3, 3);"), Response::Empty(3));
         assert_eq!(run("UPDATE t SET v = 9 WHERE id >= 2;"), Response::Empty(2));
         assert_eq!(run("DELETE FROM t WHERE id = 1;"), Response::Empty(1));
