@@ -167,6 +167,7 @@ impl<'input> Parser<'input> {
     fn parse_ident(&mut self) -> ParserResult<String> {
         self.next_token().and_then(|token| match token {
             Token::Identifier(identifier) => Ok(identifier),
+            Token::Keyword(keyword) if keyword.is_unreserved() => Ok(keyword.as_name()),
             _ => Err(self.error(ErrorKind::Expected {
                 expected: Token::Identifier(Default::default()),
                 found: token,
@@ -270,7 +271,11 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_pref(&mut self) -> ParserResult<Expression> {
-        match self.next_token()? {
+        let token = match self.next_token()? {
+            Token::Keyword(keyword) if keyword.is_unreserved() => Token::Identifier(keyword.as_name()),
+            token => token,
+        };
+        match token {
             Token::String(string) => Ok(Expression::Value(Value::String(string.into()))),
             Token::Keyword(Keyword::True) => Ok(Expression::Value(Value::Boolean(true))),
             Token::Keyword(Keyword::False) => Ok(Expression::Value(Value::Boolean(false))),
@@ -497,6 +502,7 @@ impl<'input> Parser<'input> {
             let key = match self.next_token()? {
                 Token::Identifier(id) => id,
                 Token::String(s) => s,
+                Token::Keyword(k) if k.is_unreserved() => k.as_name(),
                 Token::Keyword(k) => k.to_string(),
                 other => {
                     return Err(self.error(ErrorKind::ExpectedOneOf {

@@ -368,17 +368,34 @@ impl Display for Whitespace {
 }
 
 impl Keyword {
+    #[inline(always)]
     pub fn as_optional(&self) -> Option<Keyword> {
-        match self {
-            Self::None => None,
-            _ => Some(*self),
-        }
+        (*self != Self::None).then_some(*self)
     }
 
     pub fn is_function(&self) -> bool {
         use crate::sql::statement::Function;
-
         Function::try_from(self).is_ok()
+    }
+
+    /// unreserved: a keyword only where its statement expects it, a name elsewhere
+    #[rustfmt::skip]
+    pub const fn is_unreserved(&self) -> bool {
+        matches!(
+            self,
+            Self::Begin | Self::Checkpoint | Self::Savepoint | Self::Release
+            | Self::Session | Self::Characteristics | Self::Isolation
+            | Self::Level | Self::Read | Self::Committed
+            | Self::Repeatable | Self::Serializable | Self::Cascade
+            | Self::Restrict | Self::No | Self::Action
+        )
+    }
+
+    /// the keyword used as a name
+    pub fn as_name(&self) -> String {
+        let mut name = self.to_string();
+        name.make_ascii_lowercase();
+        name
     }
 }
 
