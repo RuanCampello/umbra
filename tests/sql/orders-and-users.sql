@@ -1,8 +1,8 @@
 CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100), email VARCHAR(100), country VARCHAR(50), created_at DATE);
 
-CREATE TABLE products (id SERIAL PRIMARY KEY, name VARCHAR(100), category VARCHAR(50), price DECIMAL(10, 2), stock INTEGER);
+CREATE TABLE products (id SERIAL PRIMARY KEY, name VARCHAR(100), category VARCHAR(50), price NUMERIC(10, 2), stock INTEGER);
 
-CREATE TABLE orders (id SERIAL PRIMARY KEY, user_id INTEGER, product_id INTEGER, quantity INTEGER, total_price DECIMAL(10, 2), order_date DATE);
+CREATE TABLE orders (id SERIAL PRIMARY KEY, user_id INTEGER, product_id INTEGER, quantity INTEGER, total_price NUMERIC(10, 2), order_date DATE);
 
 INSERT INTO users (name, email, country, created_at)
 VALUES ('Patricia Smith', 'patricia.smith@example.com', 'France', '2023-04-08'),

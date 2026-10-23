@@ -1,13 +1,13 @@
 CREATE TABLE employees (
-    employee_id INT PRIMARY KEY,
+    employee_id INTEGER PRIMARY KEY,
     first_name VARCHAR(50),
     last_name VARCHAR(50),
-    department_id INT,
+    department_id INTEGER,
     salary DOUBLE PRECISION
 );
 
 CREATE TABLE departments (
-    department_id INT PRIMARY KEY,
+    department_id INTEGER PRIMARY KEY,
     department_name VARCHAR(50),
     location VARCHAR(50)
 );
