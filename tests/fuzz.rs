@@ -54,7 +54,7 @@ fn table(rng: &mut Rng) -> MvccDatabase {
 /// the statements creating and filling `t` and `u`, in SQL both umbra and PostgreSQL accept
 fn schema(rng: &mut Rng, real: &str) -> Vec<String> {
     let mut statements = vec![format!(
-        "CREATE TABLE t (id INT PRIMARY KEY, a INT NULL, r {real} NULL, s TEXT NULL, b BOOLEAN NULL, n NUMERIC(10, 2) NULL)"
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, a INTEGER NULL, r {real} NULL, s TEXT NULL, b BOOLEAN NULL, n NUMERIC(10, 2) NULL)"
     )];
 
     let indexes = [
@@ -89,7 +89,7 @@ fn schema(rng: &mut Rng, real: &str) -> Vec<String> {
         })
         .collect();
     statements.push(format!("INSERT INTO t (id, a, r, s, b, n) VALUES {}", rows.join(", ")));
-    statements.push("CREATE TABLE u (uid INT PRIMARY KEY, ua INT NULL, us TEXT NULL)".into());
+    statements.push("CREATE TABLE u (uid INTEGER PRIMARY KEY, ua INTEGER NULL, us TEXT NULL)".into());
     if rng.chance(50) {
         statements.push("CREATE INDEX idx_ua ON u(ua)".into());
     }
@@ -148,7 +148,7 @@ fn expression(rng: &mut Rng, depth: u32) -> (String, bool) {
         6 => format!(
             "CAST({} AS {})",
             number(rng, depth - 1),
-            rng.pick(&["INT", "BIGINT", "DOUBLE PRECISION", "NUMERIC(10, 2)", "NUMERIC(10, 1)"])
+            rng.pick(&["INTEGER", "BIGINT", "DOUBLE PRECISION", "NUMERIC(10, 2)", "NUMERIC(10, 1)"])
         ),
         _ => format!("COALESCE({}, {})", number(rng, depth - 1), rng.pick(&NUMBERS)),
     };
@@ -311,7 +311,7 @@ fn mutations(
     filtered: &BTreeSet<i64>,
     all: &BTreeSet<i64>,
 ) -> Result<(), String> {
-    rows(db, "START TRANSACTION;")?;
+    rows(db, "BEGIN;")?;
     let updated = affected(db, &format!("UPDATE t SET a = a WHERE {p};"))?;
     let deleted = affected(db, &format!("DELETE FROM t WHERE {p};"))?;
     let left = ids(db, "SELECT id FROM t;")?;
@@ -603,7 +603,7 @@ fn float_literals(sql: &str) -> String {
 #[test]
 fn multiplying_null_by_zero_stays_null() {
     let mut db = MvccDatabase::in_memory().unwrap();
-    db.exec("CREATE TABLE t (id INT PRIMARY KEY, n NUMERIC(10, 2) NULLABLE);")
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, n NUMERIC(10, 2) NULLABLE);")
         .unwrap();
     db.exec("INSERT INTO t (id, n) VALUES (1, 2.25), (2, NULL);").unwrap();
 
@@ -619,7 +619,7 @@ fn multiplying_null_by_zero_stays_null() {
 #[test]
 fn scalar_functions_of_null_are_null() {
     let mut db = MvccDatabase::in_memory().unwrap();
-    db.exec("CREATE TABLE t (id INT PRIMARY KEY, n NUMERIC(10, 2) NULLABLE, s TEXT NULLABLE);")
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, n NUMERIC(10, 2) NULLABLE, s TEXT NULLABLE);")
         .unwrap();
     db.exec("INSERT INTO t (id, n, s) VALUES (1, NULL, NULL);").unwrap();
 
@@ -645,7 +645,7 @@ fn scalar_functions_of_null_are_null() {
 #[test]
 fn and_or_short_circuit_everywhere() {
     let mut db = MvccDatabase::in_memory().unwrap();
-    db.exec("CREATE TABLE t (id INT PRIMARY KEY, a INT);").unwrap();
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, a INTEGER);").unwrap();
     db.exec("INSERT INTO t (id, a) VALUES (1, 1);").unwrap();
 
     let decided = [("a = 1 OR 1 / (a - 1) = 0", true), ("a != 1 AND 1 / (a - 1) = 0", false)];
@@ -664,7 +664,7 @@ fn and_or_short_circuit_everywhere() {
 #[test]
 fn numeric_division_by_long_divisors() {
     let mut db = MvccDatabase::in_memory().unwrap();
-    db.exec("CREATE TABLE t (id INT PRIMARY KEY, n NUMERIC(10, 2), m NUMERIC(10, 4));")
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, n NUMERIC(10, 2), m NUMERIC(10, 4));")
         .unwrap();
     db.exec("INSERT INTO t (id, n, m) VALUES (1, 0.5, 1.5), (2, 1, 0.0625), (3, 2.25, 1.5), (4, -1, 12.5);")
         .unwrap();

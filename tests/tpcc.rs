@@ -48,7 +48,7 @@ struct Totals {
 
 #[test]
 fn consistent_after_concurrent_transactions() {
-    for level in ["READ COMMITTED", "SNAPSHOT", "SERIALIZABLE"] {
+    for level in ["READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE"] {
         let db = MvccDatabase::in_memory().unwrap();
         populate(&mut db.session());
 
@@ -79,7 +79,7 @@ fn consistent_after_the_server_is_killed() {
         for worker in 0..6 {
             let mut client = server.client();
             let stop = Arc::clone(&stop);
-            scope.spawn(move || drive(&mut client, "SNAPSHOT", worker, usize::MAX, &stop));
+            scope.spawn(move || drive(&mut client, "REPEATABLE READ", worker, usize::MAX, &stop));
         }
 
         std::thread::sleep(Duration::from_millis(1500));
@@ -93,29 +93,29 @@ fn consistent_after_the_server_is_killed() {
 
 fn populate(db: &mut dyn Session) {
     for ddl in [
-        "CREATE TABLE warehouse (w_id INT PRIMARY KEY, w_ytd BIGINT)",
-        "CREATE TABLE district (d_id INT PRIMARY KEY, d_w_id INT, d_ytd BIGINT, d_next_o_id INT)",
-        "CREATE TABLE customer (c_id INT PRIMARY KEY, c_d_id INT, c_balance BIGINT, c_ytd_payment BIGINT)",
-        "CREATE TABLE orders (o_key BIGINT PRIMARY KEY, o_id INT, o_d_id INT, o_c_id INT, o_carrier_id INT NULLABLE, o_ol_cnt INT)",
+        "CREATE TABLE warehouse (w_id INTEGER PRIMARY KEY, w_ytd BIGINT)",
+        "CREATE TABLE district (d_id INTEGER PRIMARY KEY, d_w_id INTEGER, d_ytd BIGINT, d_next_o_id INTEGER)",
+        "CREATE TABLE customer (c_id INTEGER PRIMARY KEY, c_d_id INTEGER, c_balance BIGINT, c_ytd_payment BIGINT)",
+        "CREATE TABLE orders (o_key BIGINT PRIMARY KEY, o_id INTEGER, o_d_id INTEGER, o_c_id INTEGER, o_carrier_id INTEGER NULLABLE, o_ol_cnt INTEGER)",
         "CREATE UNIQUE INDEX orders_district ON orders (o_d_id, o_id)",
-        "CREATE TABLE new_order (no_key BIGINT PRIMARY KEY, no_o_id INT, no_d_id INT)",
+        "CREATE TABLE new_order (no_key BIGINT PRIMARY KEY, no_o_id INTEGER, no_d_id INTEGER)",
         "CREATE UNIQUE INDEX new_order_district ON new_order (no_d_id, no_o_id)",
-        "CREATE TABLE order_line (ol_key BIGINT PRIMARY KEY, ol_o_key BIGINT, ol_d_id INT, ol_amount INT, ol_delivery_d INT NULLABLE)",
+        "CREATE TABLE order_line (ol_key BIGINT PRIMARY KEY, ol_o_key BIGINT, ol_d_id INTEGER, ol_amount INTEGER, ol_delivery_d INTEGER NULLABLE)",
         "CREATE INDEX order_line_order ON order_line(ol_o_key)",
-        "CREATE TABLE history (h_id SERIAL PRIMARY KEY, h_c_id INT, h_d_id INT, h_w_id INT, h_amount INT)",
+        "CREATE TABLE history (h_id SERIAL PRIMARY KEY, h_c_id INTEGER, h_d_id INTEGER, h_w_id INTEGER, h_amount INTEGER)",
     ] {
         db.run(ddl).unwrap();
     }
 
     for warehouse in 1..=WAREHOUSES {
-        db.run(&format!("INSERT INTO warehouse VALUES ({warehouse}, 0)")).unwrap();
+        db.run(&format!("INSERT INTO warehouse (w_id, w_ytd) VALUES ({warehouse}, 0)")).unwrap();
         for district in districts(warehouse) {
-            db.run(&format!("INSERT INTO district VALUES ({district}, {warehouse}, 0, 1)"))
+            db.run(&format!("INSERT INTO district (d_id, d_w_id, d_ytd, d_next_o_id) VALUES ({district}, {warehouse}, 0, 1)"))
                 .unwrap();
             let customers: Vec<_> = customers(district)
                 .map(|customer| format!("({customer}, {district}, 0, 0)"))
                 .collect();
-            db.run(&format!("INSERT INTO customer VALUES {}", customers.join(", ")))
+            db.run(&format!("INSERT INTO customer (c_id, c_d_id, c_balance, c_ytd_payment) VALUES {}", customers.join(", ")))
                 .unwrap();
         }
     }
@@ -132,7 +132,7 @@ fn drive(db: &mut dyn Session, level: &str, worker: u64, count: usize, stop: &At
         let customer = district * 1000 + rng.below(CUSTOMERS as u64) as i64;
 
         let outcome =
-            db.run(&format!("START TRANSACTION ISOLATION LEVEL {level}")).and_then(|_| {
+            db.run(&format!("BEGIN ISOLATION LEVEL {level}")).and_then(|_| {
                 match rng.below(100) {
                     0..45 => new_order(db, district, customer, 1 + rng.below(10) as i64, &mut rng),
                     45..88 => {
@@ -167,16 +167,16 @@ fn new_order(
 
     let key = district * 100_000 + order;
     db.run(&format!(
-        "INSERT INTO orders VALUES ({key}, {order}, {district}, {customer}, NULL, {lines})"
+        "INSERT INTO orders (o_key, o_id, o_d_id, o_c_id, o_carrier_id, o_ol_cnt) VALUES ({key}, {order}, {district}, {customer}, NULL, {lines})"
     ))?;
-    db.run(&format!("INSERT INTO new_order VALUES ({key}, {order}, {district})"))?;
+    db.run(&format!("INSERT INTO new_order (no_key, no_o_id, no_d_id) VALUES ({key}, {order}, {district})"))?;
 
     let rows: Vec<_> = (0..lines)
         .map(|line| {
             format!("({}, {key}, {district}, {}, NULL)", key * 16 + line, 1 + rng.below(10_000))
         })
         .collect();
-    db.run(&format!("INSERT INTO order_line VALUES {}", rows.join(", "))).map(drop)
+    db.run(&format!("INSERT INTO order_line (ol_key, ol_o_key, ol_d_id, ol_amount, ol_delivery_d) VALUES {}", rows.join(", "))).map(drop)
 }
 
 fn payment(

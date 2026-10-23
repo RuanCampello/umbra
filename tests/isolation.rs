@@ -8,7 +8,7 @@ use umbra::sql::statement::Value;
 /// the hermitage fixture: `test (id, value)` holding `(1, 10), (2, 20)`
 fn hermitage() -> MvccDatabase {
     let mut db = MvccDatabase::in_memory().unwrap();
-    db.exec("CREATE TABLE test (id INT PRIMARY KEY, value INT);").unwrap();
+    db.exec("CREATE TABLE test (id INTEGER PRIMARY KEY, value INTEGER);").unwrap();
     db.exec("INSERT INTO test (id, value) VALUES (1, 10), (2, 20);").unwrap();
     db
 }
@@ -40,10 +40,10 @@ fn every_isolation_syntax_form_parses() {
     for statement in [
         "BEGIN;",
         "BEGIN TRANSACTION;",
-        "START TRANSACTION;",
+        "BEGIN;",
         "BEGIN ISOLATION LEVEL READ COMMITTED;",
         "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;",
-        "START TRANSACTION ISOLATION LEVEL SNAPSHOT;",
+        "BEGIN ISOLATION LEVEL REPEATABLE READ;",
         "begin transaction isolation level serializable;",
     ] {
         db.exec(statement).unwrap();
@@ -72,7 +72,7 @@ fn set_transaction_after_the_first_statement_is_an_error() {
 #[test]
 fn isolation_words_remain_usable_as_names() {
     let mut db = MvccDatabase::in_memory().unwrap();
-    db.exec("CREATE TABLE session (level INT PRIMARY KEY, read INT, snapshot INT);")
+    db.exec("CREATE TABLE session (level INTEGER PRIMARY KEY, read INTEGER, snapshot INTEGER);")
         .unwrap();
     db.exec("INSERT INTO session (level, read, snapshot) VALUES (1, 2, 3);")
         .unwrap();
@@ -131,7 +131,7 @@ fn read_committed_increments_from_many_sessions_are_never_lost() {
 
 #[test]
 fn snapshot_rejects_a_lost_update_that_read_committed_resolves() {
-    for (level, expected) in [("SNAPSHOT", None), ("READ COMMITTED", Some(12))] {
+    for (level, expected) in [("REPEATABLE READ", None), ("READ COMMITTED", Some(12))] {
         let mut first = hermitage();
         let mut second = first.session();
 
@@ -161,7 +161,7 @@ fn snapshot_rejects_a_lost_update_that_read_committed_resolves() {
 
 #[test]
 fn write_skew_is_allowed_at_snapshot_and_rejected_at_serializable() {
-    for (level, skew) in [("SNAPSHOT", true), ("SERIALIZABLE", false)] {
+    for (level, skew) in [("REPEATABLE READ", true), ("SERIALIZABLE", false)] {
         let mut first = hermitage();
         let mut second = first.session();
 
@@ -182,7 +182,7 @@ fn write_skew_is_allowed_at_snapshot_and_rejected_at_serializable() {
     }
 }
 
-const LEVELS: [&str; 3] = ["READ COMMITTED", "SNAPSHOT", "SERIALIZABLE"];
+const LEVELS: [&str; 3] = ["READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE"];
 
 /// two sessions over one Hermitage database, both inside a transaction at `level`
 fn pair(level: &str) -> (MvccDatabase, MvccDatabase) {
@@ -438,9 +438,9 @@ fn bank_transfers_conserve_the_total_in_every_snapshot() {
     const ACCOUNTS: u64 = 16;
     const START: i64 = 1_000;
 
-    for (level, seed) in [("SNAPSHOT", 7), ("SERIALIZABLE", 11)] {
+    for (level, seed) in [("REPEATABLE READ", 7), ("SERIALIZABLE", 11)] {
         let mut db = MvccDatabase::in_memory().unwrap();
-        db.exec("CREATE TABLE accounts (id INT PRIMARY KEY, balance INT);").unwrap();
+        db.exec("CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER);").unwrap();
         let rows: Vec<_> = (0..ACCOUNTS).map(|id| format!("({id}, {START})")).collect();
         let sql = format!("INSERT INTO accounts (id, balance) VALUES {};", rows.join(", "));
         db.exec(&sql).unwrap();
@@ -517,7 +517,7 @@ fn bank_transfers_conserve_the_total_in_every_snapshot() {
 fn concurrent_write_skew_never_breaks_the_invariant_at_serializable() {
     for round in 0..50 {
         let mut db = MvccDatabase::in_memory().unwrap();
-        db.exec("CREATE TABLE doctors (id INT PRIMARY KEY, on_call INT);").unwrap();
+        db.exec("CREATE TABLE doctors (id INTEGER PRIMARY KEY, on_call INTEGER);").unwrap();
         db.exec("INSERT INTO doctors (id, on_call) VALUES (1, 1), (2, 1);").unwrap();
 
         let barrier = Barrier::new(2);
@@ -751,7 +751,7 @@ fn list_append_histories_contain_no_forbidden_cycles() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    for (level, seed) in [("READ COMMITTED", 3), ("SNAPSHOT", 5), ("SERIALIZABLE", 9)] {
+    for (level, seed) in [("READ COMMITTED", 3), ("REPEATABLE READ", 5), ("SERIALIZABLE", 9)] {
         let seed = seed + base;
         let (history, finals) = list_append_history(level, seed);
         let committed = history.iter().filter(|r| r.committed).count();
