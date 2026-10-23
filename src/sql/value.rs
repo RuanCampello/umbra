@@ -931,14 +931,14 @@ mod tests {
 
     #[test]
     fn test_value_serialise_float() {
-        let value = Value::Float(3.14159);
+        let value = Value::Float(1.23456);
         let bytes = value.serialise().unwrap();
         assert_eq!(bytes[0], 3); // FLOAT tag
         assert_eq!(bytes.len(), 9); // tag + 8 bytes
 
         let (deserialized, consumed) = Value::deserialise(&bytes).unwrap();
         assert_eq!(consumed, 9);
-        assert_eq!(deserialized, Value::Float(3.14159));
+        assert_eq!(deserialized, Value::Float(1.23456));
     }
 
     #[test]

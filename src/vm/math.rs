@@ -277,10 +277,8 @@ mod tests {
 
     #[test]
     fn test_trunc() -> Result<(), SqlError> {
-        use std::f64::consts::PI;
-
-        assert_eq!(Value::Float(3f64), trunc(&PI.into(), None)?);
-        assert_eq!(Value::Float(3.14), trunc(&PI.into(), Some(2.into()))?);
+        assert_eq!(Value::Float(1f64), trunc(&1.23456.into(), None)?);
+        assert_eq!(Value::Float(1.23), trunc(&1.23456.into(), Some(2.into()))?);
 
         assert_eq!(
             Err(TypeError::ExpectedType {
@@ -288,7 +286,7 @@ mod tests {
                 found: Expression::Value(3.5.into())
             }
             .into()),
-            trunc(&PI.into(), Some(3.5.into()))
+            trunc(&1.23456.into(), Some(3.5.into()))
         );
         assert_eq!(
             Err(TypeError::ExpectedType {
