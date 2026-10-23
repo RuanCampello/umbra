@@ -134,10 +134,7 @@ impl<'sql> Sql<'sql> for Insert {
     fn parse(parser: &mut Parser<'sql>) -> ParserResult<Self> {
         parser.expect_keyword(Keyword::Into)?;
         let into = parser.parse_ident()?;
-        let columns: Vec<String> = match parser.peek_token() {
-            Some(Ok(Token::Keyword(Keyword::Values))) | None => Ok(vec![]),
-            Some(_) => parser.parse_separated_tokens(Parser::parse_ident, true),
-        }?;
+        let columns = parser.parse_separated_tokens(Parser::parse_ident, true)?;
 
         parser.expect_keyword(Keyword::Values)?;
 
