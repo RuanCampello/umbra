@@ -21,7 +21,7 @@ pub(crate) enum Statement {
     Drop(Drop),
     Source(String),
     Commit,
-    /// `BEGIN`/`START TRANSACTION`, optionally with its isolation level
+    /// `BEGIN [TRANSACTION]`, optionally with its isolation level
     StartTransaction(Option<IsolationLevel>),
     /// `SET TRANSACTION …` (`session: false`) or `SET SESSION CHARACTERISTICS AS TRANSACTION …`
     SetIsolation {
@@ -636,17 +636,14 @@ impl Display for Statement {
             },
 
             Statement::Insert(Insert { into, columns, values, returning }) => {
-                let columns = match columns.is_empty() {
-                    true => String::from(" "),
-                    false => format!(" ({}) ", join(columns, ", ")),
-                };
+                let columns = join(columns, ", ");
 
                 let values = join(
                     &values.iter().map(|row| format!("({})", join(row, ", "))).collect::<Vec<_>>(),
                     ", ",
                 );
 
-                write!(f, "INSERT INTO {into}{columns}VALUES ({})", values)?;
+                write!(f, "INSERT INTO {into} ({columns}) VALUES ({})", values)?;
                 if !returning.is_empty() {
                     write!(f, "RETURNING {}", join(returning, ", "))?;
                 }
@@ -837,11 +834,7 @@ impl Expression {
                 Value::Number(number) => number.to_string(),
                 Value::Float(float) => float.to_string(),
                 Value::Numeric(numeric) => numeric.to_string(),
-                Value::String(text) => match (text.contains('\''), text.contains('"')) {
-                    (false, _) => format!("'{text}'"),
-                    (true, false) => format!("\"{text}\""),
-                    (true, true) => return None,
-                },
+                Value::String(text) => format!("'{}'", text.replace('\'', "''")),
                 _ => return None,
             },
             Self::UnaryOperation { operator, expr } => format!("({operator}{})", expr.to_sql()?),
@@ -985,8 +978,8 @@ impl Display for Type {
             Type::Boolean => f.write_str("BOOLEAN"),
             Type::SmallInt => f.write_str("SMALLINT"),
             Type::UnsignedSmallInt => f.write_str("SMALLINT UNSIGNED"),
-            Type::Integer => f.write_str("INT"),
-            Type::UnsignedInteger => f.write_str("INT UNSIGNED"),
+            Type::Integer => f.write_str("INTEGER"),
+            Type::UnsignedInteger => f.write_str("INTEGER UNSIGNED"),
             Type::BigInteger => f.write_str("BIGINT"),
             Type::UnsignedBigInteger => f.write_str("BIGINT UNSIGNED"),
             Type::SmallSerial => f.write_str("SMALLSERIAL"),
@@ -1262,7 +1255,6 @@ impl From<Keyword> for JoinType {
         match value {
             Keyword::Left => Self::Left,
             Keyword::Right => Self::Right,
-            Keyword::Inner => Self::Inner,
             Keyword::Full => Self::Full,
             _ => Self::Inner,
         }
