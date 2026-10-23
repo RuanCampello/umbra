@@ -59,7 +59,7 @@ fn serialisation_and_deserialisation() -> Result<()> {
                 department VARCHAR(20),
                 salary DOUBLE PRECISION, 
                 hire_date DATE,
-                performance_rating INT
+                performance_rating INTEGER
             );"#,
     )?;
 
@@ -634,7 +634,7 @@ fn count_function() -> Result<()> {
 #[test]
 fn count_function_on_empty() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE product (id INT PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE product (id INTEGER PRIMARY KEY, name VARCHAR(50));")?;
 
     let query = db.exec("SELECT COUNT(*) FROM product;")?;
     assert_eq!(query.tuples, vec![vec![Value::Number(0)]]);
@@ -646,7 +646,7 @@ fn count_function_on_empty() -> Result<()> {
 #[test]
 fn aggregate_functions() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE sales (id SERIAL PRIMARY KEY, price DOUBLE PRECISION, quantity INT, category VARCHAR(30));")?;
+    db.exec("CREATE TABLE sales (id SERIAL PRIMARY KEY, price DOUBLE PRECISION, quantity INTEGER, category VARCHAR(30));")?;
 
     db.exec(
         "INSERT INTO sales (id, price, quantity, category) VALUES
@@ -677,7 +677,7 @@ fn aggregate_functions() -> Result<()> {
 #[test]
 fn typeof_function() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(25), active BOOLEAN, salary REAL, hire_date DATE);")?;
+    db.exec("CREATE TABLE employees (id INTEGER PRIMARY KEY, name VARCHAR(25), active BOOLEAN, salary REAL, hire_date DATE);")?;
     db.exec("INSERT INTO employees (id, name, active, salary, hire_date) VALUES (1, 'Alice', TRUE, 1000.0, '2020-01-01');")?;
 
     let cases = vec![
@@ -700,7 +700,7 @@ fn typeof_function() -> Result<()> {
 fn group_by() -> Result<()> {
     let mut db = State::default();
     db.exec(
-            "CREATE TABLE sales (id SERIAL PRIMARY KEY, region VARCHAR(2), price INT, qty INT UNSIGNED);",
+            "CREATE TABLE sales (id SERIAL PRIMARY KEY, region VARCHAR(2), price INTEGER, qty INTEGER UNSIGNED);",
         )?;
 
     db.exec("INSERT INTO sales (region, price, qty) VALUES ('N', 10, 1);")?;
@@ -741,7 +741,7 @@ fn group_by() -> Result<()> {
 #[test]
 fn group_by_distinct_behaviour() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INT);")?;
+    db.exec("CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INTEGER);")?;
     db.exec("INSERT INTO payment (customer_id) VALUES (1), (2), (1), (3), (2), (2);")?;
 
     let query =
@@ -759,7 +759,7 @@ fn group_by_distinct_behaviour() -> Result<()> {
 fn group_by_with_multiple_cols() -> Result<()> {
     let mut db = State::default();
     db.exec(
-        "CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INT, staff_id INT, amount INT);",
+        "CREATE TABLE payment (id SERIAL PRIMARY KEY, customer_id INTEGER, staff_id INTEGER, amount INTEGER);",
     )?;
     db.exec(
         r#"
@@ -801,7 +801,7 @@ fn group_by_with_multiple_cols() -> Result<()> {
 #[test]
 fn order_by_desc() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, price INT, name VARCHAR(20));")?;
+    db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, price INTEGER, name VARCHAR(20));")?;
     db.exec(
         r#"
             INSERT INTO items (price, name)
@@ -910,9 +910,9 @@ fn select_alias_with_group_by() -> Result<()> {
             CREATE TABLE sales (
                 id SERIAL PRIMARY KEY,
                 region VARCHAR(10),
-                price INT,
-                bonus INT,
-                discount INT,
+                price INTEGER,
+                bonus INTEGER,
+                discount INTEGER,
                 salesperson VARCHAR(20)
             );
         "#,
@@ -995,7 +995,7 @@ fn select_alias_with_group_by() -> Result<()> {
 #[test]
 fn alias_with_order_by() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30), age INT UNSIGNED);")?;
+    db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(30), age INTEGER UNSIGNED);")?;
     db.exec("INSERT INTO users (age, name) VALUES (19, 'John Doe'), (23, 'Mary Dove');")?;
 
     let query = db.exec("SELECT name as user_name, age FROM users ORDER BY user_name;")?;
@@ -1021,7 +1021,7 @@ fn complete_alias_with_group_and_order() -> Result<()> {
                 department VARCHAR(20),
                 salary DOUBLE PRECISION, 
                 hire_date DATE,
-                performance_rating INT
+                performance_rating INTEGER
             );"#,
     )?;
     db.exec(
@@ -1115,7 +1115,7 @@ fn text_column_ordering() -> Result<()> {
 #[test]
 fn text_string_functions() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE users (id INT PRIMARY KEY, name TEXT);")?;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);")?;
     db.exec(
         "INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob'), (3, 'carol'), (4, 'dave');",
     )?;
@@ -1256,8 +1256,8 @@ fn coalesce_function() -> Result<()> {
         CREATE TABLE items (
             id SERIAL PRIMARY KEY,
             product VARCHAR (100),
-            price INT,
-            discount INT NULLABLE
+            price INTEGER,
+            discount INTEGER NULLABLE
         );
         "#,
     )?;
@@ -1753,7 +1753,7 @@ fn simple_join() -> Result<()> {
         r#"
     SELECT fruit_a, fruit_b
     FROM basket_a
-    INNER JOIN basket_b ON fruit_a = fruit_b;"#,
+    JOIN basket_b ON fruit_a = fruit_b;"#,
     )?;
 
     assert_eq!(
@@ -1826,8 +1826,8 @@ fn multiple_join() -> Result<()> {
     let mut db = State::default();
 
     db.exec("CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);")?;
-    db.exec("CREATE TABLE posts (id SERIAL PRIMARY KEY, user_id INT, title TEXT);")?;
-    db.exec("CREATE TABLE comments (id SERIAL PRIMARY KEY, post_id INT, content TEXT);")?;
+    db.exec("CREATE TABLE posts (id SERIAL PRIMARY KEY, user_id INTEGER, title TEXT);")?;
+    db.exec("CREATE TABLE comments (id SERIAL PRIMARY KEY, post_id INTEGER, content TEXT);")?;
 
     db.exec("INSERT INTO users (name) VALUES ('Alice'), ('Bob');")?;
     db.exec(
@@ -1944,8 +1944,8 @@ fn more_complex_join() -> Result<()> {
 fn join_type_coercion() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));")?;
-    db.exec("CREATE TABLE orders (id INT PRIMARY KEY, user_id BIGINT, amount INT);")?;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id BIGINT, amount INTEGER);")?;
 
     db.exec("INSERT INTO users (id, name) VALUES (1, 'Alice');")?;
     db.exec("INSERT INTO orders (id, user_id, amount) VALUES (100, 1, 50);")?;
@@ -1962,11 +1962,11 @@ fn join_type_coercion() -> Result<()> {
 fn non_equi_join() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE t1 (val INT PRIMARY KEY);")?;
-    db.exec("CREATE TABLE t2 (val INT PRIMARY KEY);")?;
+    db.exec("CREATE TABLE t1 (val INTEGER PRIMARY KEY);")?;
+    db.exec("CREATE TABLE t2 (val INTEGER PRIMARY KEY);")?;
 
-    db.exec("INSERT INTO t1 VALUES (10), (3);")?;
-    db.exec("INSERT INTO t2 VALUES (5);")?;
+    db.exec("INSERT INTO t1 (val) VALUES (10), (3);")?;
+    db.exec("INSERT INTO t2 (val) VALUES (5);")?;
 
     let query = db.exec("SELECT t1.val FROM t1 JOIN t2 ON t1.val > t2.val;")?;
     assert_eq!(query.tuples, vec![vec![10.into()]]);
@@ -1979,7 +1979,7 @@ fn self_join() -> Result<()> {
     let mut db = State::default();
 
     db.exec(
-        "CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(50), manager_id INT NULLABLE);",
+        "CREATE TABLE employees (id INTEGER PRIMARY KEY, name VARCHAR(50), manager_id INTEGER NULLABLE);",
     )?;
     db.exec(
         r#"
@@ -2012,10 +2012,10 @@ fn self_join() -> Result<()> {
     db.exec(
         r#"
     CREATE TABLE employee (
-        employee_id INT PRIMARY KEY,
+        employee_id INTEGER PRIMARY KEY,
         first_name VARCHAR (255),
         last_name VARCHAR (255),
-        manager_id INT NULLABLE
+        manager_id INTEGER NULLABLE
     );"#,
     )?;
     db.exec(
@@ -2038,7 +2038,7 @@ fn self_join() -> Result<()> {
         CONCAT(e.first_name, ' ', e.last_name) AS employee,
         CONCAT(m.first_name, ' ', m.last_name) AS manager
     FROM employee AS e
-    INNER JOIN employee AS m ON m.employee_id = e.manager_id
+    JOIN employee AS m ON m.employee_id = e.manager_id
     ORDER BY manager, employee;"#,
     )?;
 
@@ -2119,7 +2119,7 @@ fn limit_zero() -> Result<()> {
 fn limit_with_join() -> Result<()> {
     let mut db = State::default();
     db.exec("CREATE TABLE departments (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
-    db.exec("CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(50), dept_id INT);")?;
+    db.exec("CREATE TABLE employees (id SERIAL PRIMARY KEY, name VARCHAR(50), dept_id INTEGER);")?;
 
     db.exec(
         r#"
@@ -2223,7 +2223,7 @@ fn offset() -> Result<()> {
 #[test]
 fn pagination_pattern() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE data (id SERIAL PRIMARY KEY, value INT);")?;
+    db.exec("CREATE TABLE data (id SERIAL PRIMARY KEY, value INTEGER);")?;
     db.exec(
         r#"
         INSERT INTO data (value)
@@ -2262,8 +2262,8 @@ fn pagination_pattern() -> Result<()> {
 fn index_nested_loop_join() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50));")?;
-    db.exec("CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, amount INT);")?;
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, amount INTEGER);")?;
     db.exec("INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');")?;
     db.exec(
         "INSERT INTO orders (id, user_id, amount) VALUES (100, 1, 50), (101, 1, 75), (102, 2, 100);",
@@ -2301,7 +2301,7 @@ fn index_nested_loop_join() -> Result<()> {
 #[test]
 fn aggregate_with_coalesce() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE salaries (id INT PRIMARY KEY, name VARCHAR(50), base REAL, bonus REAL NULLABLE);")?;
+    db.exec("CREATE TABLE salaries (id INTEGER PRIMARY KEY, name VARCHAR(50), base REAL, bonus REAL NULLABLE);")?;
     db.exec(
         r#"
         INSERT INTO salaries (id, name, base, bonus) VALUES
@@ -2336,8 +2336,8 @@ fn aggregate_with_coalesce() -> Result<()> {
 fn complex_where_with_join() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT, amount REAL, status VARCHAR(20));")?;
-    db.exec("CREATE TABLE customers (id INT PRIMARY KEY, name VARCHAR(50), tier VARCHAR(20));")?;
+    db.exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, amount REAL, status VARCHAR(20));")?;
+    db.exec("CREATE TABLE customers (id INTEGER PRIMARY KEY, name VARCHAR(50), tier VARCHAR(20));")?;
 
     db.exec(
         r#"
@@ -2380,8 +2380,8 @@ fn multiple_chained_joins() -> Result<()> {
     let mut db = State::default();
 
     db.exec("CREATE TABLE countries (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
-    db.exec("CREATE TABLE cities (id SERIAL PRIMARY KEY, name VARCHAR(50), country_id INT);")?;
-    db.exec("CREATE TABLE people (id SERIAL PRIMARY KEY, name VARCHAR(50), city_id INT);")?;
+    db.exec("CREATE TABLE cities (id SERIAL PRIMARY KEY, name VARCHAR(50), country_id INTEGER);")?;
+    db.exec("CREATE TABLE people (id SERIAL PRIMARY KEY, name VARCHAR(50), city_id INTEGER);")?;
 
     db.exec("INSERT INTO countries (name) VALUES ('USA'), ('Canada');")?;
     db.exec(
@@ -2444,7 +2444,7 @@ fn join_with_null_values() -> Result<()> {
     let mut db = State::default();
 
     db.exec(
-        "CREATE TABLE products (id SERIAL PRIMARY KEY, name VARCHAR(50), category_id INT NULLABLE);",
+        "CREATE TABLE products (id SERIAL PRIMARY KEY, name VARCHAR(50), category_id INTEGER NULLABLE);",
     )?;
     db.exec("CREATE TABLE categories (id SERIAL PRIMARY KEY, name VARCHAR(50));")?;
 
@@ -2496,7 +2496,7 @@ fn join_with_null_values() -> Result<()> {
 #[test]
 fn interval_with_null() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE nullable_dates (id INT PRIMARY KEY, d DATE NULLABLE);")?;
+    db.exec("CREATE TABLE nullable_dates (id INTEGER PRIMARY KEY, d DATE NULLABLE);")?;
     db.exec(
         r#"
         INSERT INTO nullable_dates (id, d) VALUES
@@ -2523,7 +2523,7 @@ fn interval_with_null() -> Result<()> {
 #[test]
 fn boundary_date_operations() -> Result<()> {
     let mut db = State::default();
-    db.exec("CREATE TABLE boundary_dates (id INT PRIMARY KEY, d DATE);")?;
+    db.exec("CREATE TABLE boundary_dates (id INTEGER PRIMARY KEY, d DATE);")?;
     db.exec(
         r#"
         INSERT INTO boundary_dates (id, d) VALUES
@@ -2598,17 +2598,17 @@ fn interval_subtraction() -> Result<()> {
 fn min_max_on_different_types() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE int_test (id INT PRIMARY KEY, val INT);")?;
+    db.exec("CREATE TABLE int_test (id INTEGER PRIMARY KEY, val INTEGER);")?;
     db.exec("INSERT INTO int_test (id, val) VALUES (1, 100), (2, -50), (3, 0), (4, 999);")?;
     let query = db.exec("SELECT MIN(val), MAX(val) FROM int_test;")?;
     assert_eq!(query.tuples, vec![vec![(-50).into(), 999.into()]]);
 
-    db.exec("CREATE TABLE str_test (id INT PRIMARY KEY, name VARCHAR(50));")?;
+    db.exec("CREATE TABLE str_test (id INTEGER PRIMARY KEY, name VARCHAR(50));")?;
     db.exec("INSERT INTO str_test (id, name) VALUES (1, 'zebra'), (2, 'apple'), (3, 'mango');")?;
     let query = db.exec("SELECT MIN(name), MAX(name) FROM str_test;")?;
     assert_eq!(query.tuples, vec![vec!["apple".into(), "zebra".into()]]);
 
-    db.exec("CREATE TABLE date_test (id INT PRIMARY KEY, event_date DATE);")?;
+    db.exec("CREATE TABLE date_test (id INTEGER PRIMARY KEY, event_date DATE);")?;
     db.exec(
         r#"
         INSERT INTO date_test (id, event_date) VALUES
@@ -2736,7 +2736,7 @@ fn numeric_ordering_and_join() -> Result<()> {
     let mut db = State::default();
 
     db.exec("CREATE TABLE products ( id SERIAL PRIMARY KEY, name TEXT, price NUMERIC);")?;
-    db.exec("CREATE TABLE orders ( id SERIAL PRIMARY KEY, product_id INT, quantity INT);")?;
+    db.exec("CREATE TABLE orders ( id SERIAL PRIMARY KEY, product_id INTEGER, quantity INTEGER);")?;
     db.exec("INSERT INTO products (name, price) VALUES ('apple', 1.20), ('banana', 2.50);")?;
     db.exec("INSERT INTO orders (product_id, quantity) VALUES (1, 10), (2, 3);")?;
 
@@ -2790,7 +2790,7 @@ fn complex_numeric_join() -> Result<()> {
 
     db.exec("CREATE TABLE invoices (id SERIAL PRIMARY KEY, customer TEXT);")?;
     db.exec("CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT, price NUMERIC);")?;
-    db.exec("CREATE TABLE invoice_items (id SERIAL PRIMARY KEY, invoice_id INT, product_id INT, qty INT);")?;
+    db.exec("CREATE TABLE invoice_items (id SERIAL PRIMARY KEY, invoice_id INTEGER, product_id INTEGER, qty INTEGER);")?;
 
     db.exec("INSERT INTO invoices (customer) VALUES ('jon'), ('mary');")?;
     db.exec("INSERT INTO products (name, price) VALUES ('keyboard', 120), ('mouse', 40.5);")?;
@@ -2834,7 +2834,7 @@ fn returning() -> Result<()> {
         product_name VARCHAR(100),
         category VARCHAR(50),
         quantity INTEGER,
-        unit_price DECIMAL(10,2)
+        unit_price NUMERIC(10,2)
     );"#,
     )?;
 
@@ -2893,7 +2893,7 @@ fn basic_enum() -> Result<()> {
     CREATE TABLE requests(
         id SERIAL PRIMARY KEY,
         title VARCHAR(255),
-        priority "low" | "medium" | "high",
+        priority 'low' | 'medium' | 'high',
         request_date DATE
     );"#,
     )?;
@@ -3047,15 +3047,15 @@ fn text_indexing() -> Result<()> {
     db.exec(
         r#"
     CREATE TABLE student (
-        sid   INT PRIMARY KEY,
+        sid   INTEGER PRIMARY KEY,
         name  TEXT,
         login TEXT UNIQUE,
-        age   INT,
+        age   INTEGER,
         gpa   NUMERIC(2,1)
     );"#,
     )?;
     db.exec("CREATE TABLE course (cid TEXT PRIMARY KEY, name TEXT);")?;
-    db.exec("CREATE TABLE enrolled (sid INT, cid TEXT, grade VARCHAR(1));")?;
+    db.exec("CREATE TABLE enrolled (sid INTEGER, cid TEXT, grade VARCHAR(1));")?;
     db.exec(
         r#"
     INSERT INTO student (sid, name, login, age, gpa) VALUES
@@ -3176,7 +3176,7 @@ fn jsonb_null_evaluation() -> Result<()> {
 fn null_in_between() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, value INT NULLABLE);")?;
+    db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, value INTEGER NULLABLE);")?;
     db.exec("INSERT INTO items (value) VALUES (5), (10), (15), (NULL);")?;
 
     let query = db.exec("SELECT * FROM items WHERE value BETWEEN 5 AND 15;")?;
@@ -3195,7 +3195,7 @@ fn null_in_between() -> Result<()> {
 fn null_in() -> Result<()> {
     let mut db = State::default();
 
-    db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, value INT NULLABLE);")?;
+    db.exec("CREATE TABLE items (id SERIAL PRIMARY KEY, value INTEGER NULLABLE);")?;
     db.exec("INSERT INTO items (value) VALUES (1), (2), (3), (NULL);")?;
 
     let query = db.exec("SELECT * FROM items WHERE value IN (NULL, 1, 3);")?;
@@ -3239,7 +3239,7 @@ fn null_in_aggregate_functions() -> Result<()> {
 fn ternary_logic_partitioning_holds_on_every_access_path() -> Result<()> {
     let mut db = State::default();
     db.exec(
-        "CREATE TABLE tlp (id INT PRIMARY KEY, a INT NULLABLE, b VARCHAR(10) NULLABLE, c INT);",
+        "CREATE TABLE tlp (id INTEGER PRIMARY KEY, a INTEGER NULLABLE, b VARCHAR(10) NULLABLE, c INTEGER);",
     )?;
 
     let rows: Vec<_> = (0..200)

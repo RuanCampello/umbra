@@ -184,7 +184,7 @@ fn concurrent_reads_do_not_block_on_open_transactions() {
 fn concurrent_inserts_are_atomic() {
     let server = State::default();
     let mut setup_client = server.client();
-    setup_client.exec("CREATE TABLE traffic (id SERIAL PRIMARY KEY, thread_id INT);");
+    setup_client.exec("CREATE TABLE traffic (id SERIAL PRIMARY KEY, thread_id INTEGER);");
 
     let mut handles = vec![];
     for i in 0..10 {
@@ -501,9 +501,9 @@ fn json_joins_and_filtering() {
     db.exec(
         r#"
     INSERT INTO agents (id, name, status, metadata) VALUES
-        (1, 'Alice', 'active', {address: {city: "London"}, level: 5}),
-        (2, 'Bob', 'inactive', {address: {city: "Berlin"}, level: 2}),
-        (3, 'Eve', 'active', {address: {city: "Rome"}, level: 7});
+        (1, 'Alice', 'active', {address: {city: 'London'}, level: 5}),
+        (2, 'Bob', 'inactive', {address: {city: 'Berlin'}, level: 2}),
+        (3, 'Eve', 'active', {address: {city: 'Rome'}, level: 7});
     "#,
     );
     db.exec(r#"INSERT INTO assignments (agent_id, role) VALUES (1, 'handler'), (2, 'observer');"#);
@@ -582,7 +582,7 @@ fn writes_report_affected_rows_over_tcp() {
     let server = State::new("sql/employees-and-departments.sql");
     let mut db = server.client();
 
-    db.send("CREATE TABLE tallies (id INT PRIMARY KEY, n INT);");
+    db.send("CREATE TABLE tallies (id INTEGER PRIMARY KEY, n INTEGER);");
     assert_eq!(
         db.send("INSERT INTO tallies (id, n) VALUES (1, 0), (2, 0), (3, 0), (4, 0);"),
         Response::Empty(4)
@@ -596,7 +596,7 @@ fn integer_sums_stay_integers() {
     let server = State::default();
     let mut db = server.client();
 
-    db.exec("CREATE TABLE invoices (id INT PRIMARY KEY, account BIGINT, cents INT);");
+    db.exec("CREATE TABLE invoices (id INTEGER PRIMARY KEY, account BIGINT, cents INTEGER);");
     db.exec("CREATE INDEX invoices_account ON invoices(account);");
     db.exec("INSERT INTO invoices (id, account, cents) VALUES (1, 7, 1050), (2, 7, 2500), (3, 8, 1);");
 
@@ -611,7 +611,7 @@ fn integer_sums_stay_integers() {
 fn more_clients_than_cores_are_all_served() {
     let server = State::default();
     let mut setup = server.client();
-    setup.exec("CREATE TABLE visits (id INT PRIMARY KEY);");
+    setup.exec("CREATE TABLE visits (id INTEGER PRIMARY KEY);");
 
     let mut clients: Vec<_> = (0..32).map(|_| server.client()).collect();
     for (id, client) in clients.iter_mut().enumerate() {
