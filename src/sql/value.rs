@@ -742,7 +742,7 @@ impl Neg for Value {
 impl Display for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::String(string) => write!(f, "\"{string}\""),
+            Value::String(string) => write!(f, "'{}'", string.replace('\'', "''")),
             Value::Number(number) => write!(f, "{number}"),
             Value::Float(float) => write!(f, "{float}"),
             Value::Boolean(bool) => f.write_str(match *bool {
