@@ -245,6 +245,11 @@ fn setting(name: &str, default: u64) -> u64 {
     std::env::var(name).map(|value| value.parse().unwrap()).unwrap_or(default)
 }
 
+fn columns() -> String {
+    let fields = (0..FIELDS).map(|field| format!("field{field}"));
+    std::iter::once("ycsb_key".to_string()).chain(fields).collect::<Vec<_>>().join(", ")
+}
+
 fn load(engine: &dyn Engine, records: u64) {
     let mut connection = engine.connect();
     let _ = connection.execute("DROP TABLE usertable");
@@ -262,7 +267,7 @@ fn load(engine: &dyn Engine, records: u64) {
     for batch in (0..records).collect::<Vec<_>>().chunks(500) {
         let rows: Vec<_> = batch.iter().map(|&number| row(number, &mut rng)).collect();
         connection.execute("BEGIN TRANSACTION").unwrap();
-        let sql = format!("INSERT INTO usertable VALUES {}", rows.join(", "));
+        let sql = format!("INSERT INTO usertable ({}) VALUES {}", columns(), rows.join(", "));
         connection.execute(&sql).unwrap();
         connection.execute("COMMIT").unwrap();
     }
@@ -345,7 +350,7 @@ fn operate(
         },
         Operation::Insert => {
             let number = shared.inserted.fetch_add(1, Ordering::Relaxed);
-            connection.execute(&format!("INSERT INTO usertable VALUES {}", row(number, rng)))
+            connection.execute(&format!("INSERT INTO usertable ({}) VALUES {}", columns(), row(number, rng)))
         },
         Operation::Scan => {
             let length = 1 + rng.below(100);
