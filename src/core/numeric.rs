@@ -10,7 +10,7 @@ use std::{cmp::Ordering, convert::TryFrom, fmt::Display, ops::Add, str::FromStr}
 
 /// Arbitrary-precision numeric type
 /// This can represent any decimal with arbitrary precision
-#[derive(Debug, Clone, Hash, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub enum Numeric {
     /// Small numeric value packed into a single 64-bit word
     /// No heap allocation, optimal for cache locality
