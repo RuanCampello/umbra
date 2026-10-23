@@ -20,12 +20,12 @@ const SETUP_SQL: &str = r#"
         product_name VARCHAR(100),
         category VARCHAR(50),
         unit_price REAL,
-        stock_quantity INT
+        stock_quantity INTEGER
     );
 
     CREATE TABLE orders (
         order_id SERIAL PRIMARY KEY,
-        customer_id INT,
+        customer_id INTEGER,
         order_date DATE,
         total_amount REAL,
         status VARCHAR(20)
@@ -33,9 +33,9 @@ const SETUP_SQL: &str = r#"
 
     CREATE TABLE order_items (
         item_id SERIAL PRIMARY KEY,
-        order_id INT,
-        product_id INT,
-        quantity INT,
+        order_id INTEGER,
+        product_id INTEGER,
+        quantity INTEGER,
         item_price REAL
     );
 "#;
@@ -116,7 +116,7 @@ fn benchmark_simple_join(c: &mut Criterion) {
     let query = r#"
         SELECT c.first_name, c.last_name, o.order_id, o.total_amount
         FROM customers AS c
-        INNER JOIN orders AS o ON c.customer_id = o.customer_id
+        JOIN orders AS o ON c.customer_id = o.customer_id
         WHERE o.status = 'completed'
         ORDER BY o.total_amount DESC;
     "#;
@@ -227,9 +227,9 @@ fn benchmark_multiple_joins(c: &mut Criterion) {
             oi.quantity,
             oi.item_price
         FROM customers AS c
-        INNER JOIN orders AS o ON c.customer_id = o.customer_id
-        INNER JOIN order_items AS oi ON o.order_id = oi.order_id
-        INNER JOIN products AS p ON oi.product_id = p.product_id
+        JOIN orders AS o ON c.customer_id = o.customer_id
+        JOIN order_items AS oi ON o.order_id = oi.order_id
+        JOIN products AS p ON oi.product_id = p.product_id
         WHERE p.category = 'Category1' AND o.status = 'completed'
         ORDER BY o.order_date DESC;
     "#;
@@ -280,8 +280,8 @@ fn benchmark_join_with_group_by(c: &mut Criterion) {
             SUM(oi.quantity) AS total_quantity,
             SUM(oi.item_price) AS total_revenue
         FROM products AS p
-        INNER JOIN order_items AS oi ON p.product_id = oi.product_id
-        INNER JOIN orders AS o ON oi.order_id = o.order_id
+        JOIN order_items AS oi ON p.product_id = oi.product_id
+        JOIN orders AS o ON oi.order_id = o.order_id
         WHERE o.status = 'completed'
         GROUP BY p.category
         ORDER BY total_revenue DESC;

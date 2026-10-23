@@ -5,7 +5,7 @@ DROP TABLE IF EXISTS orders;
 DROP TABLE IF EXISTS products;
 DROP TABLE IF EXISTS customers;
 CREATE TABLE customers (
-    customer_id INT PRIMARY KEY,
+    customer_id INTEGER PRIMARY KEY,
     first_name VARCHAR(50),
     last_name VARCHAR(50),
     email VARCHAR(100),
@@ -14,26 +14,26 @@ CREATE TABLE customers (
 );
 
 CREATE TABLE products (
-    product_id INT PRIMARY KEY,
+    product_id INTEGER PRIMARY KEY,
     product_name VARCHAR(100),
     category VARCHAR(50),
     price NUMERIC(10, 2),
-    in_stock INT
+    in_stock INTEGER
 );
 
 CREATE TABLE orders (
-    order_id INT PRIMARY KEY,
-    customer_id INT,
+    order_id INTEGER PRIMARY KEY,
+    customer_id INTEGER,
     order_date DATE,
     status VARCHAR(20),
     total_amount NUMERIC(12, 2)
 );
 
 CREATE TABLE order_items (
-    item_id INT PRIMARY KEY,
-    order_id INT,
-    product_id INT,
-    quantity INT,
+    item_id INTEGER PRIMARY KEY,
+    order_id INTEGER,
+    product_id INTEGER,
+    quantity INTEGER,
     item_price NUMERIC(10, 2)
 );
 

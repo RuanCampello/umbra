@@ -17,8 +17,8 @@ fn main() {
         "CREATE TABLE users (
             id SERIAL PRIMARY KEY,
             name VARCHAR(50),
-            department_id INT,
-            salary INT
+            department_id INTEGER,
+            salary INTEGER
         );",
     )
     .expect("Failed to create users table");

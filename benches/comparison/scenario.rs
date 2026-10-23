@@ -115,7 +115,7 @@ pub fn scenarios() -> Vec<Scenario> {
             label: "INNER JOIN",
             workload: Workload::Read(
                 "SELECT u.name, o.amount FROM users AS u \
-                 INNER JOIN orders AS o ON u.id = o.user_id \
+                 JOIN orders AS o ON u.id = o.user_id \
                  WHERE o.status = 'completed' LIMIT 100",
             ),
             iterations: 40,

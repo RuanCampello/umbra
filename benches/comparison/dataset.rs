@@ -13,14 +13,14 @@ pub const SCHEMA: [&str; 2] = [
         id INTEGER PRIMARY KEY,
         name VARCHAR(64),
         email VARCHAR(128),
-        age INT,
+        age INTEGER,
         balance REAL,
         active BOOLEAN,
         created_at VARCHAR(32)
     )",
     "CREATE TABLE orders (
         id INTEGER PRIMARY KEY,
-        user_id INT,
+        user_id INTEGER,
         amount REAL,
         status VARCHAR(16),
         order_date VARCHAR(32)
