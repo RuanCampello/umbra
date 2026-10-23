@@ -120,7 +120,6 @@ impl<'input> Tokenizer<'input> {
             },
             '<' => match self.stream.peek_next() {
                 Some('=') => self.consume(Token::LtEq),
-                Some('>') => self.consume(Token::Neq),
                 _ => Ok(Token::Lt),
             },
             '>' => match self.stream.peek_next() {
@@ -156,7 +155,7 @@ impl<'input> Tokenizer<'input> {
             '.' => self.consume(Token::Dot),
             ';' => self.consume(Token::Semicolon),
             '|' => self.consume(Token::Pipe),
-            '"' | '\'' => self.tokenize_string(),
+            '\'' => self.tokenize_string(),
             '0'..='9' => self.tokenize_number(),
             _ if Token::is_keyword(c) => self.tokenize_keyword(),
             _ => {
@@ -196,12 +195,18 @@ impl<'input> Tokenizer<'input> {
     }
 
     fn tokenize_string(&mut self) -> TokenizerResult {
-        let quote = self.stream.next().unwrap();
-        let string = self.stream.take_while(|c| *c != quote).collect();
-
-        match self.stream.next().is_some_and(|c| c == quote) {
-            true => Ok(Token::String(string)),
-            false => self.error(ErrorKind::StringUnclosed),
+        self.stream.next();
+        let mut string = String::new();
+        loop {
+            string.extend(self.stream.take_while(|c| *c != '\''));
+            match (self.stream.next(), self.stream.peek()) {
+                (None, _) => return self.error(ErrorKind::StringUnclosed),
+                (Some(_), Some('\'')) => {
+                    self.stream.next();
+                    string.push('\'');
+                },
+                (Some(_), _) => return Ok(Token::String(string)),
+            }
         }
     }
 
@@ -458,16 +463,18 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_double_string() {
-        let sql = "SELECT name FROM users WHERE name = \"John Doe";
+    fn a_doubled_quote_is_a_quote_inside_a_string() {
+        let tokens = Tokenizer::without_whitespace("'it''s' ''''").tokenize().unwrap();
+        assert_eq!(tokens[..2], [Token::String("it's".into()), Token::String("'".into())]);
+    }
 
-        assert_eq!(
+    #[test]
+    fn a_double_quote_does_not_open_a_string() {
+        let sql = "SELECT name FROM users WHERE name = \"John Doe\"";
+
+        assert!(matches!(
             Tokenizer::new(sql).tokenize(),
-            Err(TokenizerError {
-                kind: ErrorKind::StringUnclosed,
-                location: Location { line: 1, col: 46 },
-                input: sql.into(),
-            })
-        )
+            Err(TokenizerError { kind: ErrorKind::UnexpectedToken('"'), .. })
+        ))
     }
 }
