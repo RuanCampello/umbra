@@ -1,7 +1,7 @@
 # Three-valued logic and NULL propagation, results from PostgreSQL
 
 statement ok
-CREATE TABLE readings (id INT PRIMARY KEY, sensor TEXT NOT NULL, celsius INT NULL, humidity DOUBLE PRECISION NULL)
+CREATE TABLE readings (id INTEGER PRIMARY KEY, sensor TEXT NOT NULL, celsius INTEGER NULL, humidity DOUBLE PRECISION NULL)
 
 statement ok
 INSERT INTO readings (id, sensor, celsius, humidity) VALUES (1, 'north', 12, 0.5), (2, 'north', NULL, 0.7), (3, 'south', 20, NULL), (4, 'south', NULL, NULL), (5, 'east', -4, 0.25)

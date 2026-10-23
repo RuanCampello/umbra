@@ -1,7 +1,7 @@
 # HAVING and DISTINCT, results from PostgreSQL
 
 statement ok
-CREATE TABLE orders (id INT PRIMARY KEY, customer TEXT NOT NULL, region TEXT NOT NULL, total INT NOT NULL, discount INT NULL)
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL, region TEXT NOT NULL, total INTEGER NOT NULL, discount INTEGER NULL)
 
 statement ok
 INSERT INTO orders (id, customer, region, total, discount) VALUES (1, 'ada', 'north', 120, NULL), (2, 'ada', 'north', 80, 5), (3, 'grace', 'south', 300, NULL), (4, 'alan', 'south', 40, 10), (5, 'alan', 'south', 40, NULL), (6, 'edsger', 'east', 500, 50), (7, 'grace', 'south', 60, NULL), (8, 'barbara', 'north', 40, NULL)

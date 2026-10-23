@@ -1,13 +1,13 @@
 # CAST, results from PostgreSQL
 
 statement ok
-CREATE TABLE prices (id INT PRIMARY KEY, amount DOUBLE PRECISION NOT NULL, label TEXT NOT NULL, exact NUMERIC(10, 3) NULL)
+CREATE TABLE prices (id INTEGER PRIMARY KEY, amount DOUBLE PRECISION NOT NULL, label TEXT NOT NULL, exact NUMERIC(10, 3) NULL)
 
 statement ok
 INSERT INTO prices (id, amount, label, exact) VALUES (1, 2.5, '42', 1.255), (2, 3.5, '7', -1.255), (3, -2.5, '-3', NULL), (4, 10.75, '0', 2.5)
 
 query II rowsort
-SELECT id, CAST(amount AS INT) FROM prices
+SELECT id, CAST(amount AS INTEGER) FROM prices
 ----
 1	2
 2	4
@@ -23,7 +23,7 @@ SELECT id, CAST(exact AS NUMERIC(10, 2)) FROM prices
 4	2.500
 
 query II rowsort
-SELECT id, CAST(exact AS INT) FROM prices
+SELECT id, CAST(exact AS INTEGER) FROM prices
 ----
 1	1
 2	-1
@@ -31,7 +31,7 @@ SELECT id, CAST(exact AS INT) FROM prices
 4	3
 
 query II rowsort
-SELECT id, CAST(label AS INT) + 1 FROM prices
+SELECT id, CAST(label AS INTEGER) + 1 FROM prices
 ----
 1	43
 2	8
@@ -63,13 +63,13 @@ SELECT id, CAST(label AS VARCHAR(1)) FROM prices
 4	0
 
 query I rowsort
-SELECT id FROM prices WHERE CAST(label AS INT) > 5
+SELECT id FROM prices WHERE CAST(label AS INTEGER) > 5
 ----
 1
 2
 
 query I
-SELECT COUNT(*) FROM prices WHERE CAST(exact AS INT) IS NULL
+SELECT COUNT(*) FROM prices WHERE CAST(exact AS INTEGER) IS NULL
 ----
 1
 
@@ -82,7 +82,7 @@ statement ok
 INSERT INTO prices (id, amount, label, exact) VALUES (5, 1, 'x', 0)
 
 statement error
-SELECT CAST(label AS INT) FROM prices
+SELECT CAST(label AS INTEGER) FROM prices
 
 statement error
 SELECT CAST(100000 AS SMALLINT) FROM prices

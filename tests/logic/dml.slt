@@ -1,7 +1,7 @@
 # Updates and deletes, results from PostgreSQL
 
 statement ok
-CREATE TABLE stock (id INT PRIMARY KEY, item TEXT NOT NULL, quantity INT NOT NULL, price DOUBLE PRECISION NOT NULL)
+CREATE TABLE stock (id INTEGER PRIMARY KEY, item TEXT NOT NULL, quantity INTEGER NOT NULL, price DOUBLE PRECISION NOT NULL)
 
 statement ok
 INSERT INTO stock (id, item, quantity, price) VALUES (1, 'bolt', 100, 0.25), (2, 'nut', 250, 0.1), (3, 'gear', 12, 4.5), (4, 'chain', 3, 19.0), (5, 'spring', 40, 1.2)

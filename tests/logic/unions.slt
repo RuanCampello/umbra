@@ -1,10 +1,10 @@
 # UNION and UNION ALL, results from PostgreSQL
 
 statement ok
-CREATE TABLE staff (id INT PRIMARY KEY, name TEXT NOT NULL, city TEXT NULL)
+CREATE TABLE staff (id INTEGER PRIMARY KEY, name TEXT NOT NULL, city TEXT NULL)
 
 statement ok
-CREATE TABLE clients (id INT PRIMARY KEY, name TEXT NOT NULL, city TEXT NULL)
+CREATE TABLE clients (id INTEGER PRIMARY KEY, name TEXT NOT NULL, city TEXT NULL)
 
 statement ok
 INSERT INTO staff (id, name, city) VALUES (1, 'Ada', 'London'), (2, 'Alan', 'London'), (3, 'Grace', NULL)
@@ -72,10 +72,10 @@ SELECT name FROM staff ORDER BY name UNION SELECT name FROM clients
 # INTERSECT and EXCEPT, with ALL multiplicities and INTERSECT binding tighter
 
 statement ok
-CREATE TABLE bag_a (id INT PRIMARY KEY, v INT NOT NULL)
+CREATE TABLE bag_a (id INTEGER PRIMARY KEY, v INTEGER NOT NULL)
 
 statement ok
-CREATE TABLE bag_b (id INT PRIMARY KEY, v INT NOT NULL)
+CREATE TABLE bag_b (id INTEGER PRIMARY KEY, v INTEGER NOT NULL)
 
 statement ok
 INSERT INTO bag_a (id, v) VALUES (1, 1), (2, 1), (3, 1), (4, 2), (5, 3), (6, 4)

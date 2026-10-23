@@ -1,10 +1,10 @@
 # Constraint enforcement, outcomes checked against PostgreSQL
 
 statement ok
-CREATE TABLE customers (id INT PRIMARY KEY, email VARCHAR(50) NOT NULL UNIQUE, age INT NULL CHECK (age >= 18))
+CREATE TABLE customers (id INTEGER PRIMARY KEY, email VARCHAR(50) NOT NULL UNIQUE, age INTEGER NULL CHECK (age >= 18))
 
 statement ok
-CREATE TABLE orders (id INT PRIMARY KEY, customer INT NOT NULL REFERENCES customers(id), total INT NOT NULL CHECK (total > 0))
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer INTEGER NOT NULL REFERENCES customers(id), total INTEGER NOT NULL CHECK (total > 0))
 
 statement ok
 INSERT INTO customers (id, email, age) VALUES (1, 'ada@example.com', 36), (2, 'grace@example.com', NULL)
@@ -65,13 +65,13 @@ statement error
 INSERT INTO orders (id, customer) VALUES (10, 1)
 
 statement ok
-INSERT INTO customers VALUES (11, 'barbara@example.com', 70)
+INSERT INTO customers (id, email, age) VALUES (11, 'barbara@example.com', 70)
 
 statement ok
-INSERT INTO customers VALUES (12, 'edsger@example.com')
+INSERT INTO customers (id, email) VALUES (12, 'edsger@example.com')
 
 statement error
-INSERT INTO customers VALUES (13, 'alan@example.com', 41, 1)
+INSERT INTO customers (id, email, age) VALUES (13, 'alan@example.com', 41, 1)
 
 query IT
 SELECT id, email FROM customers ORDER BY id

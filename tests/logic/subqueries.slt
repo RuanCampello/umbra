@@ -1,10 +1,10 @@
 # Uncorrelated subqueries, results from PostgreSQL
 
 statement ok
-CREATE TABLE authors (id INT PRIMARY KEY, name TEXT NOT NULL, country TEXT NULL)
+CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL, country TEXT NULL)
 
 statement ok
-CREATE TABLE books (id INT PRIMARY KEY, author INT NOT NULL, title TEXT NOT NULL, pages INT NOT NULL)
+CREATE TABLE books (id INTEGER PRIMARY KEY, author INTEGER NOT NULL, title TEXT NOT NULL, pages INTEGER NOT NULL)
 
 statement ok
 INSERT INTO authors (id, name, country) VALUES (1, 'Le Guin', 'US'), (2, 'Lem', 'PL'), (3, 'Borges', 'AR'), (4, 'Calvino', NULL)
@@ -114,10 +114,10 @@ SELECT name, (SELECT MAX(pages) FROM books WHERE books.author = authors.id) FROM
 # Correlated EXISTS and NOT EXISTS over one equality, NULLs on either side
 
 statement ok
-CREATE TABLE parent (id INT PRIMARY KEY, code INT NULL, name TEXT NOT NULL)
+CREATE TABLE parent (id INTEGER PRIMARY KEY, code INTEGER NULL, name TEXT NOT NULL)
 
 statement ok
-CREATE TABLE child (id INT PRIMARY KEY, parent_code INT NULL, kind TEXT NOT NULL, weight INT NOT NULL)
+CREATE TABLE child (id INTEGER PRIMARY KEY, parent_code INTEGER NULL, kind TEXT NOT NULL, weight INTEGER NOT NULL)
 
 statement ok
 INSERT INTO parent (id, code, name) VALUES (1, 10, 'a'), (2, 20, 'b'), (3, NULL, 'c'), (4, 40, 'd'), (5, 50, 'e')
@@ -126,37 +126,37 @@ statement ok
 INSERT INTO child (id, parent_code, kind, weight) VALUES (1, 10, 'x', 5), (2, 10, 'y', 7), (3, 20, 'y', 1), (4, NULL, 'x', 9), (5, 40, 'x', 2)
 
 query T rowsort
-SELECT name FROM parent p WHERE EXISTS (SELECT 1 FROM child c WHERE c.parent_code = p.code)
+SELECT name FROM parent AS p WHERE EXISTS (SELECT 1 FROM child AS c WHERE c.parent_code = p.code)
 ----
 a
 b
 d
 
 query T rowsort
-SELECT name FROM parent p WHERE NOT EXISTS (SELECT 1 FROM child c WHERE c.parent_code = p.code)
+SELECT name FROM parent AS p WHERE NOT EXISTS (SELECT 1 FROM child AS c WHERE c.parent_code = p.code)
 ----
 c
 e
 
 query T rowsort
-SELECT name FROM parent p WHERE EXISTS (SELECT 1 FROM child c WHERE p.code = c.parent_code AND c.kind = 'y' AND c.weight > 2)
+SELECT name FROM parent AS p WHERE EXISTS (SELECT 1 FROM child AS c WHERE p.code = c.parent_code AND c.kind = 'y' AND c.weight > 2)
 ----
 a
 
 query T rowsort
-SELECT name FROM parent p WHERE NOT EXISTS (SELECT 1 FROM child c WHERE c.parent_code = p.code AND c.kind = 'x') AND p.id < 5
+SELECT name FROM parent AS p WHERE NOT EXISTS (SELECT 1 FROM child AS c WHERE c.parent_code = p.code AND c.kind = 'x') AND p.id < 5
 ----
 b
 c
 
 query TI rowsort
-SELECT p.name, p.id FROM parent p WHERE EXISTS (SELECT * FROM child c JOIN parent q ON q.code = c.parent_code WHERE c.parent_code = p.code AND q.id <> 2)
+SELECT p.name, p.id FROM parent AS p WHERE EXISTS (SELECT * FROM child AS c JOIN parent AS q ON q.code = c.parent_code WHERE c.parent_code = p.code AND q.id != 2)
 ----
 a	1
 d	4
 
 statement ok
-DELETE FROM parent WHERE NOT EXISTS (SELECT 1 FROM child c WHERE c.parent_code = parent.code)
+DELETE FROM parent WHERE NOT EXISTS (SELECT 1 FROM child AS c WHERE c.parent_code = parent.code)
 
 query T rowsort
 SELECT name FROM parent
@@ -166,7 +166,7 @@ b
 d
 
 query T rowsort
-SELECT name FROM parent p WHERE EXISTS (SELECT 1 FROM child p WHERE p.weight > 6)
+SELECT name FROM parent AS p WHERE EXISTS (SELECT 1 FROM child AS p WHERE p.weight > 6)
 ----
 a
 b

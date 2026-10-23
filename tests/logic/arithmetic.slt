@@ -1,7 +1,7 @@
 # Arithmetic over integers, floats and numerics, results from PostgreSQL
 
 statement ok
-CREATE TABLE measures (id INT PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, x DOUBLE PRECISION NOT NULL, n NUMERIC(10, 2) NOT NULL)
+CREATE TABLE measures (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL, x DOUBLE PRECISION NOT NULL, n NUMERIC(10, 2) NOT NULL)
 
 statement ok
 INSERT INTO measures (id, a, b, x, n) VALUES (1, 7, 2, 1.5, 10.25), (2, -7, 2, -0.5, 3.10), (3, 9, -4, 2.25, -1.05), (4, 0, 5, 0.0, 0.00)
@@ -181,7 +181,7 @@ SELECT 100000000000000000000 / 3
 33333333333333331968.000
 
 query RR rowsort
-SELECT 1.5 % n, -1.5 % n FROM measures WHERE n <> 0
+SELECT 1.5 % n, -1.5 % n FROM measures WHERE n != 0
 ----
 0.450	-0.450
 0.500	-0.500
@@ -231,6 +231,6 @@ SELECT POWER(2, 10), POWER(2, 64), POWER(2, -1)
 1024.000	18446744073709551616.000	0.500
 
 query II
-SELECT id, CAST(CASE WHEN id > 100 THEN n ELSE -x END AS INT) FROM measures WHERE id = 2
+SELECT id, CAST(CASE WHEN id > 100 THEN n ELSE -x END AS INTEGER) FROM measures WHERE id = 2
 ----
 2	0

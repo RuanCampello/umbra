@@ -1,7 +1,7 @@
 # Aggregation and grouping, results from PostgreSQL
 
 statement ok
-CREATE TABLE sales (id INT PRIMARY KEY, region TEXT NOT NULL, product TEXT NOT NULL, units INT NOT NULL, price DOUBLE PRECISION NOT NULL, discount INT NULL)
+CREATE TABLE sales (id INTEGER PRIMARY KEY, region TEXT NOT NULL, product TEXT NOT NULL, units INTEGER NOT NULL, price DOUBLE PRECISION NOT NULL, discount INTEGER NULL)
 
 statement ok
 INSERT INTO sales (id, region, product, units, price, discount) VALUES (1, 'north', 'lamp', 3, 19.5, NULL), (2, 'north', 'desk', 1, 120.0, 10), (3, 'south', 'lamp', 7, 18.0, 5), (4, 'south', 'chair', 4, 45.25, NULL), (5, 'east', 'desk', 2, 115.0, 15), (6, 'north', 'lamp', 1, 21.0, NULL), (7, 'east', 'chair', 6, 44.0, 0)
@@ -88,7 +88,7 @@ north	3	desk
 south	7	chair
 
 statement ok
-CREATE TABLE big (id INT PRIMARY KEY, v BIGINT NOT NULL)
+CREATE TABLE big (id INTEGER PRIMARY KEY, v BIGINT NOT NULL)
 
 statement ok
 INSERT INTO big (id, v) VALUES (1, 9223372036854775807), (2, 9223372036854775807), (3, -5), (4, -9223372036854775807)
@@ -99,7 +99,7 @@ SELECT AVG(v) FROM big
 2305843009213693952.000
 
 query I
-SELECT SUM(v) FROM big WHERE id <> 3
+SELECT SUM(v) FROM big WHERE id != 3
 ----
 9223372036854775807
 

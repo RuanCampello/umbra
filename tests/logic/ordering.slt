@@ -1,7 +1,7 @@
 # Ordering, limits and offsets, results from PostgreSQL
 
 statement ok
-CREATE TABLE books (id INT PRIMARY KEY, title TEXT NOT NULL, year INT NULL, rating DOUBLE PRECISION NOT NULL)
+CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, year INTEGER NULL, rating DOUBLE PRECISION NOT NULL)
 
 statement ok
 INSERT INTO books (id, title, year, rating) VALUES (1, 'Dune', 1965, 4.3), (2, 'Neuromancer', 1984, 3.9), (3, 'Solaris', 1961, 4.0), (4, 'Hyperion', 1989, 4.3), (5, 'Ubik', 1969, 4.1), (6, 'Untitled', NULL, 2.5), (7, 'Foundation', 1951, 4.2)

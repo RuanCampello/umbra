@@ -1,10 +1,10 @@
 # Joins, results from PostgreSQL
 
 statement ok
-CREATE TABLE departments (id INT PRIMARY KEY, name TEXT NOT NULL, floor INT NULL)
+CREATE TABLE departments (id INTEGER PRIMARY KEY, name TEXT NOT NULL, floor INTEGER NULL)
 
 statement ok
-CREATE TABLE employees (id INT PRIMARY KEY, name TEXT NOT NULL, department INT NULL, salary INT NOT NULL)
+CREATE TABLE employees (id INTEGER PRIMARY KEY, name TEXT NOT NULL, department INTEGER NULL, salary INTEGER NOT NULL)
 
 statement ok
 INSERT INTO departments (id, name, floor) VALUES (1, 'engineering', 3), (2, 'marketing', NULL), (3, 'legal', 1)
@@ -88,7 +88,7 @@ grace	engineering	130
 ada	engineering	120
 
 statement ok
-CREATE TABLE readings (id INT PRIMARY KEY, level DOUBLE PRECISION NOT NULL, ratio NUMERIC(6, 2) NOT NULL)
+CREATE TABLE readings (id INTEGER PRIMARY KEY, level DOUBLE PRECISION NOT NULL, ratio NUMERIC(6, 2) NOT NULL)
 
 statement ok
 INSERT INTO readings (id, level, ratio) VALUES (1, 120, 1.5), (2, 90.5, 2), (3, 80, 0.5)
@@ -109,7 +109,7 @@ SELECT r.id, q.id FROM readings AS r JOIN readings AS q ON r.ratio = q.level / 6
 ----
 
 query TT rowsort
-SELECT d.name, e.name FROM departments d CROSS JOIN employees e WHERE e.salary >= 120
+SELECT d.name, e.name FROM departments AS d CROSS JOIN employees AS e WHERE e.salary >= 120
 ----
 engineering	ada
 engineering	grace
@@ -119,18 +119,18 @@ marketing	ada
 marketing	grace
 
 query I
-SELECT COUNT(*) FROM departments, employees
+SELECT COUNT(*) FROM departments CROSS JOIN employees
 ----
 15
 
 query TT rowsort
-SELECT d.name, e.name FROM departments d, employees e WHERE d.id = e.department AND d.floor = 3
+SELECT d.name, e.name FROM departments AS d CROSS JOIN employees AS e WHERE d.id = e.department AND d.floor = 3
 ----
 engineering	ada
 engineering	grace
 
 query TTT rowsort
-SELECT d.name, e.name, r.level FROM departments d CROSS JOIN employees e JOIN readings r ON r.id = e.id WHERE d.id = 3
+SELECT d.name, e.name, r.level FROM departments AS d CROSS JOIN employees AS e JOIN readings AS r ON r.id = e.id WHERE d.id = 3
 ----
 legal	ada	120
 legal	alan	80

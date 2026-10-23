@@ -1,7 +1,7 @@
 # SELECT without FROM, results from PostgreSQL
 
 statement ok
-CREATE TABLE things (id INT PRIMARY KEY, weight INT NOT NULL)
+CREATE TABLE things (id INTEGER PRIMARY KEY, weight INTEGER NOT NULL)
 
 statement ok
 INSERT INTO things (id, weight) VALUES (1, 10), (2, 25), (3, 7)
@@ -27,7 +27,7 @@ SELECT CASE WHEN EXISTS (SELECT id FROM things WHERE weight > 20) THEN 1 ELSE 0 
 1
 
 query I
-SELECT CAST('42' AS INT) * 2
+SELECT CAST('42' AS INTEGER) * 2
 ----
 84
 

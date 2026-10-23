@@ -1,7 +1,7 @@
 # CASE, results from PostgreSQL
 
 statement ok
-CREATE TABLE tickets (id INT PRIMARY KEY, priority INT NULL, state TEXT NOT NULL, hours DOUBLE PRECISION NOT NULL)
+CREATE TABLE tickets (id INTEGER PRIMARY KEY, priority INTEGER NULL, state TEXT NOT NULL, hours DOUBLE PRECISION NOT NULL)
 
 statement ok
 INSERT INTO tickets (id, priority, state, hours) VALUES (1, 1, 'open', 2.5), (2, 3, 'closed', 10), (3, NULL, 'open', 0), (4, 2, 'blocked', 4), (5, 1, 'closed', 1)

@@ -1,7 +1,7 @@
 # Index access paths must return what a full scan returns, results from PostgreSQL
 
 statement ok
-CREATE TABLE events (id INT PRIMARY KEY, code VARCHAR(10) NOT NULL UNIQUE, severity INT NOT NULL, origin TEXT NOT NULL)
+CREATE TABLE events (id INTEGER PRIMARY KEY, code VARCHAR(10) NOT NULL UNIQUE, severity INTEGER NOT NULL, origin TEXT NOT NULL)
 
 statement ok
 CREATE INDEX events_severity ON events(severity)
@@ -116,7 +116,7 @@ SELECT id FROM events WHERE severity <= 2 ORDER BY severity DESC, id
 # Composite indexes: equalities on leading columns, then a range or a point set on the next
 
 statement ok
-CREATE TABLE orders (id INT PRIMARY KEY, w INT NOT NULL, d INT NULL, o INT NOT NULL, amount INT NOT NULL)
+CREATE TABLE orders (id INTEGER PRIMARY KEY, w INTEGER NOT NULL, d INTEGER NULL, o INTEGER NOT NULL, amount INTEGER NOT NULL)
 
 statement ok
 CREATE UNIQUE INDEX orders_key ON orders (w, d, o)
