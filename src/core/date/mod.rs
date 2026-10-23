@@ -62,7 +62,7 @@ pub struct NaiveTime {
 
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct u24([u8; 3]);
 
 #[allow(clippy::enum_variant_names)]
@@ -454,6 +454,12 @@ impl Ord for u24 {
     }
 }
 
+impl PartialOrd for u24 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +521,15 @@ mod tests {
         let val_b = u_24.0;
         let reconstructed = u24(val_b);
         assert_eq!(reconstructed.get(), val);
+    }
+
+    #[test]
+    fn test_time_order_across_a_byte_carry() {
+        let before = NaiveTime::new(0, 3, 59).unwrap();
+        let after = NaiveTime::new(0, 4, 0).unwrap();
+
+        assert!(before < after);
+        assert_eq!(before.partial_cmp(&after), Some(before.cmp(&after)));
     }
 
     #[test]
