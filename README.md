@@ -69,7 +69,7 @@ The scheme comes from HyPer (Neumann, Mühlbauer and Kemper, SIGMOD 2015), and t
 | level | snapshot taken | prevents | allows |
 |---|---|---|---|
 | `READ COMMITTED` | per statement | dirty writes and reads | non-repeatable reads, phantoms, write skew |
-| `SNAPSHOT` (default, `REPEATABLE READ` is an alias) | per transaction | the above, lost updates, read skew | write skew |
+| `REPEATABLE READ` (default, snapshot isolation) | per transaction | the above, lost updates, read skew | write skew |
 | `SERIALIZABLE` | per transaction, reads validated at commit | all of the above | nothing |
 
 
@@ -89,7 +89,7 @@ Index nested-loop joins when the inner side has an index, hash joins otherwise. 
 | type | range | notes |
 |---|---|---|
 | `SMALLINT` | −2¹⁵ to 2¹⁵−1 | |
-| `INTEGER` / `INT` | −2³¹ to 2³¹−1 | |
+| `INTEGER` | −2³¹ to 2³¹−1 | |
 | `BIGINT` | −2⁶³ to 2⁶³−1 | |
 | `SMALLINT UNSIGNED` | 0 to 2¹⁶−1 | MySQL's syntax, rather than PostgreSQL's check constraint |
 | `INTEGER UNSIGNED` | 0 to 2³²−1 | |
@@ -105,7 +105,7 @@ a transaction that rolls back is gone for good.
 |---|---|---|
 | `REAL` | about 7 significant digits | stored at single precision |
 | `DOUBLE PRECISION` | about 15 significant digits | |
-| `NUMERIC(p, s)` / `DECIMAL` | arbitrary | base-10,000 digits, as in PostgreSQL. A value with more decimal places than `s` is rejected |
+| `NUMERIC(p, s)` | arbitrary | base-10,000 digits, as in PostgreSQL. A value with more decimal places than `s` is rejected |
 
 Mixing exact and approximate numbers gives an approximate result. A decimal literal such as `0.1` is a
 `DOUBLE PRECISION`, unless it meets a `NUMERIC` column. This is a deliberate difference from PostgreSQL, where it would
@@ -165,12 +165,12 @@ That last one departs from the SQL standard on purpose. A column is only nullabl
 CREATE TABLE crypts (
     id SERIAL PRIMARY KEY,
     name VARCHAR(50) UNIQUE,
-    depth INT DEFAULT 6 CHECK (depth > 0)
+    depth INTEGER DEFAULT 6 CHECK (depth > 0)
 );
 
 CREATE TABLE bats (
     id SERIAL PRIMARY KEY,
-    crypt INT NULLABLE REFERENCES crypts(id) ON DELETE CASCADE,
+    crypt INTEGER NULLABLE REFERENCES crypts(id) ON DELETE CASCADE,
     name TEXT
 );
 ```
@@ -178,20 +178,24 @@ CREATE TABLE bats (
 ### Statements
 
 - `CREATE TABLE`, `DROP TABLE`, `CREATE [UNIQUE] INDEX` on one or more columns
-- `INSERT` (several rows at once, only with column list), `UPDATE`, `DELETE`. `INSERT` and `UPDATE` take
+- `INSERT` (several rows at once, always with a column list that names every column without a default, a serial or
+  `NULLABLE`), `UPDATE`, `DELETE`. `INSERT` and `UPDATE` take
   `RETURNING`
-- `SELECT` with `WHERE`, `ORDER BY`, `LIMIT` / `OFFSET`, `DISTINCT`, `GROUP BY`, `HAVING`, column and table aliases
-- joins: inner, left, right, full, cross and comma joins, on any condition
+- `SELECT` with `WHERE`, `ORDER BY`, `LIMIT` / `OFFSET`, `DISTINCT`, `GROUP BY`, `HAVING`, column and table aliases (always with `AS`)
+- joins: `JOIN`, `LEFT JOIN`, `RIGHT JOIN`, `FULL JOIN` on any condition, and `CROSS JOIN`
 - `UNION`, `INTERSECT` and `EXCEPT`, with or without `ALL`
 - `CASE`, `CAST`, `BETWEEN`, `IN`, `LIKE`, `IS [NOT] NULL`, `%`
 - subqueries in `IN`, `EXISTS` and as scalars. Correlated subqueries are refused with an error, except `EXISTS` over an
   equality, which becomes a semi-join.
 - `EXPLAIN`
 
+The dialect keeps one spelling per construct: strings take single quotes (a quote inside is doubled, `'it''s'`),
+inequality is `!=`, and every statement ends with `;`.
+
 ### Transactions
 
-- `BEGIN` / `START TRANSACTION [ISOLATION LEVEL ...]`, `COMMIT`, `ROLLBACK`
-- `SAVEPOINT`, `ROLLBACK TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]`
+- `BEGIN [TRANSACTION] [ISOLATION LEVEL READ COMMITTED | REPEATABLE READ | SERIALIZABLE]`, `COMMIT`, `ROLLBACK`
+- `SAVEPOINT name`, `ROLLBACK TO SAVEPOINT name`, `RELEASE SAVEPOINT name`
 - `SET TRANSACTION ISOLATION LEVEL ...` and `SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL ...`
 - `CHECKPOINT`
 
